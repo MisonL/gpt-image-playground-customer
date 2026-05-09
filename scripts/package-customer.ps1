@@ -1,0 +1,50 @@
+$ErrorActionPreference = 'Stop'
+
+$projectRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+$distDir = Join-Path $projectRoot 'dist'
+$stageDir = Join-Path $distDir 'gpt-image-playground-customer'
+$zipPath = Join-Path $distDir 'gpt-image-playground-customer.zip'
+
+$excludedNames = @(
+    '.git',
+    '.next',
+    'node_modules',
+    'generated-images',
+    'dist'
+)
+
+$excludedFiles = @(
+    'dev-server.log',
+    'dev-server.err.log',
+    'tsconfig.tsbuildinfo',
+    'next-env.d.ts'
+)
+
+if (Test-Path $stageDir) {
+    Remove-Item -LiteralPath $stageDir -Recurse -Force
+}
+
+if (Test-Path $zipPath) {
+    Remove-Item -LiteralPath $zipPath -Force
+}
+
+New-Item -ItemType Directory -Path $stageDir | Out-Null
+
+Get-ChildItem -LiteralPath $projectRoot -Force | ForEach-Object {
+    if ($excludedNames -contains $_.Name) {
+        return
+    }
+
+    if (-not $_.PSIsContainer -and $excludedFiles -contains $_.Name) {
+        return
+    }
+
+    Copy-Item -LiteralPath $_.FullName -Destination $stageDir -Recurse -Force
+}
+
+Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $zipPath -Force
+
+Write-Host ''
+Write-Host "Customer package: $zipPath"
+Write-Host ''
+Write-Host 'Send this zip file to the customer. They can unzip it and run start-windows.bat.'
