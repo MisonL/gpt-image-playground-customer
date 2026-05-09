@@ -28,12 +28,6 @@ type ApiSettingsDialogProps = {
 export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: ApiSettingsDialogProps) {
     const [draft, setDraft] = React.useState<ApiSettings>(settings);
 
-    React.useEffect(() => {
-        if (isOpen) {
-            setDraft(settings);
-        }
-    }, [isOpen, settings]);
-
     const handleSave = () => {
         onSave({
             apiKey: draft.apiKey.trim(),

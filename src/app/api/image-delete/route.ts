@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs/promises';
+import { isValidImageFilename } from '@/lib/image-request-utils';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 
@@ -7,6 +8,13 @@ const outputDir = path.resolve(process.cwd(), 'generated-images');
 
 function sha256(data: string): string {
     return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+function verifyPasswordHash(clientPasswordHash: string, serverPassword: string): boolean {
+    const serverPasswordHash = sha256(serverPassword);
+    const clientBuffer = Buffer.from(clientPasswordHash, 'hex');
+    const serverBuffer = Buffer.from(serverPasswordHash, 'hex');
+    return clientBuffer.length === serverBuffer.length && crypto.timingSafeEqual(clientBuffer, serverBuffer);
 }
 
 type DeleteRequestBody = {
@@ -36,8 +44,7 @@ export async function POST(request: NextRequest) {
                 console.error('Missing password hash for delete operation.');
                 return NextResponse.json({ error: 'Unauthorized: Missing password hash.' }, { status: 401 });
             }
-            const serverPasswordHash = sha256(process.env.APP_PASSWORD);
-            if (clientPasswordHash !== serverPasswordHash) {
+            if (!verifyPasswordHash(clientPasswordHash, process.env.APP_PASSWORD)) {
                 console.error('Invalid password hash for delete operation.');
                 return NextResponse.json({ error: 'Unauthorized: Invalid password.' }, { status: 401 });
             }
@@ -62,7 +69,7 @@ export async function POST(request: NextRequest) {
     const deletionResults: FileDeletionResult[] = [];
 
     for (const filename of filenames) {
-        if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        if (!isValidImageFilename(filename)) {
             console.warn(`Invalid filename for deletion: ${filename}`);
             deletionResults.push({ filename, success: false, error: 'Invalid filename format.' });
             continue;

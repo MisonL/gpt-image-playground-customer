@@ -1,5 +1,27 @@
 import crypto from 'crypto';
 import fs from 'fs/promises';
+import {
+    RequestValidationError,
+    assertSafeApiOverride,
+    createImageResult,
+    readBackground,
+    readCount,
+    readEditQuality,
+    readGenerateQuality,
+    readImageFiles,
+    readMaskFile,
+    readMode,
+    readModel,
+    readModeration,
+    readOutputCompression,
+    readOutputFormat,
+    readRequiredText,
+    readSize,
+    readStorageMode,
+    validateApiBaseUrl,
+    type GenerateParams,
+    type ValidOutputFormat
+} from '@/lib/image-request-utils';
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import path from 'path';
@@ -24,24 +46,6 @@ type StreamingEvent = {
 };
 
 const outputDir = path.resolve(process.cwd(), 'generated-images');
-
-// Define valid output formats for type safety
-const VALID_OUTPUT_FORMATS = ['png', 'jpeg', 'webp'] as const;
-type ValidOutputFormat = (typeof VALID_OUTPUT_FORMATS)[number];
-
-// Validate and normalize output format
-function validateOutputFormat(format: unknown): ValidOutputFormat {
-    const normalized = String(format || 'png').toLowerCase();
-
-    // Handle jpg -> jpeg normalization
-    const mapped = normalized === 'jpg' ? 'jpeg' : normalized;
-
-    if (VALID_OUTPUT_FORMATS.includes(mapped as ValidOutputFormat)) {
-        return mapped as ValidOutputFormat;
-    }
-
-    return 'png'; // default fallback
-}
 
 function describeInvalidImagesResponse(result: unknown): string {
     if (typeof result === 'string') {
@@ -79,6 +83,13 @@ function sha256(data: string): string {
     return crypto.createHash('sha256').update(data).digest('hex');
 }
 
+function verifyPasswordHash(clientPasswordHash: string, serverPassword: string): boolean {
+    const serverPasswordHash = sha256(serverPassword);
+    const clientBuffer = Buffer.from(clientPasswordHash, 'hex');
+    const serverBuffer = Buffer.from(serverPasswordHash, 'hex');
+    return clientBuffer.length === serverBuffer.length && crypto.timingSafeEqual(clientBuffer, serverBuffer);
+}
+
 export async function POST(request: NextRequest) {
     console.log('Received POST request to /api/images');
 
@@ -86,8 +97,11 @@ export async function POST(request: NextRequest) {
         const formData = await request.formData();
         const requestApiKey = String(formData.get('apiKey') || '').trim();
         const requestApiBaseUrl = String(formData.get('apiBaseUrl') || '').trim();
+        assertSafeApiOverride(requestApiKey, requestApiBaseUrl);
+        validateApiBaseUrl(requestApiBaseUrl);
         const effectiveApiKey = requestApiKey || process.env.OPENAI_API_KEY;
         const effectiveApiBaseUrl = requestApiBaseUrl || process.env.OPENAI_API_BASE_URL;
+        validateApiBaseUrl(effectiveApiBaseUrl || '');
 
         if (!effectiveApiKey) {
             console.error('OPENAI_API_KEY is not set and no request API key was provided.');
@@ -97,122 +111,81 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        if (effectiveApiBaseUrl) {
-            try {
-                new URL(effectiveApiBaseUrl);
-            } catch {
-                return NextResponse.json({ error: 'API URL 格式无效。' }, { status: 400 });
-            }
-        }
-
         const openai = new OpenAI({
             apiKey: effectiveApiKey,
             baseURL: effectiveApiBaseUrl || undefined
         });
 
-        let effectiveStorageMode: 'fs' | 'indexeddb';
-        const explicitMode = process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE;
-        const isOnVercel = process.env.VERCEL === '1';
-
-        if (explicitMode === 'fs') {
-            effectiveStorageMode = 'fs';
-        } else if (explicitMode === 'indexeddb') {
-            effectiveStorageMode = 'indexeddb';
-        } else if (isOnVercel) {
-            effectiveStorageMode = 'indexeddb';
-        } else {
-            effectiveStorageMode = 'fs';
-        }
-        console.log(
-            `Effective Image Storage Mode: ${effectiveStorageMode} (Explicit: ${explicitMode || 'unset'}, Vercel: ${isOnVercel})`
-        );
+        const effectiveStorageMode = readStorageMode(process.env);
+        console.log(`Effective Image Storage Mode: ${effectiveStorageMode}`);
 
         if (effectiveStorageMode === 'fs') {
             await ensureOutputDirExists();
         }
 
         if (process.env.APP_PASSWORD) {
-            const clientPasswordHash = formData.get('passwordHash') as string | null;
-            if (!clientPasswordHash) {
+            const clientPasswordHash = formData.get('passwordHash');
+            if (typeof clientPasswordHash !== 'string' || !clientPasswordHash) {
                 console.error('Missing password hash.');
                 return NextResponse.json({ error: 'Unauthorized: Missing password hash.' }, { status: 401 });
             }
-            const serverPasswordHash = sha256(process.env.APP_PASSWORD);
-            if (clientPasswordHash !== serverPasswordHash) {
+            if (!verifyPasswordHash(clientPasswordHash, process.env.APP_PASSWORD)) {
                 console.error('Invalid password hash.');
                 return NextResponse.json({ error: 'Unauthorized: Invalid password.' }, { status: 401 });
             }
         }
 
-        const mode = formData.get('mode') as 'generate' | 'edit' | null;
-        const prompt = formData.get('prompt') as string | null;
-        const model =
-            (formData.get('model') as
-                | 'gpt-image-1'
-                | 'gpt-image-1-mini'
-                | 'gpt-image-1.5'
-                | 'gpt-image-2'
-                | null) || 'gpt-image-2';
+        const mode = readMode(formData);
+        const prompt = readRequiredText(formData, 'prompt');
+        const model = readModel(formData);
 
         console.log(`Mode: ${mode}, Model: ${model}, Prompt: ${prompt ? prompt.substring(0, 50) + '...' : 'N/A'}`);
 
-        if (!mode || !prompt) {
-            return NextResponse.json({ error: 'Missing required parameters: mode and prompt' }, { status: 400 });
-        }
-
-        // Check for streaming mode
         const streamEnabled = formData.get('stream') === 'true';
-        const partialImagesCount = parseInt((formData.get('partial_images') as string) || '2', 10);
+        const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
 
         let result: OpenAI.Images.ImagesResponse;
+        let responseOutputFormat: ValidOutputFormat = 'png';
 
         if (mode === 'generate') {
-            const n = parseInt((formData.get('n') as string) || '1', 10);
-            // gpt-image-2 accepts arbitrary WxH strings that the SDK's narrow literal union doesn't express.
-            const size = ((formData.get('size') as string) || '1024x1024') as OpenAI.Images.ImageGenerateParams['size'];
-            const quality = (formData.get('quality') as OpenAI.Images.ImageGenerateParams['quality']) || 'auto';
-            const output_format =
-                (formData.get('output_format') as OpenAI.Images.ImageGenerateParams['output_format']) || 'png';
-            const output_compression_str = formData.get('output_compression') as string | null;
-            const background =
-                (formData.get('background') as OpenAI.Images.ImageGenerateParams['background']) || 'auto';
-            const moderation =
-                (formData.get('moderation') as OpenAI.Images.ImageGenerateParams['moderation']) || 'auto';
+            const n = readCount(formData, 'n', 1, 1, 10);
+            const size = readSize(formData, 'size', '1024x1024', model) as OpenAI.Images.ImageGenerateParams['size'];
+            const quality = readGenerateQuality(formData) as OpenAI.Images.ImageGenerateParams['quality'];
+            const outputFormat = readOutputFormat(formData);
+            const outputCompression = readOutputCompression(formData, outputFormat);
+            const background = readBackground(formData, model) as OpenAI.Images.ImageGenerateParams['background'];
+            const moderation = readModeration(formData) as OpenAI.Images.ImageGenerateParams['moderation'];
+            responseOutputFormat = outputFormat;
 
-            const baseParams = {
+            const baseParams: GenerateParams = {
                 model,
                 prompt,
-                n: Math.max(1, Math.min(n || 1, 10)),
+                n,
                 size,
                 quality,
-                output_format,
+                output_format: outputFormat,
                 background,
                 moderation
             };
 
-            if ((output_format === 'jpeg' || output_format === 'webp') && output_compression_str) {
-                const compression = parseInt(output_compression_str, 10);
-                if (!isNaN(compression) && compression >= 0 && compression <= 100) {
-                    (baseParams as OpenAI.Images.ImageGenerateParams).output_compression = compression;
-                }
+            if (outputCompression !== undefined) {
+                baseParams.output_compression = outputCompression;
             }
 
             // Handle streaming mode for generation
             if (streamEnabled) {
-                const actualPartialImages = Math.max(1, Math.min(partialImagesCount, 3)) as 1 | 2 | 3;
-
                 const streamParams = {
                     ...baseParams,
                     stream: true as const,
-                    partial_images: actualPartialImages
-                };
+                    partial_images: partialImagesCount
+                } satisfies OpenAI.Images.ImageGenerateParamsStreaming;
 
                 const stream = await openai.images.generate(streamParams);
 
                 // Create SSE response
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
-                const fileExtension = validateOutputFormat(output_format);
+                const fileExtension = outputFormat;
 
                 const readableStream = new ReadableStream({
                     async start(controller) {
@@ -247,12 +220,12 @@ export async function POST(request: NextRequest) {
                                         console.log(`Streaming: Saved image ${filename}`);
                                     }
 
-                                    const imageData = {
+                                    const imageData = createImageResult(
                                         filename,
-                                        b64_json: event.b64_json || '',
-                                        output_format: fileExtension,
-                                        ...(effectiveStorageMode === 'fs' ? { path: `/api/image/${filename}` } : {})
-                                    };
+                                        event.b64_json || '',
+                                        fileExtension,
+                                        effectiveStorageMode
+                                    );
                                     completedImages.push(imageData);
 
                                     const completedEvent: StreamingEvent = {
@@ -303,33 +276,21 @@ export async function POST(request: NextRequest) {
                 });
             }
 
-            const params: OpenAI.Images.ImageGenerateParams = baseParams;
+            const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...baseParams, stream: false };
             console.log('Calling OpenAI generate with params:', params);
             result = await openai.images.generate(params);
         } else if (mode === 'edit') {
-            const n = parseInt((formData.get('n') as string) || '1', 10);
-            // gpt-image-2 accepts arbitrary WxH strings that the SDK's narrow literal union doesn't express.
-            const size = ((formData.get('size') as string) || 'auto') as OpenAI.Images.ImageEditParams['size'];
-            const quality = (formData.get('quality') as OpenAI.Images.ImageEditParams['quality']) || 'auto';
-
-            const imageFiles: File[] = [];
-            for (const [key, value] of formData.entries()) {
-                if (key.startsWith('image_') && value instanceof File) {
-                    imageFiles.push(value);
-                }
-            }
-
-            if (imageFiles.length === 0) {
-                return NextResponse.json({ error: 'No image file provided for editing.' }, { status: 400 });
-            }
-
-            const maskFile = formData.get('mask') as File | null;
+            const n = readCount(formData, 'n', 1, 1, 10);
+            const size = readSize(formData, 'size', 'auto', model) as OpenAI.Images.ImageEditParams['size'];
+            const quality = readEditQuality(formData) as OpenAI.Images.ImageEditParams['quality'];
+            const imageFiles = readImageFiles(formData);
+            const maskFile = readMaskFile(formData);
 
             const baseEditParams = {
                 model,
                 prompt,
                 image: imageFiles,
-                n: Math.max(1, Math.min(n || 1, 10)),
+                n,
                 size: size === 'auto' ? undefined : size,
                 quality: quality === 'auto' ? undefined : quality
             };
@@ -347,7 +308,7 @@ export async function POST(request: NextRequest) {
                 const streamEditParams = {
                     ...baseEditParams,
                     stream: true as const,
-                    partial_images: Math.max(1, Math.min(partialImagesCount, 3)) as 1 | 2 | 3,
+                    partial_images: partialImagesCount,
                     ...(maskFile ? { mask: maskFile } : {})
                 };
 
@@ -391,12 +352,12 @@ export async function POST(request: NextRequest) {
                                         console.log(`Streaming edit: Saved image ${filename}`);
                                     }
 
-                                    const imageData = {
+                                    const imageData = createImageResult(
                                         filename,
-                                        b64_json: event.b64_json || '',
-                                        output_format: fileExtension,
-                                        ...(effectiveStorageMode === 'fs' ? { path: `/api/image/${filename}` } : {})
-                                    };
+                                        event.b64_json || '',
+                                        fileExtension,
+                                        effectiveStorageMode
+                                    );
                                     completedImages.push(imageData);
 
                                     const completedEvent: StreamingEvent = {
@@ -482,7 +443,7 @@ export async function POST(request: NextRequest) {
                 const buffer = Buffer.from(imageData.b64_json, 'base64');
                 const timestamp = Date.now();
 
-                const fileExtension = validateOutputFormat(formData.get('output_format'));
+                const fileExtension = responseOutputFormat;
                 const filename = `${timestamp}-${index}.${fileExtension}`;
 
                 if (effectiveStorageMode === 'fs') {
@@ -493,15 +454,12 @@ export async function POST(request: NextRequest) {
                 } else {
                 }
 
-                const imageResult: { filename: string; b64_json: string; path?: string; output_format: string } = {
-                    filename: filename,
-                    b64_json: imageData.b64_json,
-                    output_format: fileExtension
-                };
-
-                if (effectiveStorageMode === 'fs') {
-                    imageResult.path = `/api/image/${filename}`;
-                }
+                const imageResult = createImageResult(
+                    filename,
+                    imageData.b64_json,
+                    fileExtension,
+                    effectiveStorageMode
+                );
 
                 return imageResult;
             })
@@ -516,7 +474,10 @@ export async function POST(request: NextRequest) {
         let errorMessage = 'An unexpected error occurred.';
         let status = 500;
 
-        if (error instanceof Error) {
+        if (error instanceof RequestValidationError) {
+            errorMessage = error.message;
+            status = error.status;
+        } else if (error instanceof Error) {
             errorMessage = error.message;
             if (errorMessage.includes('<!DOCTYPE html') || errorMessage.includes('<html')) {
                 errorMessage = describeInvalidImagesResponse(errorMessage);

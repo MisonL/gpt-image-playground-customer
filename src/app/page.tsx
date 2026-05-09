@@ -1,16 +1,16 @@
 'use client';
 
+import { ApiSettingsDialog, type ApiSettings } from '@/components/api-settings-dialog';
 import { EditingForm, type EditingFormData } from '@/components/editing-form';
 import { GenerationForm, type GenerationFormData } from '@/components/generation-form';
 import { HistoryPanel } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
-import { ApiSettingsDialog, type ApiSettings } from '@/components/api-settings-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
-import { getPresetDimensions } from '@/lib/size-utils';
 import { db, type ImageRecord } from '@/lib/db';
+import { getPresetDimensions } from '@/lib/size-utils';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Settings2 } from 'lucide-react';
 import * as React from 'react';
@@ -43,6 +43,54 @@ type DrawnPoint = {
 const MAX_EDIT_IMAGES = 10;
 const apiSettingsLocalStorageKey = 'openaiImageApiSettings';
 const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
+const sseEventDelimiterPattern = /\r?\n\r?\n/;
+
+function readLocalStorageValue(key: string): string | null {
+    if (typeof window === 'undefined') return null;
+    return window.localStorage.getItem(key);
+}
+
+function readStoredHistory(): HistoryMetadata[] {
+    const storedHistory = readLocalStorageValue('openaiImageHistory');
+    if (!storedHistory) return [];
+    try {
+        const parsedHistory: unknown = JSON.parse(storedHistory);
+        if (Array.isArray(parsedHistory)) return parsedHistory as HistoryMetadata[];
+        console.warn('Invalid history data found in localStorage.');
+        window.localStorage.removeItem('openaiImageHistory');
+    } catch (e) {
+        console.error('Failed to load or parse history from localStorage:', e);
+        window.localStorage.removeItem('openaiImageHistory');
+    }
+    return [];
+}
+
+function readStoredApiSettings(): ApiSettings {
+    const storedApiSettings = readLocalStorageValue(apiSettingsLocalStorageKey);
+    if (!storedApiSettings) return emptyApiSettings;
+    try {
+        const parsedSettings = JSON.parse(storedApiSettings) as Partial<ApiSettings>;
+        return {
+            apiKey: typeof parsedSettings.apiKey === 'string' ? parsedSettings.apiKey : '',
+            baseUrl: typeof parsedSettings.baseUrl === 'string' ? parsedSettings.baseUrl : ''
+        };
+    } catch (error) {
+        console.error('Failed to load API settings from localStorage:', error);
+        window.localStorage.removeItem(apiSettingsLocalStorageKey);
+        return emptyApiSettings;
+    }
+}
+
+function readStoredDeletePreference(): boolean {
+    return readLocalStorageValue('imageGenSkipDeleteConfirm') === 'true';
+}
+
+function getMimeTypeFromFormat(format: string): string {
+    if (format === 'jpeg') return 'image/jpeg';
+    if (format === 'webp') return 'image/webp';
+
+    return 'image/png';
+}
 
 const explicitModeClient = process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE;
 
@@ -71,6 +119,11 @@ type ApiImageResponseItem = {
     path?: string;
 };
 
+type ApiImageResult = {
+    path: string;
+    filename: string;
+};
+
 export default function HomePage() {
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
@@ -81,7 +134,7 @@ export default function HomePage() {
     const [latestImageBatch, setLatestImageBatch] = React.useState<{ path: string; filename: string }[] | null>(null);
     const [imageOutputView, setImageOutputView] = React.useState<'grid' | number>('grid');
     const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
-    const [isInitialLoad, setIsInitialLoad] = React.useState(true);
+    const hasLoadedStoredHistoryRef = React.useRef(false);
     const blobUrlCacheRef = React.useRef<Map<string, string>>(new Map());
     const [isPasswordDialogOpen, setIsPasswordDialogOpen] = React.useState(false);
     const [isApiSettingsDialogOpen, setIsApiSettingsDialogOpen] = React.useState(false);
@@ -158,29 +211,17 @@ export default function HomePage() {
     }, []);
 
     React.useEffect(() => {
+        queueMicrotask(() => {
+            setHistory(readStoredHistory());
+            hasLoadedStoredHistoryRef.current = true;
+        });
+    }, []);
+
+    React.useEffect(() => {
         return () => {
             editSourceImagePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
         };
     }, [editSourceImagePreviewUrls]);
-
-    React.useEffect(() => {
-        try {
-            const storedHistory = localStorage.getItem('openaiImageHistory');
-            if (storedHistory) {
-                const parsedHistory: HistoryMetadata[] = JSON.parse(storedHistory);
-                if (Array.isArray(parsedHistory)) {
-                    setHistory(parsedHistory);
-                } else {
-                    console.warn('Invalid history data found in localStorage.');
-                    localStorage.removeItem('openaiImageHistory');
-                }
-            }
-        } catch (e) {
-            console.error('Failed to load or parse history from localStorage:', e);
-            localStorage.removeItem('openaiImageHistory');
-        }
-        setIsInitialLoad(false);
-    }, []);
 
     React.useEffect(() => {
         const fetchAuthStatus = async () => {
@@ -198,34 +239,20 @@ export default function HomePage() {
         };
 
         fetchAuthStatus();
-        const storedHash = localStorage.getItem('clientPasswordHash');
-        if (storedHash) {
-            setClientPasswordHash(storedHash);
-        }
-        const storedApiSettings = localStorage.getItem(apiSettingsLocalStorageKey);
-        if (storedApiSettings) {
-            try {
-                const parsedSettings = JSON.parse(storedApiSettings) as Partial<ApiSettings>;
-                setApiSettings({
-                    apiKey: typeof parsedSettings.apiKey === 'string' ? parsedSettings.apiKey : '',
-                    baseUrl: typeof parsedSettings.baseUrl === 'string' ? parsedSettings.baseUrl : ''
-                });
-            } catch (error) {
-                console.error('Failed to load API settings from localStorage:', error);
-                localStorage.removeItem(apiSettingsLocalStorageKey);
-            }
-        }
+        queueMicrotask(() => {
+            setClientPasswordHash(readLocalStorageValue('clientPasswordHash'));
+            setApiSettings(readStoredApiSettings());
+        });
     }, []);
 
     React.useEffect(() => {
-        if (!isInitialLoad) {
-            try {
-                localStorage.setItem('openaiImageHistory', JSON.stringify(history));
-            } catch (e) {
-                console.error('Failed to save history to localStorage:', e);
-            }
+        if (!hasLoadedStoredHistoryRef.current) return;
+        try {
+            localStorage.setItem('openaiImageHistory', JSON.stringify(history));
+        } catch (e) {
+            console.error('Failed to save history to localStorage:', e);
         }
-    }, [history, isInitialLoad]);
+    }, [history]);
 
     React.useEffect(() => {
         return () => {
@@ -234,12 +261,9 @@ export default function HomePage() {
     }, [editSourceImagePreviewUrls]);
 
     React.useEffect(() => {
-        const storedPref = localStorage.getItem('imageGenSkipDeleteConfirm');
-        if (storedPref === 'true') {
-            setSkipDeleteConfirmation(true);
-        } else if (storedPref === 'false') {
-            setSkipDeleteConfirmation(false);
-        }
+        queueMicrotask(() => {
+            setSkipDeleteConfirmation(readStoredDeletePreference());
+        });
     }, []);
 
     React.useEffect(() => {
@@ -325,12 +349,96 @@ export default function HomePage() {
         }
     };
 
-    const getMimeTypeFromFormat = (format: string): string => {
-        if (format === 'jpeg') return 'image/jpeg';
-        if (format === 'webp') return 'image/webp';
+    const buildHistoryEntry = React.useCallback(
+        (images: ApiImageResponseItem[], usage: unknown, durationMsValue: number): HistoryMetadata => {
+            const isGenerateMode = mode === 'generate';
+            const currentModel = isGenerateMode ? genModel : editModel;
+            return {
+                timestamp: Date.now(),
+                images: images.map((img) => ({ filename: img.filename })),
+                storageModeUsed: effectiveStorageModeClient,
+                durationMs: durationMsValue,
+                quality: isGenerateMode ? genQuality : editQuality,
+                background: isGenerateMode ? genBackground : 'auto',
+                moderation: isGenerateMode ? genModeration : 'auto',
+                output_format: isGenerateMode ? genOutputFormat : 'png',
+                prompt: isGenerateMode ? genPrompt : editPrompt,
+                mode,
+                costDetails: calculateApiCost(usage as Parameters<typeof calculateApiCost>[0], currentModel),
+                model: currentModel
+            };
+        },
+        [
+            editModel,
+            editPrompt,
+            editQuality,
+            genBackground,
+            genModel,
+            genModeration,
+            genOutputFormat,
+            genPrompt,
+            genQuality,
+            mode
+        ]
+    );
 
-        return 'image/png';
-    };
+    const materializeImages = React.useCallback(
+        async (images: ApiImageResponseItem[]): Promise<ApiImageResult[]> => {
+            if (effectiveStorageModeClient === 'indexeddb') {
+                const indexedDbImages = await Promise.all(
+                    images.map(async (img) => {
+                        if (!img.b64_json) {
+                            throw new Error(`Image ${img.filename} missing base64 data in IndexedDB mode.`);
+                        }
+                        const byteCharacters = atob(img.b64_json);
+                        const byteNumbers = new Array(byteCharacters.length);
+                        for (let i = 0; i < byteCharacters.length; i++) {
+                            byteNumbers[i] = byteCharacters.charCodeAt(i);
+                        }
+                        const byteArray = new Uint8Array(byteNumbers);
+                        const blob = new Blob([byteArray], { type: getMimeTypeFromFormat(img.output_format) });
+
+                        await db.images.put({ filename: img.filename, blob });
+
+                        const existingUrl = blobUrlCacheRef.current.get(img.filename);
+                        if (existingUrl) {
+                            URL.revokeObjectURL(existingUrl);
+                        }
+                        const blobUrl = URL.createObjectURL(blob);
+                        blobUrlCacheRef.current.set(img.filename, blobUrl);
+                        return { filename: img.filename, path: blobUrl };
+                    })
+                );
+                return indexedDbImages;
+            }
+
+            const fsImages = images
+                .filter((img) => !!img.path)
+                .map((img) => ({ path: img.path!, filename: img.filename }));
+            if (fsImages.length !== images.length) {
+                throw new Error('API response omitted one or more image paths.');
+            }
+            return fsImages;
+        },
+        []
+    );
+
+    const commitCompletedImages = React.useCallback(
+        async (images: ApiImageResponseItem[], usage: unknown, durationMsValue: number, clearStreaming = false) => {
+            if (images.length === 0) {
+                throw new Error('API response did not contain valid image data or filenames.');
+            }
+
+            const processedImages = await materializeImages(images);
+            setLatestImageBatch(processedImages);
+            setImageOutputView(processedImages.length > 1 ? 'grid' : 0);
+            if (clearStreaming) {
+                setStreamingPreviewImages(new Map());
+            }
+            setHistory((prevHistory) => [buildHistoryEntry(images, usage, durationMsValue), ...prevHistory]);
+        },
+        [buildHistoryEntry, materializeImages]
+    );
 
     const handleApiCall = async (formData: GenerationFormData | EditingFormData) => {
         const startTime = Date.now();
@@ -411,7 +519,6 @@ export default function HomePage() {
                 body: apiFormData
             });
 
-            // Check if response is SSE (streaming)
             const contentType = response.headers.get('content-type');
             if (contentType?.includes('text/event-stream')) {
                 if (!response.body) {
@@ -422,154 +529,50 @@ export default function HomePage() {
                 const decoder = new TextDecoder();
                 let buffer = '';
 
+                const processSseEvent = async (rawEvent: string) => {
+                    const dataLines = rawEvent
+                        .split(/\r?\n/)
+                        .filter((line) => line.startsWith('data: '))
+                        .map((line) => line.slice(6));
+                    if (dataLines.length === 0) return;
+
+                    const event = JSON.parse(dataLines.join('\n'));
+                    if (event.type === 'partial_image') {
+                        const imageIndex = event.index ?? 0;
+                        const dataUrl = `data:image/png;base64,${event.b64_json}`;
+                        setStreamingPreviewImages((prev) => {
+                            const newMap = new Map(prev);
+                            newMap.set(imageIndex, dataUrl);
+                            return newMap;
+                        });
+                    } else if (event.type === 'error') {
+                        throw new Error(event.error || 'Streaming error occurred');
+                    } else if (event.type === 'done') {
+                        durationMs = Date.now() - startTime;
+                        await commitCompletedImages(event.images || [], event.usage, durationMs, true);
+                    }
+                };
+
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
                     buffer += decoder.decode(value, { stream: true });
+                    const events = buffer.split(sseEventDelimiterPattern);
+                    buffer = events.pop() || '';
 
-                    // Process complete SSE events
-                    const lines = buffer.split('\n\n');
-                    buffer = lines.pop() || ''; // Keep incomplete event in buffer
-
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            const jsonStr = line.slice(6);
-                            try {
-                                const event = JSON.parse(jsonStr);
-
-                                if (event.type === 'partial_image') {
-                                    // Update streaming preview with partial image
-                                    const imageIndex = event.index ?? 0;
-                                    const dataUrl = `data:image/png;base64,${event.b64_json}`;
-                                    setStreamingPreviewImages((prev) => {
-                                        const newMap = new Map(prev);
-                                        newMap.set(imageIndex, dataUrl);
-                                        return newMap;
-                                    });
-                                } else if (event.type === 'error') {
-                                    throw new Error(event.error || 'Streaming error occurred');
-                                } else if (event.type === 'done') {
-                                    // Finalize with all completed images
-                                    durationMs = Date.now() - startTime;
-
-                                    if (event.images && event.images.length > 0) {
-                                        let historyQuality: GenerationFormData['quality'] = 'auto';
-                                        let historyBackground: GenerationFormData['background'] = 'auto';
-                                        let historyModeration: GenerationFormData['moderation'] = 'auto';
-                                        let historyOutputFormat: GenerationFormData['output_format'] = 'png';
-                                        let historyPrompt: string = '';
-
-                                        if (mode === 'generate') {
-                                            historyQuality = genQuality;
-                                            historyBackground = genBackground;
-                                            historyModeration = genModeration;
-                                            historyOutputFormat = genOutputFormat;
-                                            historyPrompt = genPrompt;
-                                        } else {
-                                            historyQuality = editQuality;
-                                            historyBackground = 'auto';
-                                            historyModeration = 'auto';
-                                            historyOutputFormat = 'png';
-                                            historyPrompt = editPrompt;
-                                        }
-
-                                        const currentModel = mode === 'generate' ? genModel : editModel;
-                                        const costDetails = calculateApiCost(event.usage, currentModel);
-
-                                        const batchTimestamp = Date.now();
-                                        const newHistoryEntry: HistoryMetadata = {
-                                            timestamp: batchTimestamp,
-                                            images: event.images.map((img: { filename: string }) => ({
-                                                filename: img.filename
-                                            })),
-                                            storageModeUsed: effectiveStorageModeClient,
-                                            durationMs: durationMs,
-                                            quality: historyQuality,
-                                            background: historyBackground,
-                                            moderation: historyModeration,
-                                            output_format: historyOutputFormat,
-                                            prompt: historyPrompt,
-                                            mode: mode,
-                                            costDetails: costDetails,
-                                            model: currentModel
-                                        };
-
-                                        let newImageBatchPromises: Promise<{ path: string; filename: string } | null>[] =
-                                            [];
-                                        if (effectiveStorageModeClient === 'indexeddb') {
-                                            newImageBatchPromises = event.images.map(async (img: ApiImageResponseItem) => {
-                                                if (img.b64_json) {
-                                                    try {
-                                                        const byteCharacters = atob(img.b64_json);
-                                                        const byteNumbers = new Array(byteCharacters.length);
-                                                        for (let i = 0; i < byteCharacters.length; i++) {
-                                                            byteNumbers[i] = byteCharacters.charCodeAt(i);
-                                                        }
-                                                        const byteArray = new Uint8Array(byteNumbers);
-
-                                                        const actualMimeType = getMimeTypeFromFormat(img.output_format);
-                                                        const blob = new Blob([byteArray], { type: actualMimeType });
-
-                                                        await db.images.put({ filename: img.filename, blob });
-
-                                                        const blobUrl = URL.createObjectURL(blob);
-                                                        blobUrlCacheRef.current.set(img.filename, blobUrl);
-
-                                                        return { filename: img.filename, path: blobUrl };
-                                                    } catch (dbError) {
-                                                        console.error(
-                                                            `Error saving blob ${img.filename} to IndexedDB:`,
-                                                            dbError
-                                                        );
-                                                        setError(
-                                                            `Failed to save image ${img.filename} to local database.`
-                                                        );
-                                                        return null;
-                                                    }
-                                                } else {
-                                                    console.warn(
-                                                        `Image ${img.filename} missing b64_json in indexeddb mode.`
-                                                    );
-                                                    return null;
-                                                }
-                                            });
-                                        } else {
-                                            newImageBatchPromises = event.images
-                                                .filter((img: ApiImageResponseItem) => !!img.path)
-                                                .map((img: ApiImageResponseItem) =>
-                                                    Promise.resolve({
-                                                        path: img.path!,
-                                                        filename: img.filename
-                                                    })
-                                                );
-                                        }
-
-                                        const processedImages = (await Promise.all(newImageBatchPromises)).filter(
-                                            Boolean
-                                        ) as {
-                                            path: string;
-                                            filename: string;
-                                        }[];
-
-                                        setLatestImageBatch(processedImages);
-                                        setImageOutputView(processedImages.length > 1 ? 'grid' : 0);
-                                        setStreamingPreviewImages(new Map()); // Clear streaming previews
-
-                                        setHistory((prevHistory) => [newHistoryEntry, ...prevHistory]);
-                                    }
-                                }
-                            } catch (parseError) {
-                                console.error('Error parsing SSE event:', parseError);
-                            }
-                        }
+                    for (const eventText of events) {
+                        await processSseEvent(eventText);
                     }
                 }
+                const remainingEvent = buffer.trim();
+                if (remainingEvent) {
+                    await processSseEvent(remainingEvent);
+                }
 
-                return; // Exit early for streaming
+                return;
             }
 
-            // Non-streaming response handling (original code)
             const result = await response.json();
 
             if (!response.ok) {
@@ -584,103 +587,8 @@ export default function HomePage() {
                 throw new Error(result.error || `API request failed with status ${response.status}`);
             }
 
-            if (result.images && result.images.length > 0) {
-                durationMs = Date.now() - startTime;
-
-                let historyQuality: GenerationFormData['quality'] = 'auto';
-                let historyBackground: GenerationFormData['background'] = 'auto';
-                let historyModeration: GenerationFormData['moderation'] = 'auto';
-                let historyOutputFormat: GenerationFormData['output_format'] = 'png';
-                let historyPrompt: string = '';
-
-                if (mode === 'generate') {
-                    historyQuality = genQuality;
-                    historyBackground = genBackground;
-                    historyModeration = genModeration;
-                    historyOutputFormat = genOutputFormat;
-                    historyPrompt = genPrompt;
-                } else {
-                    historyQuality = editQuality;
-                    historyBackground = 'auto';
-                    historyModeration = 'auto';
-                    historyOutputFormat = 'png';
-                    historyPrompt = editPrompt;
-                }
-
-                const currentModel = mode === 'generate' ? genModel : editModel;
-                const costDetails = calculateApiCost(result.usage, currentModel);
-
-                const batchTimestamp = Date.now();
-                const newHistoryEntry: HistoryMetadata = {
-                    timestamp: batchTimestamp,
-                    images: result.images.map((img: { filename: string }) => ({ filename: img.filename })),
-                    storageModeUsed: effectiveStorageModeClient,
-                    durationMs: durationMs,
-                    quality: historyQuality,
-                    background: historyBackground,
-                    moderation: historyModeration,
-                    output_format: historyOutputFormat,
-                    prompt: historyPrompt,
-                    mode: mode,
-                    costDetails: costDetails,
-                    model: currentModel
-                };
-
-                let newImageBatchPromises: Promise<{ path: string; filename: string } | null>[] = [];
-                if (effectiveStorageModeClient === 'indexeddb') {
-                    newImageBatchPromises = result.images.map(async (img: ApiImageResponseItem) => {
-                        if (img.b64_json) {
-                            try {
-                                const byteCharacters = atob(img.b64_json);
-                                const byteNumbers = new Array(byteCharacters.length);
-                                for (let i = 0; i < byteCharacters.length; i++) {
-                                    byteNumbers[i] = byteCharacters.charCodeAt(i);
-                                }
-                                const byteArray = new Uint8Array(byteNumbers);
-
-                                const actualMimeType = getMimeTypeFromFormat(img.output_format);
-                                const blob = new Blob([byteArray], { type: actualMimeType });
-
-                                await db.images.put({ filename: img.filename, blob });
-
-                                const blobUrl = URL.createObjectURL(blob);
-                                blobUrlCacheRef.current.set(img.filename, blobUrl);
-
-                                return { filename: img.filename, path: blobUrl };
-                            } catch (dbError) {
-                                console.error(`Error saving blob ${img.filename} to IndexedDB:`, dbError);
-                                setError(`Failed to save image ${img.filename} to local database.`);
-                                return null;
-                            }
-                        } else {
-                            console.warn(`Image ${img.filename} missing b64_json in indexeddb mode.`);
-                            return null;
-                        }
-                    });
-                } else {
-                    newImageBatchPromises = result.images
-                        .filter((img: ApiImageResponseItem) => !!img.path)
-                        .map((img: ApiImageResponseItem) =>
-                            Promise.resolve({
-                                path: img.path!,
-                                filename: img.filename
-                            })
-                        );
-                }
-
-                const processedImages = (await Promise.all(newImageBatchPromises)).filter(Boolean) as {
-                    path: string;
-                    filename: string;
-                }[];
-
-                setLatestImageBatch(processedImages);
-                setImageOutputView(processedImages.length > 1 ? 'grid' : 0);
-
-                setHistory((prevHistory) => [newHistoryEntry, ...prevHistory]);
-            } else {
-                setLatestImageBatch(null);
-                throw new Error('API response did not contain valid image data or filenames.');
-            }
+            durationMs = Date.now() - startTime;
+            await commitCompletedImages(result.images || [], result.usage, durationMs);
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
             console.error(`API Call Error after ${durationMs}ms:`, err);
@@ -910,12 +818,14 @@ export default function HomePage() {
                         : 'Set a password to use for API requests.'
                 }
             />
-            <ApiSettingsDialog
-                isOpen={isApiSettingsDialogOpen}
-                onOpenChange={setIsApiSettingsDialogOpen}
-                settings={apiSettings}
-                onSave={handleSaveApiSettings}
-            />
+            {isApiSettingsDialogOpen ? (
+                <ApiSettingsDialog
+                    isOpen={isApiSettingsDialogOpen}
+                    onOpenChange={setIsApiSettingsDialogOpen}
+                    settings={apiSettings}
+                    onSave={handleSaveApiSettings}
+                />
+            ) : null}
             <div className='w-full max-w-screen-2xl space-y-6'>
                 <div className='flex justify-end'>
                     <Button

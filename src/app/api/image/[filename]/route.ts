@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import { RequestValidationError, isValidImageFilename } from '@/lib/image-request-utils';
 import { lookup } from 'mime-types';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
@@ -13,8 +14,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         return NextResponse.json({ error: 'Filename is required' }, { status: 400 });
     }
 
-    // Basic security: Prevent directory traversal
-    if (filename.includes('..') || filename.startsWith('/') || filename.startsWith('\\')) {
+    if (!isValidImageFilename(filename)) {
         return NextResponse.json({ error: 'Invalid filename' }, { status: 400 });
     }
 
@@ -38,6 +38,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         console.error(`Error serving image ${filename}:`, error);
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
             return NextResponse.json({ error: 'Image not found' }, { status: 404 });
+        }
+        if (error instanceof RequestValidationError) {
+            return NextResponse.json({ error: error.message }, { status: error.status });
         }
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }

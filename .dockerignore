@@ -3,6 +3,8 @@ node_modules
 out
 build
 coverage
+artifacts
+dist
 .git
 .gitignore
 .env

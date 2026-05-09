@@ -8,6 +8,7 @@ $zipPath = Join-Path $distDir 'gpt-image-playground-customer.zip'
 $excludedNames = @(
     '.git',
     '.next',
+    'artifacts',
     'node_modules',
     'generated-images',
     'dist'
@@ -16,6 +17,7 @@ $excludedNames = @(
 $excludedFiles = @(
     'dev-server.log',
     'dev-server.err.log',
+    '.env.local',
     'tsconfig.tsbuildinfo',
     'next-env.d.ts'
 )
@@ -42,7 +44,8 @@ Get-ChildItem -LiteralPath $projectRoot -Force | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $stageDir -Recurse -Force
 }
 
-Compress-Archive -Path (Join-Path $stageDir '*') -DestinationPath $zipPath -Force
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory($stageDir, $zipPath)
 
 Write-Host ''
 Write-Host "Customer package: $zipPath"
