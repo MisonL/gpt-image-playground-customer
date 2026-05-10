@@ -18,7 +18,7 @@ GPT Image Playground 是一个用于本地部署的 `gpt-image-2` 图片服务�
   <img src="./readme-images/interface.jpg" alt="GPT Image Playground interface" width="900"/>
 </p>
 
-> **4K 出图提示**：如果遇到 4K 分辨率出图失败问题（状态码 `524`），请使用 [superapi 站](https://superapi.buzz/register?aff=W0rz) 提供的 `gpt-image-2` 渠道。该渠道已适配支持 4K 流式出图，价格便宜（`0.012` 元/张）。
+> **4K 出图提示**：如果遇到 4K 分辨率出图失败问题（状态码 `524`），请使用 [superapi 站](https://superapi.buzz/register?aff=W0rz) 提供的 `gpt-image-2` 渠道。该渠道已适配支持 4K 流式出图，价格便宜（`0.0075` 元/张）。
 
 ## 快速开始
 
