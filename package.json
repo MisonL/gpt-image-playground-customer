@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --turbopack -p 4783",
     "build": "next build",
+    "test": "node --test --import tsx \"src/**/*.test.ts\"",
     "start": "next start -p 4783",
     "lint": "eslint src",
     "format": "prettier --write \"src/**/*.{ts,tsx}\""
@@ -49,6 +50,7 @@
     "prettier": "^3.5.3",
     "prettier-plugin-tailwindcss": "^0.6.11",
     "tailwindcss": "^4.1.4",
+    "tsx": "^4.20.6",
     "tw-animate-css": "^1.2.8",
     "typescript": "^5"
   },
