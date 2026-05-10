@@ -90,6 +90,10 @@ function verifyPasswordHash(clientPasswordHash: string, serverPassword: string):
     return clientBuffer.length === serverBuffer.length && crypto.timingSafeEqual(clientBuffer, serverBuffer);
 }
 
+function createImageFilename(batchId: string, index: number, extension: ValidOutputFormat): string {
+    return `${Date.now()}-${batchId}-${index}.${extension}`;
+}
+
 export async function POST(request: NextRequest) {
     console.log('Received POST request to /api/images');
 
@@ -184,7 +188,7 @@ export async function POST(request: NextRequest) {
 
                 // Create SSE response
                 const encoder = new TextEncoder();
-                const timestamp = Date.now();
+                const batchId = crypto.randomBytes(8).toString('hex');
                 const fileExtension = outputFormat;
 
                 const readableStream = new ReadableStream({
@@ -210,7 +214,7 @@ export async function POST(request: NextRequest) {
                                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
                                 } else if (event.type === 'image_generation.completed') {
                                     const currentIndex = imageIndex;
-                                    const filename = `${timestamp}-${currentIndex}.${fileExtension}`;
+                                    const filename = createImageFilename(batchId, currentIndex, fileExtension);
 
                                     // Save to filesystem if in fs mode
                                     if (effectiveStorageMode === 'fs' && event.b64_json) {
@@ -316,8 +320,8 @@ export async function POST(request: NextRequest) {
 
                 // Create SSE response for edit
                 const encoder = new TextEncoder();
-                const timestamp = Date.now();
-                const fileExtension = 'png'; // Edit mode always outputs PNG
+                const batchId = crypto.randomBytes(8).toString('hex');
+                const fileExtension: ValidOutputFormat = 'png';
 
                 const readableStream = new ReadableStream({
                     async start(controller) {
@@ -342,7 +346,7 @@ export async function POST(request: NextRequest) {
                                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
                                 } else if (event.type === 'image_edit.completed') {
                                     const currentIndex = imageIndex;
-                                    const filename = `${timestamp}-${currentIndex}.${fileExtension}`;
+                                    const filename = createImageFilename(batchId, currentIndex, fileExtension);
 
                                     // Save to filesystem if in fs mode
                                     if (effectiveStorageMode === 'fs' && event.b64_json) {
@@ -434,6 +438,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
         }
 
+        const batchId = crypto.randomBytes(8).toString('hex');
         const savedImagesData = await Promise.all(
             result.data.map(async (imageData, index) => {
                 if (!imageData.b64_json) {
@@ -441,27 +446,17 @@ export async function POST(request: NextRequest) {
                     throw new Error(`Image data at index ${index} is missing base64 data.`);
                 }
                 const buffer = Buffer.from(imageData.b64_json, 'base64');
-                const timestamp = Date.now();
-
                 const fileExtension = responseOutputFormat;
-                const filename = `${timestamp}-${index}.${fileExtension}`;
+                const filename = createImageFilename(batchId, index, fileExtension);
 
                 if (effectiveStorageMode === 'fs') {
                     const filepath = path.join(outputDir, filename);
                     console.log(`Attempting to save image to: ${filepath}`);
                     await fs.writeFile(filepath, buffer);
                     console.log(`Successfully saved image: ${filename}`);
-                } else {
                 }
 
-                const imageResult = createImageResult(
-                    filename,
-                    imageData.b64_json,
-                    fileExtension,
-                    effectiveStorageMode
-                );
-
-                return imageResult;
+                return createImageResult(filename, imageData.b64_json, fileExtension, effectiveStorageMode);
             })
         );
 

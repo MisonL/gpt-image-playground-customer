@@ -1,6 +1,6 @@
 import type OpenAI from 'openai';
 
-export const VALID_IMAGE_FILENAME_PATTERN = /^\d{13}-\d+\.(png|jpe?g|webp)$/i;
+export const VALID_IMAGE_FILENAME_PATTERN = /^\d{13}(?:-[a-f0-9]{16})?-\d+\.(png|jpe?g|webp)$/i;
 export const MAX_IMAGE_COUNT = 10;
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 export const MAX_PROMPT_LENGTH = 32000;
