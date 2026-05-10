@@ -1,0 +1,485 @@
+'use client';
+
+import * as React from 'react';
+
+export type Locale = 'zh-CN' | 'en-US';
+
+const localeStorageKey = 'gptImagePlaygroundLocale';
+const defaultLocale: Locale = 'zh-CN';
+
+const messages: Record<Locale, Record<string, string>> = {
+    'zh-CN': {
+        'app.apiSettings': 'API 设置',
+        'app.language': '语言',
+        'app.theme': '主题',
+        'app.themeLight': '亮色',
+        'app.themeDark': '暗色',
+        'mode.generate': '生成',
+        'mode.edit': '编辑',
+        'common.auto': '自动',
+        'common.custom': '自定义',
+        'common.square': '方图',
+        'common.landscape': '横图',
+        'common.portrait': '竖图',
+        'common.low': '低',
+        'common.medium': '中',
+        'common.high': '高',
+        'common.png': 'PNG',
+        'common.jpeg': 'JPEG',
+        'common.webp': 'WebP',
+        'common.save': '保存',
+        'common.clear': '清空',
+        'common.close': '关闭',
+        'common.cancel': '取消',
+        'common.delete': '删除',
+        'common.copy': '复制',
+        'common.copied': '已复制',
+        'common.error': '错误',
+        'common.saved': '已保存',
+        'form.model': '模型',
+        'form.selectModel': '选择模型',
+        'form.prompt': '提示词',
+        'form.promptPlaceholder': '例如：一只写实风格的猫宇航员漂浮在太空中',
+        'form.editPromptPlaceholder': '例如：给主体加一顶派对帽',
+        'form.numberOfImages': '图片数量：{count}',
+        'form.size': '尺寸',
+        'form.quality': '质量',
+        'form.background': '背景',
+        'form.backgroundOpaque': '不透明',
+        'form.backgroundTransparent': '透明',
+        'form.outputFormat': '输出格式',
+        'form.compression': '压缩：{value}%',
+        'form.moderation': '内容审核级别',
+        'form.width': '宽度 (px)',
+        'form.height': '高度 (px)',
+        'form.pixelsMeta': '{pixels} 像素（最大值的 {percent}%）- {ratio}',
+        'form.ratio': '{ratio}:1 比例',
+        'form.noRatio': '-',
+        'form.customConstraints':
+            '限制：边长必须是 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素在 655,360 到 8,294,400 之间。',
+        'sizeError.positive': '宽度和高度必须为正数。',
+        'sizeError.whole': '宽度和高度必须为整数。',
+        'sizeError.multiple': '宽度和高度都必须是 {multiple} 的倍数。',
+        'sizeError.maxEdge': '单边最大值为 {max}px。',
+        'sizeError.aspect': '宽高比（长边:短边）不能超过 {max}:1。',
+        'sizeError.minPixels': '总像素不能少于 {min}。',
+        'sizeError.maxPixels': '总像素不能超过 {max}。',
+        'streaming.enable': '启用流式预览',
+        'streaming.previewImages': '预览图数量',
+        'streaming.disabledByCount': '只有生成单张图片（n=1）时支持流式预览。',
+        'streaming.description': '生成过程中显示局部预览图，交互反馈更及时。',
+        'streaming.costHint': '每张预览图约增加约 $0.003 成本（额外 100 个输出 token）。',
+        'generate.title': '生成图片',
+        'generate.description': '根据文本提示词创建新图片。',
+        'generate.submit': '生成',
+        'generate.loading': '生成中...',
+        'edit.title': '编辑图片',
+        'edit.description': '使用文本提示词修改已有图片。',
+        'edit.submit': '编辑图片',
+        'edit.loading': '编辑中...',
+        'edit.sourceImages': '源图片 [最多：{count}]',
+        'edit.noFile': '未选择文件。',
+        'edit.filesSelected': '已选择 {count} 个文件',
+        'edit.browse': '浏览...',
+        'edit.mask': '蒙版',
+        'edit.createMask': '创建蒙版',
+        'edit.closeMaskEditor': '关闭蒙版编辑器',
+        'edit.editSavedMask': '编辑已保存蒙版',
+        'edit.drawMaskHint': '在下方图片上涂抹需要编辑的区域（涂抹区域会在蒙版中变为透明）。',
+        'edit.brushSize': '画笔大小：{value}px',
+        'edit.brushSizeLabel': '画笔大小',
+        'edit.uploadMask': '上传蒙版',
+        'edit.clearMask': '清除',
+        'edit.saveMask': '保存蒙版',
+        'edit.maskPreview': '生成的蒙版预览：',
+        'edit.maskPreviewLoading': '正在生成蒙版预览...',
+        'edit.maskSaved': '蒙版已保存。',
+        'edit.maskApplied': '已应用蒙版：{name}',
+        'edit.imagePreviewForMasking': '用于绘制蒙版的图片预览',
+        'edit.generatedMaskPreviewAlt': '生成的蒙版预览',
+        'edit.sourcePreview': '源图片预览 {index}',
+        'edit.removeImage': '移除第 {index} 张图片',
+        'edit.fidelityHint':
+            'gpt-image-2 始终以高保真方式处理参考图。编辑质量更好，但比 gpt-image-1.5 的默认保真度消耗更多输入图片 token。',
+        'output.empty': '生成的图片会显示在这里。',
+        'output.error': '图片显示失败。',
+        'output.generating': '正在生成图片...',
+        'output.editing': '正在编辑图片...',
+        'output.streaming': '流式生成中...',
+        'output.sendToEdit': '发送到编辑',
+        'output.showGrid': '显示网格视图',
+        'output.selectImage': '选择第 {index} 张图片',
+        'output.thumbnail': '第 {index} 张缩略图',
+        'output.generatedImage': '生成图片 {index}',
+        'output.alt': '生成图片输出',
+        'history.title': '历史记录',
+        'history.empty': '生成记录会显示在这里。',
+        'history.clear': '清空',
+        'history.totalCost': '总成本：${cost}',
+        'history.totalCostSummary': '总成本摘要',
+        'history.costSummaryDescription': '历史记录中所有生成图片的预计总成本摘要。',
+        'history.totalImages': '生成图片总数：',
+        'history.averageCost': '单张平均成本：',
+        'history.totalEstimatedCost': '预计总成本：',
+        'history.costBreakdown': '成本明细',
+        'history.costBreakdownDescription': '本次图片生成的预计成本明细。',
+        'history.pricingFor': '{model} 计费：',
+        'history.textInput': '文本输入：',
+        'history.imageInput': '图片输入：',
+        'history.imageOutput': '图片输出：',
+        'history.tokens1m': ' / 100 万 token',
+        'history.textInputTokens': '文本输入 token：',
+        'history.imageInputTokens': '图片输入 token：',
+        'history.imageOutputTokens': '图片输出 token：',
+        'history.time': '耗时：',
+        'history.model': '模型：',
+        'history.quality': '质量：',
+        'history.bg': '背景：',
+        'history.mod': '审核：',
+        'history.showPrompt': '查看提示词',
+        'history.prompt': '提示词',
+        'history.promptDescription': '本次生成所使用的完整提示词。',
+        'history.noPrompt': '未记录提示词。',
+        'history.deleteItem': '删除历史项',
+        'history.confirmDeletion': '确认删除',
+        'history.confirmDeletionDescription': '确定要删除这条历史记录吗？这会移除 {count} 张图片。此操作无法撤销。',
+        'history.dontAskAgain': '不再询问',
+        'history.viewBatch': '查看 {time} 生成的图片批次',
+        'history.previewBatch': '{time} 生成批次的预览',
+        'history.showCost': '查看成本明细',
+        'history.showTotalCost': '查看总成本摘要',
+        'history.modeCreate': '生成',
+        'history.modeEdit': '编辑',
+        'history.storageFile': '文件',
+        'history.storageDb': '数据库',
+        'history.generatedOn': '生成时间：{time}',
+        'api.title': 'API 设置',
+        'api.description': '留空时使用服务器环境变量；填写后仅保存在当前浏览器。',
+        'api.key': 'API Key',
+        'api.url': 'API URL',
+        'api.urlHint': '填 OpenAI 兼容接口根地址，通常以 /v1 结尾；不要填管理后台网页地址。',
+        'password.configure': '配置密码',
+        'password.required': '需要密码',
+        'password.initialDescription': '设置用于 API 请求的密码。',
+        'password.retryDescription': '服务器要求密码，或上一次密码不正确。请输入密码后继续。',
+        'password.placeholder': '输入密码',
+        'password.empty': '密码不能为空。',
+        'password.hashError': '保存密码失败：哈希计算出错。',
+        'error.passwordRequired': '需要密码。请点击锁图标配置密码。',
+        'error.unauthorized': '未授权：密码无效或缺失，请重试。',
+        'error.unexpected': '发生未知错误。',
+        'error.responseBodyNull': '响应体为空。',
+        'error.streaming': '流式生成出错。',
+        'error.apiFailed': 'API 请求失败，状态码 {status}',
+        'error.imageMissingBase64': '图片 {filename} 在 IndexedDB 模式下缺少 base64 数据。',
+        'error.apiOmittedPaths': 'API 响应缺少一个或多个图片路径。',
+        'error.noImages': 'API 响应中没有有效图片数据或文件名。',
+        'error.historyImageLoad': '图片 {filename} 无法加载。',
+        'error.historySomeMissing': '这条历史记录中的部分图片无法加载，可能已被清理或丢失。',
+        'error.clearHistory': '清空历史失败：{message}',
+        'error.maxEditImages': '编辑表单最多只能添加 {count} 张图片。',
+        'error.imageNotFoundDb': '本地数据库中找不到图片 {filename}。',
+        'error.fetchImage': '获取图片失败：{statusText}',
+        'error.retrieveImage': '无法读取图片数据：{filename}。',
+        'error.sendToEdit': '发送到编辑表单失败。',
+        'error.deleteUnexpected': '删除时发生未知错误。',
+        'confirm.clearHistoryFs': '确定要清空全部图片历史吗？此操作无法撤销。',
+        'confirm.clearHistoryIndexedDb':
+            '确定要清空全部图片历史吗？IndexedDB 模式下也会永久删除已存储图片。此操作无法撤销。',
+        'alert.editNoImage': '请至少选择一张要编辑的图片。',
+        'alert.maxImages': '最多只能选择 {count} 张图片。',
+        'alert.saveMaskBeforeSubmit': '请先保存已绘制的蒙版再提交。',
+        'alert.maskInvalidType': '蒙版文件类型无效。请上传 PNG 文件。',
+        'alert.maskDimensionMismatch': '蒙版尺寸（{actual}）必须与源图片尺寸（{expected}）一致。',
+        'alert.maskLoadFailed': '无法加载上传的蒙版图片并检查尺寸。',
+        'alert.pasteMaxImages': '无法粘贴：已达到最多 {count} 张图片的限制。'
+    },
+    'en-US': {
+        'app.apiSettings': 'API Settings',
+        'app.language': 'Language',
+        'app.theme': 'Theme',
+        'app.themeLight': 'Light',
+        'app.themeDark': 'Dark',
+        'mode.generate': 'Generate',
+        'mode.edit': 'Edit',
+        'common.auto': 'Auto',
+        'common.custom': 'Custom',
+        'common.square': 'Square',
+        'common.landscape': 'Landscape',
+        'common.portrait': 'Portrait',
+        'common.low': 'Low',
+        'common.medium': 'Medium',
+        'common.high': 'High',
+        'common.png': 'PNG',
+        'common.jpeg': 'JPEG',
+        'common.webp': 'WebP',
+        'common.save': 'Save',
+        'common.clear': 'Clear',
+        'common.close': 'Close',
+        'common.cancel': 'Cancel',
+        'common.delete': 'Delete',
+        'common.copy': 'Copy',
+        'common.copied': 'Copied',
+        'common.error': 'Error',
+        'common.saved': 'Saved',
+        'form.model': 'Model',
+        'form.selectModel': 'Select model',
+        'form.prompt': 'Prompt',
+        'form.promptPlaceholder': 'e.g., A photorealistic cat astronaut floating in space',
+        'form.editPromptPlaceholder': 'e.g., Add a party hat to the main subject',
+        'form.numberOfImages': 'Number of Images: {count}',
+        'form.size': 'Size',
+        'form.quality': 'Quality',
+        'form.background': 'Background',
+        'form.backgroundOpaque': 'Opaque',
+        'form.backgroundTransparent': 'Transparent',
+        'form.outputFormat': 'Output Format',
+        'form.compression': 'Compression: {value}%',
+        'form.moderation': 'Moderation Level',
+        'form.width': 'Width (px)',
+        'form.height': 'Height (px)',
+        'form.pixelsMeta': '{pixels} pixels ({percent}% of max) - {ratio}',
+        'form.ratio': '{ratio}:1 ratio',
+        'form.noRatio': '-',
+        'form.customConstraints':
+            'Constraints: multiples of 16, max edge 3840px, aspect ratio <= 3:1, 655,360 to 8,294,400 total pixels.',
+        'sizeError.positive': 'Width and height must be positive numbers.',
+        'sizeError.whole': 'Width and height must be whole numbers.',
+        'sizeError.multiple': 'Both edges must be multiples of {multiple}.',
+        'sizeError.maxEdge': 'Maximum edge is {max}px.',
+        'sizeError.aspect': 'Aspect ratio (long:short) must be <= {max}:1.',
+        'sizeError.minPixels': 'Total pixels must be at least {min}.',
+        'sizeError.maxPixels': 'Total pixels must be no more than {max}.',
+        'streaming.enable': 'Enable Streaming',
+        'streaming.previewImages': 'Preview Images',
+        'streaming.disabledByCount': 'Streaming is only supported when generating a single image (n=1).',
+        'streaming.description':
+            'Shows partial preview images as they are generated, providing a more interactive experience.',
+        'streaming.costHint': 'Each preview image adds about $0.003 to the cost (100 additional output tokens).',
+        'generate.title': 'Generate Image',
+        'generate.description': 'Create a new image from a text prompt.',
+        'generate.submit': 'Generate',
+        'generate.loading': 'Generating...',
+        'edit.title': 'Edit Image',
+        'edit.description': 'Modify an existing image with a text prompt.',
+        'edit.submit': 'Edit Image',
+        'edit.loading': 'Editing...',
+        'edit.sourceImages': 'Source Image(s) [Max: {count}]',
+        'edit.noFile': 'No file selected.',
+        'edit.filesSelected': '{count} files selected',
+        'edit.browse': 'Browse...',
+        'edit.mask': 'Mask',
+        'edit.createMask': 'Create Mask',
+        'edit.closeMaskEditor': 'Close Mask Editor',
+        'edit.editSavedMask': 'Edit Saved Mask',
+        'edit.drawMaskHint':
+            'Draw on the image below to mark areas for editing (drawn areas become transparent in the mask).',
+        'edit.brushSize': 'Brush Size: {value}px',
+        'edit.brushSizeLabel': 'Brush Size',
+        'edit.uploadMask': 'Upload Mask',
+        'edit.clearMask': 'Clear',
+        'edit.saveMask': 'Save Mask',
+        'edit.maskPreview': 'Generated Mask Preview:',
+        'edit.maskPreviewLoading': 'Generating mask preview...',
+        'edit.maskSaved': 'Mask saved successfully!',
+        'edit.maskApplied': 'Mask applied: {name}',
+        'edit.imagePreviewForMasking': 'Image preview for masking',
+        'edit.generatedMaskPreviewAlt': 'Generated mask preview',
+        'edit.sourcePreview': 'Source preview {index}',
+        'edit.removeImage': 'Remove image {index}',
+        'edit.fidelityHint':
+            "gpt-image-2 always processes reference images at high fidelity. This improves edit quality but uses more input image tokens per request than gpt-image-1.5's default fidelity.",
+        'output.empty': 'Your generated image will appear here.',
+        'output.error': 'Error displaying image.',
+        'output.generating': 'Generating image...',
+        'output.editing': 'Editing image...',
+        'output.streaming': 'Streaming...',
+        'output.sendToEdit': 'Send to Edit',
+        'output.showGrid': 'Show grid view',
+        'output.selectImage': 'Select image {index}',
+        'output.thumbnail': 'Thumbnail {index}',
+        'output.generatedImage': 'Generated image {index}',
+        'output.alt': 'Generated image output',
+        'history.title': 'History',
+        'history.empty': 'Generated images will appear here.',
+        'history.clear': 'Clear',
+        'history.totalCost': 'Total Cost: ${cost}',
+        'history.totalCostSummary': 'Total Cost Summary',
+        'history.costSummaryDescription':
+            'A summary of the total estimated cost for all generated images in the history.',
+        'history.totalImages': 'Total Images Generated:',
+        'history.averageCost': 'Average Cost Per Image:',
+        'history.totalEstimatedCost': 'Total Estimated Cost:',
+        'history.costBreakdown': 'Cost Breakdown',
+        'history.costBreakdownDescription': 'Estimated cost breakdown for this image generation.',
+        'history.pricingFor': 'Pricing for {model}:',
+        'history.textInput': 'Text Input:',
+        'history.imageInput': 'Image Input:',
+        'history.imageOutput': 'Image Output:',
+        'history.tokens1m': ' / 1M tokens',
+        'history.textInputTokens': 'Text Input Tokens:',
+        'history.imageInputTokens': 'Image Input Tokens:',
+        'history.imageOutputTokens': 'Image Output Tokens:',
+        'history.time': 'Time:',
+        'history.model': 'Model:',
+        'history.quality': 'Quality:',
+        'history.bg': 'BG:',
+        'history.mod': 'Mod:',
+        'history.showPrompt': 'Show Prompt',
+        'history.prompt': 'Prompt',
+        'history.promptDescription': 'The full prompt used to generate this image batch.',
+        'history.noPrompt': 'No prompt recorded.',
+        'history.deleteItem': 'Delete history item',
+        'history.confirmDeletion': 'Confirm Deletion',
+        'history.confirmDeletionDescription':
+            'Are you sure you want to delete this history entry? This will remove {count} image(s). This action cannot be undone.',
+        'history.dontAskAgain': "Don't ask me again",
+        'history.viewBatch': 'View image batch from {time}',
+        'history.previewBatch': 'Preview for batch generated at {time}',
+        'history.showCost': 'Show cost breakdown',
+        'history.showTotalCost': 'Show total cost summary',
+        'history.modeCreate': 'Create',
+        'history.modeEdit': 'Edit',
+        'history.storageFile': 'file',
+        'history.storageDb': 'db',
+        'history.generatedOn': 'Generated on: {time}',
+        'api.title': 'API Settings',
+        'api.description': 'Leave blank to use server environment variables. Saved only in this browser when filled.',
+        'api.key': 'API Key',
+        'api.url': 'API URL',
+        'api.urlHint':
+            'Use the OpenAI-compatible API root, usually ending with /v1. Do not enter an admin dashboard URL.',
+        'password.configure': 'Configure Password',
+        'password.required': 'Password Required',
+        'password.initialDescription': 'Set a password to use for API requests.',
+        'password.retryDescription':
+            'The server requires a password, or the previous one was incorrect. Please enter it to continue.',
+        'password.placeholder': 'Enter your password',
+        'password.empty': 'Password cannot be empty.',
+        'password.hashError': 'Failed to save password due to a hashing error.',
+        'error.passwordRequired': 'Password is required. Please configure the password by clicking the lock icon.',
+        'error.unauthorized': 'Unauthorized: Invalid or missing password. Please try again.',
+        'error.unexpected': 'An unexpected error occurred.',
+        'error.responseBodyNull': 'Response body is null',
+        'error.streaming': 'Streaming error occurred',
+        'error.apiFailed': 'API request failed with status {status}',
+        'error.imageMissingBase64': 'Image {filename} missing base64 data in IndexedDB mode.',
+        'error.apiOmittedPaths': 'API response omitted one or more image paths.',
+        'error.noImages': 'API response did not contain valid image data or filenames.',
+        'error.historyImageLoad': 'Image {filename} could not be loaded.',
+        'error.historySomeMissing':
+            'Some images from this history entry could not be loaded (they might have been cleared or are missing).',
+        'error.clearHistory': 'Failed to clear history: {message}',
+        'error.maxEditImages': 'Cannot add more than {count} images to the edit form.',
+        'error.imageNotFoundDb': 'Image {filename} not found in local database.',
+        'error.fetchImage': 'Failed to fetch image: {statusText}',
+        'error.retrieveImage': 'Could not retrieve image data for {filename}.',
+        'error.sendToEdit': 'Failed to send image to edit form.',
+        'error.deleteUnexpected': 'An unexpected error occurred during deletion.',
+        'confirm.clearHistoryFs': 'Are you sure you want to clear the entire image history? This cannot be undone.',
+        'confirm.clearHistoryIndexedDb':
+            'Are you sure you want to clear the entire image history? In IndexedDB mode, this will also permanently delete all stored images. This cannot be undone.',
+        'alert.editNoImage': 'Please select at least one image to edit.',
+        'alert.maxImages': 'You can only select up to {count} images.',
+        'alert.saveMaskBeforeSubmit': 'Please save the mask you have drawn before submitting.',
+        'alert.maskInvalidType': 'Invalid file type. Please upload a PNG file for the mask.',
+        'alert.maskDimensionMismatch':
+            'Mask dimensions ({actual}) must match the source image dimensions ({expected}).',
+        'alert.maskLoadFailed': 'Failed to load the uploaded mask image to check dimensions.',
+        'alert.pasteMaxImages': 'Cannot paste: Maximum of {count} images reached.'
+    }
+};
+
+type I18nContextValue = {
+    locale: Locale;
+    setLocale: (locale: Locale) => void;
+    t: (key: string, values?: Record<string, string | number>) => string;
+};
+
+const I18nContext = React.createContext<I18nContextValue | null>(null);
+let currentLocale: Locale = defaultLocale;
+const localeSubscribers = new Set<() => void>();
+
+function isLocale(value: string | null): value is Locale {
+    return value === 'zh-CN' || value === 'en-US';
+}
+
+function readInitialLocale(): Locale {
+    if (typeof window === 'undefined') return defaultLocale;
+    const stored = window.localStorage.getItem(localeStorageKey);
+    return isLocale(stored) ? stored : defaultLocale;
+}
+
+function subscribeToLocaleChanges(onStoreChange: () => void): () => void {
+    if (typeof window === 'undefined') return () => {};
+
+    const handleStorage = (event: StorageEvent) => {
+        if (event.key === localeStorageKey) {
+            syncLocaleFromStorage();
+        }
+    };
+
+    localeSubscribers.add(onStoreChange);
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+        localeSubscribers.delete(onStoreChange);
+        window.removeEventListener('storage', handleStorage);
+    };
+}
+
+function getLocaleSnapshot(): Locale {
+    return currentLocale;
+}
+
+function emitLocale(nextLocale: Locale): void {
+    if (currentLocale === nextLocale) return;
+    currentLocale = nextLocale;
+    localeSubscribers.forEach((subscriber) => subscriber());
+}
+
+function syncLocaleFromStorage(): void {
+    emitLocale(readInitialLocale());
+}
+
+function interpolate(template: string, values?: Record<string, string | number>): string {
+    if (!values) return template;
+    return template.replace(/\{(\w+)\}/g, (match, key) => String(values[key] ?? match));
+}
+
+export function I18nProvider({ children }: { children: React.ReactNode }) {
+    const locale = React.useSyncExternalStore(subscribeToLocaleChanges, getLocaleSnapshot, () => defaultLocale);
+
+    React.useEffect(() => {
+        document.documentElement.lang = locale;
+    }, [locale]);
+
+    React.useEffect(() => {
+        queueMicrotask(syncLocaleFromStorage);
+    }, []);
+
+    const setLocale = React.useCallback((nextLocale: Locale) => {
+        window.localStorage.setItem(localeStorageKey, nextLocale);
+        emitLocale(nextLocale);
+    }, []);
+
+    const t = React.useCallback(
+        (key: string, values?: Record<string, string | number>) => {
+            const template = messages[locale][key] ?? messages[defaultLocale][key] ?? key;
+            return interpolate(template, values);
+        },
+        [locale]
+    );
+
+    const value = React.useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
+
+    return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+}
+
+export function useI18n(): I18nContextValue {
+    const context = React.useContext(I18nContext);
+    if (!context) {
+        throw new Error('useI18n must be used within I18nProvider.');
+    }
+    return context;
+}

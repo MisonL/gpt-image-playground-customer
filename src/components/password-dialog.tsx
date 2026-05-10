@@ -10,6 +10,7 @@ import {
     DialogTitle
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { useI18n } from '@/lib/i18n';
 import * as React from 'react';
 
 interface PasswordDialogProps {
@@ -27,6 +28,7 @@ export function PasswordDialog({
     title = 'Configure Password',
     description
 }: PasswordDialogProps) {
+    const { t } = useI18n();
     const [currentPassword, setCurrentPassword] = React.useState('');
     const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -57,7 +59,7 @@ export function PasswordDialog({
                             ref={inputRef}
                             id='password-input'
                             type='password'
-                            placeholder='Enter your password'
+                            placeholder={t('password.placeholder')}
                             value={currentPassword}
                             onChange={(e) => setCurrentPassword(e.target.value)}
                             className='col-span-1 border-white/20 bg-black text-white placeholder:text-white/40 focus:border-white/50 focus:ring-white/50'
@@ -76,7 +78,7 @@ export function PasswordDialog({
                         onClick={handleSave}
                         disabled={!currentPassword.trim()}
                         className='bg-white px-6 text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
-                        Save
+                        {t('common.save')}
                     </Button>
                 </DialogFooter>
             </DialogContent>

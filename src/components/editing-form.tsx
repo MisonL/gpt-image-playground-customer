@@ -11,7 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import type { GptImageModel } from '@/lib/cost-utils';
+import { useI18n } from '@/lib/i18n';
 import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
+import type { SizePreset } from '@/lib/size-utils';
 import {
     Upload,
     Eraser,
@@ -41,9 +44,6 @@ type DrawnPoint = {
     y: number;
     size: number;
 };
-
-import type { GptImageModel } from '@/lib/cost-utils';
-import type { SizePreset } from '@/lib/size-utils';
 
 export type EditingFormData = {
     prompt: string;
@@ -108,12 +108,14 @@ const RadioItemWithIcon = ({
     value,
     id,
     label,
-    Icon
+    Icon,
+    disabled = false
 }: {
     value: string;
     id: string;
     label: string;
     Icon: React.ElementType;
+    disabled?: boolean;
 }) => (
     <div className='flex items-center space-x-2'>
         <RadioGroupItem
@@ -121,7 +123,9 @@ const RadioItemWithIcon = ({
             id={id}
             className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
         />
-        <Label htmlFor={id} className='flex cursor-pointer items-center gap-2 text-base text-white/80'>
+        <Label
+            htmlFor={id}
+            className={`flex items-center gap-2 text-base ${disabled ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
             <Icon className='h-5 w-5 text-white/60' />
             {label}
         </Label>
@@ -174,14 +178,25 @@ export function EditingForm({
     partialImages,
     setPartialImages
 }: EditingFormProps) {
+    const { locale, t } = useI18n();
     const [firstImagePreviewUrl, setFirstImagePreviewUrl] = React.useState<string | null>(null);
 
     const isGptImage2 = editModel === 'gpt-image-2';
     const customSizeValidation =
-        editSize === 'custom'
-            ? validateGptImage2Size(editCustomWidth, editCustomHeight)
-            : { valid: true as const };
+        editSize === 'custom' ? validateGptImage2Size(editCustomWidth, editCustomHeight) : { valid: true as const };
     const customSizeInvalid = editSize === 'custom' && !customSizeValidation.valid;
+    const editCustomPixels = editCustomWidth * editCustomHeight;
+    const editCustomRatio =
+        editCustomWidth > 0 && editCustomHeight > 0
+            ? t('form.ratio', {
+                  ratio: (
+                      Math.max(editCustomWidth, editCustomHeight) / Math.min(editCustomWidth, editCustomHeight)
+                  ).toFixed(2)
+              })
+            : t('form.noRatio');
+    const editCustomSizeError = customSizeValidation.valid
+        ? null
+        : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
     // Disable streaming when editN > 1 (OpenAI limitation)
     React.useEffect(() => {
@@ -390,7 +405,7 @@ export function EditingForm({
             const totalFiles = imageFiles.length + newFiles.length;
 
             if (totalFiles > maxImages) {
-                alert(`You can only select up to ${maxImages} images.`);
+                alert(t('alert.maxImages', { count: maxImages }));
                 const allowedNewFiles = newFiles.slice(0, maxImages - imageFiles.length);
                 if (allowedNewFiles.length === 0) {
                     event.target.value = '';
@@ -435,7 +450,7 @@ export function EditingForm({
         }
 
         if (file.type !== 'image/png') {
-            alert('Invalid file type. Please upload a PNG file for the mask.');
+            alert(t('alert.maskInvalidType'));
             event.target.value = '';
             return;
         }
@@ -447,7 +462,10 @@ export function EditingForm({
         img.onload = () => {
             if (img.width !== editOriginalImageSize.width || img.height !== editOriginalImageSize.height) {
                 alert(
-                    `Mask dimensions (${img.width}x${img.height}) must match the source image dimensions (${editOriginalImageSize.width}x${editOriginalImageSize.height}).`
+                    t('alert.maskDimensionMismatch', {
+                        actual: `${img.width}x${img.height}`,
+                        expected: `${editOriginalImageSize.width}x${editOriginalImageSize.height}`
+                    })
                 );
                 URL.revokeObjectURL(objectUrl);
                 event.target.value = '';
@@ -473,7 +491,7 @@ export function EditingForm({
         };
 
         img.onerror = () => {
-            alert('Failed to load the uploaded mask image to check dimensions.');
+            alert(t('alert.maskLoadFailed'));
             URL.revokeObjectURL(objectUrl);
             event.target.value = '';
         };
@@ -481,14 +499,13 @@ export function EditingForm({
         img.src = objectUrl;
     };
 
-    const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
-        event.preventDefault();
+    const handleSubmit = () => {
         if (imageFiles.length === 0) {
-            alert('Please select at least one image to edit.');
+            alert(t('alert.editNoImage'));
             return;
         }
         if (editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved) {
-            alert('Please save the mask you have drawn before submitting.');
+            alert(t('alert.saveMaskBeforeSubmit'));
             return;
         }
         if (customSizeInvalid) {
@@ -510,9 +527,9 @@ export function EditingForm({
     };
 
     const displayFileNames = (files: File[]) => {
-        if (files.length === 0) return 'No file selected.';
+        if (files.length === 0) return t('edit.noFile');
         if (files.length === 1) return files[0].name;
-        return `${files.length} files selected`;
+        return t('edit.filesSelected', { count: files.length });
     };
 
     return (
@@ -520,34 +537,38 @@ export function EditingForm({
             <CardHeader className='flex items-start justify-between border-b border-white/10 pb-4'>
                 <div>
                     <div className='flex items-center'>
-                        <CardTitle className='py-1 text-lg font-medium text-white'>Edit Image</CardTitle>
+                        <CardTitle className='py-1 text-lg font-medium text-white'>{t('edit.title')}</CardTitle>
                         {isPasswordRequiredByBackend && (
                             <Button
                                 variant='ghost'
                                 size='icon'
                                 onClick={onOpenPasswordDialog}
                                 className='ml-2 text-white/60 hover:text-white'
-                                aria-label='Configure Password'>
+                                aria-label={t('password.configure')}>
                                 {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                             </Button>
                         )}
                     </div>
-                    <CardDescription className='mt-1 text-white/60'>Modify an existing image with a text prompt.</CardDescription>
+                    <CardDescription className='mt-1 text-white/60'>{t('edit.description')}</CardDescription>
                 </div>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
-            <form onSubmit={handleSubmit} className='flex h-full flex-1 flex-col overflow-hidden'>
+            <div className='flex h-full flex-1 flex-col overflow-hidden'>
                 <CardContent className='flex-1 space-y-5 overflow-y-auto p-4'>
                     <div className='space-y-1.5'>
                         <Label htmlFor='edit-model-select' className='text-white'>
-                            Model
+                            {t('form.model')}
                         </Label>
                         <div className='flex items-center gap-4'>
-                            <Select value={editModel} onValueChange={(value) => setEditModel(value as EditingFormData['model'])} disabled={isLoading}>
+                            <Select
+                                value={editModel}
+                                onValueChange={(value) => setEditModel(value as EditingFormData['model'])}
+                                disabled={isLoading}
+                                name='edit-model'>
                                 <SelectTrigger
                                     id='edit-model-select'
                                     className='w-[180px] rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'>
-                                    <SelectValue placeholder='Select model' />
+                                    <SelectValue placeholder={t('form.selectModel')} />
                                 </SelectTrigger>
                                 <SelectContent className='border-white/20 bg-black text-white'>
                                     <SelectItem value='gpt-image-2' className='focus:bg-white/10'>
@@ -569,11 +590,7 @@ export function EditingForm({
                                     <TooltipTrigger asChild>
                                         <Info className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
                                     </TooltipTrigger>
-                                    <TooltipContent className='max-w-[280px]'>
-                                        gpt-image-2 always processes reference images at high fidelity. This improves
-                                        edit quality but uses more input image tokens per request than
-                                        gpt-image-1.5&apos;s default fidelity.
-                                    </TooltipContent>
+                                    <TooltipContent className='max-w-[280px]'>{t('edit.fidelityHint')}</TooltipContent>
                                 </Tooltip>
                             )}
                             <Tooltip>
@@ -581,22 +598,21 @@ export function EditingForm({
                                     <div className='flex items-center gap-2'>
                                         <Checkbox
                                             id='edit-enable-streaming'
+                                            name='edit-enable-streaming'
                                             checked={enableStreaming}
                                             onCheckedChange={(checked) => setEnableStreaming(!!checked)}
                                             disabled={isLoading || editN[0] > 1}
-                                            className='border-white/40 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black disabled:cursor-not-allowed disabled:opacity-50'
+                                            className='border-white/40 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black'
                                         />
                                         <Label
                                             htmlFor='edit-enable-streaming'
                                             className={`text-sm ${editN[0] > 1 ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
-                                            Enable Streaming
+                                            {t('streaming.enable')}
                                         </Label>
                                     </div>
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[250px]'>
-                                    {editN[0] > 1
-                                        ? 'Streaming is only supported when generating a single image (n=1).'
-                                        : 'Shows partial preview images as they are generated, providing a more interactive experience.'}
+                                    {editN[0] > 1 ? t('streaming.disabledByCount') : t('streaming.description')}
                                 </TooltipContent>
                             </Tooltip>
                         </div>
@@ -605,20 +621,22 @@ export function EditingForm({
                     {enableStreaming && (
                         <div className='space-y-3'>
                             <div className='flex items-center gap-2'>
-                                <Label className='text-white'>Preview Images</Label>
+                                <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                    {t('streaming.previewImages')}
+                                </div>
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <HelpCircle className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
                                     </TooltipTrigger>
-                                    <TooltipContent className='max-w-[250px]'>
-                                        Each preview image adds ~$0.003 to the cost (100 additional output tokens).
-                                    </TooltipContent>
+                                    <TooltipContent className='max-w-[250px]'>{t('streaming.costHint')}</TooltipContent>
                                 </Tooltip>
                             </div>
                             <RadioGroup
                                 value={String(partialImages)}
                                 onValueChange={(value) => setPartialImages(Number(value) as 1 | 2 | 3)}
                                 disabled={isLoading}
+                                name='edit-partial_images'
+                                aria-label={t('streaming.previewImages')}
                                 className='flex gap-x-5'>
                                 <div className='flex items-center space-x-2'>
                                     <RadioGroupItem
@@ -656,11 +674,11 @@ export function EditingForm({
 
                     <div className='space-y-1.5'>
                         <Label htmlFor='edit-prompt' className='text-white'>
-                            Prompt
+                            {t('form.prompt')}
                         </Label>
                         <Textarea
                             id='edit-prompt'
-                            placeholder='e.g., Add a party hat to the main subject'
+                            placeholder={t('form.editPromptPlaceholder')}
                             value={editPrompt}
                             onChange={(e) => setEditPrompt(e.target.value)}
                             required
@@ -670,13 +688,15 @@ export function EditingForm({
                     </div>
 
                     <div className='space-y-2'>
-                        <Label className='text-white'>Source Image(s) [Max: 10]</Label>
+                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                            {t('edit.sourceImages', { count: maxImages })}
+                        </div>
                         <Label
                             htmlFor='image-files-input'
                             className='flex h-10 w-full cursor-pointer items-center justify-between rounded-md border border-white/20 bg-black px-3 py-2 text-sm transition-colors hover:bg-white/5'>
                             <span className='truncate pr-2 text-white/60'>{displayFileNames(imageFiles)}</span>
                             <span className='flex shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-3 py-1 text-xs font-medium text-white/80 hover:bg-white/20'>
-                                <Upload className='h-3 w-3' /> Browse...
+                                <Upload className='h-3 w-3' /> {t('edit.browse')}
                             </span>
                         </Label>
                         <Input
@@ -694,7 +714,7 @@ export function EditingForm({
                                     <div key={url} className='relative shrink-0'>
                                         <Image
                                             src={url}
-                                            alt={`Source preview ${index + 1}`}
+                                            alt={t('edit.sourcePreview', { index: index + 1 })}
                                             width={80}
                                             height={80}
                                             className='rounded border border-white/10 object-cover'
@@ -706,7 +726,7 @@ export function EditingForm({
                                             size='icon'
                                             className='absolute top-0 right-0 h-5 w-5 translate-x-1/3 -translate-y-1/3 transform rounded-full bg-red-600 p-0.5 text-white hover:bg-red-700'
                                             onClick={() => handleRemoveImage(index)}
-                                            aria-label={`Remove image ${index + 1}`}>
+                                            aria-label={t('edit.removeImage', { index: index + 1 })}>
                                             <X className='h-3 w-3' />
                                         </Button>
                                     </div>
@@ -716,7 +736,9 @@ export function EditingForm({
                     </div>
 
                     <div className='space-y-3'>
-                        <Label className='block text-white'>Mask</Label>
+                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                            {t('edit.mask')}
+                        </div>
                         <Button
                             type='button'
                             variant='outline'
@@ -725,22 +747,19 @@ export function EditingForm({
                             disabled={isLoading || !editOriginalImageSize}
                             className='w-full justify-start border-white/20 px-3 text-white/80 hover:bg-white/10 hover:text-white'>
                             {editShowMaskEditor
-                                ? 'Close Mask Editor'
+                                ? t('edit.closeMaskEditor')
                                 : editGeneratedMaskFile
-                                  ? 'Edit Saved Mask'
-                                  : 'Create Mask'}
+                                  ? t('edit.editSavedMask')
+                                  : t('edit.createMask')}
                             {editIsMaskSaved && !editShowMaskEditor && (
-                                <span className='ml-auto text-xs text-green-400'>(Saved)</span>
+                                <span className='ml-auto text-xs text-green-400'>({t('common.saved')})</span>
                             )}
                             <ScanEye className='mt-0.5' />
                         </Button>
 
                         {editShowMaskEditor && firstImagePreviewUrl && editOriginalImageSize && (
                             <div className='space-y-3 rounded-md border border-white/20 bg-black p-3'>
-                                <p className='text-xs text-white/60'>
-                                    Draw on the image below to mark areas for editing (drawn areas become transparent in
-                                    the mask).
-                                </p>
+                                <p className='text-xs text-white/60'>{t('edit.drawMaskHint')}</p>
                                 <div
                                     className='relative mx-auto w-full overflow-hidden rounded border border-white/10'
                                     style={{
@@ -749,7 +768,7 @@ export function EditingForm({
                                     }}>
                                     <Image
                                         src={firstImagePreviewUrl}
-                                        alt='Image preview for masking'
+                                        alt={t('edit.imagePreviewForMasking')}
                                         width={editOriginalImageSize.width}
                                         height={editOriginalImageSize.height}
                                         className='block h-auto w-full'
@@ -771,11 +790,13 @@ export function EditingForm({
                                 </div>
                                 <div className='grid grid-cols-1 gap-4 pt-2'>
                                     <div className='space-y-2'>
-                                        <Label htmlFor='brush-size-slider' className='text-sm text-white'>
-                                            Brush Size: {editBrushSize[0]}px
-                                        </Label>
+                                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                            {t('edit.brushSize', { value: editBrushSize[0] })}
+                                        </div>
                                         <Slider
                                             id='brush-size-slider'
+                                            name='brush-size'
+                                            thumbLabel={t('edit.brushSizeLabel')}
                                             min={5}
                                             max={100}
                                             step={1}
@@ -794,7 +815,7 @@ export function EditingForm({
                                         onClick={() => maskInputRef.current?.click()}
                                         disabled={isLoading || !editOriginalImageSize}
                                         className='mr-auto border-white/20 text-white/80 hover:bg-white/10 hover:text-white'>
-                                        <UploadCloud className='mr-1.5 h-4 w-4' /> Upload Mask
+                                        <UploadCloud className='mr-1.5 h-4 w-4' /> {t('edit.uploadMask')}
                                     </Button>
                                     <Input
                                         ref={maskInputRef}
@@ -812,7 +833,7 @@ export function EditingForm({
                                             onClick={handleClearMask}
                                             disabled={isLoading}
                                             className='border-white/20 text-white/80 hover:bg-white/10 hover:text-white'>
-                                            <Eraser className='mr-1.5 h-4 w-4' /> Clear
+                                            <Eraser className='mr-1.5 h-4 w-4' /> {t('edit.clearMask')}
                                         </Button>
                                         <Button
                                             type='button'
@@ -821,19 +842,19 @@ export function EditingForm({
                                             onClick={generateAndSaveMask}
                                             disabled={isLoading || editDrawnPoints.length === 0}
                                             className='bg-white text-black hover:bg-white/90 disabled:opacity-50'>
-                                            <Save className='mr-1.5 h-4 w-4' /> Save Mask
+                                            <Save className='mr-1.5 h-4 w-4' /> {t('edit.saveMask')}
                                         </Button>
                                     </div>
                                 </div>
                                 {editMaskPreviewUrl && (
                                     <div className='mt-3 border-t border-white/10 pt-3 text-center'>
-                                        <Label className='mb-1.5 block text-sm text-white'>
-                                            Generated Mask Preview:
-                                        </Label>
+                                        <div className='mb-1.5 block text-sm leading-none font-medium text-white select-none'>
+                                            {t('edit.maskPreview')}
+                                        </div>
                                         <div className='inline-block rounded border border-gray-300 bg-white p-1'>
                                             <Image
                                                 src={editMaskPreviewUrl}
-                                                alt='Generated mask preview'
+                                                alt={t('edit.generatedMaskPreviewAlt')}
                                                 width={0}
                                                 height={134}
                                                 className='block max-w-full'
@@ -845,33 +866,46 @@ export function EditingForm({
                                 )}
                                 {editIsMaskSaved && !editMaskPreviewUrl && (
                                     <p className='pt-1 text-center text-xs text-yellow-400'>
-                                        Generating mask preview...
+                                        {t('edit.maskPreviewLoading')}
                                     </p>
                                 )}
                                 {editIsMaskSaved && editMaskPreviewUrl && (
-                                    <p className='pt-1 text-center text-xs text-green-400'>Mask saved successfully!</p>
+                                    <p className='pt-1 text-center text-xs text-green-400'>{t('edit.maskSaved')}</p>
                                 )}
                             </div>
                         )}
                         {!editShowMaskEditor && editGeneratedMaskFile && (
-                            <p className='pt-1 text-xs text-green-400'>Mask applied: {editGeneratedMaskFile.name}</p>
+                            <p className='pt-1 text-xs text-green-400'>
+                                {t('edit.maskApplied', { name: editGeneratedMaskFile.name })}
+                            </p>
                         )}
                     </div>
 
                     <div className='space-y-3'>
-                        <Label className='block text-white'>Size</Label>
+                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                            {t('form.size')}
+                        </div>
                         <RadioGroup
                             value={editSize}
                             onValueChange={(value) => setEditSize(value as EditingFormData['size'])}
                             disabled={isLoading}
+                            name='edit-size'
+                            aria-label={t('form.size')}
                             className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon value='auto' id='edit-size-auto' label='Auto' Icon={Sparkles} />
+                            <RadioItemWithIcon
+                                value='auto'
+                                id='edit-size-auto'
+                                label={t('common.auto')}
+                                Icon={Sparkles}
+                                disabled={isLoading}
+                            />
                             {isGptImage2 && (
                                 <RadioItemWithIcon
                                     value='custom'
                                     id='edit-size-custom'
-                                    label='Custom'
+                                    label={t('common.custom')}
                                     Icon={SquareDashed}
+                                    disabled={isLoading}
                                 />
                             )}
                             <Tooltip>
@@ -880,8 +914,9 @@ export function EditingForm({
                                         <RadioItemWithIcon
                                             value='square'
                                             id='edit-size-square'
-                                            label='Square'
+                                            label={t('common.square')}
                                             Icon={Square}
+                                            disabled={isLoading}
                                         />
                                     </div>
                                 </TooltipTrigger>
@@ -893,8 +928,9 @@ export function EditingForm({
                                         <RadioItemWithIcon
                                             value='landscape'
                                             id='edit-size-landscape'
-                                            label='Landscape'
+                                            label={t('common.landscape')}
                                             Icon={RectangleHorizontal}
+                                            disabled={isLoading}
                                         />
                                     </div>
                                 </TooltipTrigger>
@@ -906,8 +942,9 @@ export function EditingForm({
                                         <RadioItemWithIcon
                                             value='portrait'
                                             id='edit-size-portrait'
-                                            label='Portrait'
+                                            label={t('common.portrait')}
                                             Icon={RectangleVertical}
+                                            disabled={isLoading}
                                         />
                                     </div>
                                 </TooltipTrigger>
@@ -919,7 +956,7 @@ export function EditingForm({
                                 <div className='flex items-center gap-3'>
                                     <div className='flex-1 space-y-1'>
                                         <Label htmlFor='edit-custom-width' className='text-xs text-white/70'>
-                                            Width (px)
+                                            {t('form.width')}
                                         </Label>
                                         <Input
                                             id='edit-custom-width'
@@ -933,10 +970,10 @@ export function EditingForm({
                                             className='rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'
                                         />
                                     </div>
-                                    <span className='pt-5 text-white/60'>×</span>
+                                    <span className='pt-5 text-white/60'>x</span>
                                     <div className='flex-1 space-y-1'>
                                         <Label htmlFor='edit-custom-height' className='text-xs text-white/70'>
-                                            Height (px)
+                                            {t('form.height')}
                                         </Label>
                                         <Input
                                             id='edit-custom-height'
@@ -952,43 +989,68 @@ export function EditingForm({
                                     </div>
                                 </div>
                                 <p className='text-xs text-white/50'>
-                                    {(editCustomWidth * editCustomHeight).toLocaleString()} pixels (
-                                    {((editCustomWidth * editCustomHeight) / 8_294_400 * 100).toFixed(1)}% of max) ·{' '}
-                                    {editCustomWidth > 0 && editCustomHeight > 0
-                                        ? `${(Math.max(editCustomWidth, editCustomHeight) / Math.min(editCustomWidth, editCustomHeight)).toFixed(2)}:1 ratio`
-                                        : '—'}
+                                    {t('form.pixelsMeta', {
+                                        pixels: editCustomPixels.toLocaleString(locale),
+                                        percent: ((editCustomPixels / 8_294_400) * 100).toFixed(1),
+                                        ratio: editCustomRatio
+                                    })}
                                 </p>
-                                {!customSizeValidation.valid && (
-                                    <p className='text-xs text-red-400'>{customSizeValidation.reason}</p>
-                                )}
-                                <p className='text-xs text-white/40'>
-                                    Constraints: multiples of 16, max edge 3840px, aspect ratio ≤ 3:1, 655,360 to
-                                    8,294,400 total pixels.
-                                </p>
+                                {editCustomSizeError && <p className='text-xs text-red-400'>{editCustomSizeError}</p>}
+                                <p className='text-xs text-white/40'>{t('form.customConstraints')}</p>
                             </div>
                         )}
                     </div>
 
                     <div className='space-y-3'>
-                        <Label className='block text-white'>Quality</Label>
+                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                            {t('form.quality')}
+                        </div>
                         <RadioGroup
                             value={editQuality}
                             onValueChange={(value) => setEditQuality(value as EditingFormData['quality'])}
                             disabled={isLoading}
+                            name='edit-quality'
+                            aria-label={t('form.quality')}
                             className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon value='auto' id='edit-quality-auto' label='Auto' Icon={Sparkles} />
-                            <RadioItemWithIcon value='low' id='edit-quality-low' label='Low' Icon={Tally1} />
-                            <RadioItemWithIcon value='medium' id='edit-quality-medium' label='Medium' Icon={Tally2} />
-                            <RadioItemWithIcon value='high' id='edit-quality-high' label='High' Icon={Tally3} />
+                            <RadioItemWithIcon
+                                value='auto'
+                                id='edit-quality-auto'
+                                label={t('common.auto')}
+                                Icon={Sparkles}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='low'
+                                id='edit-quality-low'
+                                label={t('common.low')}
+                                Icon={Tally1}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='medium'
+                                id='edit-quality-medium'
+                                label={t('common.medium')}
+                                Icon={Tally2}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='high'
+                                id='edit-quality-high'
+                                label={t('common.high')}
+                                Icon={Tally3}
+                                disabled={isLoading}
+                            />
                         </RadioGroup>
                     </div>
 
                     <div className='space-y-2'>
-                        <Label htmlFor='edit-n-slider' className='text-white'>
-                            Number of Images: {editN[0]}
-                        </Label>
+                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                            {t('form.numberOfImages', { count: editN[0] })}
+                        </div>
                         <Slider
                             id='edit-n-slider'
+                            name='edit-n'
+                            thumbLabel={t('form.numberOfImages', { count: editN[0] })}
                             min={1}
                             max={10}
                             step={1}
@@ -1001,14 +1063,15 @@ export function EditingForm({
                 </CardContent>
                 <CardFooter className='border-t border-white/10 p-4'>
                     <Button
-                        type='submit'
+                        type='button'
+                        onClick={handleSubmit}
                         disabled={isLoading || !editPrompt || imageFiles.length === 0 || customSizeInvalid}
                         className='flex w-full items-center justify-center gap-2 rounded-md bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
                         {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
-                        {isLoading ? 'Editing...' : 'Edit Image'}
+                        {isLoading ? t('edit.loading') : t('edit.submit')}
                     </Button>
                 </CardFooter>
-            </form>
+            </div>
         </Card>
     );
 }

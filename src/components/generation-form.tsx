@@ -11,7 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import type { GptImageModel } from '@/lib/cost-utils';
+import { useI18n } from '@/lib/i18n';
 import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
+import type { SizePreset } from '@/lib/size-utils';
 import {
     Square,
     RectangleHorizontal,
@@ -32,9 +35,6 @@ import {
     SquareDashed
 } from 'lucide-react';
 import * as React from 'react';
-
-import type { GptImageModel } from '@/lib/cost-utils';
-import type { SizePreset } from '@/lib/size-utils';
 
 export type GenerationFormData = {
     prompt: string;
@@ -90,12 +90,14 @@ const RadioItemWithIcon = ({
     value,
     id,
     label,
-    Icon
+    Icon,
+    disabled = false
 }: {
     value: string;
     id: string;
     label: string;
     Icon: React.ElementType;
+    disabled?: boolean;
 }) => (
     <div className='flex items-center space-x-2'>
         <RadioGroupItem
@@ -103,7 +105,9 @@ const RadioItemWithIcon = ({
             id={id}
             className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
         />
-        <Label htmlFor={id} className='flex cursor-pointer items-center gap-2 text-base text-white/80'>
+        <Label
+            htmlFor={id}
+            className={`flex items-center gap-2 text-base ${disabled ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
             <Icon className='h-5 w-5 text-white/60' />
             {label}
         </Label>
@@ -145,11 +149,22 @@ export function GenerationForm({
     partialImages,
     setPartialImages
 }: GenerationFormProps) {
+    const { locale, t } = useI18n();
     const showCompression = outputFormat === 'jpeg' || outputFormat === 'webp';
     const isGptImage2 = model === 'gpt-image-2';
     const customSizeValidation =
         size === 'custom' ? validateGptImage2Size(customWidth, customHeight) : { valid: true as const };
     const customSizeInvalid = size === 'custom' && !customSizeValidation.valid;
+    const customPixels = customWidth * customHeight;
+    const customRatio =
+        customWidth > 0 && customHeight > 0
+            ? t('form.ratio', {
+                  ratio: (Math.max(customWidth, customHeight) / Math.min(customWidth, customHeight)).toFixed(2)
+              })
+            : t('form.noRatio');
+    const customSizeError = customSizeValidation.valid
+        ? null
+        : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
     // Disable streaming when n > 1 (OpenAI limitation)
     React.useEffect(() => {
@@ -172,8 +187,7 @@ export function GenerationForm({
         }
     }, [isGptImage2, background, setBackground]);
 
-    const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
-        event.preventDefault();
+    const handleSubmit = () => {
         if (customSizeInvalid) {
             return;
         }
@@ -200,34 +214,38 @@ export function GenerationForm({
             <CardHeader className='flex items-start justify-between border-b border-white/10 pb-4'>
                 <div>
                     <div className='flex items-center'>
-                        <CardTitle className='py-1 text-lg font-medium text-white'>Generate Image</CardTitle>
+                        <CardTitle className='py-1 text-lg font-medium text-white'>{t('generate.title')}</CardTitle>
                         {isPasswordRequiredByBackend && (
                             <Button
                                 variant='ghost'
                                 size='icon'
                                 onClick={onOpenPasswordDialog}
                                 className='ml-2 text-white/60 hover:text-white'
-                                aria-label='Configure Password'>
+                                aria-label={t('password.configure')}>
                                 {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                             </Button>
                         )}
                     </div>
-                    <CardDescription className='mt-1 text-white/60'>Create a new image from a text prompt.</CardDescription>
+                    <CardDescription className='mt-1 text-white/60'>{t('generate.description')}</CardDescription>
                 </div>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
-            <form onSubmit={handleSubmit} className='flex h-full flex-1 flex-col overflow-hidden'>
+            <div className='flex h-full flex-1 flex-col overflow-hidden'>
                 <CardContent className='flex-1 space-y-5 overflow-y-auto p-4'>
                     <div className='space-y-1.5'>
                         <Label htmlFor='model-select' className='text-white'>
-                            Model
+                            {t('form.model')}
                         </Label>
                         <div className='flex items-center gap-4'>
-                            <Select value={model} onValueChange={(value) => setModel(value as GenerationFormData['model'])} disabled={isLoading}>
+                            <Select
+                                value={model}
+                                onValueChange={(value) => setModel(value as GenerationFormData['model'])}
+                                disabled={isLoading}
+                                name='model'>
                                 <SelectTrigger
                                     id='model-select'
                                     className='w-[180px] rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'>
-                                    <SelectValue placeholder='Select model' />
+                                    <SelectValue placeholder={t('form.selectModel')} />
                                 </SelectTrigger>
                                 <SelectContent className='border-white/20 bg-black text-white'>
                                     <SelectItem value='gpt-image-2' className='focus:bg-white/10'>
@@ -249,22 +267,21 @@ export function GenerationForm({
                                     <div className='flex items-center gap-2'>
                                         <Checkbox
                                             id='enable-streaming'
+                                            name='enable-streaming'
                                             checked={enableStreaming}
                                             onCheckedChange={(checked) => setEnableStreaming(!!checked)}
                                             disabled={isLoading || n[0] > 1}
-                                            className='border-white/40 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black disabled:cursor-not-allowed disabled:opacity-50'
+                                            className='border-white/40 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black'
                                         />
                                         <Label
                                             htmlFor='enable-streaming'
                                             className={`text-sm ${n[0] > 1 ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
-                                            Enable Streaming
+                                            {t('streaming.enable')}
                                         </Label>
                                     </div>
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[250px]'>
-                                    {n[0] > 1
-                                        ? 'Streaming is only supported when generating a single image (n=1).'
-                                        : 'Shows partial preview images as they are generated, providing a more interactive experience.'}
+                                    {n[0] > 1 ? t('streaming.disabledByCount') : t('streaming.description')}
                                 </TooltipContent>
                             </Tooltip>
                         </div>
@@ -273,20 +290,22 @@ export function GenerationForm({
                     {enableStreaming && (
                         <div className='space-y-3'>
                             <div className='flex items-center gap-2'>
-                                <Label className='text-white'>Preview Images</Label>
+                                <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                    {t('streaming.previewImages')}
+                                </div>
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <HelpCircle className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
                                     </TooltipTrigger>
-                                    <TooltipContent className='max-w-[250px]'>
-                                        Each preview image adds ~$0.003 to the cost (100 additional output tokens).
-                                    </TooltipContent>
+                                    <TooltipContent className='max-w-[250px]'>{t('streaming.costHint')}</TooltipContent>
                                 </Tooltip>
                             </div>
                             <RadioGroup
                                 value={String(partialImages)}
                                 onValueChange={(value) => setPartialImages(Number(value) as 1 | 2 | 3)}
                                 disabled={isLoading}
+                                name='partial_images'
+                                aria-label={t('streaming.previewImages')}
                                 className='flex gap-x-5'>
                                 <div className='flex items-center space-x-2'>
                                     <RadioGroupItem
@@ -324,11 +343,11 @@ export function GenerationForm({
 
                     <div className='space-y-1.5'>
                         <Label htmlFor='prompt' className='text-white'>
-                            Prompt
+                            {t('form.prompt')}
                         </Label>
                         <Textarea
                             id='prompt'
-                            placeholder='e.g., A photorealistic cat astronaut floating in space'
+                            placeholder={t('form.promptPlaceholder')}
                             value={prompt}
                             onChange={(e) => setPrompt(e.target.value)}
                             required
@@ -338,11 +357,13 @@ export function GenerationForm({
                     </div>
 
                     <div className='space-y-2'>
-                        <Label htmlFor='n-slider' className='text-white'>
-                            Number of Images: {n[0]}
-                        </Label>
+                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                            {t('form.numberOfImages', { count: n[0] })}
+                        </div>
                         <Slider
                             id='n-slider'
+                            name='n'
+                            thumbLabel={t('form.numberOfImages', { count: n[0] })}
                             min={1}
                             max={10}
                             step={1}
@@ -354,19 +375,30 @@ export function GenerationForm({
                     </div>
 
                     <div className='space-y-3'>
-                        <Label className='block text-white'>Size</Label>
+                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                            {t('form.size')}
+                        </div>
                         <RadioGroup
                             value={size}
                             onValueChange={(value) => setSize(value as GenerationFormData['size'])}
                             disabled={isLoading}
+                            name='size'
+                            aria-label={t('form.size')}
                             className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon value='auto' id='size-auto' label='Auto' Icon={Sparkles} />
+                            <RadioItemWithIcon
+                                value='auto'
+                                id='size-auto'
+                                label={t('common.auto')}
+                                Icon={Sparkles}
+                                disabled={isLoading}
+                            />
                             {isGptImage2 && (
                                 <RadioItemWithIcon
                                     value='custom'
                                     id='size-custom'
-                                    label='Custom'
+                                    label={t('common.custom')}
                                     Icon={SquareDashed}
+                                    disabled={isLoading}
                                 />
                             )}
                             <Tooltip>
@@ -375,8 +407,9 @@ export function GenerationForm({
                                         <RadioItemWithIcon
                                             value='square'
                                             id='size-square'
-                                            label='Square'
+                                            label={t('common.square')}
                                             Icon={Square}
+                                            disabled={isLoading}
                                         />
                                     </div>
                                 </TooltipTrigger>
@@ -388,8 +421,9 @@ export function GenerationForm({
                                         <RadioItemWithIcon
                                             value='landscape'
                                             id='size-landscape'
-                                            label='Landscape'
+                                            label={t('common.landscape')}
                                             Icon={RectangleHorizontal}
+                                            disabled={isLoading}
                                         />
                                     </div>
                                 </TooltipTrigger>
@@ -401,8 +435,9 @@ export function GenerationForm({
                                         <RadioItemWithIcon
                                             value='portrait'
                                             id='size-portrait'
-                                            label='Portrait'
+                                            label={t('common.portrait')}
                                             Icon={RectangleVertical}
+                                            disabled={isLoading}
                                         />
                                     </div>
                                 </TooltipTrigger>
@@ -414,7 +449,7 @@ export function GenerationForm({
                                 <div className='flex items-center gap-3'>
                                     <div className='flex-1 space-y-1'>
                                         <Label htmlFor='custom-width' className='text-xs text-white/70'>
-                                            Width (px)
+                                            {t('form.width')}
                                         </Label>
                                         <Input
                                             id='custom-width'
@@ -428,10 +463,10 @@ export function GenerationForm({
                                             className='rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'
                                         />
                                     </div>
-                                    <span className='pt-5 text-white/60'>×</span>
+                                    <span className='pt-5 text-white/60'>x</span>
                                     <div className='flex-1 space-y-1'>
                                         <Label htmlFor='custom-height' className='text-xs text-white/70'>
-                                            Height (px)
+                                            {t('form.height')}
                                         </Label>
                                         <Input
                                             id='custom-height'
@@ -447,77 +482,141 @@ export function GenerationForm({
                                     </div>
                                 </div>
                                 <p className='text-xs text-white/50'>
-                                    {(customWidth * customHeight).toLocaleString()} pixels (
-                                    {((customWidth * customHeight) / 8_294_400 * 100).toFixed(1)}% of max) ·{' '}
-                                    {customWidth > 0 && customHeight > 0
-                                        ? `${(Math.max(customWidth, customHeight) / Math.min(customWidth, customHeight)).toFixed(2)}:1 ratio`
-                                        : '—'}
+                                    {t('form.pixelsMeta', {
+                                        pixels: customPixels.toLocaleString(locale),
+                                        percent: ((customPixels / 8_294_400) * 100).toFixed(1),
+                                        ratio: customRatio
+                                    })}
                                 </p>
-                                {!customSizeValidation.valid && (
-                                    <p className='text-xs text-red-400'>{customSizeValidation.reason}</p>
-                                )}
-                                <p className='text-xs text-white/40'>
-                                    Constraints: multiples of 16, max edge 3840px, aspect ratio ≤ 3:1, 655,360 to
-                                    8,294,400 total pixels.
-                                </p>
+                                {customSizeError && <p className='text-xs text-red-400'>{customSizeError}</p>}
+                                <p className='text-xs text-white/40'>{t('form.customConstraints')}</p>
                             </div>
                         )}
                     </div>
 
                     <div className='space-y-3'>
-                        <Label className='block text-white'>Quality</Label>
+                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                            {t('form.quality')}
+                        </div>
                         <RadioGroup
                             value={quality}
                             onValueChange={(value) => setQuality(value as GenerationFormData['quality'])}
                             disabled={isLoading}
+                            name='quality'
+                            aria-label={t('form.quality')}
                             className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon value='auto' id='quality-auto' label='Auto' Icon={Sparkles} />
-                            <RadioItemWithIcon value='low' id='quality-low' label='Low' Icon={Tally1} />
-                            <RadioItemWithIcon value='medium' id='quality-medium' label='Medium' Icon={Tally2} />
-                            <RadioItemWithIcon value='high' id='quality-high' label='High' Icon={Tally3} />
+                            <RadioItemWithIcon
+                                value='auto'
+                                id='quality-auto'
+                                label={t('common.auto')}
+                                Icon={Sparkles}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='low'
+                                id='quality-low'
+                                label={t('common.low')}
+                                Icon={Tally1}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='medium'
+                                id='quality-medium'
+                                label={t('common.medium')}
+                                Icon={Tally2}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='high'
+                                id='quality-high'
+                                label={t('common.high')}
+                                Icon={Tally3}
+                                disabled={isLoading}
+                            />
                         </RadioGroup>
                     </div>
 
                     {!isGptImage2 && (
                         <div className='space-y-3'>
-                            <Label className='block text-white'>Background</Label>
+                            <div className='block text-sm leading-none font-medium text-white select-none'>
+                                {t('form.background')}
+                            </div>
                             <RadioGroup
                                 value={background}
                                 onValueChange={(value) => setBackground(value as GenerationFormData['background'])}
                                 disabled={isLoading}
+                                name='background'
+                                aria-label={t('form.background')}
                                 className='flex flex-wrap gap-x-5 gap-y-3'>
-                                <RadioItemWithIcon value='auto' id='bg-auto' label='Auto' Icon={Sparkles} />
-                                <RadioItemWithIcon value='opaque' id='bg-opaque' label='Opaque' Icon={BrickWall} />
+                                <RadioItemWithIcon
+                                    value='auto'
+                                    id='bg-auto'
+                                    label={t('common.auto')}
+                                    Icon={Sparkles}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='opaque'
+                                    id='bg-opaque'
+                                    label={t('form.backgroundOpaque')}
+                                    Icon={BrickWall}
+                                    disabled={isLoading}
+                                />
                                 <RadioItemWithIcon
                                     value='transparent'
                                     id='bg-transparent'
-                                    label='Transparent'
+                                    label={t('form.backgroundTransparent')}
                                     Icon={Eraser}
+                                    disabled={isLoading}
                                 />
                             </RadioGroup>
                         </div>
                     )}
 
                     <div className='space-y-3'>
-                        <Label className='block text-white'>Output Format</Label>
+                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                            {t('form.outputFormat')}
+                        </div>
                         <RadioGroup
                             value={outputFormat}
                             onValueChange={(value) => setOutputFormat(value as GenerationFormData['output_format'])}
                             disabled={isLoading}
+                            name='output_format'
+                            aria-label={t('form.outputFormat')}
                             className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon value='png' id='format-png' label='PNG' Icon={FileImage} />
-                            <RadioItemWithIcon value='jpeg' id='format-jpeg' label='JPEG' Icon={FileImage} />
-                            <RadioItemWithIcon value='webp' id='format-webp' label='WebP' Icon={FileImage} />
+                            <RadioItemWithIcon
+                                value='png'
+                                id='format-png'
+                                label='PNG'
+                                Icon={FileImage}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='jpeg'
+                                id='format-jpeg'
+                                label='JPEG'
+                                Icon={FileImage}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='webp'
+                                id='format-webp'
+                                label='WebP'
+                                Icon={FileImage}
+                                disabled={isLoading}
+                            />
                         </RadioGroup>
                     </div>
 
                     {showCompression && (
                         <div className='space-y-2 pt-2 transition-opacity duration-300'>
-                            <Label htmlFor='compression-slider' className='text-white'>
-                                Compression: {compression[0]}%
-                            </Label>
+                            <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                {t('form.compression', { value: compression[0] })}
+                            </div>
                             <Slider
                                 id='compression-slider'
+                                name='output_compression'
+                                thumbLabel={t('form.compression', { value: compression[0] })}
                                 min={0}
                                 max={100}
                                 step={1}
@@ -530,27 +629,44 @@ export function GenerationForm({
                     )}
 
                     <div className='space-y-3'>
-                        <Label className='block text-white'>Moderation Level</Label>
+                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                            {t('form.moderation')}
+                        </div>
                         <RadioGroup
                             value={moderation}
                             onValueChange={(value) => setModeration(value as GenerationFormData['moderation'])}
                             disabled={isLoading}
+                            name='moderation'
+                            aria-label={t('form.moderation')}
                             className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon value='auto' id='mod-auto' label='Auto' Icon={ShieldCheck} />
-                            <RadioItemWithIcon value='low' id='mod-low' label='Low' Icon={ShieldAlert} />
+                            <RadioItemWithIcon
+                                value='auto'
+                                id='mod-auto'
+                                label={t('common.auto')}
+                                Icon={ShieldCheck}
+                                disabled={isLoading}
+                            />
+                            <RadioItemWithIcon
+                                value='low'
+                                id='mod-low'
+                                label={t('common.low')}
+                                Icon={ShieldAlert}
+                                disabled={isLoading}
+                            />
                         </RadioGroup>
                     </div>
                 </CardContent>
                 <CardFooter className='border-t border-white/10 p-4'>
                     <Button
-                        type='submit'
+                        type='button'
+                        onClick={handleSubmit}
                         disabled={isLoading || !prompt || customSizeInvalid}
                         className='flex w-full items-center justify-center gap-2 rounded-md bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
                         {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
-                        {isLoading ? 'Generating...' : 'Generate'}
+                        {isLoading ? t('generate.loading') : t('generate.submit')}
                     </Button>
                 </CardFooter>
-            </form>
+            </div>
         </Card>
     );
 }

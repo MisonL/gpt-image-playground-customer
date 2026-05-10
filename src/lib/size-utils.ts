@@ -1,6 +1,10 @@
 import type { GptImageModel } from '@/lib/cost-utils';
 
-export type SizeValidation = { valid: true } | { valid: false; reason: string };
+type SizeValidationValues = Record<string, string | number>;
+
+export type SizeValidation =
+    | { valid: true }
+    | { valid: false; reason: string; reasonKey: string; values?: SizeValidationValues };
 
 export const GPT_IMAGE_2_MIN_PIXELS = 655_360;
 export const GPT_IMAGE_2_MAX_PIXELS = 8_294_400;
@@ -10,28 +14,61 @@ export const GPT_IMAGE_2_MAX_ASPECT = 3;
 
 export function validateGptImage2Size(width: number, height: number): SizeValidation {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-        return { valid: false, reason: 'Width and height must be positive numbers.' };
+        return {
+            valid: false,
+            reason: 'Width and height must be positive numbers.',
+            reasonKey: 'sizeError.positive'
+        };
     }
     if (!Number.isInteger(width) || !Number.isInteger(height)) {
-        return { valid: false, reason: 'Width and height must be whole numbers.' };
+        return {
+            valid: false,
+            reason: 'Width and height must be whole numbers.',
+            reasonKey: 'sizeError.whole'
+        };
     }
     if (width % GPT_IMAGE_2_EDGE_MULTIPLE !== 0 || height % GPT_IMAGE_2_EDGE_MULTIPLE !== 0) {
-        return { valid: false, reason: `Both edges must be multiples of ${GPT_IMAGE_2_EDGE_MULTIPLE}.` };
+        return {
+            valid: false,
+            reason: `Both edges must be multiples of ${GPT_IMAGE_2_EDGE_MULTIPLE}.`,
+            reasonKey: 'sizeError.multiple',
+            values: { multiple: GPT_IMAGE_2_EDGE_MULTIPLE }
+        };
     }
     if (width > GPT_IMAGE_2_MAX_EDGE || height > GPT_IMAGE_2_MAX_EDGE) {
-        return { valid: false, reason: `Maximum edge is ${GPT_IMAGE_2_MAX_EDGE}px.` };
+        return {
+            valid: false,
+            reason: `Maximum edge is ${GPT_IMAGE_2_MAX_EDGE}px.`,
+            reasonKey: 'sizeError.maxEdge',
+            values: { max: GPT_IMAGE_2_MAX_EDGE }
+        };
     }
     const long = Math.max(width, height);
     const short = Math.min(width, height);
     if (long / short > GPT_IMAGE_2_MAX_ASPECT) {
-        return { valid: false, reason: `Aspect ratio (long:short) must be ≤ ${GPT_IMAGE_2_MAX_ASPECT}:1.` };
+        return {
+            valid: false,
+            reason: `Aspect ratio (long:short) must be <= ${GPT_IMAGE_2_MAX_ASPECT}:1.`,
+            reasonKey: 'sizeError.aspect',
+            values: { max: GPT_IMAGE_2_MAX_ASPECT }
+        };
     }
     const pixels = width * height;
     if (pixels < GPT_IMAGE_2_MIN_PIXELS) {
-        return { valid: false, reason: `Total pixels must be at least ${GPT_IMAGE_2_MIN_PIXELS.toLocaleString()}.` };
+        return {
+            valid: false,
+            reason: `Total pixels must be at least ${GPT_IMAGE_2_MIN_PIXELS.toLocaleString()}.`,
+            reasonKey: 'sizeError.minPixels',
+            values: { min: GPT_IMAGE_2_MIN_PIXELS.toLocaleString() }
+        };
     }
     if (pixels > GPT_IMAGE_2_MAX_PIXELS) {
-        return { valid: false, reason: `Total pixels must be no more than ${GPT_IMAGE_2_MAX_PIXELS.toLocaleString()}.` };
+        return {
+            valid: false,
+            reason: `Total pixels must be no more than ${GPT_IMAGE_2_MAX_PIXELS.toLocaleString()}.`,
+            reasonKey: 'sizeError.maxPixels',
+            values: { max: GPT_IMAGE_2_MAX_PIXELS.toLocaleString() }
+        };
     }
     return { valid: true };
 }
@@ -65,5 +102,5 @@ export function getPresetTooltip(preset: SizePreset, model: GptImageModel): stri
     const [w, h] = dims.split('x').map(Number);
     const mp = ((w * h) / 1_000_000).toFixed(1);
     const ratio = preset === 'square' ? '1:1' : preset === 'landscape' ? '3:2' : '2:3';
-    return `${w} × ${h} · ${ratio} · ${mp} MP`;
+    return `${w} x ${h} - ${ratio} - ${mp} MP`;
 }

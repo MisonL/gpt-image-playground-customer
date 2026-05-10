@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useI18n } from '@/lib/i18n';
 import * as React from 'react';
 
 export type ApiSettings = {
@@ -26,6 +27,7 @@ type ApiSettingsDialogProps = {
 };
 
 export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: ApiSettingsDialogProps) {
+    const { t } = useI18n();
     const [draft, setDraft] = React.useState<ApiSettings>(settings);
 
     const handleSave = () => {
@@ -47,15 +49,13 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
         <Dialog open={isOpen} onOpenChange={onOpenChange}>
             <DialogContent className='border-white/20 bg-black text-white sm:max-w-[520px]'>
                 <DialogHeader>
-                    <DialogTitle className='text-white'>API 设置</DialogTitle>
-                    <DialogDescription className='text-white/60'>
-                        留空时使用服务器环境变量；填写后仅保存在当前浏览器。
-                    </DialogDescription>
+                    <DialogTitle className='text-white'>{t('api.title')}</DialogTitle>
+                    <DialogDescription className='text-white/60'>{t('api.description')}</DialogDescription>
                 </DialogHeader>
                 <div className='grid gap-4 py-2'>
                     <div className='grid gap-2'>
                         <Label htmlFor='api-key-input' className='text-white'>
-                            API Key
+                            {t('api.key')}
                         </Label>
                         <Input
                             id='api-key-input'
@@ -69,7 +69,7 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
                     </div>
                     <div className='grid gap-2'>
                         <Label htmlFor='api-base-url-input' className='text-white'>
-                            API URL
+                            {t('api.url')}
                         </Label>
                         <Input
                             id='api-base-url-input'
@@ -79,9 +79,7 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
                             onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))}
                             className='border-white/20 bg-black text-white placeholder:text-white/40 focus:border-white/50 focus:ring-white/50'
                         />
-                        <p className='text-xs leading-5 text-white/50'>
-                            填 OpenAI 兼容接口根地址，通常以 /v1 结尾；不要填管理后台网页地址。
-                        </p>
+                        <p className='text-xs leading-5 text-white/50'>{t('api.urlHint')}</p>
                     </div>
                 </div>
                 <DialogFooter>
@@ -90,10 +88,10 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
                         variant='ghost'
                         onClick={handleClear}
                         className='text-white/70 hover:bg-white/10 hover:text-white'>
-                        清空
+                        {t('common.clear')}
                     </Button>
                     <Button type='button' onClick={handleSave} className='bg-white px-6 text-black hover:bg-white/90'>
-                        保存
+                        {t('common.save')}
                     </Button>
                 </DialogFooter>
             </DialogContent>

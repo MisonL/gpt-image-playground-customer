@@ -1,5 +1,6 @@
 import './globals.css';
 import { ThemeProvider } from '@/components/theme-provider';
+import { I18nProvider } from '@/lib/i18n';
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 
@@ -15,7 +16,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
     title: 'GPT Image Playground',
-    description: "Generate and edit images using OpenAI's GPT Image models.",
+    description: '使用 OpenAI GPT Image 模型生成和编辑图片。',
     icons: {
         icon: '/favicon.svg'
     }
@@ -27,10 +28,10 @@ export default function RootLayout({
     children: React.ReactNode;
 }>) {
     return (
-        <html lang='en' suppressHydrationWarning>
-            <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-                <ThemeProvider attribute='class' defaultTheme='dark' enableSystem={false} disableTransitionOnChange>
-                    {children}
+        <html lang='zh-CN' suppressHydrationWarning>
+            <body className={`${geistSans.variable} ${geistMono.variable} theme-adapt antialiased`}>
+                <ThemeProvider attribute='class' defaultTheme='light' enableSystem={false} disableTransitionOnChange>
+                    <I18nProvider>{children}</I18nProvider>
                 </ThemeProvider>
             </body>
         </html>

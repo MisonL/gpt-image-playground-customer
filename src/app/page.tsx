@@ -1,18 +1,18 @@
 'use client';
 
 import { ApiSettingsDialog, type ApiSettings } from '@/components/api-settings-dialog';
+import { AppControls } from '@/components/app-controls';
 import { EditingForm, type EditingFormData } from '@/components/editing-form';
 import { GenerationForm, type GenerationFormData } from '@/components/generation-form';
 import { HistoryPanel } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
+import { useI18n } from '@/lib/i18n';
 import { getPresetDimensions } from '@/lib/size-utils';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Settings2 } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -125,6 +125,7 @@ type ApiImageResult = {
 };
 
 export default function HomePage() {
+    const { t } = useI18n();
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
@@ -277,7 +278,7 @@ export default function HomePage() {
             }
 
             if (editImageFiles.length >= MAX_EDIT_IMAGES) {
-                alert(`Cannot paste: Maximum of ${MAX_EDIT_IMAGES} images reached.`);
+                alert(t('alert.pasteMaxImages', { count: MAX_EDIT_IMAGES }));
                 return;
             }
 
@@ -304,7 +305,7 @@ export default function HomePage() {
         return () => {
             window.removeEventListener('paste', handlePaste);
         };
-    }, [mode, editImageFiles.length]);
+    }, [mode, editImageFiles.length, t]);
 
     async function sha256Client(text: string): Promise<string> {
         const encoder = new TextEncoder();
@@ -317,7 +318,7 @@ export default function HomePage() {
 
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
-            setError('Password cannot be empty.');
+            setError(t('password.empty'));
             return;
         }
         try {
@@ -331,7 +332,7 @@ export default function HomePage() {
             }
         } catch (e) {
             console.error('Error hashing password:', e);
-            setError('Failed to save password due to a hashing error.');
+            setError(t('password.hashError'));
         }
     };
 
@@ -388,7 +389,7 @@ export default function HomePage() {
                 const indexedDbImages = await Promise.all(
                     images.map(async (img) => {
                         if (!img.b64_json) {
-                            throw new Error(`Image ${img.filename} missing base64 data in IndexedDB mode.`);
+                            throw new Error(t('error.imageMissingBase64', { filename: img.filename }));
                         }
                         const byteCharacters = atob(img.b64_json);
                         const byteNumbers = new Array(byteCharacters.length);
@@ -416,17 +417,17 @@ export default function HomePage() {
                 .filter((img) => !!img.path)
                 .map((img) => ({ path: img.path!, filename: img.filename }));
             if (fsImages.length !== images.length) {
-                throw new Error('API response omitted one or more image paths.');
+                throw new Error(t('error.apiOmittedPaths'));
             }
             return fsImages;
         },
-        []
+        [t]
     );
 
     const commitCompletedImages = React.useCallback(
         async (images: ApiImageResponseItem[], usage: unknown, durationMsValue: number, clearStreaming = false) => {
             if (images.length === 0) {
-                throw new Error('API response did not contain valid image data or filenames.');
+                throw new Error(t('error.noImages'));
             }
 
             const processedImages = await materializeImages(images);
@@ -437,7 +438,7 @@ export default function HomePage() {
             }
             setHistory((prevHistory) => [buildHistoryEntry(images, usage, durationMsValue), ...prevHistory]);
         },
-        [buildHistoryEntry, materializeImages]
+        [buildHistoryEntry, materializeImages, t]
     );
 
     const handleApiCall = async (formData: GenerationFormData | EditingFormData) => {
@@ -454,7 +455,7 @@ export default function HomePage() {
         if (isPasswordRequiredByBackend && clientPasswordHash) {
             apiFormData.append('passwordHash', clientPasswordHash);
         } else if (isPasswordRequiredByBackend && !clientPasswordHash) {
-            setError('Password is required. Please configure the password by clicking the lock icon.');
+            setError(t('error.passwordRequired'));
             setPasswordDialogContext('initial');
             setIsPasswordDialogOpen(true);
             setIsLoading(false);
@@ -522,7 +523,7 @@ export default function HomePage() {
             const contentType = response.headers.get('content-type');
             if (contentType?.includes('text/event-stream')) {
                 if (!response.body) {
-                    throw new Error('Response body is null');
+                    throw new Error(t('error.responseBodyNull'));
                 }
 
                 const reader = response.body.getReader();
@@ -546,7 +547,7 @@ export default function HomePage() {
                             return newMap;
                         });
                     } else if (event.type === 'error') {
-                        throw new Error(event.error || 'Streaming error occurred');
+                        throw new Error(event.error || t('error.streaming'));
                     } else if (event.type === 'done') {
                         durationMs = Date.now() - startTime;
                         await commitCompletedImages(event.images || [], event.usage, durationMs, true);
@@ -577,14 +578,14 @@ export default function HomePage() {
 
             if (!response.ok) {
                 if (response.status === 401 && isPasswordRequiredByBackend) {
-                    setError('Unauthorized: Invalid or missing password. Please try again.');
+                    setError(t('error.unauthorized'));
                     setPasswordDialogContext('retry');
                     setLastApiCallArgs([formData]);
                     setIsPasswordDialogOpen(true);
 
                     return;
                 }
-                throw new Error(result.error || `API request failed with status ${response.status}`);
+                throw new Error(result.error || t('error.apiFailed', { status: response.status }));
             }
 
             durationMs = Date.now() - startTime;
@@ -592,7 +593,7 @@ export default function HomePage() {
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
             console.error(`API Call Error after ${durationMs}ms:`, err);
-            const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred.';
+            const errorMessage = err instanceof Error ? err.message : t('error.unexpected');
             setError(errorMessage);
             setLatestImageBatch(null);
             setStreamingPreviewImages(new Map());
@@ -620,7 +621,7 @@ export default function HomePage() {
                     console.warn(
                         `Could not get image source for history item: ${imgInfo.filename} (mode: ${originalStorageMode})`
                     );
-                    setError(`Image ${imgInfo.filename} could not be loaded.`);
+                    setError(t('error.historyImageLoad', { filename: imgInfo.filename }));
                     return null;
                 }
             });
@@ -629,9 +630,7 @@ export default function HomePage() {
                 const validImages = resolvedBatch.filter(Boolean) as { path: string; filename: string }[];
 
                 if (validImages.length !== item.images.length) {
-                    setError(
-                        'Some images from this history entry could not be loaded (they might have been cleared or are missing).'
-                    );
+                    setError(t('error.historySomeMissing'));
                 } else {
                     setError(null);
                 }
@@ -640,14 +639,14 @@ export default function HomePage() {
                 setImageOutputView(validImages.length > 1 ? 'grid' : 0);
             });
         },
-        [getImageSrc]
+        [getImageSrc, t]
     );
 
     const handleClearHistory = React.useCallback(async () => {
         const confirmationMessage =
             effectiveStorageModeClient === 'indexeddb'
-                ? 'Are you sure you want to clear the entire image history? In IndexedDB mode, this will also permanently delete all stored images. This cannot be undone.'
-                : 'Are you sure you want to clear the entire image history? This cannot be undone.';
+                ? t('confirm.clearHistoryIndexedDb')
+                : t('confirm.clearHistoryFs');
 
         if (window.confirm(confirmationMessage)) {
             setHistory([]);
@@ -665,10 +664,10 @@ export default function HomePage() {
                 }
             } catch (e) {
                 console.error('Failed during history clearing:', e);
-                setError(`Failed to clear history: ${e instanceof Error ? e.message : String(e)}`);
+                setError(t('error.clearHistory', { message: e instanceof Error ? e.message : String(e) }));
             }
         }
-    }, []);
+    }, [t]);
 
     const handleSendToEdit = async (filename: string) => {
         if (isSendingToEdit) return;
@@ -682,7 +681,7 @@ export default function HomePage() {
         }
 
         if (mode === 'edit' && editImageFiles.length >= MAX_EDIT_IMAGES) {
-            setError(`Cannot add more than ${MAX_EDIT_IMAGES} images to the edit form.`);
+            setError(t('error.maxEditImages', { count: MAX_EDIT_IMAGES }));
             setIsSendingToEdit(false);
             return;
         }
@@ -697,19 +696,19 @@ export default function HomePage() {
                     blob = record.blob;
                     mimeType = blob.type || mimeType;
                 } else {
-                    throw new Error(`Image ${filename} not found in local database.`);
+                    throw new Error(t('error.imageNotFoundDb', { filename }));
                 }
             } else {
                 const response = await fetch(`/api/image/${filename}`);
                 if (!response.ok) {
-                    throw new Error(`Failed to fetch image: ${response.statusText}`);
+                    throw new Error(t('error.fetchImage', { statusText: response.statusText }));
                 }
                 blob = await response.blob();
                 mimeType = response.headers.get('Content-Type') || mimeType;
             }
 
             if (!blob) {
-                throw new Error(`Could not retrieve image data for ${filename}.`);
+                throw new Error(t('error.retrieveImage', { filename }));
             }
 
             const newFile = new File([blob], filename, { type: mimeType });
@@ -725,7 +724,7 @@ export default function HomePage() {
             }
         } catch (err: unknown) {
             console.error('Error sending image to edit:', err);
-            const errorMessage = err instanceof Error ? err.message : 'Failed to send image to edit form.';
+            const errorMessage = err instanceof Error ? err.message : t('error.sendToEdit');
             setError(errorMessage);
         } finally {
             setIsSendingToEdit(false);
@@ -774,12 +773,12 @@ export default function HomePage() {
                 );
             } catch (e: unknown) {
                 console.error('Error during item deletion:', e);
-                setError(e instanceof Error ? e.message : 'An unexpected error occurred during deletion.');
+                setError(e instanceof Error ? e.message : t('error.deleteUnexpected'));
             } finally {
                 setItemToDeleteConfirm(null);
             }
         },
-        [isPasswordRequiredByBackend, clientPasswordHash]
+        [isPasswordRequiredByBackend, clientPasswordHash, t]
     );
 
     const handleRequestDeleteItem = React.useCallback(
@@ -806,16 +805,16 @@ export default function HomePage() {
     }, []);
 
     return (
-        <main className='flex min-h-screen flex-col items-center bg-black p-4 text-white md:p-8 lg:p-12'>
+        <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 md:p-8 lg:p-12'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
                 onSave={handleSavePassword}
-                title={passwordDialogContext === 'retry' ? 'Password Required' : 'Configure Password'}
+                title={passwordDialogContext === 'retry' ? t('password.required') : t('password.configure')}
                 description={
                     passwordDialogContext === 'retry'
-                        ? 'The server requires a password, or the previous one was incorrect. Please enter it to continue.'
-                        : 'Set a password to use for API requests.'
+                        ? t('password.retryDescription')
+                        : t('password.initialDescription')
                 }
             />
             {isApiSettingsDialogOpen ? (
@@ -827,16 +826,7 @@ export default function HomePage() {
                 />
             ) : null}
             <div className='w-full max-w-screen-2xl space-y-6'>
-                <div className='flex justify-end'>
-                    <Button
-                        type='button'
-                        variant='outline'
-                        onClick={() => setIsApiSettingsDialogOpen(true)}
-                        className='border-white/20 bg-black text-white hover:bg-white/10 hover:text-white'>
-                        <Settings2 className='h-4 w-4' />
-                        API 设置
-                    </Button>
-                </div>
+                <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
                 <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
                     <div className='relative flex h-[70vh] min-h-[600px] flex-col lg:col-span-1'>
                         <div className={mode === 'generate' ? 'block h-full w-full' : 'hidden'}>
@@ -928,7 +918,7 @@ export default function HomePage() {
                     <div className='flex h-[70vh] min-h-[600px] flex-col lg:col-span-1'>
                         {error && (
                             <Alert variant='destructive' className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
-                                <AlertTitle className='text-red-200'>Error</AlertTitle>
+                                <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
                                 <AlertDescription>{error}</AlertDescription>
                             </Alert>
                         )}
@@ -936,7 +926,7 @@ export default function HomePage() {
                             imageBatch={latestImageBatch}
                             viewMode={imageOutputView}
                             onViewChange={setImageOutputView}
-                            altText='Generated image output'
+                            altText={t('output.alt')}
                             isLoading={isLoading || isSendingToEdit}
                             onSendToEdit={handleSendToEdit}
                             currentMode={mode}
