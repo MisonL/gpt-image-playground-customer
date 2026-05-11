@@ -12,6 +12,15 @@ import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/co
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
 import { getPresetDimensions } from '@/lib/size-utils';
+import {
+    applyStreamingClientEvent,
+    buildStreamingBatchJobs,
+    isRuntimeStreamingBatchEnabled,
+    scheduleStreamingBatch,
+    shouldUseStreamingBatch,
+    type ApiImageResponseItem,
+    type StreamingBatchJob
+} from '@/lib/streaming-batch';
 import { useLiveQuery } from 'dexie-react-hooks';
 import * as React from 'react';
 
@@ -44,6 +53,8 @@ const MAX_EDIT_IMAGES = 10;
 const apiSettingsLocalStorageKey = 'openaiImageApiSettings';
 const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
+type RequestMode = 'generate' | 'edit';
+type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, boolean, 1 | 2 | 3];
 
 function readLocalStorageValue(key: string): string | null {
     if (typeof window === 'undefined') return null;
@@ -109,17 +120,68 @@ if (explicitModeClient === 'fs') {
     effectiveStorageModeClient = 'fs';
 }
 
-type ApiImageResponseItem = {
-    filename: string;
-    b64_json?: string;
-    output_format: string;
-    path?: string;
-};
-
 type ApiImageResult = {
     path: string;
     filename: string;
 };
+
+type ApiUsage = {
+    input_tokens_details?: {
+        text_tokens?: number;
+        image_tokens?: number;
+    };
+    output_tokens?: number;
+};
+
+type RuntimeCapabilities = {
+    streamingBatch: {
+        enabled: boolean;
+        recommendedConcurrency: number;
+    };
+};
+
+class ApiRequestError extends Error {
+    readonly status?: number;
+
+    constructor(message: string, status?: number) {
+        super(message);
+        this.name = 'ApiRequestError';
+        this.status = status;
+    }
+}
+
+function mergeUsageValues(usages: unknown[]): ApiUsage | undefined {
+    const merged: ApiUsage = {
+        input_tokens_details: {
+            text_tokens: 0,
+            image_tokens: 0
+        },
+        output_tokens: 0
+    };
+    let hasUsage = false;
+
+    usages.forEach((usage) => {
+        if (!usage || typeof usage !== 'object') return;
+        const candidate = usage as ApiUsage;
+        const textTokens = candidate.input_tokens_details?.text_tokens;
+        const imageTokens = candidate.input_tokens_details?.image_tokens;
+        const outputTokens = candidate.output_tokens;
+        if (typeof textTokens === 'number') {
+            merged.input_tokens_details!.text_tokens! += textTokens;
+            hasUsage = true;
+        }
+        if (typeof imageTokens === 'number') {
+            merged.input_tokens_details!.image_tokens! += imageTokens;
+            hasUsage = true;
+        }
+        if (typeof outputTokens === 'number') {
+            merged.output_tokens! += outputTokens;
+            hasUsage = true;
+        }
+    });
+
+    return hasUsage ? merged : undefined;
+}
 
 export default function HomePage() {
     const { t } = useI18n();
@@ -137,8 +199,9 @@ export default function HomePage() {
     const [isPasswordDialogOpen, setIsPasswordDialogOpen] = React.useState(false);
     const [isApiSettingsDialogOpen, setIsApiSettingsDialogOpen] = React.useState(false);
     const [apiSettings, setApiSettings] = React.useState<ApiSettings>(emptyApiSettings);
+    const [runtimeCapabilities, setRuntimeCapabilities] = React.useState<RuntimeCapabilities | null>(null);
     const [passwordDialogContext, setPasswordDialogContext] = React.useState<'initial' | 'retry'>('initial');
-    const [lastApiCallArgs, setLastApiCallArgs] = React.useState<[GenerationFormData | EditingFormData] | null>(null);
+    const [lastApiCallArgs, setLastApiCallArgs] = React.useState<ApiCallRetryArgs | null>(null);
     const [skipDeleteConfirmation, setSkipDeleteConfirmation] = React.useState<boolean>(false);
     const [itemToDeleteConfirm, setItemToDeleteConfirm] = React.useState<HistoryMetadata | null>(null);
     const [dialogCheckboxStateSkipConfirm, setDialogCheckboxStateSkipConfirm] = React.useState<boolean>(false);
@@ -182,6 +245,10 @@ export default function HomePage() {
     const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(2);
     // Streaming preview images (base64 data URLs for partial images during streaming)
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
+    const streamingBatchEnabled = isRuntimeStreamingBatchEnabled({
+        serverEnabled: runtimeCapabilities?.streamingBatch.enabled
+    });
+    const streamingBatchConcurrency = Math.max(1, runtimeCapabilities?.streamingBatch.recommendedConcurrency ?? 1);
 
     const getImageSrc = React.useCallback(
         (filename: string): string | undefined => {
@@ -241,6 +308,24 @@ export default function HomePage() {
             setClientPasswordHash(readLocalStorageValue('clientPasswordHash'));
             setApiSettings(readStoredApiSettings());
         });
+    }, []);
+
+    React.useEffect(() => {
+        const fetchRuntimeCapabilities = async () => {
+            try {
+                const response = await fetch('/api/runtime-capabilities');
+                if (!response.ok) {
+                    throw new Error('Failed to fetch runtime capabilities');
+                }
+                const data = (await response.json()) as RuntimeCapabilities;
+                setRuntimeCapabilities(data);
+            } catch (error) {
+                console.error('Error fetching runtime capabilities:', error);
+                setRuntimeCapabilities(null);
+            }
+        };
+
+        fetchRuntimeCapabilities();
     }, []);
 
     React.useEffect(() => {
@@ -325,7 +410,9 @@ export default function HomePage() {
             setError(null);
             setIsPasswordDialogOpen(false);
             if (passwordDialogContext === 'retry' && lastApiCallArgs) {
-                await handleApiCall(...lastApiCallArgs);
+                const retryArgs = lastApiCallArgs;
+                setLastApiCallArgs(null);
+                await handleApiCall(...retryArgs);
             }
         } catch (e) {
             console.error('Error hashing password:', e);
@@ -438,80 +525,97 @@ export default function HomePage() {
         [buildHistoryEntry, materializeImages, t]
     );
 
-    const handleApiCall = async (formData: GenerationFormData | EditingFormData) => {
-        const startTime = Date.now();
-        let durationMs = 0;
-
-        setIsLoading(true);
-        setError(null);
-        setLatestImageBatch(null);
-        setImageOutputView('grid');
-        setStreamingPreviewImages(new Map());
-
-        const apiFormData = new FormData();
-        if (isPasswordRequiredByBackend && clientPasswordHash) {
-            apiFormData.append('passwordHash', clientPasswordHash);
-        } else if (isPasswordRequiredByBackend && !clientPasswordHash) {
-            setError(t('error.passwordRequired'));
-            setPasswordDialogContext('initial');
-            setIsPasswordDialogOpen(true);
-            setIsLoading(false);
-            return;
-        }
-        apiFormData.append('mode', mode);
-        if (apiSettings.apiKey) {
-            apiFormData.append('apiKey', apiSettings.apiKey);
-        }
-        if (apiSettings.baseUrl) {
-            apiFormData.append('apiBaseUrl', apiSettings.baseUrl);
-        }
-
-        // Add streaming parameters if enabled
-        if (enableStreaming) {
-            apiFormData.append('stream', 'true');
-            apiFormData.append('partial_images', partialImages.toString());
-        }
-
-        if (mode === 'generate') {
-            const genData = formData as GenerationFormData;
-            apiFormData.append('model', genModel);
-            apiFormData.append('prompt', genPrompt);
-            apiFormData.append('n', genN[0].toString());
-            const genSizeToSend =
-                genSize === 'custom'
-                    ? `${genCustomWidth}x${genCustomHeight}`
-                    : (getPresetDimensions(genSize, genModel) ?? genSize);
-            apiFormData.append('size', genSizeToSend);
-            apiFormData.append('quality', genQuality);
-            apiFormData.append('output_format', genOutputFormat);
-            if (
-                (genOutputFormat === 'jpeg' || genOutputFormat === 'webp') &&
-                genData.output_compression !== undefined
-            ) {
-                apiFormData.append('output_compression', genData.output_compression.toString());
+    const buildApiFormData = React.useCallback(
+        (
+            formData: GenerationFormData | EditingFormData,
+            requestMode: RequestMode,
+            options: {
+                forceSingleImage?: boolean;
+                streaming: boolean;
+                partialImages: 1 | 2 | 3;
             }
-            apiFormData.append('background', genBackground);
-            apiFormData.append('moderation', genModeration);
-        } else {
-            apiFormData.append('model', editModel);
-            apiFormData.append('prompt', editPrompt);
-            apiFormData.append('n', editN[0].toString());
-            const editSizeToSend =
-                editSize === 'custom'
-                    ? `${editCustomWidth}x${editCustomHeight}`
-                    : (getPresetDimensions(editSize, editModel) ?? editSize);
-            apiFormData.append('size', editSizeToSend);
-            apiFormData.append('quality', editQuality);
-
-            editImageFiles.forEach((file, index) => {
-                apiFormData.append(`image_${index}`, file, file.name);
-            });
-            if (editGeneratedMaskFile) {
-                apiFormData.append('mask', editGeneratedMaskFile, editGeneratedMaskFile.name);
+        ) => {
+            const apiFormData = new FormData();
+            if (isPasswordRequiredByBackend && clientPasswordHash) {
+                apiFormData.append('passwordHash', clientPasswordHash);
+            } else if (isPasswordRequiredByBackend && !clientPasswordHash) {
+                throw new Error(t('error.passwordRequired'));
             }
-        }
+            apiFormData.append('mode', requestMode);
+            if (apiSettings.apiKey) {
+                apiFormData.append('apiKey', apiSettings.apiKey);
+            }
+            if (apiSettings.baseUrl) {
+                apiFormData.append('apiBaseUrl', apiSettings.baseUrl);
+            }
 
-        try {
+            if (options.streaming) {
+                apiFormData.append('stream', 'true');
+                apiFormData.append('partial_images', options.partialImages.toString());
+            }
+
+            if (requestMode === 'generate') {
+                const genData = formData as GenerationFormData;
+                apiFormData.append('model', genData.model);
+                apiFormData.append('prompt', genData.prompt);
+                apiFormData.append('n', options.forceSingleImage ? '1' : genData.n.toString());
+                const genSizeToSend =
+                    genData.size === 'custom'
+                        ? `${genData.customWidth}x${genData.customHeight}`
+                        : (getPresetDimensions(genData.size, genData.model) ?? genData.size);
+                apiFormData.append('size', genSizeToSend);
+                apiFormData.append('quality', genData.quality);
+                apiFormData.append('output_format', genData.output_format);
+                if (
+                    (genData.output_format === 'jpeg' || genData.output_format === 'webp') &&
+                    genData.output_compression !== undefined
+                ) {
+                    apiFormData.append('output_compression', genData.output_compression.toString());
+                }
+                apiFormData.append('background', genData.background);
+                apiFormData.append('moderation', genData.moderation);
+            } else {
+                const editData = formData as EditingFormData;
+                apiFormData.append('model', editData.model);
+                apiFormData.append('prompt', editData.prompt);
+                apiFormData.append('n', options.forceSingleImage ? '1' : editData.n.toString());
+                const editSizeToSend =
+                    editData.size === 'custom'
+                        ? `${editData.customWidth}x${editData.customHeight}`
+                        : (getPresetDimensions(editData.size, editData.model) ?? editData.size);
+                apiFormData.append('size', editSizeToSend);
+                apiFormData.append('quality', editData.quality);
+
+                editData.imageFiles.forEach((file, index) => {
+                    apiFormData.append(`image_${index}`, file, file.name);
+                });
+                if (editData.maskFile) {
+                    apiFormData.append('mask', editData.maskFile, editData.maskFile.name);
+                }
+            }
+
+            return apiFormData;
+        },
+        [
+            apiSettings.apiKey,
+            apiSettings.baseUrl,
+            clientPasswordHash,
+            isPasswordRequiredByBackend,
+            t
+        ]
+    );
+
+    const executeImageRequest = React.useCallback(
+        async (
+            apiFormData: FormData,
+            options: {
+                previewIndexOffset?: number;
+                retryFormData?: GenerationFormData | EditingFormData;
+                retryMode?: RequestMode;
+                retryStreaming?: boolean;
+                retryPartialImages?: 1 | 2 | 3;
+            } = {}
+        ): Promise<{ images: ApiImageResponseItem[]; usage: unknown }> => {
             const response = await fetch('/api/images', {
                 method: 'POST',
                 body: apiFormData
@@ -526,6 +630,12 @@ export default function HomePage() {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
+                let streamingState: {
+                    completedImages: ApiImageResponseItem[];
+                    usage?: unknown;
+                } = {
+                    completedImages: []
+                };
 
                 const processSseEvent = async (rawEvent: string) => {
                     const dataLines = rawEvent
@@ -536,7 +646,7 @@ export default function HomePage() {
 
                     const event = JSON.parse(dataLines.join('\n'));
                     if (event.type === 'partial_image') {
-                        const imageIndex = event.index ?? 0;
+                        const imageIndex = options.previewIndexOffset ?? event.index ?? 0;
                         const dataUrl = `data:image/png;base64,${event.b64_json}`;
                         setStreamingPreviewImages((prev) => {
                             const newMap = new Map(prev);
@@ -545,9 +655,8 @@ export default function HomePage() {
                         });
                     } else if (event.type === 'error') {
                         throw new Error(event.error || t('error.streaming'));
-                    } else if (event.type === 'done') {
-                        durationMs = Date.now() - startTime;
-                        await commitCompletedImages(event.images || [], event.usage, durationMs, true);
+                    } else if (event.type === 'completed' || event.type === 'done') {
+                        streamingState = applyStreamingClientEvent(streamingState, event);
                     }
                 };
 
@@ -568,7 +677,7 @@ export default function HomePage() {
                     await processSseEvent(remainingEvent);
                 }
 
-                return;
+                return { images: streamingState.completedImages, usage: streamingState.usage };
             }
 
             const result = await response.json();
@@ -577,14 +686,114 @@ export default function HomePage() {
                 if (response.status === 401 && isPasswordRequiredByBackend) {
                     setError(t('error.unauthorized'));
                     setPasswordDialogContext('retry');
-                    setLastApiCallArgs([formData]);
+                    if (
+                        options.retryFormData &&
+                        options.retryMode &&
+                        options.retryStreaming !== undefined &&
+                        options.retryPartialImages !== undefined
+                    ) {
+                        setLastApiCallArgs([
+                            options.retryFormData,
+                            options.retryMode,
+                            options.retryStreaming,
+                            options.retryPartialImages
+                        ]);
+                    }
                     setIsPasswordDialogOpen(true);
-
-                    return;
+                    throw new ApiRequestError(t('error.unauthorized'), 401);
                 }
-                throw new Error(result.error || t('error.apiFailed', { status: response.status }));
+                throw new ApiRequestError(result.error || t('error.apiFailed', { status: response.status }), response.status);
             }
 
+            return { images: result.images || [], usage: result.usage };
+        },
+        [isPasswordRequiredByBackend, t]
+    );
+
+    const handleApiCall = async (
+        formData: GenerationFormData | EditingFormData,
+        requestMode: RequestMode = mode,
+        requestStreaming: boolean = enableStreaming,
+        requestPartialImages: 1 | 2 | 3 = partialImages
+    ) => {
+        const startTime = Date.now();
+        let durationMs = 0;
+
+        setIsLoading(true);
+        setError(null);
+        setLatestImageBatch(null);
+        setImageOutputView('grid');
+        setStreamingPreviewImages(new Map());
+
+        try {
+            if (isPasswordRequiredByBackend && !clientPasswordHash) {
+                setError(t('error.passwordRequired'));
+                setPasswordDialogContext('initial');
+                setIsPasswordDialogOpen(true);
+                return;
+            }
+
+            const imageCount =
+                requestMode === 'generate' ? (formData as GenerationFormData).n : (formData as EditingFormData).n;
+            const useStreamingBatch = shouldUseStreamingBatch({
+                enabled: streamingBatchEnabled,
+                streaming: requestStreaming,
+                imageCount
+            });
+
+            if (useStreamingBatch) {
+                const jobs = buildStreamingBatchJobs(imageCount);
+                const batchResults = await scheduleStreamingBatch(
+                    jobs,
+                    streamingBatchConcurrency,
+                    async (job: StreamingBatchJob) => {
+                        const requestFormData = buildApiFormData(formData, requestMode, {
+                            forceSingleImage: true,
+                            streaming: requestStreaming,
+                            partialImages: requestPartialImages
+                        });
+                        return executeImageRequest(requestFormData, {
+                            previewIndexOffset: job.outputIndex,
+                            retryFormData: formData,
+                            retryMode: requestMode,
+                            retryStreaming: requestStreaming,
+                            retryPartialImages: requestPartialImages
+                        });
+                    }
+                );
+                const errors = batchResults.filter((result): result is Error => result instanceof Error);
+                const successes = batchResults.filter(
+                    (result): result is { images: ApiImageResponseItem[]; usage: unknown } => !(result instanceof Error)
+                );
+                if (errors.some((error) => error instanceof ApiRequestError && error.status === 401)) {
+                    return;
+                }
+                if (successes.length === 0) {
+                    throw errors[0] || new Error(t('error.noImages'));
+                }
+                const images = successes.flatMap((result) => result.images);
+                const usage = mergeUsageValues(successes.map((result) => result.usage));
+                durationMs = Date.now() - startTime;
+                await commitCompletedImages(images, usage, durationMs, true);
+                if (errors.length > 0) {
+                    setError(t('error.batchPartialFailure', { failed: errors.length, total: jobs.length }));
+                }
+                return;
+            }
+
+            const result = await executeImageRequest(
+                buildApiFormData(formData, requestMode, {
+                    forceSingleImage: false,
+                    streaming: requestStreaming,
+                    partialImages: requestPartialImages
+                }),
+                {
+                    retryFormData: formData,
+                    retryMode: requestMode,
+                    retryStreaming: requestStreaming,
+                    retryPartialImages: requestPartialImages
+                }
+            );
             durationMs = Date.now() - startTime;
             await commitCompletedImages(result.images || [], result.usage, durationMs);
         } catch (err: unknown) {
@@ -859,6 +1068,7 @@ export default function HomePage() {
                                 setModeration={setGenModeration}
                                 enableStreaming={enableStreaming}
                                 setEnableStreaming={setEnableStreaming}
+                                allowStreamingBatch={streamingBatchEnabled}
                                 partialImages={partialImages}
                                 setPartialImages={setPartialImages}
                             />
@@ -907,6 +1117,7 @@ export default function HomePage() {
                                 setEditMaskPreviewUrl={setEditMaskPreviewUrl}
                                 enableStreaming={enableStreaming}
                                 setEnableStreaming={setEnableStreaming}
+                                allowStreamingBatch={streamingBatchEnabled}
                                 partialImages={partialImages}
                                 setPartialImages={setPartialImages}
                             />

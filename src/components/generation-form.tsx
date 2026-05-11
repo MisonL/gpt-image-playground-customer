@@ -82,6 +82,7 @@ type GenerationFormProps = {
     setModeration: React.Dispatch<React.SetStateAction<GenerationFormData['moderation']>>;
     enableStreaming: boolean;
     setEnableStreaming: React.Dispatch<React.SetStateAction<boolean>>;
+    allowStreamingBatch: boolean;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
 };
@@ -146,6 +147,7 @@ export function GenerationForm({
     setModeration,
     enableStreaming,
     setEnableStreaming,
+    allowStreamingBatch,
     partialImages,
     setPartialImages
 }: GenerationFormProps) {
@@ -166,12 +168,14 @@ export function GenerationForm({
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
-    // Disable streaming when n > 1 (OpenAI limitation)
+    const streamingDisabledByCount = n[0] > 1 && !allowStreamingBatch;
+
+    // Disable streaming when n > 1 unless batch streaming fanout is explicitly enabled.
     React.useEffect(() => {
-        if (n[0] > 1 && enableStreaming) {
+        if (streamingDisabledByCount && enableStreaming) {
             setEnableStreaming(false);
         }
-    }, [n, enableStreaming, setEnableStreaming]);
+    }, [streamingDisabledByCount, enableStreaming, setEnableStreaming]);
 
     // 'custom' is only valid on gpt-image-2; reset when switching to a legacy model
     React.useEffect(() => {
@@ -270,18 +274,22 @@ export function GenerationForm({
                                             name='enable-streaming'
                                             checked={enableStreaming}
                                             onCheckedChange={(checked) => setEnableStreaming(!!checked)}
-                                            disabled={isLoading || n[0] > 1}
+                                            disabled={isLoading || streamingDisabledByCount}
                                             className='border-white/40 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black'
                                         />
                                         <Label
                                             htmlFor='enable-streaming'
-                                            className={`text-sm ${n[0] > 1 ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
+                                            className={`text-sm ${streamingDisabledByCount ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
                                             {t('streaming.enable')}
                                         </Label>
                                     </div>
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[250px]'>
-                                    {n[0] > 1 ? t('streaming.disabledByCount') : t('streaming.description')}
+                                    {streamingDisabledByCount
+                                        ? t('streaming.disabledByCount')
+                                        : allowStreamingBatch && n[0] > 1
+                                          ? t('streaming.batchDescription')
+                                          : t('streaming.description')}
                                 </TooltipContent>
                             </Tooltip>
                         </div>
