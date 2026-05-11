@@ -7,6 +7,7 @@ export type ChannelCredential = {
     channelId: string;
     apiKey: string;
     baseUrl?: string;
+    failureCooldownMs?: number;
 };
 
 export type ChannelPoolConfig = {
@@ -27,6 +28,34 @@ export type ChannelPoolSummary = {
 
 export type ChannelRouter = {
     select(options?: { affinityKey?: string }): ChannelCredential;
+    reportFailure(credential: ChannelCredential, options?: ChannelFailureReportOptions): void;
+    getHealthSummary(): ChannelPoolHealthSummary;
+};
+
+export type ChannelFailureReportOptions = {
+    scope?: 'credential' | 'channel';
+    reason?: ChannelFailureReason;
+};
+
+export type ChannelFailureReason = {
+    at: number;
+    scope: 'credential' | 'channel';
+    status?: number;
+    code?: string;
+    requestId?: string;
+    message?: string;
+};
+
+export type PublicChannelFailureReason = Omit<ChannelFailureReason, 'message'>;
+
+export type ChannelPoolHealthSummary = {
+    credentialCount: number;
+    healthyCredentialCount: number;
+    unhealthyCredentialCount: number;
+    channelCount: number;
+    healthyChannelCount: number;
+    unhealthyChannelCount: number;
+    lastFailure?: ChannelFailureReason;
 };
 
 export type EffectiveCredential = {
@@ -37,11 +66,14 @@ export type EffectiveCredential = {
 
 type ChannelRouterOptions = ChannelPoolConfig & {
     random?: () => number;
+    failureCooldownMs?: number;
+    now?: () => number;
 };
 
 const DEFAULT_STRATEGY: RoutingStrategy = 'sticky';
+const DEFAULT_FAILURE_COOLDOWN_MS = 60_000;
 const VALID_STRATEGIES = new Set<RoutingStrategy>(['sticky', 'round_robin', 'random']);
-const CHANNEL_KEY_PATTERN = /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS)$/;
+const CHANNEL_KEY_PATTERN = /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS|FAILURE_COOLDOWN_MS)$/;
 
 export function parseChannelPoolConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
     if (env.OPENAI_CHANNELS_JSON?.trim()) {
@@ -73,27 +105,99 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
 
     let nextIndex = 0;
     const random = options.random || Math.random;
+    const now = options.now || Date.now;
+    const failureCooldownMs = Math.max(1, Math.floor(options.failureCooldownMs ?? DEFAULT_FAILURE_COOLDOWN_MS));
+    const unhealthyUntilByCredentialId = new Map<string, number>();
+    const unhealthyUntilByChannelId = new Map<string, number>();
+    const channelIds = Array.from(new Set(options.credentials.map((credential) => credential.channelId)));
+    let lastFailure: ChannelFailureReason | undefined;
+
+    const isHealthy = (credential: ChannelCredential) => {
+        const currentTime = now();
+        return (
+            (unhealthyUntilByCredentialId.get(credential.id) ?? 0) <= currentTime &&
+            (unhealthyUntilByChannelId.get(credential.channelId) ?? 0) <= currentTime
+        );
+    };
+
+    const healthyCredentials = () => options.credentials.filter(isHealthy);
 
     return {
         select(selectOptions = {}) {
+            const candidates = healthyCredentials();
+            if (candidates.length === 0) {
+                throw new RequestValidationError('No healthy channel credential is currently available.', 503);
+            }
+
             if (options.strategy === 'round_robin') {
-                const credential = options.credentials[nextIndex];
-                nextIndex = (nextIndex + 1) % options.credentials.length;
-                return credential;
+                const credential = selectRoundRobinHealthy(options.credentials, nextIndex, isHealthy);
+                nextIndex = credential.nextIndex;
+                return credential.value;
             }
 
             if (options.strategy === 'random') {
-                const index = Math.min(
-                    Math.floor(random() * options.credentials.length),
-                    options.credentials.length - 1
-                );
-                return options.credentials[index];
+                const index = Math.min(Math.floor(random() * candidates.length), candidates.length - 1);
+                return candidates[index];
             }
 
             const affinityKey = selectOptions.affinityKey || 'default';
-            return options.credentials[stableHash(affinityKey) % options.credentials.length];
+            const startIndex = stableHash(affinityKey) % options.credentials.length;
+            for (let offset = 0; offset < options.credentials.length; offset += 1) {
+                const credential = options.credentials[(startIndex + offset) % options.credentials.length];
+                if (isHealthy(credential)) {
+                    return credential;
+                }
+            }
+
+            throw new RequestValidationError('No healthy channel credential is currently available.', 503);
+        },
+        reportFailure(credential: ChannelCredential, reportOptions = {}) {
+            const cooldownMs = credential.failureCooldownMs ?? failureCooldownMs;
+            const currentTime = now();
+            const unhealthyUntil = currentTime + cooldownMs;
+            const scope = reportOptions.scope === 'channel' ? 'channel' : 'credential';
+            lastFailure = reportOptions.reason ?? { at: currentTime, scope };
+            if (reportOptions.scope === 'channel') {
+                unhealthyUntilByChannelId.set(credential.channelId, unhealthyUntil);
+                return;
+            }
+            unhealthyUntilByCredentialId.set(credential.id, unhealthyUntil);
+        },
+        getHealthSummary() {
+            const healthyCredentialCount = healthyCredentials().length;
+            const healthyChannelCount = channelIds.filter((channelId) =>
+                options.credentials.some((credential) => credential.channelId === channelId && isHealthy(credential))
+            ).length;
+            return {
+                credentialCount: options.credentials.length,
+                healthyCredentialCount,
+                unhealthyCredentialCount: options.credentials.length - healthyCredentialCount,
+                channelCount: channelIds.length,
+                healthyChannelCount,
+                unhealthyChannelCount: channelIds.length - healthyChannelCount,
+                ...(lastFailure ? { lastFailure } : {})
+            };
         }
     };
+}
+
+function selectRoundRobinHealthy(
+    credentials: ChannelCredential[],
+    startIndex: number,
+    isHealthy: (credential: ChannelCredential) => boolean
+): { value: ChannelCredential; nextIndex: number } {
+    for (let offset = 0; offset < credentials.length; offset += 1) {
+        const index = (startIndex + offset) % credentials.length;
+        const credential = credentials[index];
+        if (isHealthy(credential)) {
+            return {
+                value: credential,
+                nextIndex: (index + 1) % credentials.length
+            };
+        }
+    }
+
+    throw new RequestValidationError('No healthy channel credential is currently available.', 503);
 }
 
 export function getChannelPoolSummary(config: ChannelPoolConfig): ChannelPoolSummary {
@@ -140,6 +244,56 @@ export function resolveEffectiveCredential(options: {
     };
 }
 
+export function isCredentialFailure(error: unknown): boolean {
+    const status = readErrorNumber(error, 'status') ?? readNestedErrorNumber(error, 'status');
+    if (status === 401 || status === 403 || status === 429) {
+        return true;
+    }
+
+    const code = readErrorString(error, 'code') || readNestedErrorString(error, 'code');
+    return (
+        code === 'invalid_api_key' ||
+        code === 'insufficient_quota' ||
+        code === 'rate_limit_exceeded' ||
+        code === 'account_deactivated'
+    );
+}
+
+export function isChannelFailure(error: unknown): boolean {
+    if (error instanceof RequestValidationError || isCredentialFailure(error)) {
+        return false;
+    }
+    if (isConnectionFailure(error)) {
+        return true;
+    }
+    const status = readErrorNumber(error, 'status') ?? readNestedErrorNumber(error, 'status');
+    return status === 500 || status === 502 || status === 503 || status === 504 || status === 520 || status === 522 || status === 523 || status === 524;
+}
+
+export function describeChannelFailure(error: unknown, scope: 'credential' | 'channel', at = Date.now()): ChannelFailureReason {
+    return {
+        at,
+        scope,
+        ...readStatusField(error),
+        ...readErrorStringField(error, 'code'),
+        ...readRequestIdField(error),
+        ...readErrorStringField(error, 'message')
+    };
+}
+
+export function toPublicChannelFailure(reason: ChannelFailureReason | undefined): PublicChannelFailureReason | undefined {
+    if (!reason) {
+        return undefined;
+    }
+    return {
+        at: reason.at,
+        scope: reason.scope,
+        ...(reason.status === undefined ? {} : { status: reason.status }),
+        ...(reason.code === undefined ? {} : { code: reason.code }),
+        ...(reason.requestId === undefined ? {} : { requestId: reason.requestId })
+    };
+}
+
 function parseLegacyConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
     const apiKey = env.OPENAI_API_KEY?.trim();
     const baseUrl = normalizeOptionalString(env.OPENAI_API_BASE_URL);
@@ -169,6 +323,7 @@ function parseNumberedChannel(env: Record<string, string | undefined>, channelIn
     const channelId = readOptionalEnv(env, `OPENAI_CHANNEL_${channelIndex}_ID`) || `channel-${channelIndex}`;
     const rawApiKeys = readRequiredEnv(env, `OPENAI_CHANNEL_${channelIndex}_API_KEYS`);
     const baseUrl = normalizeOptionalString(env[`OPENAI_CHANNEL_${channelIndex}_BASE_URL`]);
+    const failureCooldownMs = readOptionalPositiveIntegerEnv(env, `OPENAI_CHANNEL_${channelIndex}_FAILURE_COOLDOWN_MS`);
     if (baseUrl) {
         validateApiBaseUrl(baseUrl);
     }
@@ -185,7 +340,8 @@ function parseNumberedChannel(env: Record<string, string | undefined>, channelIn
         id: `${channelId}#${keyIndex}`,
         channelId,
         apiKey,
-        baseUrl
+        baseUrl,
+        ...(failureCooldownMs ? { failureCooldownMs } : {})
     }));
 }
 
@@ -226,6 +382,15 @@ function readOptionalEnv(env: Record<string, string | undefined>, fieldName: str
     return normalized || undefined;
 }
 
+function readOptionalPositiveIntegerEnv(env: Record<string, string | undefined>, fieldName: string): number | undefined {
+    const value = readOptionalEnv(env, fieldName);
+    if (!value || !/^\d+$/.test(value)) {
+        return undefined;
+    }
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function normalizeOptionalString(value: unknown): string | undefined {
     if (value === undefined || value === null) {
         return undefined;
@@ -244,4 +409,93 @@ function stableHash(value: string): number {
         hash = Math.imul(hash, 16777619);
     }
     return hash >>> 0;
+}
+
+function readErrorNumber(error: unknown, fieldName: string): number | undefined {
+    if (typeof error !== 'object' || error === null || !(fieldName in error)) {
+        return undefined;
+    }
+    const value = (error as Record<string, unknown>)[fieldName];
+    return typeof value === 'number' ? value : undefined;
+}
+
+function readStatusField(error: unknown): { status?: number } {
+    const value = readErrorNumber(error, 'status') ?? readNestedErrorNumber(error, 'status');
+    return value === undefined ? {} : { status: value };
+}
+
+function readRequestIdField(error: unknown): { requestId?: string } {
+    const value =
+        readErrorString(error, 'requestID') ||
+        readNestedErrorString(error, 'requestID') ||
+        readErrorString(error, 'requestId') ||
+        readNestedErrorString(error, 'requestId');
+    return value ? { requestId: value } : {};
+}
+
+function readErrorStringField(
+    error: unknown,
+    fieldName: 'code' | 'message'
+): { code?: string; message?: string } {
+    const value = readErrorString(error, fieldName) || readNestedErrorString(error, fieldName);
+    if (!value) {
+        return {};
+    }
+    return { [fieldName]: value };
+}
+
+function readErrorString(error: unknown, fieldName: string): string | undefined {
+    if (typeof error !== 'object' || error === null || !(fieldName in error)) {
+        return undefined;
+    }
+    const value = (error as Record<string, unknown>)[fieldName];
+    return typeof value === 'string' ? value : undefined;
+}
+
+function readNestedErrorString(error: unknown, fieldName: string): string | undefined {
+    if (typeof error !== 'object' || error === null || !('error' in error)) {
+        return undefined;
+    }
+    return readErrorString((error as { error?: unknown }).error, fieldName);
+}
+
+function readNestedErrorNumber(error: unknown, fieldName: string): number | undefined {
+    if (typeof error !== 'object' || error === null || !('error' in error)) {
+        return undefined;
+    }
+    return readErrorNumber((error as { error?: unknown }).error, fieldName);
+}
+
+function isConnectionFailure(error: unknown): boolean {
+    const name = readErrorString(error, 'name') || readConstructorName(error);
+    if (name === 'APIConnectionError' || name === 'APIConnectionTimeoutError') {
+        return true;
+    }
+
+    const code = readErrorString(error, 'code') || readNestedCauseString(error, 'code');
+    return (
+        code === 'ENOTFOUND' ||
+        code === 'ECONNRESET' ||
+        code === 'ECONNREFUSED' ||
+        code === 'ETIMEDOUT' ||
+        code === 'EAI_AGAIN'
+    );
+}
+
+function readConstructorName(error: unknown): string | undefined {
+    if (typeof error !== 'object' || error === null) {
+        return undefined;
+    }
+    const constructorValue = (error as { constructor?: unknown }).constructor;
+    if (typeof constructorValue !== 'function') {
+        return undefined;
+    }
+    return constructorValue.name;
+}
+
+function readNestedCauseString(error: unknown, fieldName: string): string | undefined {
+    if (typeof error !== 'object' || error === null || !('cause' in error)) {
+        return undefined;
+    }
+    return readErrorString((error as { cause?: unknown }).cause, fieldName);
 }
