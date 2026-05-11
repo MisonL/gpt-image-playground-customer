@@ -108,9 +108,6 @@ if (explicitModeClient === 'fs') {
 } else {
     effectiveStorageModeClient = 'fs';
 }
-console.log(
-    `Client Effective Storage Mode: ${effectiveStorageModeClient} (Explicit: ${explicitModeClient || 'unset'}, Vercel Env: ${vercelEnvClient || 'N/A'})`
-);
 
 type ApiImageResponseItem = {
     filename: string;

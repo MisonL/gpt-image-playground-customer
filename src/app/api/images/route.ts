@@ -21,7 +21,8 @@ import {
     type GenerateParams,
     type ValidOutputFormat
 } from '@/lib/image-request-utils';
-import crypto from 'crypto';
+import { appLogger } from '@/lib/app-logger';
+import { createBatchId, createImageFilename, outputDir, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
@@ -46,7 +47,6 @@ type StreamingEvent = {
     error?: string;
 };
 
-const outputDir = path.resolve(process.cwd(), 'generated-images');
 const serverChannelConfig = parseChannelPoolConfig(process.env);
 const serverChannelRouter =
     serverChannelConfig.credentials.length > 0 ? createChannelRouter(serverChannelConfig) : undefined;
@@ -69,13 +69,13 @@ async function ensureOutputDirExists() {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
             try {
                 await fs.mkdir(outputDir, { recursive: true });
-                console.log(`Created output directory: ${outputDir}`);
+                appLogger.info(`Created output directory: ${outputDir}`);
             } catch (mkdirError) {
-                console.error(`Error creating output directory ${outputDir}:`, mkdirError);
+                appLogger.error(`Error creating output directory ${outputDir}:`, mkdirError);
                 throw new Error('Failed to create image output directory.');
             }
         } else {
-            console.error(`Error accessing output directory ${outputDir}:`, error);
+            appLogger.error(`Error accessing output directory ${outputDir}:`, error);
             throw new Error(
                 `Failed to access or ensure image output directory exists. Original error: ${error instanceof Error ? error.message : String(error)}`
             );
@@ -83,33 +83,7 @@ async function ensureOutputDirExists() {
     }
 }
 
-function sha256(data: string): string {
-    return crypto.createHash('sha256').update(data).digest('hex');
-}
-
-function verifyPasswordHash(clientPasswordHash: string, serverPassword: string): boolean {
-    const serverPasswordHash = sha256(serverPassword);
-    const clientBuffer = Buffer.from(clientPasswordHash, 'hex');
-    const serverBuffer = Buffer.from(serverPasswordHash, 'hex');
-    return clientBuffer.length === serverBuffer.length && crypto.timingSafeEqual(clientBuffer, serverBuffer);
-}
-
-function createImageFilename(batchId: string, index: number, extension: ValidOutputFormat): string {
-    return `${Date.now()}-${batchId}-${index}.${extension}`;
-}
-
-function readAffinityKey(headers: Headers): string {
-    return (
-        headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-        headers.get('x-real-ip')?.trim() ||
-        headers.get('user-agent')?.trim() ||
-        'default'
-    );
-}
-
 export async function POST(request: NextRequest) {
-    console.log('Received POST request to /api/images');
-
     try {
         const formData = await request.formData();
         const requestApiKey = String(formData.get('apiKey') || '').trim();
@@ -132,14 +106,14 @@ export async function POST(request: NextRequest) {
         validateApiBaseUrl(effectiveApiBaseUrl || '');
 
         if (!effectiveApiKey) {
-            console.error('OPENAI_API_KEY is not set and no request API key was provided.');
+            appLogger.error('OPENAI_API_KEY is not set and no request API key was provided.');
             return NextResponse.json(
                 { error: '请在 API 设置中填写 API Key，或配置 OPENAI_API_KEY 环境变量。' },
                 { status: 400 }
             );
         }
         if (selectedCredential) {
-            console.log(
+            appLogger.info(
                 `Selected API channel: ${selectedCredential.channelId}, credential: ${selectedCredential.id}, strategy: server`
             );
         }
@@ -150,20 +124,21 @@ export async function POST(request: NextRequest) {
         });
 
         const effectiveStorageMode = readStorageMode(process.env);
-        console.log(`Effective Image Storage Mode: ${effectiveStorageMode}`);
+        appLogger.info(`Effective Image Storage Mode: ${effectiveStorageMode}`);
 
         if (effectiveStorageMode === 'fs') {
             await ensureOutputDirExists();
         }
 
-        if (process.env.APP_PASSWORD) {
+        const appPassword = process.env.APP_PASSWORD;
+        if (appPassword) {
             const clientPasswordHash = formData.get('passwordHash');
             if (typeof clientPasswordHash !== 'string' || !clientPasswordHash) {
-                console.error('Missing password hash.');
+                appLogger.error('Missing password hash.');
                 return NextResponse.json({ error: 'Unauthorized: Missing password hash.' }, { status: 401 });
             }
-            if (!verifyPasswordHash(clientPasswordHash, process.env.APP_PASSWORD)) {
-                console.error('Invalid password hash.');
+            if (!verifyPasswordHash(clientPasswordHash, appPassword)) {
+                appLogger.error('Invalid password hash.');
                 return NextResponse.json({ error: 'Unauthorized: Invalid password.' }, { status: 401 });
             }
         }
@@ -172,7 +147,7 @@ export async function POST(request: NextRequest) {
         const prompt = readRequiredText(formData, 'prompt');
         const model = readModel(formData);
 
-        console.log(`Mode: ${mode}, Model: ${model}, Prompt: ${prompt ? prompt.substring(0, 50) + '...' : 'N/A'}`);
+        appLogger.debug(`Mode: ${mode}, Model: ${model}, Prompt: ${prompt ? prompt.substring(0, 50) + '...' : 'N/A'}`);
 
         const streamEnabled = formData.get('stream') === 'true';
         const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
@@ -217,7 +192,7 @@ export async function POST(request: NextRequest) {
 
                 // Create SSE response
                 const encoder = new TextEncoder();
-                const batchId = crypto.randomBytes(8).toString('hex');
+                const batchId = createBatchId();
                 const fileExtension = outputFormat;
 
                 const readableStream = new ReadableStream({
@@ -250,7 +225,7 @@ export async function POST(request: NextRequest) {
                                         const buffer = Buffer.from(event.b64_json, 'base64');
                                         const filepath = path.join(outputDir, filename);
                                         await fs.writeFile(filepath, buffer);
-                                        console.log(`Streaming: Saved image ${filename}`);
+                                        appLogger.debug(`Streaming: Saved image ${filename}`);
                                     }
 
                                     const imageData = createImageResult(
@@ -289,7 +264,7 @@ export async function POST(request: NextRequest) {
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
                             controller.close();
                         } catch (error) {
-                            console.error('Streaming error:', error);
+                            appLogger.error('Streaming error:', error);
                             const errorEvent: StreamingEvent = {
                                 type: 'error',
                                 error: error instanceof Error ? error.message : 'Streaming error occurred'
@@ -310,7 +285,7 @@ export async function POST(request: NextRequest) {
             }
 
             const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...baseParams, stream: false };
-            console.log('Calling OpenAI generate with params:', params);
+            appLogger.debug('Calling OpenAI generate with params:', params);
             result = await openai.images.generate(params);
         } else if (mode === 'edit') {
             const n = readCount(formData, 'n', 1, 1, 10);
@@ -330,7 +305,7 @@ export async function POST(request: NextRequest) {
 
             // Handle streaming mode for editing
             if (streamEnabled) {
-                console.log('Calling OpenAI edit with streaming, params:', {
+                appLogger.debug('Calling OpenAI edit with streaming, params:', {
                     ...baseEditParams,
                     stream: true,
                     partial_images: partialImagesCount,
@@ -349,7 +324,7 @@ export async function POST(request: NextRequest) {
 
                 // Create SSE response for edit
                 const encoder = new TextEncoder();
-                const batchId = crypto.randomBytes(8).toString('hex');
+                const batchId = createBatchId();
                 const fileExtension: ValidOutputFormat = 'png';
 
                 const readableStream = new ReadableStream({
@@ -382,7 +357,7 @@ export async function POST(request: NextRequest) {
                                         const buffer = Buffer.from(event.b64_json, 'base64');
                                         const filepath = path.join(outputDir, filename);
                                         await fs.writeFile(filepath, buffer);
-                                        console.log(`Streaming edit: Saved image ${filename}`);
+                                        appLogger.debug(`Streaming edit: Saved image ${filename}`);
                                     }
 
                                     const imageData = createImageResult(
@@ -421,7 +396,7 @@ export async function POST(request: NextRequest) {
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
                             controller.close();
                         } catch (error) {
-                            console.error('Streaming edit error:', error);
+                            appLogger.error('Streaming edit error:', error);
                             const errorEvent: StreamingEvent = {
                                 type: 'error',
                                 error: error instanceof Error ? error.message : 'Streaming error occurred'
@@ -446,7 +421,7 @@ export async function POST(request: NextRequest) {
                 ...(maskFile ? { mask: maskFile } : {})
             };
 
-            console.log('Calling OpenAI edit with params:', {
+            appLogger.debug('Calling OpenAI edit with params:', {
                 ...params,
                 image: `[${imageFiles.map((f) => f.name).join(', ')}]`,
                 mask: maskFile ? maskFile.name : 'N/A'
@@ -456,22 +431,22 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid mode specified' }, { status: 400 });
         }
 
-        console.log('OpenAI API call successful.');
+        appLogger.info('OpenAI API call successful.');
 
         if (!result || !Array.isArray(result.data) || result.data.length === 0) {
             const invalidResult: unknown = result;
-            console.error('Invalid or empty data received from OpenAI API:', {
+            appLogger.error('Invalid or empty data received from OpenAI API:', {
                 type: typeof invalidResult,
                 preview: typeof invalidResult === 'string' ? invalidResult.slice(0, 300) : invalidResult
             });
             return NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
         }
 
-        const batchId = crypto.randomBytes(8).toString('hex');
+        const batchId = createBatchId();
         const savedImagesData = await Promise.all(
             result.data.map(async (imageData, index) => {
                 if (!imageData.b64_json) {
-                    console.error(`Image data ${index} is missing b64_json.`);
+                    appLogger.error(`Image data ${index} is missing b64_json.`);
                     throw new Error(`Image data at index ${index} is missing base64 data.`);
                 }
                 const buffer = Buffer.from(imageData.b64_json, 'base64');
@@ -480,20 +455,20 @@ export async function POST(request: NextRequest) {
 
                 if (effectiveStorageMode === 'fs') {
                     const filepath = path.join(outputDir, filename);
-                    console.log(`Attempting to save image to: ${filepath}`);
+                    appLogger.debug(`Attempting to save image to: ${filepath}`);
                     await fs.writeFile(filepath, buffer);
-                    console.log(`Successfully saved image: ${filename}`);
+                    appLogger.info(`Successfully saved image: ${filename}`);
                 }
 
                 return createImageResult(filename, imageData.b64_json, fileExtension, effectiveStorageMode);
             })
         );
 
-        console.log(`All images processed. Mode: ${effectiveStorageMode}`);
+        appLogger.info(`All images processed. Mode: ${effectiveStorageMode}`);
 
         return NextResponse.json({ images: savedImagesData, usage: result.usage });
     } catch (error: unknown) {
-        console.error('Error in /api/images:', error);
+        appLogger.error('Error in /api/images:', error);
 
         let errorMessage = 'An unexpected error occurred.';
         let status = 500;

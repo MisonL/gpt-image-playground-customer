@@ -1,6 +1,6 @@
 # GPT Image Playground
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-339933)
 
@@ -174,6 +174,7 @@ https://your-compatible-api.example.com/v1
 | `OPENAI_CHANNEL_N_BASE_URL` | 否 | 无 | 第 N 个 OpenAI 兼容接口根地址，通常以 `/v1` 结尾。 |
 | `OPENAI_CHANNEL_N_API_KEYS` | 否 | 无 | 第 N 个渠道的一个或多个 API Key，多个 key 用英文逗号分隔。 |
 | `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问密码。 |
+| `APP_LOG_LEVEL` | 否 | 生产环境 `warn`，其他环境 `info` | 服务端日志等级，可选 `debug`、`info`、`warn`、`error`。 |
 | `NEXT_PUBLIC_IMAGE_STORAGE_MODE` | 否 | `fs` | 可选 `fs` 或 `indexeddb`。 |
 
 自定义 API URL 必须同时提供 API Key，避免服务器密钥被发送到未知接口。
@@ -316,6 +317,10 @@ docker logs -f gpt-image-playground-customer
 - Tailwind CSS 4
 - Radix UI
 - Dexie IndexedDB
+
+## 变更记录
+
+版本变更和未发布改动记录在 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## License
 
