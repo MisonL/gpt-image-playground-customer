@@ -574,9 +574,17 @@ describe('isChannelFailure', () => {
         const dnsError = Object.assign(new Error('getaddrinfo ENOTFOUND api.example.com'), {
             code: 'ENOTFOUND'
         });
+        const nestedConnectionError = Object.assign(new Error('Connection error.'), {
+            cause: Object.assign(new TypeError('fetch failed'), {
+                cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:65535'), {
+                    code: 'ECONNREFUSED'
+                })
+            })
+        });
 
         assert.equal(isChannelFailure(connectionError), true);
         assert.equal(isChannelFailure(timeoutError), true);
         assert.equal(isChannelFailure(dnsError), true);
+        assert.equal(isChannelFailure(nestedConnectionError), true);
     });
 });
