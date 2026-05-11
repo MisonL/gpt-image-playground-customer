@@ -472,7 +472,7 @@ function isConnectionFailure(error: unknown): boolean {
         return true;
     }
 
-    const code = readErrorString(error, 'code') || readNestedCauseString(error, 'code');
+    const code = readErrorString(error, 'code') || readCauseChainString(error, 'code');
     return (
         code === 'ENOTFOUND' ||
         code === 'ECONNRESET' ||
@@ -493,9 +493,10 @@ function readConstructorName(error: unknown): string | undefined {
     return constructorValue.name;
 }
 
-function readNestedCauseString(error: unknown, fieldName: string): string | undefined {
-    if (typeof error !== 'object' || error === null || !('cause' in error)) {
+function readCauseChainString(error: unknown, fieldName: string, depth = 0): string | undefined {
+    if (depth > 4 || typeof error !== 'object' || error === null || !('cause' in error)) {
         return undefined;
     }
-    return readErrorString((error as { cause?: unknown }).cause, fieldName);
+    const cause = (error as { cause?: unknown }).cause;
+    return readErrorString(cause, fieldName) || readCauseChainString(cause, fieldName, depth + 1);
 }
