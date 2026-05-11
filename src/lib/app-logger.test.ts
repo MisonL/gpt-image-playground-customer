@@ -8,9 +8,10 @@ const originalDebug = console.debug;
 const originalInfo = console.info;
 const originalWarn = console.warn;
 const originalError = console.error;
+const nodeEnvKey: string = 'NODE_ENV';
 
 beforeEach(() => {
-    process.env.NODE_ENV = 'test';
+    process.env[nodeEnvKey] = 'test';
 });
 
 afterEach(() => {
@@ -20,9 +21,9 @@ afterEach(() => {
         process.env.APP_LOG_LEVEL = originalLogLevel;
     }
     if (originalNodeEnv === undefined) {
-        delete process.env.NODE_ENV;
+        delete process.env[nodeEnvKey];
     } else {
-        process.env.NODE_ENV = originalNodeEnv;
+        process.env[nodeEnvKey] = originalNodeEnv;
     }
     console.debug = originalDebug;
     console.info = originalInfo;
@@ -34,7 +35,7 @@ describe('appLogger', { concurrency: false }, () => {
     it('uses warn as the production default log level', () => {
         const calls: string[] = [];
         delete process.env.APP_LOG_LEVEL;
-        process.env.NODE_ENV = 'production';
+        process.env[nodeEnvKey] = 'production';
         console.info = (message?: unknown) => {
             calls.push(`info:${String(message)}`);
         };
@@ -67,7 +68,7 @@ describe('appLogger', { concurrency: false }, () => {
     it('falls back to the default level for invalid configured values', () => {
         const calls: string[] = [];
         process.env.APP_LOG_LEVEL = 'verbose';
-        process.env.NODE_ENV = 'production';
+        process.env[nodeEnvKey] = 'production';
         console.info = (message?: unknown) => {
             calls.push(`info:${String(message)}`);
         };
