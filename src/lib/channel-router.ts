@@ -14,6 +14,17 @@ export type ChannelPoolConfig = {
     credentials: ChannelCredential[];
 };
 
+export type ChannelPoolSummary = {
+    credentialCount: number;
+    channelCount: number;
+    strategy: RoutingStrategy;
+    channels: Array<{
+        id: string;
+        baseUrl?: string;
+        credentialCount: number;
+    }>;
+};
+
 export type ChannelRouter = {
     select(options?: { affinityKey?: string }): ChannelCredential;
 };
@@ -32,7 +43,7 @@ const DEFAULT_STRATEGY: RoutingStrategy = 'sticky';
 const VALID_STRATEGIES = new Set<RoutingStrategy>(['sticky', 'round_robin', 'random']);
 const CHANNEL_KEY_PATTERN = /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS)$/;
 
-export function parseChannelPoolConfig(env: NodeJS.ProcessEnv): ChannelPoolConfig {
+export function parseChannelPoolConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
     if (env.OPENAI_CHANNELS_JSON?.trim()) {
         throw new RequestValidationError(
             'OPENAI_CHANNELS_JSON has been removed. Use OPENAI_ROUTING_STRATEGY and OPENAI_CHANNEL_N_* variables instead.',
@@ -85,6 +96,30 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
     };
 }
 
+export function getChannelPoolSummary(config: ChannelPoolConfig): ChannelPoolSummary {
+    const channels = new Map<string, { id: string; baseUrl?: string; credentialCount: number }>();
+
+    config.credentials.forEach((credential) => {
+        const existing = channels.get(credential.channelId);
+        if (existing) {
+            existing.credentialCount += 1;
+            return;
+        }
+        channels.set(credential.channelId, {
+            id: credential.channelId,
+            baseUrl: credential.baseUrl,
+            credentialCount: 1
+        });
+    });
+
+    return {
+        credentialCount: config.credentials.length,
+        channelCount: channels.size,
+        strategy: config.strategy,
+        channels: Array.from(channels.values())
+    };
+}
+
 export function resolveEffectiveCredential(options: {
     requestApiKey: string;
     requestApiBaseUrl: string;
@@ -105,7 +140,7 @@ export function resolveEffectiveCredential(options: {
     };
 }
 
-function parseLegacyConfig(env: NodeJS.ProcessEnv): ChannelPoolConfig {
+function parseLegacyConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
     const apiKey = env.OPENAI_API_KEY?.trim();
     const baseUrl = normalizeOptionalString(env.OPENAI_API_BASE_URL);
 
@@ -130,7 +165,7 @@ function parseLegacyConfig(env: NodeJS.ProcessEnv): ChannelPoolConfig {
     };
 }
 
-function parseNumberedChannel(env: NodeJS.ProcessEnv, channelIndex: number): ChannelCredential[] {
+function parseNumberedChannel(env: Record<string, string | undefined>, channelIndex: number): ChannelCredential[] {
     const channelId = readOptionalEnv(env, `OPENAI_CHANNEL_${channelIndex}_ID`) || `channel-${channelIndex}`;
     const rawApiKeys = readRequiredEnv(env, `OPENAI_CHANNEL_${channelIndex}_API_KEYS`);
     const baseUrl = normalizeOptionalString(env[`OPENAI_CHANNEL_${channelIndex}_BASE_URL`]);
@@ -164,7 +199,7 @@ function readStrategy(value: unknown, fieldName: string): RoutingStrategy {
     return value as RoutingStrategy;
 }
 
-function readConfiguredChannelIndexes(env: NodeJS.ProcessEnv): number[] {
+function readConfiguredChannelIndexes(env: Record<string, string | undefined>): number[] {
     const indexes = new Set<number>();
     Object.keys(env).forEach((key) => {
         const match = key.match(CHANNEL_KEY_PATTERN);
@@ -174,7 +209,7 @@ function readConfiguredChannelIndexes(env: NodeJS.ProcessEnv): number[] {
     return Array.from(indexes).sort((left, right) => left - right);
 }
 
-function readRequiredEnv(env: NodeJS.ProcessEnv, fieldName: string): string {
+function readRequiredEnv(env: Record<string, string | undefined>, fieldName: string): string {
     const value = env[fieldName];
     if (typeof value !== 'string' || value.trim().length === 0) {
         throw new RequestValidationError(`${fieldName} is required.`, 500);
@@ -182,7 +217,7 @@ function readRequiredEnv(env: NodeJS.ProcessEnv, fieldName: string): string {
     return value.trim();
 }
 
-function readOptionalEnv(env: NodeJS.ProcessEnv, fieldName: string): string | undefined {
+function readOptionalEnv(env: Record<string, string | undefined>, fieldName: string): string | undefined {
     const value = env[fieldName];
     if (typeof value !== 'string') {
         return undefined;
