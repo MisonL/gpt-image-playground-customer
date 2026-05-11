@@ -100,6 +100,7 @@ type EditingFormProps = {
     setEditMaskPreviewUrl: React.Dispatch<React.SetStateAction<string | null>>;
     enableStreaming: boolean;
     setEnableStreaming: React.Dispatch<React.SetStateAction<boolean>>;
+    allowStreamingBatch: boolean;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
 };
@@ -175,6 +176,7 @@ export function EditingForm({
     setEditMaskPreviewUrl,
     enableStreaming,
     setEnableStreaming,
+    allowStreamingBatch,
     partialImages,
     setPartialImages
 }: EditingFormProps) {
@@ -198,12 +200,14 @@ export function EditingForm({
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
-    // Disable streaming when editN > 1 (OpenAI limitation)
+    const streamingDisabledByCount = editN[0] > 1 && !allowStreamingBatch;
+
+    // Disable streaming when editN > 1 unless batch streaming fanout is explicitly enabled.
     React.useEffect(() => {
-        if (editN[0] > 1 && enableStreaming) {
+        if (streamingDisabledByCount && enableStreaming) {
             setEnableStreaming(false);
         }
-    }, [editN, enableStreaming, setEnableStreaming]);
+    }, [streamingDisabledByCount, enableStreaming, setEnableStreaming]);
 
     // 'custom' is only valid on gpt-image-2; reset when switching to a legacy model
     React.useEffect(() => {
@@ -601,18 +605,22 @@ export function EditingForm({
                                             name='edit-enable-streaming'
                                             checked={enableStreaming}
                                             onCheckedChange={(checked) => setEnableStreaming(!!checked)}
-                                            disabled={isLoading || editN[0] > 1}
+                                            disabled={isLoading || streamingDisabledByCount}
                                             className='border-white/40 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black'
                                         />
                                         <Label
                                             htmlFor='edit-enable-streaming'
-                                            className={`text-sm ${editN[0] > 1 ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
+                                            className={`text-sm ${streamingDisabledByCount ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
                                             {t('streaming.enable')}
                                         </Label>
                                     </div>
                                 </TooltipTrigger>
                                 <TooltipContent className='max-w-[250px]'>
-                                    {editN[0] > 1 ? t('streaming.disabledByCount') : t('streaming.description')}
+                                    {streamingDisabledByCount
+                                        ? t('streaming.disabledByCount')
+                                        : allowStreamingBatch && editN[0] > 1
+                                          ? t('streaming.batchDescription')
+                                          : t('streaming.description')}
                                 </TooltipContent>
                             </Tooltip>
                         </div>
