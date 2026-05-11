@@ -1,5 +1,4 @@
-import crypto from 'crypto';
-import fs from 'fs/promises';
+import { createChannelRouter, parseChannelPoolConfig, resolveEffectiveCredential } from '@/lib/channel-router';
 import {
     RequestValidationError,
     assertSafeApiOverride,
@@ -22,6 +21,8 @@ import {
     type GenerateParams,
     type ValidOutputFormat
 } from '@/lib/image-request-utils';
+import crypto from 'crypto';
+import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import path from 'path';
@@ -46,6 +47,9 @@ type StreamingEvent = {
 };
 
 const outputDir = path.resolve(process.cwd(), 'generated-images');
+const serverChannelConfig = parseChannelPoolConfig(process.env);
+const serverChannelRouter =
+    serverChannelConfig.credentials.length > 0 ? createChannelRouter(serverChannelConfig) : undefined;
 
 function describeInvalidImagesResponse(result: unknown): string {
     if (typeof result === 'string') {
@@ -94,6 +98,15 @@ function createImageFilename(batchId: string, index: number, extension: ValidOut
     return `${Date.now()}-${batchId}-${index}.${extension}`;
 }
 
+function readAffinityKey(headers: Headers): string {
+    return (
+        headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+        headers.get('x-real-ip')?.trim() ||
+        headers.get('user-agent')?.trim() ||
+        'default'
+    );
+}
+
 export async function POST(request: NextRequest) {
     console.log('Received POST request to /api/images');
 
@@ -103,8 +116,19 @@ export async function POST(request: NextRequest) {
         const requestApiBaseUrl = String(formData.get('apiBaseUrl') || '').trim();
         assertSafeApiOverride(requestApiKey, requestApiBaseUrl);
         validateApiBaseUrl(requestApiBaseUrl);
-        const effectiveApiKey = requestApiKey || process.env.OPENAI_API_KEY;
-        const effectiveApiBaseUrl = requestApiBaseUrl || process.env.OPENAI_API_BASE_URL;
+        const selectedServerCredential = requestApiKey
+            ? undefined
+            : serverChannelRouter?.select({ affinityKey: readAffinityKey(request.headers) });
+        const {
+            apiKey: effectiveApiKey,
+            baseUrl: effectiveApiBaseUrl,
+            selectedCredential
+        } = resolveEffectiveCredential({
+            requestApiKey,
+            requestApiBaseUrl,
+            legacyBaseUrl: process.env.OPENAI_API_BASE_URL,
+            selectedCredential: selectedServerCredential
+        });
         validateApiBaseUrl(effectiveApiBaseUrl || '');
 
         if (!effectiveApiKey) {
@@ -112,6 +136,11 @@ export async function POST(request: NextRequest) {
             return NextResponse.json(
                 { error: '请在 API 设置中填写 API Key，或配置 OPENAI_API_KEY 环境变量。' },
                 { status: 400 }
+            );
+        }
+        if (selectedCredential) {
+            console.log(
+                `Selected API channel: ${selectedCredential.channelId}, credential: ${selectedCredential.id}, strategy: server`
             );
         }
 
@@ -275,7 +304,7 @@ export async function POST(request: NextRequest) {
                     headers: {
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
-                        'Connection': 'keep-alive'
+                        Connection: 'keep-alive'
                     }
                 });
             }
@@ -407,7 +436,7 @@ export async function POST(request: NextRequest) {
                     headers: {
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
-                        'Connection': 'keep-alive'
+                        Connection: 'keep-alive'
                     }
                 });
             }
