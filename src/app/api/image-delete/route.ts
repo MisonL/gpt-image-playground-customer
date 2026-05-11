@@ -1,21 +1,9 @@
-import crypto from 'crypto';
 import fs from 'fs/promises';
+import { appLogger } from '@/lib/app-logger';
 import { isValidImageFilename } from '@/lib/image-request-utils';
+import { outputDir, verifyPasswordHash } from '@/lib/server-runtime';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
-
-const outputDir = path.resolve(process.cwd(), 'generated-images');
-
-function sha256(data: string): string {
-    return crypto.createHash('sha256').update(data).digest('hex');
-}
-
-function verifyPasswordHash(clientPasswordHash: string, serverPassword: string): boolean {
-    const serverPasswordHash = sha256(serverPassword);
-    const clientBuffer = Buffer.from(clientPasswordHash, 'hex');
-    const serverBuffer = Buffer.from(serverPasswordHash, 'hex');
-    return clientBuffer.length === serverBuffer.length && crypto.timingSafeEqual(clientBuffer, serverBuffer);
-}
 
 type DeleteRequestBody = {
     filenames: string[];
@@ -29,26 +17,25 @@ type FileDeletionResult = {
 };
 
 export async function POST(request: NextRequest) {
-    console.log('Received POST request to /api/image-delete');
-
     let requestBody: DeleteRequestBody;
     try {
         requestBody = await request.json();
 
-        if (process.env.APP_PASSWORD) {
+        const appPassword = process.env.APP_PASSWORD;
+        if (appPassword) {
             const clientPasswordHash = requestBody.passwordHash;
 
             if (!clientPasswordHash) {
-                console.error('Missing password hash for delete operation.');
+                appLogger.error('Missing password hash for delete operation.');
                 return NextResponse.json({ error: 'Unauthorized: Missing password hash.' }, { status: 401 });
             }
-            if (!verifyPasswordHash(clientPasswordHash, process.env.APP_PASSWORD)) {
-                console.error('Invalid password hash for delete operation.');
+            if (!verifyPasswordHash(clientPasswordHash, appPassword)) {
+                appLogger.error('Invalid password hash for delete operation.');
                 return NextResponse.json({ error: 'Unauthorized: Invalid password.' }, { status: 401 });
             }
         }
     } catch (e) {
-        console.error('Error parsing request body for /api/image-delete:', e);
+        appLogger.error('Error parsing request body for /api/image-delete:', e);
         return NextResponse.json({ error: 'Invalid request body: Must be JSON.' }, { status: 400 });
     }
 
@@ -66,7 +53,7 @@ export async function POST(request: NextRequest) {
 
     for (const filename of filenames) {
         if (!isValidImageFilename(filename)) {
-            console.warn(`Invalid filename for deletion: ${filename}`);
+            appLogger.warn(`Invalid filename for deletion: ${filename}`);
             deletionResults.push({ filename, success: false, error: 'Invalid filename format.' });
             continue;
         }
@@ -75,10 +62,9 @@ export async function POST(request: NextRequest) {
 
         try {
             await fs.unlink(filepath);
-            console.log(`Successfully deleted image: ${filepath}`);
             deletionResults.push({ filename, success: true });
         } catch (error: unknown) {
-            console.error(`Error deleting image ${filepath}:`, error);
+            appLogger.error(`Error deleting image ${filepath}:`, error);
             if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
                 deletionResults.push({ filename, success: false, error: 'File not found.' });
             } else {
