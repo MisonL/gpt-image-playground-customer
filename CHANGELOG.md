@@ -6,14 +6,24 @@
 
 ## [未发布]
 
+## [1.3.0] - 2026-05-12
+
+### 新增
+
+- 增加服务端 credential/channel 失败冷却机制，支持按渠道覆盖冷却窗口。
+- 运行时能力接口增加健康 credential/channel 数量和最近失败摘要，用于前端刷新并发窗口。
+
+### 修复
+
+- 修正 `sticky` 路由下流式批处理推荐并发被渠道数量放大的问题，避免同一 affinity key 下突破单 credential 并发上限。
+- 兼容上游错误中的 `requestID` 和 `requestId` 字段，并确保公开能力接口不返回上游错误消息。
+
 ## [1.2.0] - 2026-05-11
 
 ### 新增
 
 - 通过 `OPENAI_CHANNEL_N_*` 环境变量支持服务端多渠道 API Key 路由。
 - 支持 `sticky`、`round_robin`、`random` 三种服务端凭证路由策略。
-- 增加服务端 credential/channel 失败冷却机制，支持按渠道覆盖冷却窗口。
-- 运行时能力接口增加健康 credential/channel 数量和最近失败摘要，用于前端刷新并发窗口。
 - 增加渠道解析、路由选择、有效凭证解析的单元测试。
 - 增加仓库执行约束文档 `AGENTS.md`。
 - 增加服务端运行时工具测试，覆盖密码哈希校验、请求来源选择、批次 ID 和图片文件名生成。
@@ -27,11 +37,6 @@
 - 将服务端请求路径日志收敛为可配置日志等级，生产环境默认只输出警告和错误。
 - 缓存日志等级解析结果，减少热路径重复计算。
 - 在 README 中补充当前 4K 渠道价格说明。
-
-### 修复
-
-- 修正 `sticky` 路由下流式批处理推荐并发被渠道数量放大的问题，避免同一 affinity key 下突破单 credential 并发上限。
-- 兼容上游错误中的 `requestID` 和 `requestId` 字段，并确保公开能力接口不返回上游错误消息。
 
 ## [1.1.0] - 2026-05-10
 
@@ -59,7 +64,8 @@
 - 支持基于 OpenAI 兼容 Images API 的本地图片生成和编辑流程。
 - 增加 Docker 部署支持和多平台启动脚本。
 
-[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.2.0...HEAD
+[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/dc7c8f5855e80cb9507517b5748c718e7155df52...v1.1.0
 [1.0.0]: https://github.com/MisonL/gpt-image-playground-customer/commit/dc7c8f5855e80cb9507517b5748c718e7155df52
