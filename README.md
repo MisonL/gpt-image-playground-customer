@@ -35,6 +35,20 @@ OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_API_BASE_URL=https://api.openai.com/v1
 ```
 
+多渠道部署可以改用服务端渠道池：
+
+```dotenv
+OPENAI_ROUTING_STRATEGY=round_robin
+
+OPENAI_CHANNEL_1_ID=official
+OPENAI_CHANNEL_1_BASE_URL=https://api.openai.com/v1
+OPENAI_CHANNEL_1_API_KEYS=sk-primary
+
+OPENAI_CHANNEL_2_ID=backup
+OPENAI_CHANNEL_2_BASE_URL=https://your-compatible-api.example.com/v1
+OPENAI_CHANNEL_2_API_KEYS=sk-backup-a,sk-backup-b
+```
+
 2. 启动服务：
 
 ```bash
@@ -155,10 +169,55 @@ https://your-compatible-api.example.com/v1
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | 条件必填 | 无 | 服务端默认 API Key。也可以在页面 `API 设置` 中填写。 |
 | `OPENAI_API_BASE_URL` | 否 | OpenAI 官方地址 | OpenAI 兼容接口根地址。 |
+| `OPENAI_ROUTING_STRATEGY` | 否 | `sticky` | 服务端多渠道路由策略，可选 `sticky`、`round_robin`、`random`。 |
+| `OPENAI_CHANNEL_N_ID` | 否 | 无 | 第 N 个服务端渠道标识，只用于日志排查。 |
+| `OPENAI_CHANNEL_N_BASE_URL` | 否 | 无 | 第 N 个 OpenAI 兼容接口根地址，通常以 `/v1` 结尾。 |
+| `OPENAI_CHANNEL_N_API_KEYS` | 否 | 无 | 第 N 个渠道的一个或多个 API Key，多个 key 用英文逗号分隔。 |
 | `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问密码。 |
 | `NEXT_PUBLIC_IMAGE_STORAGE_MODE` | 否 | `fs` | 可选 `fs` 或 `indexeddb`。 |
 
 自定义 API URL 必须同时提供 API Key，避免服务器密钥被发送到未知接口。
+
+### 服务端多渠道路由
+
+服务端多渠道路由用于配置多个 OpenAI 兼容渠道和多个 key。页面右上角 `API 设置` 中显式填写的 API Key/API URL 仍然优先，未填写时才会使用服务端渠道池。
+
+优先级：
+
+```text
+页面 API 设置 > OPENAI_CHANNEL_N_* 渠道池 > OPENAI_API_KEY 单 key 默认配置
+```
+
+配置字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `OPENAI_ROUTING_STRATEGY` | 可选 `sticky`、`round_robin`、`random`。不填默认 `sticky`。 |
+| `OPENAI_CHANNEL_N_ID` | 渠道标识，只用于日志与排查，不会暴露 API Key。 |
+| `OPENAI_CHANNEL_N_BASE_URL` | 兼容接口根地址，通常以 `/v1` 结尾。 |
+| `OPENAI_CHANNEL_N_API_KEYS` | 当前渠道下的一个或多个 API Key，多个 key 用英文逗号分隔。 |
+
+三种策略：
+
+| 策略 | 行为 |
+| --- | --- |
+| `sticky` | 按请求来源稳定映射到同一凭证，适合减少同一用户在多个渠道间跳转。 |
+| `round_robin` | 按请求顺序轮询所有渠道 key，适合简单均摊流量。 |
+| `random` | 每次随机选择一个渠道 key，适合轻量分散请求。 |
+
+完整示例：
+
+```dotenv
+OPENAI_ROUTING_STRATEGY=sticky
+
+OPENAI_CHANNEL_1_ID=official
+OPENAI_CHANNEL_1_BASE_URL=https://api.openai.com/v1
+OPENAI_CHANNEL_1_API_KEYS=sk-key-1,sk-key-2
+
+OPENAI_CHANNEL_2_ID=backup
+OPENAI_CHANNEL_2_BASE_URL=https://your-compatible-api.example.com/v1
+OPENAI_CHANNEL_2_API_KEYS=sk-backup-1
+```
 
 ## 图片保存位置
 
