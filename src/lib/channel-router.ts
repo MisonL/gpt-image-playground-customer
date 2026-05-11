@@ -66,8 +66,8 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
     return {
         select(selectOptions = {}) {
             if (options.strategy === 'round_robin') {
-                const credential = options.credentials[nextIndex % options.credentials.length];
-                nextIndex += 1;
+                const credential = options.credentials[nextIndex];
+                nextIndex = (nextIndex + 1) % options.credentials.length;
                 return credential;
             }
 
