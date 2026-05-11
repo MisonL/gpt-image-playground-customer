@@ -16,6 +16,7 @@ import {
     applyStreamingClientEvent,
     buildStreamingBatchJobs,
     isRuntimeStreamingBatchEnabled,
+    resolveStreamingBatchCapacity,
     scheduleStreamingBatch,
     shouldUseStreamingBatch,
     type ApiImageResponseItem,
@@ -137,6 +138,17 @@ type RuntimeCapabilities = {
     streamingBatch: {
         enabled: boolean;
         recommendedConcurrency: number;
+        requestCredentialConcurrency: number;
+        channelCount?: number;
+        healthyChannelCount?: number;
+        unhealthyChannelCount?: number;
+        lastFailure?: {
+            at: number;
+            scope: 'credential' | 'channel';
+            status?: number;
+            code?: string;
+            requestId?: string;
+        };
     };
 };
 
@@ -245,10 +257,15 @@ export default function HomePage() {
     const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(2);
     // Streaming preview images (base64 data URLs for partial images during streaming)
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
-    const streamingBatchEnabled = isRuntimeStreamingBatchEnabled({
-        serverEnabled: runtimeCapabilities?.streamingBatch.enabled
+    const streamingBatchCapacity = resolveStreamingBatchCapacity({
+        featureEnabled: isRuntimeStreamingBatchEnabled({
+            serverEnabled: runtimeCapabilities?.streamingBatch.enabled
+        }),
+        hasRequestApiKey: apiSettings.apiKey.trim().length > 0,
+        requestCredentialConcurrency: runtimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
+        serverRecommendedConcurrency: runtimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
     });
-    const streamingBatchConcurrency = Math.max(1, runtimeCapabilities?.streamingBatch.recommendedConcurrency ?? 1);
+    const streamingBatchEnabled = streamingBatchCapacity.enabled;
 
     const getImageSrc = React.useCallback(
         (filename: string): string | undefined => {
@@ -310,23 +327,27 @@ export default function HomePage() {
         });
     }, []);
 
-    React.useEffect(() => {
-        const fetchRuntimeCapabilities = async () => {
-            try {
-                const response = await fetch('/api/runtime-capabilities');
-                if (!response.ok) {
-                    throw new Error('Failed to fetch runtime capabilities');
-                }
-                const data = (await response.json()) as RuntimeCapabilities;
-                setRuntimeCapabilities(data);
-            } catch (error) {
-                console.error('Error fetching runtime capabilities:', error);
-                setRuntimeCapabilities(null);
+    const refreshRuntimeCapabilities = React.useCallback(async (): Promise<RuntimeCapabilities | null> => {
+        try {
+            const response = await fetch('/api/runtime-capabilities');
+            if (!response.ok) {
+                throw new Error('Failed to fetch runtime capabilities');
             }
-        };
-
-        fetchRuntimeCapabilities();
+            const data = (await response.json()) as RuntimeCapabilities;
+            setRuntimeCapabilities(data);
+            return data;
+        } catch (error) {
+            console.error('Error fetching runtime capabilities:', error);
+            setRuntimeCapabilities(null);
+            return null;
+        }
     }, []);
+
+    React.useEffect(() => {
+        queueMicrotask(() => {
+            refreshRuntimeCapabilities();
+        });
+    }, [refreshRuntimeCapabilities]);
 
     React.useEffect(() => {
         if (!hasLoadedStoredHistoryRef.current) return;
@@ -726,6 +747,15 @@ export default function HomePage() {
         setStreamingPreviewImages(new Map());
 
         try {
+            const latestRuntimeCapabilities = await refreshRuntimeCapabilities();
+            const currentStreamingBatchCapacity = resolveStreamingBatchCapacity({
+                featureEnabled: isRuntimeStreamingBatchEnabled({
+                    serverEnabled: latestRuntimeCapabilities?.streamingBatch.enabled
+                }),
+                hasRequestApiKey: apiSettings.apiKey.trim().length > 0,
+                requestCredentialConcurrency: latestRuntimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
+                serverRecommendedConcurrency: latestRuntimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
+            });
             if (isPasswordRequiredByBackend && !clientPasswordHash) {
                 setError(t('error.passwordRequired'));
                 setPasswordDialogContext('initial');
@@ -736,7 +766,7 @@ export default function HomePage() {
             const imageCount =
                 requestMode === 'generate' ? (formData as GenerationFormData).n : (formData as EditingFormData).n;
             const useStreamingBatch = shouldUseStreamingBatch({
-                enabled: streamingBatchEnabled,
+                enabled: currentStreamingBatchCapacity.enabled,
                 streaming: requestStreaming,
                 imageCount
             });
@@ -745,7 +775,7 @@ export default function HomePage() {
                 const jobs = buildStreamingBatchJobs(imageCount);
                 const batchResults = await scheduleStreamingBatch(
                     jobs,
-                    streamingBatchConcurrency,
+                    currentStreamingBatchCapacity.concurrency,
                     async (job: StreamingBatchJob) => {
                         const requestFormData = buildApiFormData(formData, requestMode, {
                             forceSingleImage: true,
@@ -776,6 +806,7 @@ export default function HomePage() {
                 durationMs = Date.now() - startTime;
                 await commitCompletedImages(images, usage, durationMs, true);
                 if (errors.length > 0) {
+                    await refreshRuntimeCapabilities();
                     setError(t('error.batchPartialFailure', { failed: errors.length, total: jobs.length }));
                 }
                 return;
@@ -803,6 +834,7 @@ export default function HomePage() {
             setError(errorMessage);
             setLatestImageBatch(null);
             setStreamingPreviewImages(new Map());
+            await refreshRuntimeCapabilities();
         } finally {
             if (durationMs === 0) durationMs = Date.now() - startTime;
             setIsLoading(false);

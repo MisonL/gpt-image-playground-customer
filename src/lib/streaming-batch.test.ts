@@ -4,6 +4,7 @@ import {
     computeStreamingConcurrency,
     computeStreamingBatchRecommendation,
     isRuntimeStreamingBatchEnabled,
+    resolveStreamingBatchCapacity,
     scheduleStreamingBatch,
     shouldUseStreamingBatch
 } from './streaming-batch';
@@ -50,6 +51,29 @@ describe('computeStreamingBatchRecommendation', () => {
                 strategy: 'round_robin'
             }),
             10
+        );
+    });
+
+    it('does not multiply sticky routing capacity by channel count', () => {
+        assert.equal(
+            computeStreamingBatchRecommendation({
+                credentialCount: 5,
+                channelCount: 3,
+                maxStreamsPerCredential: 2,
+                strategy: 'sticky'
+            }),
+            2
+        );
+    });
+
+    it('returns zero when no healthy credentials are available', () => {
+        assert.equal(
+            computeStreamingBatchRecommendation({
+                credentialCount: 0,
+                maxStreamsPerCredential: 2,
+                strategy: 'round_robin'
+            }),
+            0
         );
     });
 });
@@ -109,6 +133,68 @@ describe('isRuntimeStreamingBatchEnabled', () => {
                 serverEnabled: false
             }),
             false
+        );
+    });
+});
+
+describe('resolveStreamingBatchCapacity', () => {
+    it('keeps batch streaming disabled when the feature flag is off', () => {
+        assert.deepEqual(
+            resolveStreamingBatchCapacity({
+                featureEnabled: false,
+                hasRequestApiKey: true,
+                requestCredentialConcurrency: 2,
+                serverRecommendedConcurrency: 3
+            }),
+            {
+                enabled: false,
+                concurrency: 1
+            }
+        );
+    });
+
+    it('uses request credential capacity when the user provides an API key', () => {
+        assert.deepEqual(
+            resolveStreamingBatchCapacity({
+                featureEnabled: true,
+                hasRequestApiKey: true,
+                requestCredentialConcurrency: 2,
+                serverRecommendedConcurrency: 0
+            }),
+            {
+                enabled: true,
+                concurrency: 2
+            }
+        );
+    });
+
+    it('uses healthy server capacity when the request relies on the server pool', () => {
+        assert.deepEqual(
+            resolveStreamingBatchCapacity({
+                featureEnabled: true,
+                hasRequestApiKey: false,
+                requestCredentialConcurrency: 2,
+                serverRecommendedConcurrency: 3
+            }),
+            {
+                enabled: true,
+                concurrency: 3
+            }
+        );
+    });
+
+    it('disables batch streaming when no credential source has capacity', () => {
+        assert.deepEqual(
+            resolveStreamingBatchCapacity({
+                featureEnabled: true,
+                hasRequestApiKey: false,
+                requestCredentialConcurrency: 2,
+                serverRecommendedConcurrency: 0
+            }),
+            {
+                enabled: false,
+                concurrency: 1
+            }
         );
     });
 });

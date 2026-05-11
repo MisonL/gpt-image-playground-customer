@@ -25,6 +25,18 @@ export type RuntimeStreamingBatchOptions = {
     serverEnabled?: boolean;
 };
 
+export type StreamingBatchCapacityOptions = {
+    featureEnabled: boolean;
+    hasRequestApiKey: boolean;
+    requestCredentialConcurrency: number;
+    serverRecommendedConcurrency: number;
+};
+
+export type StreamingBatchCapacity = {
+    enabled: boolean;
+    concurrency: number;
+};
+
 export type ApiImageResponseItem = {
     filename: string;
     b64_json?: string;
@@ -55,6 +67,10 @@ export function computeStreamingConcurrency(options: StreamingConcurrencyOptions
 }
 
 export function computeStreamingBatchRecommendation(options: StreamingBatchRecommendationOptions): number {
+    const credentialCount = Math.floor(options.credentialCount);
+    if (credentialCount < 1) {
+        return 0;
+    }
     const perCredential = Math.max(1, Math.floor(options.maxStreamsPerCredential ?? 1));
     if (options.strategy === 'sticky') {
         return perCredential;
@@ -64,6 +80,22 @@ export function computeStreamingBatchRecommendation(options: StreamingBatchRecom
 
 export function isRuntimeStreamingBatchEnabled(options: RuntimeStreamingBatchOptions): boolean {
     return options.serverEnabled === true;
+}
+
+export function resolveStreamingBatchCapacity(options: StreamingBatchCapacityOptions): StreamingBatchCapacity {
+    if (!options.featureEnabled) {
+        return { enabled: false, concurrency: 1 };
+    }
+
+    const selectedConcurrency = options.hasRequestApiKey
+        ? options.requestCredentialConcurrency
+        : options.serverRecommendedConcurrency;
+    const concurrency = Math.floor(selectedConcurrency);
+    if (concurrency < 1) {
+        return { enabled: false, concurrency: 1 };
+    }
+
+    return { enabled: true, concurrency };
 }
 
 export function shouldUseStreamingBatch(options: StreamingBatchDecision): boolean {
