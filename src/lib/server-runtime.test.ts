@@ -1,6 +1,8 @@
 import {
     createBatchId,
     createImageFilename,
+    readBooleanEnv,
+    readPositiveIntegerEnv,
     readAffinityKey,
     verifyPasswordHash,
     type FilenameClock
@@ -59,5 +61,23 @@ describe('createBatchId', () => {
         const second = createBatchId();
 
         assert.notEqual(first, second);
+    });
+});
+
+describe('readBooleanEnv', () => {
+    it('only enables a feature for explicit true-like values', () => {
+        assert.equal(readBooleanEnv({}, 'ENABLE_STREAMING_BATCH'), false);
+        assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: 'false' }, 'ENABLE_STREAMING_BATCH'), false);
+        assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: '1' }, 'ENABLE_STREAMING_BATCH'), true);
+        assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: 'true' }, 'ENABLE_STREAMING_BATCH'), true);
+    });
+});
+
+describe('readPositiveIntegerEnv', () => {
+    it('reads a positive integer or falls back to a safe default', () => {
+        assert.equal(readPositiveIntegerEnv({}, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 1);
+        assert.equal(readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: '2' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 2);
+        assert.equal(readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: '0' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 1);
+        assert.equal(readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: 'bad' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 1);
     });
 });

@@ -1,4 +1,9 @@
-import { createChannelRouter, parseChannelPoolConfig, resolveEffectiveCredential } from './channel-router';
+import {
+    createChannelRouter,
+    getChannelPoolSummary,
+    parseChannelPoolConfig,
+    resolveEffectiveCredential
+} from './channel-router';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -97,6 +102,38 @@ describe('parseChannelPoolConfig', () => {
                 }),
             /OPENAI_CHANNEL_N/
         );
+    });
+});
+
+describe('getChannelPoolSummary', () => {
+    it('returns sanitized capacity metadata without exposing API keys', () => {
+        const config = parseChannelPoolConfig({
+            OPENAI_ROUTING_STRATEGY: 'round_robin',
+            OPENAI_CHANNEL_1_ID: 'official',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://api.openai.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sk-one, sk-two',
+            OPENAI_CHANNEL_2_ID: 'backup',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://backup.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'sk-three'
+        });
+
+        assert.deepEqual(getChannelPoolSummary(config), {
+            credentialCount: 3,
+            channelCount: 2,
+            strategy: 'round_robin',
+            channels: [
+                {
+                    id: 'official',
+                    baseUrl: 'https://api.openai.com/v1',
+                    credentialCount: 2
+                },
+                {
+                    id: 'backup',
+                    baseUrl: 'https://backup.example.com/v1',
+                    credentialCount: 1
+                }
+            ]
+        });
     });
 });
 

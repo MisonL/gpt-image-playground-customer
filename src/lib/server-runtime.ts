@@ -43,3 +43,24 @@ export function readAffinityKey(headers: Headers): string {
         'default'
     );
 }
+
+export function readBooleanEnv(env: Record<string, string | undefined>, fieldName: string): boolean {
+    const value = env[fieldName]?.trim().toLowerCase();
+    return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+}
+
+export function readPositiveIntegerEnv(
+    env: Record<string, string | undefined>,
+    fieldName: string,
+    fallback: number
+): number {
+    const value = env[fieldName];
+    if (!value || !/^\d+$/.test(value.trim())) {
+        return fallback;
+    }
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) {
+        return fallback;
+    }
+    return parsed;
+}
