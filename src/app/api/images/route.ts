@@ -1,4 +1,10 @@
-import { createChannelRouter, parseChannelPoolConfig, resolveEffectiveCredential } from '@/lib/channel-router';
+import {
+    type ChannelCredential,
+    describeChannelFailure,
+    isChannelFailure,
+    isCredentialFailure,
+    resolveEffectiveCredential
+} from '@/lib/channel-router';
 import {
     RequestValidationError,
     assertSafeApiOverride,
@@ -22,6 +28,7 @@ import {
     type ValidOutputFormat
 } from '@/lib/image-request-utils';
 import { appLogger } from '@/lib/app-logger';
+import { getServerChannelState } from '@/lib/server-channel-router';
 import { createBatchId, createImageFilename, outputDir, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
@@ -47,9 +54,23 @@ type StreamingEvent = {
     error?: string;
 };
 
-const serverChannelConfig = parseChannelPoolConfig(process.env);
-const serverChannelRouter =
-    serverChannelConfig.credentials.length > 0 ? createChannelRouter(serverChannelConfig) : undefined;
+function reportServerCredentialFailure(credential: ChannelCredential | undefined, error: unknown) {
+    const serverChannelRouter = getServerChannelState().router;
+    if (!credential || !serverChannelRouter) {
+        return;
+    }
+    if (isChannelFailure(error)) {
+        const reason = describeChannelFailure(error, 'channel');
+        serverChannelRouter.reportFailure(credential, { scope: 'channel', reason });
+        appLogger.warn(`Temporarily cooling down API channel: ${credential.channelId}`, reason);
+        return;
+    }
+    if (isCredentialFailure(error)) {
+        const reason = describeChannelFailure(error, 'credential');
+        serverChannelRouter.reportFailure(credential, { reason });
+        appLogger.warn(`Temporarily cooling down API channel credential: ${credential.channelId}/${credential.id}`, reason);
+    }
+}
 
 function describeInvalidImagesResponse(result: unknown): string {
     if (typeof result === 'string') {
@@ -84,13 +105,15 @@ async function ensureOutputDirExists() {
 }
 
 export async function POST(request: NextRequest) {
+    let selectedServerCredential: ChannelCredential | undefined;
     try {
+        const serverChannelRouter = getServerChannelState().router;
         const formData = await request.formData();
         const requestApiKey = String(formData.get('apiKey') || '').trim();
         const requestApiBaseUrl = String(formData.get('apiBaseUrl') || '').trim();
         assertSafeApiOverride(requestApiKey, requestApiBaseUrl);
         validateApiBaseUrl(requestApiBaseUrl);
-        const selectedServerCredential = requestApiKey
+        selectedServerCredential = requestApiKey
             ? undefined
             : serverChannelRouter?.select({ affinityKey: readAffinityKey(request.headers) });
         const {
@@ -264,6 +287,7 @@ export async function POST(request: NextRequest) {
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
                             controller.close();
                         } catch (error) {
+                            reportServerCredentialFailure(selectedCredential, error);
                             appLogger.error('Streaming error:', error);
                             const errorEvent: StreamingEvent = {
                                 type: 'error',
@@ -396,6 +420,7 @@ export async function POST(request: NextRequest) {
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
                             controller.close();
                         } catch (error) {
+                            reportServerCredentialFailure(selectedCredential, error);
                             appLogger.error('Streaming edit error:', error);
                             const errorEvent: StreamingEvent = {
                                 type: 'error',
@@ -439,6 +464,7 @@ export async function POST(request: NextRequest) {
                 type: typeof invalidResult,
                 preview: typeof invalidResult === 'string' ? invalidResult.slice(0, 300) : invalidResult
             });
+            reportServerCredentialFailure(selectedCredential, { status: 502 });
             return NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
         }
 
@@ -468,6 +494,7 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({ images: savedImagesData, usage: result.usage });
     } catch (error: unknown) {
+        reportServerCredentialFailure(selectedServerCredential, error);
         appLogger.error('Error in /api/images:', error);
 
         let errorMessage = 'An unexpected error occurred.';
