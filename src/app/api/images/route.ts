@@ -28,6 +28,12 @@ import {
     type ValidOutputFormat
 } from '@/lib/image-request-utils';
 import { appLogger } from '@/lib/app-logger';
+import {
+    InvalidOpenAiImagesResponseError,
+    MissingOpenAiImageDataError,
+    persistedImageToLegacyResponse,
+    persistOpenAiImages
+} from '@/lib/image-service';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { createBatchId, createImageFilename, outputDir, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
 import fs from 'fs/promises';
@@ -458,8 +464,27 @@ export async function POST(request: NextRequest) {
 
         appLogger.info('OpenAI API call successful.');
 
-        if (!result || !Array.isArray(result.data) || result.data.length === 0) {
-            const invalidResult: unknown = result;
+        try {
+            const savedImages = await persistOpenAiImages({
+                result,
+                outputFormat: responseOutputFormat,
+                storageMode: effectiveStorageMode,
+                includeBase64: true
+            });
+            const savedImagesData = savedImages.map((image) => persistedImageToLegacyResponse(image));
+
+            appLogger.info(`All images processed. Mode: ${effectiveStorageMode}`);
+
+            return NextResponse.json({ images: savedImagesData, usage: result.usage });
+        } catch (persistError) {
+            if (persistError instanceof MissingOpenAiImageDataError) {
+                appLogger.error(`Image data ${persistError.index} is missing b64_json.`);
+                throw persistError;
+            }
+            if (!(persistError instanceof InvalidOpenAiImagesResponseError)) {
+                throw persistError;
+            }
+            const invalidResult: unknown = persistError.result;
             appLogger.error('Invalid or empty data received from OpenAI API:', {
                 type: typeof invalidResult,
                 preview: typeof invalidResult === 'string' ? invalidResult.slice(0, 300) : invalidResult
@@ -467,32 +492,6 @@ export async function POST(request: NextRequest) {
             reportServerCredentialFailure(selectedCredential, { status: 502 });
             return NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
         }
-
-        const batchId = createBatchId();
-        const savedImagesData = await Promise.all(
-            result.data.map(async (imageData, index) => {
-                if (!imageData.b64_json) {
-                    appLogger.error(`Image data ${index} is missing b64_json.`);
-                    throw new Error(`Image data at index ${index} is missing base64 data.`);
-                }
-                const buffer = Buffer.from(imageData.b64_json, 'base64');
-                const fileExtension = responseOutputFormat;
-                const filename = createImageFilename(batchId, index, fileExtension);
-
-                if (effectiveStorageMode === 'fs') {
-                    const filepath = path.join(outputDir, filename);
-                    appLogger.debug(`Attempting to save image to: ${filepath}`);
-                    await fs.writeFile(filepath, buffer);
-                    appLogger.info(`Successfully saved image: ${filename}`);
-                }
-
-                return createImageResult(filename, imageData.b64_json, fileExtension, effectiveStorageMode);
-            })
-        );
-
-        appLogger.info(`All images processed. Mode: ${effectiveStorageMode}`);
-
-        return NextResponse.json({ images: savedImagesData, usage: result.usage });
     } catch (error: unknown) {
         reportServerCredentialFailure(selectedServerCredential, error);
         appLogger.error('Error in /api/images:', error);

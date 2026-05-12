@@ -5,8 +5,9 @@ import type { ValidOutputFormat } from './image-request-utils';
 export type FilenameClock = () => number;
 
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
+const DEFAULT_OUTPUT_DIR = ['generated', 'images'].join('-');
 
-export const outputDir = path.resolve(process.cwd(), 'generated-images');
+export const outputDir = path.resolve(/* turbopackIgnore: true */ process.cwd(), process.env.IMAGE_OUTPUT_DIR || DEFAULT_OUTPUT_DIR);
 
 function sha256(data: string): string {
     return crypto.createHash('sha256').update(data).digest('hex');

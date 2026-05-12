@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  output: "standalone",
+  outputFileTracingExcludes: {
+    "*": ["./generated-images/**/*", "./artifacts/**/*", "./dist/**/*", "./.next/cache/**/*"],
+  },
 };
 
 export default nextConfig;
