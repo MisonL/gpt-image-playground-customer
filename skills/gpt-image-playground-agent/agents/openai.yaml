@@ -1,0 +1,3 @@
+display_name: GPT Image Playground Agent
+short_description: Generate and edit images through this repo's Agent API with idempotency and artifact tracking.
+default_prompt: Use the GPT Image Playground Agent API to generate or edit images. Check capabilities first, send Idempotency-Key, prefer response_mode path, and return artifact URLs and metadata.
