@@ -33,6 +33,7 @@ const child = spawn(process.execPath, [serverPath], {
   stdio: 'inherit',
   env: {
     ...process.env,
+    IMAGE_OUTPUT_DIR: process.env.IMAGE_OUTPUT_DIR || path.join(root, 'generated-images'),
     PORT: process.env.PORT || '4783',
     HOSTNAME: process.env.HOSTNAME || '0.0.0.0'
   }
