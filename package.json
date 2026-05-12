@@ -6,6 +6,7 @@
     "dev": "next dev --turbopack -p 4783",
     "prebuild": "node scripts/clean-standalone.mjs",
     "build": "next build",
+    "postbuild": "node scripts/patch-standalone-runtime.mjs",
     "test": "node --test --import tsx \"src/**/*.test.ts\"",
     "test:postgres": "node scripts/test-postgres-live.mjs",
     "start": "node scripts/start-standalone.mjs",
