@@ -120,6 +120,7 @@ http://localhost:4783
 
 - `gpt-image-2` 图片生成：根据文本提示词生成一张或多张图片。
 - `gpt-image-2` 图片编辑：上传源图后用提示词修改图片，可选遮罩。
+- Agent API：为 Codex、Claude Code、Gemini 等 Agent 提供强契约接口、幂等重试、结构化错误和产物追踪。
 - 内置遮罩工具：直接在图片上绘制遮罩，也可以上传 PNG 遮罩。
 - 完整参数控制：模型、尺寸、质量、输出格式、压缩、背景、审核级别、生成数量。
 - 4K 与自定义尺寸：支持 2K/4K 预设和手动输入宽高，并在前端校验尺寸约束。
@@ -167,6 +168,78 @@ https://your-compatible-api.example.com/v1
 
 不要填写管理后台首页或网页地址。如果接口返回 HTML，应用会提示 API URL 不是 OpenAI Images JSON 响应。
 
+## Agent API
+
+Agent API 面向自动化调用，不要求 Agent 模拟网页表单。接口统一使用结构化错误、`Idempotency-Key` 和产物 ID。
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/agent/capabilities` | 查询模型、限制、认证方式、状态后端和端点列表。 |
+| `GET /api/agent/openapi.json` | 获取机器可读 OpenAPI 描述。 |
+| `POST /api/agent/images/generate` | JSON 文生图，默认只返回文件路径和元数据。 |
+| `POST /api/agent/images/edit` | multipart 图片编辑，支持源图和 PNG mask。 |
+| `GET /api/agent/artifacts/{id}` | 查询产物元数据。 |
+| `GET /api/agent/artifacts/{id}/content` | 下载产物图片内容。 |
+| `DELETE /api/agent/artifacts/{id}` | 删除产物和元数据。 |
+
+Agent 请求必须带 `Idempotency-Key`，避免超时重试造成重复出图和重复扣费。若设置 `AGENT_API_TOKEN`，请求需携带：
+
+```text
+Authorization: Bearer your-agent-token
+```
+
+生成示例：
+
+```bash
+curl -s http://localhost:4783/api/agent/images/generate \
+  -H "Authorization: Bearer your-agent-token" \
+  -H "Idempotency-Key: demo-$(date +%s)" \
+  -H "Content-Type: application/json" \
+  --data '{"prompt":"a product photo of a ceramic mug","model":"gpt-image-2","response_mode":"path"}'
+```
+
+成功响应会包含：
+
+```json
+{
+  "request_id": "uuid",
+  "idempotency_key": "demo-key",
+  "cached": false,
+  "images": [
+    {
+      "id": "artifact-uuid",
+      "filename": "1715400000000-abcdef1234567890-0.png",
+      "content_url": "/api/agent/artifacts/artifact-uuid/content",
+      "metadata_url": "/api/agent/artifacts/artifact-uuid",
+      "output_format": "png",
+      "mime_type": "image/png",
+      "size_bytes": 12345,
+      "width": 2048,
+      "height": 2048
+    }
+  ],
+  "created_at": "2026-05-12T00:00:00.000Z"
+}
+```
+
+错误响应固定为：
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "Request validation failed.",
+    "retryable": false,
+    "details": {
+      "fields": {
+        "n": "must be an integer between 1 and 10"
+      }
+    },
+    "request_id": "uuid"
+  }
+}
+```
+
 ## 环境变量
 
 | 变量 | 是否必填 | 默认值 | 说明 |
@@ -182,6 +255,15 @@ https://your-compatible-api.example.com/v1
 | `OPENAI_MAX_STREAMS_PER_CREDENTIAL` | 否 | `1` | 每个服务端 credential 允许同时执行的流式任务数。 |
 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 否 | `60000` | 服务端 credential 或 channel 失败后的默认冷却时间。 |
 | `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问密码。 |
+| `AGENT_API_TOKEN` | 否 | 无 | 设置后，`/api/agent/*` 需要 Bearer token。 |
+| `AGENT_STATE_BACKEND` | 否 | `sqlite` | Agent 状态后端，可选 `sqlite` 或 `postgres`。 |
+| `AGENT_SQLITE_PATH` | 否 | `generated-images/.agent-state/agent.sqlite` | SQLite 状态库路径。 |
+| `AGENT_DATABASE_URL` | PostgreSQL 模式必填 | 无 | PostgreSQL 连接串。 |
+| `GPT_IMAGE_POSTGRES_PASSWORD` | Docker PostgreSQL 模式必填 | 无 | `docker-compose.postgres.yml` 中 PostgreSQL 容器密码，通过 Docker secret file 注入，不提供默认值。 |
+| `AGENT_REQUEST_LEASE_MS` | 否 | `600000` | Agent 请求运行锁租约时间。 |
+| `AGENT_REQUEST_TTL_SECONDS` | 否 | `86400` | 幂等请求记录保留秒数。 |
+| `AGENT_RECOVERY_INTERVAL_MS` | 否 | `30000` | Agent 请求触发轻量 recovery 的最小间隔。 |
+| `AGENT_PUBLIC_BASE_URL` | 否 | `/` | OpenAPI `servers[0].url`，供外部 Agent 生成客户端时使用。 |
 | `APP_LOG_LEVEL` | 否 | 生产环境 `warn`，其他环境 `info` | 服务端日志等级，可选 `debug`、`info`、`warn`、`error`。 |
 | `NEXT_PUBLIC_IMAGE_STORAGE_MODE` | 否 | `fs` | 可选 `fs` 或 `indexeddb`。 |
 
@@ -263,12 +345,40 @@ Docker 正式服务中，容器内路径是：
 /api/image/{filename}
 ```
 
+Agent API 读取图片时走鉴权接口：
+
+```text
+/api/agent/artifacts/{id}/content
+```
+
+Agent 状态库只保存请求、幂等和产物元数据，不保存图片二进制。备份时需要同时备份状态库和 `generated-images/`。
+
 如果部署到只读或临时文件系统，可以把 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 设置为 `indexeddb`。这时图片会保存在浏览器 IndexedDB 中，服务端不落盘。
 
 ## Docker 运行
 
+SQLite 单实例默认部署：
+
 ```bash
 docker compose up -d --build
+```
+
+PostgreSQL 高并发部署：
+
+```bash
+GPT_IMAGE_POSTGRES_PASSWORD='database-password' \
+AGENT_DATABASE_URL='postgres://gpt_image:database-password@postgres:5432/gpt_image_playground' \
+docker compose -f docker-compose.postgres.yml up -d --build
+```
+
+`GPT_IMAGE_POSTGRES_PASSWORD` 只在 PostgreSQL volume 首次初始化时生效。已有 `postgres-data` volume 的部署如果要更换密码，需要先在数据库内修改用户密码，或备份后重建 volume；仅修改环境变量不会自动轮换现有数据库密码。
+
+SQLite 适合单实例本地服务。多实例或长期高并发 Agent 服务应使用 PostgreSQL，不要让多个容器共享同一个 SQLite 文件作为主状态库。
+
+PostgreSQL live 并发测试可用以下命令单独执行。未提供 `AGENT_POSTGRES_TEST_DATABASE_URL` 时，脚本会自动启动临时 PostgreSQL 容器并在结束后清理。
+
+```bash
+npm run test:postgres
 ```
 
 Docker 容器内外端口统一使用 `4783`。
