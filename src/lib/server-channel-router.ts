@@ -10,6 +10,10 @@ export function getServerChannelState() {
     return cachedServerChannelState;
 }
 
+export function resetServerChannelStateForTests(): void {
+    cachedServerChannelState = undefined;
+}
+
 function createServerChannelState() {
     const config = parseChannelPoolConfig(process.env);
     const router =

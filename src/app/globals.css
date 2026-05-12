@@ -44,6 +44,9 @@
 }
 
 :root {
+    --font-geist-sans:
+        Arial, Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    --font-geist-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
     --radius: 0.625rem;
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);

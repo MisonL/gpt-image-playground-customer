@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gpt-image-playground-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gpt_image_playground
+      POSTGRES_USER: gpt_image
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gpt_image -d gpt_image_playground"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  gpt-image-playground:
+    build:
+      context: .
+    image: gpt-image-playground-customer:postgres
+    container_name: gpt-image-playground-customer
+    restart: unless-stopped
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_IMAGE_STORAGE_MODE: fs
+      AGENT_STATE_BACKEND: postgres
+      AGENT_DATABASE_URL: ${AGENT_DATABASE_URL:?set AGENT_DATABASE_URL}
+      PORT: "4783"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4783:4783"
+    volumes:
+      - ./generated-images:/app/generated-images
+
+volumes:
+  postgres-data:
+
+secrets:
+  postgres_password:
+    environment: GPT_IMAGE_POSTGRES_PASSWORD
