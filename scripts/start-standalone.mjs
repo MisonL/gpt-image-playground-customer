@@ -28,6 +28,10 @@ if (!(await exists(serverPath))) {
 
 await copyIfPresent(path.join(root, 'public'), path.join(standaloneDir, 'public'));
 await copyIfPresent(path.join(root, '.next', 'static'), path.join(standaloneDir, '.next', 'static'));
+await copyIfPresent(
+  path.join(root, 'node_modules', 'next', 'dist', 'compiled', 'next-server'),
+  path.join(standaloneDir, 'node_modules', 'next', 'dist', 'compiled', 'next-server')
+);
 
 const child = spawn(process.execPath, [serverPath], {
   stdio: 'inherit',
