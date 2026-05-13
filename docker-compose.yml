@@ -1,3 +1,5 @@
+name: gpt-image-playground-customer
+
 services:
   gpt-image-playground:
     build:
