@@ -29,24 +29,63 @@ type ApiSettingsDialogProps = {
 export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: ApiSettingsDialogProps) {
     const { t } = useI18n();
     const [draft, setDraft] = React.useState<ApiSettings>(settings);
+    const [saveStatus, setSaveStatus] = React.useState<'idle' | 'saved' | 'error'>('idle');
+    const closeTimerRef = React.useRef<number | null>(null);
+
+    const clearCloseTimer = React.useCallback(() => {
+        if (closeTimerRef.current === null) return;
+        window.clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+    }, []);
+
+    React.useEffect(() => clearCloseTimer, [clearCloseTimer]);
+
+    const handleOpenChange = (open: boolean) => {
+        if (open) {
+            clearCloseTimer();
+            setSaveStatus('idle');
+            setDraft(settings);
+        }
+        onOpenChange(open);
+    };
+
+    const closeAfterSaved = () => {
+        clearCloseTimer();
+        closeTimerRef.current = window.setTimeout(() => {
+            closeTimerRef.current = null;
+            onOpenChange(false);
+        }, 450);
+    };
 
     const handleSave = () => {
-        onSave({
-            apiKey: draft.apiKey.trim(),
-            baseUrl: draft.baseUrl.trim()
-        });
-        onOpenChange(false);
+        try {
+            onSave({
+                apiKey: draft.apiKey.trim(),
+                baseUrl: draft.baseUrl.trim()
+            });
+            setSaveStatus('saved');
+            closeAfterSaved();
+        } catch (error) {
+            console.error('Failed to save API settings.', error);
+            setSaveStatus('error');
+        }
     };
 
     const handleClear = () => {
         const emptySettings = { apiKey: '', baseUrl: '' };
-        setDraft(emptySettings);
-        onSave(emptySettings);
-        onOpenChange(false);
+        try {
+            setDraft(emptySettings);
+            onSave(emptySettings);
+            setSaveStatus('saved');
+            closeAfterSaved();
+        } catch (error) {
+            console.error('Failed to clear API settings.', error);
+            setSaveStatus('error');
+        }
     };
 
     return (
-        <Dialog open={isOpen} onOpenChange={onOpenChange}>
+        <Dialog open={isOpen} onOpenChange={handleOpenChange}>
             <DialogContent className='border-white/20 bg-black text-white sm:max-w-[520px]'>
                 <DialogHeader>
                     <DialogTitle className='text-white'>{t('api.title')}</DialogTitle>
@@ -83,6 +122,12 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
                     </div>
                 </div>
                 <DialogFooter>
+                    {saveStatus === 'saved' && (
+                        <p className='mr-auto self-center text-sm text-green-300'>{t('api.saved')}</p>
+                    )}
+                    {saveStatus === 'error' && (
+                        <p className='mr-auto self-center text-sm text-red-300'>{t('api.saveFailed')}</p>
+                    )}
                     <Button
                         type='button'
                         variant='ghost'

@@ -114,7 +114,7 @@ function HistoryPanelImpl({
                         <Dialog open={isTotalCostDialogOpen} onOpenChange={setIsTotalCostDialogOpen}>
                             <DialogTrigger asChild>
                                 <button
-                                    className='mt-0.5 flex items-center gap-1 rounded-full bg-green-600/80 px-1.5 py-0.5 text-[12px] text-white transition-colors hover:bg-green-500/90'
+                                    className='mt-0.5 flex cursor-pointer items-center gap-1 rounded-full bg-green-600/80 px-1.5 py-0.5 text-[12px] text-white transition-[background-color,transform] hover:-translate-y-0.5 hover:bg-green-500/90 active:translate-y-0'
                                     aria-label={t('history.showTotalCost')}>
                                     {t('history.totalCost', { cost: totalCost.toFixed(4) })}
                                 </button>
@@ -217,7 +217,7 @@ function HistoryPanelImpl({
             </CardHeader>
             <CardContent className='flex-grow overflow-y-auto p-4'>
                 {history.length === 0 ? (
-                    <div className='flex h-full items-center justify-center text-white/60'>
+                    <div className='flex min-h-24 items-center justify-center rounded-md border border-dashed border-white/10 px-4 text-center text-sm text-white/45'>
                         <p>{t('history.empty')}</p>
                     </div>
                 ) : (
@@ -244,7 +244,7 @@ function HistoryPanelImpl({
                                     <div className='group relative'>
                                         <button
                                             onClick={() => onSelectImage(item)}
-                                            className='relative block aspect-square w-full overflow-hidden rounded-t-md border border-white/20 transition-all duration-150 group-hover:border-white/40 focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-black focus:outline-none'
+                                            className='relative block aspect-square w-full cursor-pointer overflow-hidden rounded-t-md border border-white/20 transition-all duration-150 hover:-translate-y-0.5 hover:border-white/50 hover:brightness-110 active:translate-y-0 group-hover:border-white/40 focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-black focus:outline-none'
                                             aria-label={t('history.viewBatch', {
                                                 time: formatTimestamp(item.timestamp)
                                             })}>
@@ -313,7 +313,7 @@ function HistoryPanelImpl({
                                                             e.stopPropagation();
                                                             setOpenCostDialogTimestamp(itemKey);
                                                         }}
-                                                        className='absolute top-1 right-1 z-20 flex items-center gap-0.5 rounded-full bg-green-600/80 px-1.5 py-0.5 text-[11px] text-white transition-colors hover:bg-green-500/90'
+                                                        className='absolute top-1 right-1 z-20 flex cursor-pointer items-center gap-0.5 rounded-full bg-green-600/80 px-1.5 py-0.5 text-[11px] text-white transition-[background-color,transform] hover:-translate-y-0.5 hover:bg-green-500/90 active:translate-y-0'
                                                         aria-label={t('history.showCost')}>
                                                         <DollarSign size={12} />
                                                         {item.costDetails.estimated_cost_usd.toFixed(4)}

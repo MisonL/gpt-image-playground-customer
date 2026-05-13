@@ -8,6 +8,7 @@ import { HistoryPanel } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import {
     buildApiErrorNotice,
     buildBatchPartialFailureMessage,
@@ -17,7 +18,7 @@ import {
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
-import { getPresetDimensions } from '@/lib/size-utils';
+import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
     buildStreamingBatchJobs,
@@ -29,6 +30,7 @@ import {
     type StreamingBatchJob
 } from '@/lib/streaming-batch';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { ArrowDown, Loader2, Terminal } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -256,6 +258,8 @@ export default function HomePage() {
     const [skipDeleteConfirmation, setSkipDeleteConfirmation] = React.useState<boolean>(false);
     const [itemToDeleteConfirm, setItemToDeleteConfirm] = React.useState<HistoryMetadata | null>(null);
     const [dialogCheckboxStateSkipConfirm, setDialogCheckboxStateSkipConfirm] = React.useState<boolean>(false);
+    const [openLogsSignal, setOpenLogsSignal] = React.useState(0);
+    const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
 
     const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
 
@@ -305,6 +309,25 @@ export default function HomePage() {
         serverRecommendedConcurrency: runtimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
     });
     const streamingBatchEnabled = streamingBatchCapacity.enabled;
+    const currentPrompt = mode === 'generate' ? genPrompt : editPrompt;
+    const hasEditSourceImage = editImageFiles.length > 0;
+    const currentGenerateSizeValidation =
+        genSize === 'custom' ? validateGptImage2Size(genCustomWidth, genCustomHeight) : { valid: true as const };
+    const currentEditSizeValidation =
+        editSize === 'custom' ? validateGptImage2Size(editCustomWidth, editCustomHeight) : { valid: true as const };
+    const canOpenLogs = isPasswordRequiredByBackend === true && !!clientPasswordHash;
+    const mobilePrimaryDisabled =
+        isLoading ||
+        isSendingToEdit ||
+        !currentPrompt.trim() ||
+        (mode === 'edit' && !hasEditSourceImage) ||
+        (mode === 'generate' && !currentGenerateSizeValidation.valid) ||
+        (mode === 'edit' && !currentEditSizeValidation.valid) ||
+        (mode === 'edit' && editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved);
+
+    const scrollToOutput = React.useCallback(() => {
+        outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, []);
 
     const getImageSrc = React.useCallback(
         (filename: string): string | undefined => {
@@ -782,12 +805,12 @@ export default function HomePage() {
         [createErrorNotice, isPasswordRequiredByBackend, t]
     );
 
-    const handleApiCall = async (
+    async function handleApiCall(
         formData: GenerationFormData | EditingFormData,
         requestMode: RequestMode = mode,
         requestStreaming: boolean = enableStreaming,
         requestPartialImages: 1 | 2 | 3 = partialImages
-    ) => {
+    ) {
         const startTime = Date.now();
         let durationMs = 0;
 
@@ -796,6 +819,9 @@ export default function HomePage() {
         setLatestImageBatch(null);
         setImageOutputView('grid');
         setStreamingPreviewImages(new Map());
+        if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+            window.setTimeout(scrollToOutput, 80);
+        }
 
         try {
             const latestRuntimeCapabilities = await refreshRuntimeCapabilities();
@@ -894,7 +920,39 @@ export default function HomePage() {
             if (durationMs === 0) durationMs = Date.now() - startTime;
             setIsLoading(false);
         }
-    };
+    }
+
+    function handleMobilePrimaryAction() {
+        if (mode === 'generate') {
+            void handleApiCall({
+                prompt: genPrompt,
+                n: genN[0],
+                size: genSize,
+                customWidth: genCustomWidth,
+                customHeight: genCustomHeight,
+                quality: genQuality,
+                output_format: genOutputFormat,
+                ...(genOutputFormat === 'jpeg' || genOutputFormat === 'webp'
+                    ? { output_compression: genCompression[0] }
+                    : {}),
+                background: genBackground,
+                moderation: genModeration,
+                model: genModel
+            });
+            return;
+        }
+        void handleApiCall({
+            prompt: editPrompt,
+            n: editN[0],
+            size: editSize,
+            customWidth: editCustomWidth,
+            customHeight: editCustomHeight,
+            quality: editQuality,
+            imageFiles: editImageFiles,
+            maskFile: editGeneratedMaskFile,
+            model: editModel
+        });
+    }
 
     const handleHistorySelect = React.useCallback(
         (item: HistoryMetadata) => {
@@ -1098,7 +1156,7 @@ export default function HomePage() {
     }, []);
 
     return (
-        <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 md:p-8 lg:p-12'>
+        <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 pb-24 md:p-8 md:pb-24 lg:p-12'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -1210,7 +1268,7 @@ export default function HomePage() {
                             />
                         </div>
                     </div>
-                    <div className='flex h-[70vh] min-h-[600px] flex-col lg:col-span-1'>
+                    <div ref={outputPanelRef} className='scroll-mt-4 flex h-[70vh] min-h-[600px] flex-col lg:col-span-1'>
                         {error && (
                             <Alert variant='destructive' className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
                                 <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
@@ -1227,6 +1285,9 @@ export default function HomePage() {
                             currentMode={mode}
                             baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
                             streamingPreviewImages={streamingPreviewImages}
+                            clientPasswordHash={clientPasswordHash}
+                            canOpenLogs={canOpenLogs}
+                            openLogsSignal={openLogsSignal}
                         />
                     </div>
                 </div>
@@ -1244,6 +1305,44 @@ export default function HomePage() {
                         deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
                         onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
                     />
+                </div>
+            </div>
+            <div className='fixed right-0 bottom-0 left-0 z-40 border-t border-white/10 bg-black/90 p-3 backdrop-blur lg:hidden'>
+                <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
+                    <Button
+                        type='button'
+                        onClick={handleMobilePrimaryAction}
+                        disabled={mobilePrimaryDisabled}
+                        className='bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
+                        {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+                        {mode === 'generate'
+                            ? isLoading
+                                ? t('generate.loading')
+                                : t('generate.submit')
+                            : isLoading || isSendingToEdit
+                              ? t('edit.loading')
+                              : t('edit.submit')}
+                    </Button>
+                    <Button
+                        type='button'
+                        variant='outline'
+                        size='icon'
+                        onClick={scrollToOutput}
+                        className='border-white/20 text-white/80 hover:bg-white/10 hover:text-white'
+                        aria-label={t('ux.jumpToResult')}>
+                        <ArrowDown className='h-4 w-4' />
+                    </Button>
+                    {canOpenLogs && (
+                        <Button
+                            type='button'
+                            variant='outline'
+                            size='icon'
+                            onClick={() => setOpenLogsSignal((value) => value + 1)}
+                            className='border-white/20 text-white/80 hover:bg-white/10 hover:text-white'
+                            aria-label={t('logs.open')}>
+                            <Terminal className='h-4 w-4' />
+                        </Button>
+                    )}
                 </div>
             </div>
         </main>

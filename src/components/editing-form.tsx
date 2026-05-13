@@ -23,6 +23,8 @@ import {
     RectangleHorizontal,
     RectangleVertical,
     Sparkles,
+    SlidersHorizontal,
+    ChevronDown,
     Tally1,
     Tally2,
     Tally3,
@@ -118,16 +120,20 @@ const RadioItemWithIcon = ({
     Icon: React.ElementType;
     disabled?: boolean;
 }) => (
-    <div className='flex items-center space-x-2'>
+    <div className='group relative'>
         <RadioGroupItem
             value={value}
             id={id}
-            className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
+            className='peer sr-only'
         />
         <Label
             htmlFor={id}
-            className={`flex items-center gap-2 text-base ${disabled ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
-            <Icon className='h-5 w-5 text-white/60' />
+            className={`flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm transition-all peer-data-[state=checked]:border-white peer-data-[state=checked]:bg-white peer-data-[state=checked]:text-black ${
+                disabled
+                    ? 'cursor-not-allowed border-white/10 text-white/40'
+                    : 'cursor-pointer border-white/20 text-white/80 hover:-translate-y-0.5 hover:border-white/50 hover:bg-white/10 hover:text-white active:translate-y-0'
+            }`}>
+            <Icon className='h-4 w-4 text-current opacity-70' />
             {label}
         </Label>
     </div>
@@ -201,6 +207,27 @@ export function EditingForm({
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
     const streamingDisabledByCount = editN[0] > 1 && !allowStreamingBatch;
+    const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
+    const submitDisabledReason = React.useMemo(() => {
+        if (isLoading) return '';
+        if (!editPrompt.trim()) return t('ux.disabledPrompt');
+        if (imageFiles.length === 0) return t('ux.disabledSourceImage');
+        if (editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved) {
+            return t('ux.disabledUnsavedMask');
+        }
+        if (customSizeInvalid) return editCustomSizeError || t('ux.disabledCustomSize');
+        return '';
+    }, [
+        customSizeInvalid,
+        editCustomSizeError,
+        editDrawnPoints.length,
+        editGeneratedMaskFile,
+        editIsMaskSaved,
+        editPrompt,
+        imageFiles.length,
+        isLoading,
+        t
+    ]);
 
     // 未显式开启批量流式分发时，editN > 1 会禁用流式输出。
     React.useEffect(() => {
@@ -563,7 +590,7 @@ export function EditingForm({
                         <Label htmlFor='edit-model-select' className='text-white'>
                             {t('form.model')}
                         </Label>
-                        <div className='flex items-center gap-4'>
+                        <div className='flex flex-wrap items-center gap-4'>
                             <Select
                                 value={editModel}
                                 onValueChange={(value) => setEditModel(value as EditingFormData['model'])}
@@ -625,60 +652,6 @@ export function EditingForm({
                             </Tooltip>
                         </div>
                     </div>
-
-                    {enableStreaming && (
-                        <div className='space-y-3'>
-                            <div className='flex items-center gap-2'>
-                                <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
-                                    {t('streaming.previewImages')}
-                                </div>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <HelpCircle className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
-                                    </TooltipTrigger>
-                                    <TooltipContent className='max-w-[250px]'>{t('streaming.costHint')}</TooltipContent>
-                                </Tooltip>
-                            </div>
-                            <RadioGroup
-                                value={String(partialImages)}
-                                onValueChange={(value) => setPartialImages(Number(value) as 1 | 2 | 3)}
-                                disabled={isLoading}
-                                name='edit-partial_images'
-                                aria-label={t('streaming.previewImages')}
-                                className='flex gap-x-5'>
-                                <div className='flex items-center space-x-2'>
-                                    <RadioGroupItem
-                                        value='1'
-                                        id='edit-partial-1'
-                                        className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
-                                    />
-                                    <Label htmlFor='edit-partial-1' className='cursor-pointer text-white/80'>
-                                        1
-                                    </Label>
-                                </div>
-                                <div className='flex items-center space-x-2'>
-                                    <RadioGroupItem
-                                        value='2'
-                                        id='edit-partial-2'
-                                        className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
-                                    />
-                                    <Label htmlFor='edit-partial-2' className='cursor-pointer text-white/80'>
-                                        2
-                                    </Label>
-                                </div>
-                                <div className='flex items-center space-x-2'>
-                                    <RadioGroupItem
-                                        value='3'
-                                        id='edit-partial-3'
-                                        className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
-                                    />
-                                    <Label htmlFor='edit-partial-3' className='cursor-pointer text-white/80'>
-                                        3
-                                    </Label>
-                                </div>
-                            </RadioGroup>
-                        </div>
-                    )}
 
                     <div className='space-y-1.5'>
                         <Label htmlFor='edit-prompt' className='text-white'>
@@ -899,7 +872,7 @@ export function EditingForm({
                             disabled={isLoading}
                             name='edit-size'
                             aria-label={t('form.size')}
-                            className='flex flex-wrap gap-x-5 gap-y-3'>
+                            className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
                             <RadioItemWithIcon
                                 value='auto'
                                 id='edit-size-auto'
@@ -1009,75 +982,133 @@ export function EditingForm({
                         )}
                     </div>
 
-                    <div className='space-y-3'>
-                        <div className='block text-sm leading-none font-medium text-white select-none'>
-                            {t('form.quality')}
-                        </div>
-                        <RadioGroup
-                            value={editQuality}
-                            onValueChange={(value) => setEditQuality(value as EditingFormData['quality'])}
-                            disabled={isLoading}
-                            name='edit-quality'
-                            aria-label={t('form.quality')}
-                            className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon
-                                value='auto'
-                                id='edit-quality-auto'
-                                label={t('common.auto')}
-                                Icon={Sparkles}
-                                disabled={isLoading}
+                    <div className='rounded-md border border-white/10 bg-white/[0.03]'>
+                        <button
+                            type='button'
+                            onClick={() => setIsAdvancedOpen((open) => !open)}
+                            className='flex w-full cursor-pointer items-center justify-between px-3 py-3 text-left text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white'
+                            aria-expanded={isAdvancedOpen}>
+                            <span className='flex items-center gap-2'>
+                                <SlidersHorizontal className='h-4 w-4' />
+                                {t('ux.advanced')}
+                            </span>
+                            <ChevronDown
+                                className={`h-4 w-4 transition-transform ${isAdvancedOpen ? 'rotate-180' : ''}`}
                             />
-                            <RadioItemWithIcon
-                                value='low'
-                                id='edit-quality-low'
-                                label={t('common.low')}
-                                Icon={Tally1}
-                                disabled={isLoading}
-                            />
-                            <RadioItemWithIcon
-                                value='medium'
-                                id='edit-quality-medium'
-                                label={t('common.medium')}
-                                Icon={Tally2}
-                                disabled={isLoading}
-                            />
-                            <RadioItemWithIcon
-                                value='high'
-                                id='edit-quality-high'
-                                label={t('common.high')}
-                                Icon={Tally3}
-                                disabled={isLoading}
-                            />
-                        </RadioGroup>
-                    </div>
+                        </button>
+                        {isAdvancedOpen && (
+                            <div className='space-y-5 border-t border-white/10 p-3'>
+                                {enableStreaming && (
+                                    <div className='space-y-3'>
+                                        <div className='flex items-center gap-2'>
+                                            <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                                {t('streaming.previewImages')}
+                                            </div>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <HelpCircle className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
+                                                </TooltipTrigger>
+                                                <TooltipContent className='max-w-[250px]'>
+                                                    {t('streaming.costHint')}
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </div>
+                                        <RadioGroup
+                                            value={String(partialImages)}
+                                            onValueChange={(value) => setPartialImages(Number(value) as 1 | 2 | 3)}
+                                            disabled={isLoading}
+                                            name='edit-partial_images'
+                                            aria-label={t('streaming.previewImages')}
+                                            className='grid grid-cols-3 gap-2'>
+                                            {[1, 2, 3].map((value) => (
+                                                <RadioItemWithIcon
+                                                    key={value}
+                                                    value={String(value)}
+                                                    id={`edit-partial-${value}`}
+                                                    label={String(value)}
+                                                    Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                                    disabled={isLoading}
+                                                />
+                                            ))}
+                                        </RadioGroup>
+                                    </div>
+                                )}
 
-                    <div className='space-y-2'>
-                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
-                            {t('form.numberOfImages', { count: editN[0] })}
-                        </div>
-                        <Slider
-                            id='edit-n-slider'
-                            name='edit-n'
-                            thumbLabel={t('form.numberOfImages', { count: editN[0] })}
-                            min={1}
-                            max={10}
-                            step={1}
-                            value={editN}
-                            onValueChange={setEditN}
-                            disabled={isLoading}
-                            className='mt-3 [&>button]:border-black [&>button]:bg-white [&>button]:ring-offset-black [&>span:first-child]:h-1 [&>span:first-child>span]:bg-white'
-                        />
+                                <div className='space-y-3'>
+                                    <div className='block text-sm leading-none font-medium text-white select-none'>
+                                        {t('form.quality')}
+                                    </div>
+                                    <RadioGroup
+                                        value={editQuality}
+                                        onValueChange={(value) => setEditQuality(value as EditingFormData['quality'])}
+                                        disabled={isLoading}
+                                        name='edit-quality'
+                                        aria-label={t('form.quality')}
+                                        className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
+                                        <RadioItemWithIcon
+                                            value='auto'
+                                            id='edit-quality-auto'
+                                            label={t('common.auto')}
+                                            Icon={Sparkles}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='low'
+                                            id='edit-quality-low'
+                                            label={t('common.low')}
+                                            Icon={Tally1}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='medium'
+                                            id='edit-quality-medium'
+                                            label={t('common.medium')}
+                                            Icon={Tally2}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='high'
+                                            id='edit-quality-high'
+                                            label={t('common.high')}
+                                            Icon={Tally3}
+                                            disabled={isLoading}
+                                        />
+                                    </RadioGroup>
+                                </div>
+
+                                <div className='space-y-2'>
+                                    <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                        {t('form.numberOfImages', { count: editN[0] })}
+                                    </div>
+                                    <Slider
+                                        id='edit-n-slider'
+                                        name='edit-n'
+                                        thumbLabel={t('form.numberOfImages', { count: editN[0] })}
+                                        min={1}
+                                        max={10}
+                                        step={1}
+                                        value={editN}
+                                        onValueChange={setEditN}
+                                        disabled={isLoading}
+                                        className='mt-3 [&>button]:border-black [&>button]:bg-white [&>button]:ring-offset-black [&>span:first-child]:h-1 [&>span:first-child>span]:bg-white'
+                                    />
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </CardContent>
                 <CardFooter className='border-t border-white/10 p-4'>
-                    <Button
-                        type='button'
-                        onClick={handleSubmit}
-                        disabled={isLoading || !editPrompt || imageFiles.length === 0 || customSizeInvalid}
-                        className='flex w-full items-center justify-center gap-2 rounded-md bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
-                        {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
-                        {isLoading ? t('edit.loading') : t('edit.submit')}
-                    </Button>
+                    <div className='w-full space-y-2'>
+                        {submitDisabledReason && <p className='text-center text-xs text-white/50'>{submitDisabledReason}</p>}
+                        <Button
+                            type='button'
+                            onClick={handleSubmit}
+                            disabled={isLoading || !!submitDisabledReason}
+                            className='flex w-full items-center justify-center gap-2 rounded-md bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
+                            {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
+                            {isLoading ? t('edit.loading') : t('edit.submit')}
+                        </Button>
+                    </div>
                 </CardFooter>
             </div>
         </Card>
