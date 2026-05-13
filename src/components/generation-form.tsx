@@ -170,21 +170,21 @@ export function GenerationForm({
 
     const streamingDisabledByCount = n[0] > 1 && !allowStreamingBatch;
 
-    // Disable streaming when n > 1 unless batch streaming fanout is explicitly enabled.
+    // 未显式开启批量流式分发时，n > 1 会禁用流式输出。
     React.useEffect(() => {
         if (streamingDisabledByCount && enableStreaming) {
             setEnableStreaming(false);
         }
     }, [streamingDisabledByCount, enableStreaming, setEnableStreaming]);
 
-    // 'custom' is only valid on gpt-image-2; reset when switching to a legacy model
+    // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
         if (!isGptImage2 && size === 'custom') {
             setSize('auto');
         }
     }, [isGptImage2, size, setSize]);
 
-    // Reset transparent background when switching to gpt-image-2 (not supported)
+    // 切换到 gpt-image-2 时重置 transparent 背景，因为该模型不支持。
     React.useEffect(() => {
         if (isGptImage2 && background === 'transparent') {
             setBackground('auto');

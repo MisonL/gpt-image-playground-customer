@@ -8,6 +8,12 @@ import { HistoryPanel } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+    buildApiErrorNotice,
+    buildBatchPartialFailureMessage,
+    buildUserFacingApiErrorMessage,
+    type ApiErrorNotice
+} from '@/lib/api-error-guidance';
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
@@ -68,10 +74,10 @@ function readStoredHistory(): HistoryMetadata[] {
     try {
         const parsedHistory: unknown = JSON.parse(storedHistory);
         if (Array.isArray(parsedHistory)) return parsedHistory as HistoryMetadata[];
-        console.warn('Invalid history data found in localStorage.');
+        console.warn('localStorage 中发现无效历史记录数据。');
         window.localStorage.removeItem('openaiImageHistory');
     } catch (e) {
-        console.error('Failed to load or parse history from localStorage:', e);
+        console.error('加载或解析 localStorage 历史记录失败：', e);
         window.localStorage.removeItem('openaiImageHistory');
     }
     return [];
@@ -87,7 +93,7 @@ function readStoredApiSettings(): ApiSettings {
             baseUrl: typeof parsedSettings.baseUrl === 'string' ? parsedSettings.baseUrl : ''
         };
     } catch (error) {
-        console.error('Failed to load API settings from localStorage:', error);
+        console.error('从 localStorage 加载 API 设置失败：', error);
         window.localStorage.removeItem(apiSettingsLocalStorageKey);
         return emptyApiSettings;
     }
@@ -162,6 +168,35 @@ class ApiRequestError extends Error {
     }
 }
 
+function summarizeApiError(error: unknown, fallbackMessage: string): { message: string; status?: number } {
+    if (error instanceof ApiRequestError) {
+        return { message: error.message, status: error.status };
+    }
+    if (error instanceof Error) {
+        return { message: error.message };
+    }
+    return { message: fallbackMessage };
+}
+
+function renderErrorDescription(error: ApiErrorNotice): React.ReactNode {
+    return (
+        <div className='grid gap-2'>
+            <p>{error.message}</p>
+            {error.links.map((link) => (
+                <a
+                    className='w-fit rounded-md border border-red-400/50 px-2 py-1 font-medium text-red-100 underline-offset-2 hover:bg-red-900/30 hover:underline'
+                    href={link.url}
+                    key={link.url}
+                    rel='noreferrer'
+                    target='_blank'
+                >
+                    {link.label}
+                </a>
+            ))}
+        </div>
+    );
+}
+
 function mergeUsageValues(usages: unknown[]): ApiUsage | undefined {
     const merged: ApiUsage = {
         input_tokens_details: {
@@ -197,12 +232,16 @@ function mergeUsageValues(usages: unknown[]): ApiUsage | undefined {
 
 export default function HomePage() {
     const { t } = useI18n();
+    const createErrorNotice = React.useCallback(
+        (message: string) => buildApiErrorNotice(message, t('error.openSuperApi')),
+        [t]
+    );
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
     const [isLoading, setIsLoading] = React.useState(false);
     const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
-    const [error, setError] = React.useState<string | null>(null);
+    const [error, setError] = React.useState<ApiErrorNotice | null>(null);
     const [latestImageBatch, setLatestImageBatch] = React.useState<{ path: string; filename: string }[] | null>(null);
     const [imageOutputView, setImageOutputView] = React.useState<'grid' | number>('grid');
     const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
@@ -244,7 +283,7 @@ export default function HomePage() {
     const [genSize, setGenSize] = React.useState<GenerationFormData['size']>('auto');
     const [genCustomWidth, setGenCustomWidth] = React.useState<number>(1024);
     const [genCustomHeight, setGenCustomHeight] = React.useState<number>(1024);
-    const [genQuality, setGenQuality] = React.useState<GenerationFormData['quality']>('auto');
+    const [genQuality, setGenQuality] = React.useState<GenerationFormData['quality']>('high');
     const [genOutputFormat, setGenOutputFormat] = React.useState<GenerationFormData['output_format']>('png');
     const [genCompression, setGenCompression] = React.useState([100]);
     const [genBackground, setGenBackground] = React.useState<GenerationFormData['background']>('auto');
@@ -252,10 +291,10 @@ export default function HomePage() {
 
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
 
-    // Streaming state (shared between generate and edit modes)
-    const [enableStreaming, setEnableStreaming] = React.useState(false);
+    // 流式状态，由生成和编辑模式共用。
+    const [enableStreaming, setEnableStreaming] = React.useState(true);
     const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(2);
-    // Streaming preview images (base64 data URLs for partial images during streaming)
+    // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
         featureEnabled: isRuntimeStreamingBatchEnabled({
@@ -310,12 +349,12 @@ export default function HomePage() {
             try {
                 const response = await fetch('/api/auth-status');
                 if (!response.ok) {
-                    throw new Error('Failed to fetch auth status');
+                    throw new Error('获取鉴权状态失败');
                 }
                 const data = await response.json();
                 setIsPasswordRequiredByBackend(data.passwordRequired);
             } catch (error) {
-                console.error('Error fetching auth status:', error);
+                console.error('获取鉴权状态失败：', error);
                 setIsPasswordRequiredByBackend(false);
             }
         };
@@ -331,13 +370,13 @@ export default function HomePage() {
         try {
             const response = await fetch('/api/runtime-capabilities');
             if (!response.ok) {
-                throw new Error('Failed to fetch runtime capabilities');
+                throw new Error('获取运行时能力失败');
             }
             const data = (await response.json()) as RuntimeCapabilities;
             setRuntimeCapabilities(data);
             return data;
         } catch (error) {
-            console.error('Error fetching runtime capabilities:', error);
+            console.error('获取运行时能力失败：', error);
             setRuntimeCapabilities(null);
             return null;
         }
@@ -354,7 +393,7 @@ export default function HomePage() {
         try {
             localStorage.setItem('openaiImageHistory', JSON.stringify(history));
         } catch (e) {
-            console.error('Failed to save history to localStorage:', e);
+            console.error('保存历史记录到 localStorage 失败：', e);
         }
     }, [history]);
 
@@ -421,7 +460,7 @@ export default function HomePage() {
 
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
-            setError(t('password.empty'));
+            setError(createErrorNotice(t('password.empty')));
             return;
         }
         try {
@@ -436,8 +475,8 @@ export default function HomePage() {
                 await handleApiCall(...retryArgs);
             }
         } catch (e) {
-            console.error('Error hashing password:', e);
-            setError(t('password.hashError'));
+            console.error('计算密码哈希失败：', e);
+            setError(createErrorNotice(t('password.hashError')));
         }
     };
 
@@ -675,7 +714,7 @@ export default function HomePage() {
                             return newMap;
                         });
                     } else if (event.type === 'error') {
-                        throw new Error(event.error || t('error.streaming'));
+                        throw new ApiRequestError(event.error || t('error.streaming'), event.status);
                     } else if (event.type === 'completed' || event.type === 'done') {
                         streamingState = applyStreamingClientEvent(streamingState, event);
                     }
@@ -701,11 +740,23 @@ export default function HomePage() {
                 return { images: streamingState.completedImages, usage: streamingState.usage };
             }
 
-            const result = await response.json();
+            let result: {
+                error?: string;
+                images?: ApiImageResponseItem[];
+                usage?: unknown;
+            };
+            try {
+                result = await response.json();
+            } catch (error) {
+                if (!response.ok) {
+                    throw new ApiRequestError(t('error.apiFailed', { status: response.status }), response.status);
+                }
+                throw error;
+            }
 
             if (!response.ok) {
                 if (response.status === 401 && isPasswordRequiredByBackend) {
-                    setError(t('error.unauthorized'));
+                    setError(createErrorNotice(t('error.unauthorized')));
                     setPasswordDialogContext('retry');
                     if (
                         options.retryFormData &&
@@ -728,7 +779,7 @@ export default function HomePage() {
 
             return { images: result.images || [], usage: result.usage };
         },
-        [isPasswordRequiredByBackend, t]
+        [createErrorNotice, isPasswordRequiredByBackend, t]
     );
 
     const handleApiCall = async (
@@ -757,7 +808,7 @@ export default function HomePage() {
                 serverRecommendedConcurrency: latestRuntimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
             });
             if (isPasswordRequiredByBackend && !clientPasswordHash) {
-                setError(t('error.passwordRequired'));
+                setError(createErrorNotice(t('error.passwordRequired')));
                 setPasswordDialogContext('initial');
                 setIsPasswordDialogOpen(true);
                 return;
@@ -770,6 +821,24 @@ export default function HomePage() {
                 streaming: requestStreaming,
                 imageCount
             });
+            const executeImageRequestForCurrentOptions = async (
+                options: { forceSingleImage: boolean; previewIndexOffset?: number } = { forceSingleImage: false }
+            ) => {
+                return executeImageRequest(
+                    buildApiFormData(formData, requestMode, {
+                        forceSingleImage: options.forceSingleImage,
+                        streaming: requestStreaming,
+                        partialImages: requestPartialImages
+                    }),
+                    {
+                        previewIndexOffset: options.previewIndexOffset,
+                        retryFormData: formData,
+                        retryMode: requestMode,
+                        retryStreaming: requestStreaming,
+                        retryPartialImages: requestPartialImages
+                    }
+                );
+            };
 
             if (useStreamingBatch) {
                 const jobs = buildStreamingBatchJobs(imageCount);
@@ -777,18 +846,7 @@ export default function HomePage() {
                     jobs,
                     currentStreamingBatchCapacity.concurrency,
                     async (job: StreamingBatchJob) => {
-                        const requestFormData = buildApiFormData(formData, requestMode, {
-                            forceSingleImage: true,
-                            streaming: requestStreaming,
-                            partialImages: requestPartialImages
-                        });
-                        return executeImageRequest(requestFormData, {
-                            previewIndexOffset: job.outputIndex,
-                            retryFormData: formData,
-                            retryMode: requestMode,
-                            retryStreaming: requestStreaming,
-                            retryPartialImages: requestPartialImages
-                        });
+                        return executeImageRequestForCurrentOptions({ forceSingleImage: true, previewIndexOffset: job.outputIndex });
                     }
                 );
                 const errors = batchResults.filter((result): result is Error => result instanceof Error);
@@ -807,31 +865,28 @@ export default function HomePage() {
                 await commitCompletedImages(images, usage, durationMs, true);
                 if (errors.length > 0) {
                     await refreshRuntimeCapabilities();
-                    setError(t('error.batchPartialFailure', { failed: errors.length, total: jobs.length }));
+                    setError(
+                        createErrorNotice(
+                            buildBatchPartialFailureMessage({
+                                failed: errors.length,
+                                total: jobs.length,
+                                errors: errors.map((error) => summarizeApiError(error, t('error.unexpected'))),
+                                t
+                            })
+                        )
+                    );
                 }
                 return;
             }
 
-            const result = await executeImageRequest(
-                buildApiFormData(formData, requestMode, {
-                    forceSingleImage: false,
-                    streaming: requestStreaming,
-                    partialImages: requestPartialImages
-                }),
-                {
-                    retryFormData: formData,
-                    retryMode: requestMode,
-                    retryStreaming: requestStreaming,
-                    retryPartialImages: requestPartialImages
-                }
-            );
+            const result = await executeImageRequestForCurrentOptions();
             durationMs = Date.now() - startTime;
             await commitCompletedImages(result.images || [], result.usage, durationMs);
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
-            console.error(`API Call Error after ${durationMs}ms:`, err);
-            const errorMessage = err instanceof Error ? err.message : t('error.unexpected');
-            setError(errorMessage);
+            console.error(`API 调用在 ${durationMs}ms 后失败：`, err);
+            const errorSummary = summarizeApiError(err, t('error.unexpected'));
+            setError(createErrorNotice(buildUserFacingApiErrorMessage({ ...errorSummary, t })));
             setLatestImageBatch(null);
             setStreamingPreviewImages(new Map());
             await refreshRuntimeCapabilities();
@@ -859,7 +914,7 @@ export default function HomePage() {
                     console.warn(
                         `Could not get image source for history item: ${imgInfo.filename} (mode: ${originalStorageMode})`
                     );
-                    setError(t('error.historyImageLoad', { filename: imgInfo.filename }));
+                    setError(createErrorNotice(t('error.historyImageLoad', { filename: imgInfo.filename })));
                     return null;
                 }
             });
@@ -868,7 +923,7 @@ export default function HomePage() {
                 const validImages = resolvedBatch.filter(Boolean) as { path: string; filename: string }[];
 
                 if (validImages.length !== item.images.length) {
-                    setError(t('error.historySomeMissing'));
+                    setError(createErrorNotice(t('error.historySomeMissing')));
                 } else {
                     setError(null);
                 }
@@ -877,7 +932,7 @@ export default function HomePage() {
                 setImageOutputView(validImages.length > 1 ? 'grid' : 0);
             });
         },
-        [getImageSrc, t]
+        [createErrorNotice, getImageSrc, t]
     );
 
     const handleClearHistory = React.useCallback(async () => {
@@ -901,11 +956,11 @@ export default function HomePage() {
                     blobUrlCacheRef.current.clear();
                 }
             } catch (e) {
-                console.error('Failed during history clearing:', e);
-                setError(t('error.clearHistory', { message: e instanceof Error ? e.message : String(e) }));
+                console.error('清空历史记录失败：', e);
+                setError(createErrorNotice(t('error.clearHistory', { message: e instanceof Error ? e.message : String(e) })));
             }
         }
-    }, [t]);
+    }, [createErrorNotice, t]);
 
     const handleSendToEdit = async (filename: string) => {
         if (isSendingToEdit) return;
@@ -919,7 +974,7 @@ export default function HomePage() {
         }
 
         if (mode === 'edit' && editImageFiles.length >= MAX_EDIT_IMAGES) {
-            setError(t('error.maxEditImages', { count: MAX_EDIT_IMAGES }));
+            setError(createErrorNotice(t('error.maxEditImages', { count: MAX_EDIT_IMAGES })));
             setIsSendingToEdit(false);
             return;
         }
@@ -961,9 +1016,9 @@ export default function HomePage() {
                 setMode('edit');
             }
         } catch (err: unknown) {
-            console.error('Error sending image to edit:', err);
+            console.error('发送图片到编辑模式失败：', err);
             const errorMessage = err instanceof Error ? err.message : t('error.sendToEdit');
-            setError(errorMessage);
+            setError(createErrorNotice(errorMessage));
         } finally {
             setIsSendingToEdit(false);
         }
@@ -1010,13 +1065,13 @@ export default function HomePage() {
                     prev && prev.some((img) => filenamesToDelete.includes(img.filename)) ? null : prev
                 );
             } catch (e: unknown) {
-                console.error('Error during item deletion:', e);
-                setError(e instanceof Error ? e.message : t('error.deleteUnexpected'));
+                console.error('删除条目失败：', e);
+                setError(createErrorNotice(e instanceof Error ? e.message : t('error.deleteUnexpected')));
             } finally {
                 setItemToDeleteConfirm(null);
             }
         },
-        [isPasswordRequiredByBackend, clientPasswordHash, t]
+        [clientPasswordHash, createErrorNotice, isPasswordRequiredByBackend, t]
     );
 
     const handleRequestDeleteItem = React.useCallback(
@@ -1159,7 +1214,7 @@ export default function HomePage() {
                         {error && (
                             <Alert variant='destructive' className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
                                 <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
-                                <AlertDescription>{error}</AlertDescription>
+                                <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                             </Alert>
                         )}
                         <ImageOutput

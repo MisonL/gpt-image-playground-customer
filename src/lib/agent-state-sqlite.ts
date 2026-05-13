@@ -231,7 +231,7 @@ export class SqliteAgentStateStore implements AgentStateStore {
 
     private requireDb(): Database.Database {
         if (!this.db) {
-            throw new Error('SQLite agent state store is not initialized.');
+            throw new Error('SQLite Agent 状态库尚未初始化。');
         }
         return this.db;
     }

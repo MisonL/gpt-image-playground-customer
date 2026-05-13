@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
         if (beginResult.type === 'conflict') {
             throw new AgentApiError({
                 code: 'idempotency_conflict',
-                message: 'Idempotency-Key was already used with a different request body.',
+                message: 'Idempotency-Key 已被不同请求正文使用。',
                 status: 409,
                 retryable: false
             });
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
         if (beginResult.type === 'in_progress') {
             throw new AgentApiError({
                 code: 'request_in_progress',
-                message: 'A request with this Idempotency-Key is still running.',
+                message: '使用该 Idempotency-Key 的请求仍在运行。',
                 status: 409,
                 retryable: true,
                 retryAfterSeconds: beginResult.retryAfterSeconds
@@ -77,12 +77,12 @@ export async function POST(request: NextRequest) {
         try {
             await saveAgentExecutionArtifacts(store, execution);
         } catch (error) {
-            appLogger.error('Failed to persist Agent generate artifact metadata.', error);
+            appLogger.error('保存 Agent 生成产物元数据失败。', error);
             const persistenceError = createArtifactPersistenceError();
             try {
                 await deleteAgentExecutionFiles(execution);
             } catch (cleanupError) {
-                appLogger.error('Failed to clean up Agent generate files after metadata persistence failure.', cleanupError);
+                appLogger.error('产物元数据保存失败后清理 Agent 生成文件失败。', cleanupError);
             }
             await store.failRequest({ requestId, error: errorToAgentErrorBody(persistenceError, requestId) });
             throw persistenceError;
@@ -90,7 +90,7 @@ export async function POST(request: NextRequest) {
         try {
             await completeAgentExecutionState(store, execution);
         } catch (error) {
-            appLogger.error('Failed to persist Agent generate completion state.', error);
+            appLogger.error('保存 Agent 生成完成状态失败。', error);
             throw createCompletionPersistenceError();
         }
         return NextResponse.json(execution.response, { headers });

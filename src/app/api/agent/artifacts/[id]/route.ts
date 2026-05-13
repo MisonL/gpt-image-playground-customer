@@ -15,7 +15,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         if (!artifact) {
             throw new AgentApiError({
                 code: 'artifact_not_found',
-                message: 'Artifact not found.',
+                message: '产物不存在。',
                 status: 404,
                 retryable: false
             });
@@ -36,7 +36,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
         if (!deleted) {
             throw new AgentApiError({
                 code: 'artifact_not_found',
-                message: 'Artifact not found.',
+                message: '产物不存在。',
                 status: 404,
                 retryable: false
             });

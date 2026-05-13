@@ -41,7 +41,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import path from 'path';
 
-// Streaming event types
+// 流式事件类型。
 type StreamingEvent = {
     type: 'partial_image' | 'completed' | 'error' | 'done';
     index?: number;
@@ -58,7 +58,15 @@ type StreamingEvent = {
         output_format: string;
     }>;
     error?: string;
+    status?: number;
 };
+
+function readErrorStatus(error: unknown): number | undefined {
+    if (typeof error !== 'object' || error === null) return undefined;
+    if ('status' in error && typeof error.status === 'number') return error.status;
+    if ('statusCode' in error && typeof error.statusCode === 'number') return error.statusCode;
+    return undefined;
+}
 
 function reportServerCredentialFailure(credential: ChannelCredential | undefined, error: unknown) {
     const serverChannelRouter = getServerChannelState().router;
@@ -68,13 +76,13 @@ function reportServerCredentialFailure(credential: ChannelCredential | undefined
     if (isChannelFailure(error)) {
         const reason = describeChannelFailure(error, 'channel');
         serverChannelRouter.reportFailure(credential, { scope: 'channel', reason });
-        appLogger.warn(`Temporarily cooling down API channel: ${credential.channelId}`, reason);
+        appLogger.warn(`暂时冷却 API 渠道：${credential.channelId}`, reason);
         return;
     }
     if (isCredentialFailure(error)) {
         const reason = describeChannelFailure(error, 'credential');
         serverChannelRouter.reportFailure(credential, { reason });
-        appLogger.warn(`Temporarily cooling down API channel credential: ${credential.channelId}/${credential.id}`, reason);
+        appLogger.warn(`暂时冷却 API 渠道凭证：${credential.channelId}/${credential.id}`, reason);
     }
 }
 
@@ -96,15 +104,15 @@ async function ensureOutputDirExists() {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
             try {
                 await fs.mkdir(outputDir, { recursive: true });
-                appLogger.info(`Created output directory: ${outputDir}`);
+                appLogger.info(`已创建图片输出目录：${outputDir}`);
             } catch (mkdirError) {
-                appLogger.error(`Error creating output directory ${outputDir}:`, mkdirError);
-                throw new Error('Failed to create image output directory.');
+                appLogger.error(`创建图片输出目录失败 ${outputDir}：`, mkdirError);
+                throw new Error('创建图片输出目录失败。');
             }
         } else {
-            appLogger.error(`Error accessing output directory ${outputDir}:`, error);
+            appLogger.error(`访问图片输出目录失败 ${outputDir}：`, error);
             throw new Error(
-                `Failed to access or ensure image output directory exists. Original error: ${error instanceof Error ? error.message : String(error)}`
+                `访问或确认图片输出目录失败。原始错误：${error instanceof Error ? error.message : String(error)}`
             );
         }
     }
@@ -135,7 +143,7 @@ export async function POST(request: NextRequest) {
         validateApiBaseUrl(effectiveApiBaseUrl || '');
 
         if (!effectiveApiKey) {
-            appLogger.error('OPENAI_API_KEY is not set and no request API key was provided.');
+            appLogger.error('未设置 OPENAI_API_KEY，且请求未提供 API Key。');
             return NextResponse.json(
                 { error: '请在 API 设置中填写 API Key，或配置 OPENAI_API_KEY 环境变量。' },
                 { status: 400 }
@@ -143,7 +151,7 @@ export async function POST(request: NextRequest) {
         }
         if (selectedCredential) {
             appLogger.info(
-                `Selected API channel: ${selectedCredential.channelId}, credential: ${selectedCredential.id}, strategy: server`
+                `已选择 API 渠道：${selectedCredential.channelId}，凭证：${selectedCredential.id}，策略：server`
             );
         }
 
@@ -153,7 +161,7 @@ export async function POST(request: NextRequest) {
         });
 
         const effectiveStorageMode = readStorageMode(process.env);
-        appLogger.info(`Effective Image Storage Mode: ${effectiveStorageMode}`);
+        appLogger.info(`实际图片存储模式：${effectiveStorageMode}`);
 
         if (effectiveStorageMode === 'fs') {
             await ensureOutputDirExists();
@@ -163,12 +171,12 @@ export async function POST(request: NextRequest) {
         if (appPassword) {
             const clientPasswordHash = formData.get('passwordHash');
             if (typeof clientPasswordHash !== 'string' || !clientPasswordHash) {
-                appLogger.error('Missing password hash.');
-                return NextResponse.json({ error: 'Unauthorized: Missing password hash.' }, { status: 401 });
+                appLogger.error('缺少密码哈希。');
+                return NextResponse.json({ error: '未授权：缺少密码哈希。' }, { status: 401 });
             }
             if (!verifyPasswordHash(clientPasswordHash, appPassword)) {
-                appLogger.error('Invalid password hash.');
-                return NextResponse.json({ error: 'Unauthorized: Invalid password.' }, { status: 401 });
+                appLogger.error('密码哈希无效。');
+                return NextResponse.json({ error: '未授权：密码无效。' }, { status: 401 });
             }
         }
 
@@ -176,7 +184,7 @@ export async function POST(request: NextRequest) {
         const prompt = readRequiredText(formData, 'prompt');
         const model = readModel(formData);
 
-        appLogger.debug(`Mode: ${mode}, Model: ${model}, Prompt: ${prompt ? prompt.substring(0, 50) + '...' : 'N/A'}`);
+        appLogger.debug(`模式：${mode}，模型：${model}，提示词：${prompt ? prompt.substring(0, 50) + '...' : 'N/A'}`);
 
         const streamEnabled = formData.get('stream') === 'true';
         const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
@@ -209,7 +217,7 @@ export async function POST(request: NextRequest) {
                 baseParams.output_compression = outputCompression;
             }
 
-            // Handle streaming mode for generation
+            // 处理生成模式的流式响应。
             if (streamEnabled) {
                 const streamParams = {
                     ...baseParams,
@@ -219,7 +227,7 @@ export async function POST(request: NextRequest) {
 
                 const stream = await openai.images.generate(streamParams);
 
-                // Create SSE response
+                // 创建 SSE 响应。
                 const encoder = new TextEncoder();
                 const batchId = createBatchId();
                 const fileExtension = outputFormat;
@@ -249,12 +257,12 @@ export async function POST(request: NextRequest) {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
 
-                                    // Save to filesystem if in fs mode
+                                    // fs 模式下保存到文件系统。
                                     if (effectiveStorageMode === 'fs' && event.b64_json) {
                                         const buffer = Buffer.from(event.b64_json, 'base64');
                                         const filepath = path.join(outputDir, filename);
                                         await fs.writeFile(filepath, buffer);
-                                        appLogger.debug(`Streaming: Saved image ${filename}`);
+                                        appLogger.debug(`流式生成：已保存图片 ${filename}`);
                                     }
 
                                     const imageData = createImageResult(
@@ -277,14 +285,14 @@ export async function POST(request: NextRequest) {
 
                                     imageIndex++;
 
-                                    // Capture usage from completed event if available
+                                    // 如果完成事件带有 usage，则记录用量。
                                     if ('usage' in event && event.usage) {
                                         finalUsage = event.usage as OpenAI.Images.ImagesResponse['usage'];
                                     }
                                 }
                             }
 
-                            // Send final done event with all images and usage
+                            // 发送包含全部图片和用量的最终 done 事件。
                             const doneEvent: StreamingEvent = {
                                 type: 'done',
                                 images: completedImages,
@@ -294,10 +302,12 @@ export async function POST(request: NextRequest) {
                             controller.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
-                            appLogger.error('Streaming error:', error);
+                            appLogger.error('流式生成失败：', error);
+                            const status = readErrorStatus(error);
                             const errorEvent: StreamingEvent = {
                                 type: 'error',
-                                error: error instanceof Error ? error.message : 'Streaming error occurred'
+                                error: error instanceof Error ? error.message : '流式处理失败',
+                                ...(status ? { status } : {})
                             };
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
                             controller.close();
@@ -315,7 +325,7 @@ export async function POST(request: NextRequest) {
             }
 
             const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...baseParams, stream: false };
-            appLogger.debug('Calling OpenAI generate with params:', params);
+            appLogger.debug('调用 OpenAI generate，参数：', params);
             result = await openai.images.generate(params);
         } else if (mode === 'edit') {
             const n = readCount(formData, 'n', 1, 1, 10);
@@ -333,9 +343,9 @@ export async function POST(request: NextRequest) {
                 quality: quality === 'auto' ? undefined : quality
             };
 
-            // Handle streaming mode for editing
+            // 处理编辑模式的流式响应。
             if (streamEnabled) {
-                appLogger.debug('Calling OpenAI edit with streaming, params:', {
+                appLogger.debug('调用 OpenAI edit 流式接口，参数：', {
                     ...baseEditParams,
                     stream: true,
                     partial_images: partialImagesCount,
@@ -352,7 +362,7 @@ export async function POST(request: NextRequest) {
 
                 const stream = await openai.images.edit(streamEditParams);
 
-                // Create SSE response for edit
+                // 为编辑请求创建 SSE 响应。
                 const encoder = new TextEncoder();
                 const batchId = createBatchId();
                 const fileExtension: ValidOutputFormat = 'png';
@@ -382,12 +392,12 @@ export async function POST(request: NextRequest) {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
 
-                                    // Save to filesystem if in fs mode
+                                    // fs 模式下保存到文件系统。
                                     if (effectiveStorageMode === 'fs' && event.b64_json) {
                                         const buffer = Buffer.from(event.b64_json, 'base64');
                                         const filepath = path.join(outputDir, filename);
                                         await fs.writeFile(filepath, buffer);
-                                        appLogger.debug(`Streaming edit: Saved image ${filename}`);
+                                        appLogger.debug(`流式编辑：已保存图片 ${filename}`);
                                     }
 
                                     const imageData = createImageResult(
@@ -410,14 +420,14 @@ export async function POST(request: NextRequest) {
 
                                     imageIndex++;
 
-                                    // Capture usage from completed event if available
+                                    // 如果完成事件带有 usage，则记录用量。
                                     if ('usage' in event && event.usage) {
                                         finalUsage = event.usage as OpenAI.Images.ImagesResponse['usage'];
                                     }
                                 }
                             }
 
-                            // Send final done event with all images and usage
+                            // 发送包含全部图片和用量的最终 done 事件。
                             const doneEvent: StreamingEvent = {
                                 type: 'done',
                                 images: completedImages,
@@ -427,10 +437,12 @@ export async function POST(request: NextRequest) {
                             controller.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
-                            appLogger.error('Streaming edit error:', error);
+                            appLogger.error('流式编辑失败：', error);
+                            const status = readErrorStatus(error);
                             const errorEvent: StreamingEvent = {
                                 type: 'error',
-                                error: error instanceof Error ? error.message : 'Streaming error occurred'
+                                error: error instanceof Error ? error.message : '流式处理失败',
+                                ...(status ? { status } : {})
                             };
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
                             controller.close();
@@ -452,17 +464,17 @@ export async function POST(request: NextRequest) {
                 ...(maskFile ? { mask: maskFile } : {})
             };
 
-            appLogger.debug('Calling OpenAI edit with params:', {
+            appLogger.debug('调用 OpenAI edit，参数：', {
                 ...params,
                 image: `[${imageFiles.map((f) => f.name).join(', ')}]`,
                 mask: maskFile ? maskFile.name : 'N/A'
             });
             result = await openai.images.edit(params);
         } else {
-            return NextResponse.json({ error: 'Invalid mode specified' }, { status: 400 });
+            return NextResponse.json({ error: 'mode 无效' }, { status: 400 });
         }
 
-        appLogger.info('OpenAI API call successful.');
+        appLogger.info('OpenAI API 调用成功。');
 
         try {
             const savedImages = await persistOpenAiImages({
@@ -473,19 +485,19 @@ export async function POST(request: NextRequest) {
             });
             const savedImagesData = savedImages.map((image) => persistedImageToLegacyResponse(image));
 
-            appLogger.info(`All images processed. Mode: ${effectiveStorageMode}`);
+            appLogger.info(`所有图片已处理。模式：${effectiveStorageMode}`);
 
             return NextResponse.json({ images: savedImagesData, usage: result.usage });
         } catch (persistError) {
             if (persistError instanceof MissingOpenAiImageDataError) {
-                appLogger.error(`Image data ${persistError.index} is missing b64_json.`);
+                appLogger.error(`第 ${persistError.index} 个图片数据缺少 b64_json。`);
                 throw persistError;
             }
             if (!(persistError instanceof InvalidOpenAiImagesResponseError)) {
                 throw persistError;
             }
             const invalidResult: unknown = persistError.result;
-            appLogger.error('Invalid or empty data received from OpenAI API:', {
+            appLogger.error('OpenAI API 返回的数据无效或为空：', {
                 type: typeof invalidResult,
                 preview: typeof invalidResult === 'string' ? invalidResult.slice(0, 300) : invalidResult
             });
@@ -494,9 +506,9 @@ export async function POST(request: NextRequest) {
         }
     } catch (error: unknown) {
         reportServerCredentialFailure(selectedServerCredential, error);
-        appLogger.error('Error in /api/images:', error);
+        appLogger.error('/api/images 处理失败：', error);
 
-        let errorMessage = 'An unexpected error occurred.';
+        let errorMessage = '发生未知错误。';
         let status = 500;
 
         if (error instanceof RequestValidationError) {

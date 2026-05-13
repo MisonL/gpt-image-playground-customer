@@ -78,7 +78,7 @@ const CHANNEL_KEY_PATTERN = /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS|FAILURE
 export function parseChannelPoolConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
     if (env.OPENAI_CHANNELS_JSON?.trim()) {
         throw new RequestValidationError(
-            'OPENAI_CHANNELS_JSON has been removed. Use OPENAI_ROUTING_STRATEGY and OPENAI_CHANNEL_N_* variables instead.',
+            'OPENAI_CHANNELS_JSON 已移除。请改用 OPENAI_ROUTING_STRATEGY 和 OPENAI_CHANNEL_N_* 变量。',
             500
         );
     }
@@ -92,7 +92,7 @@ export function parseChannelPoolConfig(env: Record<string, string | undefined>):
     const credentials = channelIndexes.flatMap((channelIndex) => parseNumberedChannel(env, channelIndex));
 
     if (credentials.length === 0) {
-        throw new RequestValidationError('At least one OPENAI_CHANNEL_N_API_KEYS value is required.', 500);
+        throw new RequestValidationError('至少需要配置一个 OPENAI_CHANNEL_N_API_KEYS 值。', 500);
     }
 
     return { strategy, credentials };
@@ -100,7 +100,7 @@ export function parseChannelPoolConfig(env: Record<string, string | undefined>):
 
 export function createChannelRouter(options: ChannelRouterOptions): ChannelRouter {
     if (options.credentials.length === 0) {
-        throw new RequestValidationError('At least one channel credential is required.', 500);
+        throw new RequestValidationError('至少需要一个渠道凭证。', 500);
     }
 
     let nextIndex = 0;
@@ -126,7 +126,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
         select(selectOptions = {}) {
             const candidates = healthyCredentials();
             if (candidates.length === 0) {
-                throw new RequestValidationError('No healthy channel credential is currently available.', 503);
+                throw new RequestValidationError('当前没有可用的健康渠道凭证。', 503);
             }
 
             if (options.strategy === 'round_robin') {
@@ -149,7 +149,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 }
             }
 
-            throw new RequestValidationError('No healthy channel credential is currently available.', 503);
+            throw new RequestValidationError('当前没有可用的健康渠道凭证。', 503);
         },
         reportFailure(credential: ChannelCredential, reportOptions = {}) {
             const cooldownMs = credential.failureCooldownMs ?? failureCooldownMs;
@@ -197,7 +197,7 @@ function selectRoundRobinHealthy(
         }
     }
 
-    throw new RequestValidationError('No healthy channel credential is currently available.', 503);
+    throw new RequestValidationError('当前没有可用的健康渠道凭证。', 503);
 }
 
 export function getChannelPoolSummary(config: ChannelPoolConfig): ChannelPoolSummary {
@@ -350,7 +350,7 @@ function readStrategy(value: unknown, fieldName: string): RoutingStrategy {
         return DEFAULT_STRATEGY;
     }
     if (typeof value !== 'string' || !VALID_STRATEGIES.has(value as RoutingStrategy)) {
-        throw new RequestValidationError(`${fieldName} must be sticky, round_robin, or random.`, 500);
+        throw new RequestValidationError(`${fieldName} 必须是 sticky、round_robin 或 random。`, 500);
     }
     return value as RoutingStrategy;
 }
@@ -368,7 +368,7 @@ function readConfiguredChannelIndexes(env: Record<string, string | undefined>): 
 function readRequiredEnv(env: Record<string, string | undefined>, fieldName: string): string {
     const value = env[fieldName];
     if (typeof value !== 'string' || value.trim().length === 0) {
-        throw new RequestValidationError(`${fieldName} is required.`, 500);
+        throw new RequestValidationError(`${fieldName} 必填。`, 500);
     }
     return value.trim();
 }
@@ -396,7 +396,7 @@ function normalizeOptionalString(value: unknown): string | undefined {
         return undefined;
     }
     if (typeof value !== 'string') {
-        throw new RequestValidationError('Channel baseUrl must be a string.', 500);
+        throw new RequestValidationError('渠道 baseUrl 必须是字符串。', 500);
     }
     const normalized = value.trim();
     return normalized || undefined;

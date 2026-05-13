@@ -30,7 +30,7 @@ export class InvalidOpenAiImagesResponseError extends Error {
     readonly result: unknown;
 
     constructor(result: unknown) {
-        super('Invalid or empty Images response.');
+        super('Images 响应无效或为空。');
         this.name = 'InvalidOpenAiImagesResponseError';
         this.result = result;
     }
@@ -40,7 +40,7 @@ export class MissingOpenAiImageDataError extends Error {
     readonly index: number;
 
     constructor(index: number) {
-        super(`Image data at index ${index} is missing base64 data.`);
+        super(`索引 ${index} 的图片数据缺少 base64 数据。`);
         this.name = 'MissingOpenAiImageDataError';
         this.index = index;
     }

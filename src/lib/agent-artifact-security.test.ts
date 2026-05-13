@@ -9,6 +9,6 @@ describe('assertArtifactFilepathAllowed', () => {
     });
 
     it('rejects artifact file paths outside the generated image directory', () => {
-        assert.throws(() => assertArtifactFilepathAllowed('/etc/passwd'), /outside/);
+        assert.throws(() => assertArtifactFilepathAllowed('/etc/passwd'), /目录之外/);
     });
 });

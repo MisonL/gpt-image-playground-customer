@@ -212,7 +212,7 @@ describe('createChannelRouter', () => {
 
         config.credentials.forEach((credential) => router.reportFailure(credential));
 
-        assert.throws(() => router.select({ affinityKey: 'client-a' }), /No healthy channel credential/);
+        assert.throws(() => router.select({ affinityKey: 'client-a' }), /没有可用的健康渠道凭证/);
     });
 
     it('reports healthy capacity after credentials enter and leave cooldown', () => {

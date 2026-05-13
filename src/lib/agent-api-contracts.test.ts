@@ -14,7 +14,7 @@ describe('validateAgentGenerateRequest', () => {
             prompt: 'draw a stable test image',
             n: 1,
             size: '1024x1024',
-            quality: 'auto',
+            quality: 'high',
             output_format: 'png',
             background: 'auto',
             moderation: 'auto',
@@ -35,8 +35,8 @@ describe('validateAgentGenerateRequest', () => {
                 assert.ok(error instanceof RequestValidationError);
                 assert.equal(error.status, 422);
                 const details = JSON.parse(error.message) as { fields: Record<string, string> };
-                assert.match(details.fields.prompt, /required/);
-                assert.match(details.fields.n, /between 1 and 10/);
+                assert.match(details.fields.prompt, /必填/);
+                assert.match(details.fields.n, /1 到 10/);
                 assert.match(details.fields.output_format, /png/);
                 assert.match(details.fields.response_mode, /path/);
                 return true;
@@ -68,7 +68,7 @@ describe('validateAgentGenerateRequest', () => {
                 assert.ok(error instanceof RequestValidationError);
                 assert.equal(error.status, 422);
                 const details = JSON.parse(error.message) as { fields: Record<string, string> };
-                assert.match(details.fields.size, /pixels|multiple|Maximum|Aspect|positive/);
+                assert.match(details.fields.size, /像素|倍数|宽高比|正数/);
                 return true;
             }
         );

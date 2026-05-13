@@ -142,7 +142,7 @@ export function normalizeAgentError(error: unknown): AgentApiError {
         const details = parseValidationDetails(error.message) ?? inferValidationDetails(error.message);
         return new AgentApiError({
             code: error.status >= 500 ? 'configuration_error' : 'validation_error',
-            message: details ? 'Request validation failed.' : error.message,
+            message: details ? '请求校验失败。' : error.message,
             status: error.status === 400 ? 422 : error.status,
             retryable: false,
             ...(details ? { details } : {})
@@ -150,7 +150,7 @@ export function normalizeAgentError(error: unknown): AgentApiError {
     }
 
     const status = readNumberField(error, 'status') ?? readNumberField(error, 'statusCode');
-    const message = error instanceof Error ? error.message : 'Unexpected error.';
+    const message = error instanceof Error ? error.message : '发生未知错误。';
     if (status === 401 || status === 403) {
         return new AgentApiError({
             code: 'upstream_auth_failed',

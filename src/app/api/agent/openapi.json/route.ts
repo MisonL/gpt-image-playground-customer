@@ -2,6 +2,6 @@ import { buildAgentOpenApiDocument } from '@/lib/agent-api-contracts';
 import { NextResponse } from 'next/server';
 
 export async function GET() {
-    // Kept unauthenticated so agents can fetch the machine-readable contract before sending credentials.
+    // 保持未鉴权，便于 Agent 在发送凭据前获取机器可读契约。
     return NextResponse.json(buildAgentOpenApiDocument(process.env));
 }
