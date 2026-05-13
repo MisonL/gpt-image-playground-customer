@@ -129,7 +129,7 @@ function readIntegerField(
     if (value === undefined || value === null || value === '') return fallback;
     const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
     if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-        fields[field] = `must be an integer between ${min} and ${max}`;
+        fields[field] = `必须是 ${min} 到 ${max} 之间的整数`;
         return fallback;
     }
     return parsed;
@@ -137,11 +137,11 @@ function readIntegerField(
 
 function validatePrompt(value: unknown, fields: FieldErrors): string {
     if (typeof value !== 'string' || value.trim().length === 0) {
-        fields.prompt = 'is required';
+        fields.prompt = '必填';
         return '';
     }
     if (value.length > MAX_PROMPT_LENGTH) {
-        fields.prompt = `must be ${MAX_PROMPT_LENGTH} characters or fewer`;
+        fields.prompt = `长度不能超过 ${MAX_PROMPT_LENGTH} 个字符`;
     }
     return value;
 }
@@ -149,7 +149,7 @@ function validatePrompt(value: unknown, fields: FieldErrors): string {
 function readModel(body: Record<string, unknown>, fields: FieldErrors): GptImageModel {
     const value = readStringField(body, 'model', 'gpt-image-2');
     if (!value || !isOneOf(value, AGENT_MODELS)) {
-        fields.model = `must be one of ${AGENT_MODELS.join(', ')}`;
+        fields.model = `必须是以下值之一：${AGENT_MODELS.join(', ')}`;
         return 'gpt-image-2';
     }
     return value;
@@ -158,17 +158,17 @@ function readModel(body: Record<string, unknown>, fields: FieldErrors): GptImage
 function readSize(body: Record<string, unknown>, model: GptImageModel, fields: FieldErrors, fallback: string): string {
     const value = readStringField(body, 'size', fallback);
     if (!value) {
-        fields.size = 'must be a string';
+        fields.size = '必须是字符串';
         return fallback;
     }
     if (model !== 'gpt-image-2' && !isOneOf(value, AGENT_LEGACY_SIZES)) {
-        fields.size = `must be one of ${AGENT_LEGACY_SIZES.join(', ')} for ${model}`;
+        fields.size = `${model} 的 size 必须是以下值之一：${AGENT_LEGACY_SIZES.join(', ')}`;
         return fallback;
     }
     if (model === 'gpt-image-2' && value !== 'auto') {
         const match = /^(\d+)x(\d+)$/.exec(value);
         if (!match) {
-            fields.size = 'must be auto or a WxH value';
+            fields.size = '必须是 auto 或 WxH 格式的尺寸值';
             return value;
         }
         const validation = validateGptImage2Size(Number(match[1]), Number(match[2]));
@@ -183,7 +183,7 @@ function readOutputFormat(body: Record<string, unknown>, fields: FieldErrors): V
     const rawValue = readStringField(body, 'output_format', 'png');
     const normalized = rawValue?.toLowerCase() === 'jpg' ? 'jpeg' : rawValue?.toLowerCase();
     if (!normalized || !isOneOf(normalized, AGENT_OUTPUT_FORMATS)) {
-        fields.output_format = `must be one of ${AGENT_OUTPUT_FORMATS.join(', ')}`;
+        fields.output_format = `必须是以下值之一：${AGENT_OUTPUT_FORMATS.join(', ')}`;
         return 'png';
     }
     return normalized;
@@ -192,17 +192,17 @@ function readOutputFormat(body: Record<string, unknown>, fields: FieldErrors): V
 function readResponseMode(body: Record<string, unknown>, fields: FieldErrors): AgentResponseMode {
     const value = readStringField(body, 'response_mode', 'path');
     if (!value || !isOneOf(value, AGENT_RESPONSE_MODES)) {
-        fields.response_mode = `must be one of ${AGENT_RESPONSE_MODES.join(', ')}`;
+        fields.response_mode = `必须是以下值之一：${AGENT_RESPONSE_MODES.join(', ')}`;
         return 'path';
     }
     return value;
 }
 
 function readQuality(body: Record<string, unknown>, fields: FieldErrors): AgentQuality {
-    const value = readStringField(body, 'quality', 'auto');
+    const value = readStringField(body, 'quality', 'high');
     if (!value || !isOneOf(value, AGENT_QUALITIES)) {
-        fields.quality = `must be one of ${AGENT_QUALITIES.join(', ')}`;
-        return 'auto';
+        fields.quality = `必须是以下值之一：${AGENT_QUALITIES.join(', ')}`;
+        return 'high';
     }
     return value;
 }
@@ -210,11 +210,11 @@ function readQuality(body: Record<string, unknown>, fields: FieldErrors): AgentQ
 function readBackground(body: Record<string, unknown>, model: GptImageModel, fields: FieldErrors): AgentBackground {
     const value = readStringField(body, 'background', 'auto');
     if (!value || !isOneOf(value, AGENT_BACKGROUNDS)) {
-        fields.background = `must be one of ${AGENT_BACKGROUNDS.join(', ')}`;
+        fields.background = `必须是以下值之一：${AGENT_BACKGROUNDS.join(', ')}`;
         return 'auto';
     }
     if (model === 'gpt-image-2' && value === 'transparent') {
-        fields.background = 'transparent is not supported for gpt-image-2';
+        fields.background = 'gpt-image-2 不支持 transparent 背景';
     }
     return value;
 }
@@ -222,7 +222,7 @@ function readBackground(body: Record<string, unknown>, model: GptImageModel, fie
 function readModeration(body: Record<string, unknown>, fields: FieldErrors): AgentModeration {
     const value = readStringField(body, 'moderation', 'auto');
     if (!value || !isOneOf(value, AGENT_MODERATIONS)) {
-        fields.moderation = `must be one of ${AGENT_MODERATIONS.join(', ')}`;
+        fields.moderation = `必须是以下值之一：${AGENT_MODERATIONS.join(', ')}`;
         return 'auto';
     }
     return value;
@@ -236,12 +236,12 @@ function readOutputCompression(
     const value = body.output_compression;
     if (value === undefined || value === null || value === '') return undefined;
     if (outputFormat === 'png') {
-        fields.output_compression = 'is only valid for jpeg or webp output';
+        fields.output_compression = '仅适用于 jpeg 或 webp 输出';
         return undefined;
     }
     const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
     if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
-        fields.output_compression = 'must be an integer between 0 and 100';
+        fields.output_compression = '必须是 0 到 100 之间的整数';
         return undefined;
     }
     return parsed;
@@ -249,7 +249,7 @@ function readOutputCompression(
 
 export function validateAgentGenerateRequest(body: unknown): AgentGenerateRequest {
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-        throw new RequestValidationError('Request body must be a JSON object.');
+        throw new RequestValidationError('请求正文必须是 JSON 对象。');
     }
     const objectBody = body as Record<string, unknown>;
     const fields: FieldErrors = {};
@@ -286,7 +286,7 @@ export function readAgentStateBackend(env: Record<string, string | undefined>): 
     const backend = env.AGENT_STATE_BACKEND?.trim().toLowerCase();
     if (!backend) return 'sqlite';
     if (backend === 'sqlite' || backend === 'postgres') return backend;
-    throw new RequestValidationError('AGENT_STATE_BACKEND must be sqlite or postgres.', 500);
+    throw new RequestValidationError('AGENT_STATE_BACKEND 必须是 sqlite 或 postgres。', 500);
 }
 
 export function readAgentRequestTtlSeconds(env: Record<string, string | undefined>): number {
@@ -397,7 +397,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
         paths: {
             '/api/agent/capabilities': {
                 get: {
-                    summary: 'Get machine-readable Agent API capabilities',
+                    summary: '获取机器可读的 Agent API 能力信息',
                     responses: {
                         '200': jsonContent('#/components/schemas/AgentCapabilities')
                     }
@@ -405,15 +405,15 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
             },
             '/api/agent/openapi.json': {
                 get: {
-                    summary: 'Get the Agent API OpenAPI document',
+                    summary: '获取 Agent API 的 OpenAPI 文档',
                     responses: {
-                        '200': { description: 'OpenAPI document' }
+                        '200': { description: 'OpenAPI 文档' }
                     }
                 }
             },
             '/api/agent/images/generate': {
                 post: {
-                    summary: 'Generate images for agents',
+                    summary: '为 Agent 生成图片',
                     security: agentSecurity,
                     parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }],
                     requestBody: {
@@ -437,7 +437,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
             },
             '/api/agent/images/edit': {
                 post: {
-                    summary: 'Edit images for agents',
+                    summary: '为 Agent 编辑图片',
                     security: agentSecurity,
                     parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }],
                     requestBody: {
@@ -460,7 +460,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
             },
             '/api/agent/artifacts/{id}': {
                 get: {
-                    summary: 'Get artifact metadata',
+                    summary: '获取产物元数据',
                     security: agentSecurity,
                     parameters: [{ $ref: '#/components/parameters/ArtifactId' }],
                     responses: {
@@ -470,7 +470,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 },
                 delete: {
-                    summary: 'Delete an artifact',
+                    summary: '删除产物',
                     security: agentSecurity,
                     parameters: [{ $ref: '#/components/parameters/ArtifactId' }],
                     responses: {
@@ -482,12 +482,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
             },
             '/api/agent/artifacts/{id}/content': {
                 get: {
-                    summary: 'Download artifact content',
+                    summary: '下载产物内容',
                     security: agentSecurity,
                     parameters: [{ $ref: '#/components/parameters/ArtifactId' }],
                     responses: {
                         '200': {
-                            description: 'Image binary content',
+                            description: '图片二进制内容',
                             content: {
                                 'image/png': { schema: { type: 'string', format: 'binary' } },
                                 'image/jpeg': { schema: { type: 'string', format: 'binary' } },
@@ -550,7 +550,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         model: { type: 'string', enum: AGENT_MODELS },
                         n: { type: 'integer', minimum: 1, maximum: MAX_IMAGE_COUNT },
                         size: { type: 'string' },
-                        quality: { type: 'string', enum: AGENT_QUALITIES },
+                        quality: { type: 'string', enum: AGENT_QUALITIES, default: 'high' },
                         output_format: { type: 'string', enum: AGENT_OUTPUT_FORMATS },
                         output_compression: { type: 'integer', minimum: 0, maximum: 100 },
                         background: { type: 'string', enum: AGENT_BACKGROUNDS },

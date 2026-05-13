@@ -10,7 +10,7 @@ export function assertAgentAuthorized(headers: Headers, env: Record<string, stri
         if (!timingSafeStringEqual(authorization, expected)) {
             throw new AgentApiError({
                 code: 'unauthorized',
-                message: 'Unauthorized: invalid or missing bearer token.',
+                message: '未授权：Bearer token 无效或缺失。',
                 status: 401,
                 retryable: false
             });
@@ -25,7 +25,7 @@ export function assertAgentAuthorized(headers: Headers, env: Record<string, stri
     if (!passwordHash || !verifyPasswordHash(passwordHash, appPassword)) {
         throw new AgentApiError({
             code: 'unauthorized',
-            message: 'Unauthorized: invalid or missing password hash.',
+            message: '未授权：密码哈希无效或缺失。',
             status: 401,
             retryable: false
         });

@@ -43,7 +43,7 @@ export function ImageOutput({
 }: ImageOutputProps) {
     const { t } = useI18n();
     const handleSendClick = () => {
-        // Send to edit only works when a single image is selected
+        // 只有选中单张图片时才允许发送到编辑。
         if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
             onSendToEdit(imageBatch[viewMode].filename);
         }
@@ -58,9 +58,9 @@ export function ImageOutput({
             <div className='relative flex h-full w-full flex-grow items-center justify-center overflow-hidden'>
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
-                        // Show streaming preview images - single image centered like final view
+                        // 展示流式预览图，单图时和最终视图一样居中。
                         <div className='relative flex h-full w-full items-center justify-center'>
-                            {/* Show the latest preview image (highest index) */}
+                            {/* 展示最新的预览图，也就是最大索引图片。 */}
                             {(() => {
                                 const entries = Array.from(streamingPreviewImages.entries());
                                 const latestEntry = entries[entries.length - 1];
@@ -77,7 +77,7 @@ export function ImageOutput({
                                     />
                                 );
                             })()}
-                            {/* Overlay loader at bottom center */}
+                            {/* 在底部居中叠加加载状态。 */}
                             <div className='absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-white/80'>
                                 <Loader2 className='h-4 w-4 animate-spin' />
                                 <p className='text-sm'>{t('output.streaming')}</p>
@@ -193,7 +193,7 @@ export function ImageOutput({
                     disabled={!canSendToEdit}
                     className={cn(
                         'shrink-0 border-white/20 text-white/80 hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-50',
-                        // Hide button completely if grid view is active and there are multiple images
+                        // 多图网格视图下完全隐藏按钮。
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
                     )}>
                     <Send className='mr-2 h-4 w-4' />

@@ -16,21 +16,21 @@ export function validateGptImage2Size(width: number, height: number): SizeValida
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         return {
             valid: false,
-            reason: 'Width and height must be positive numbers.',
+            reason: '宽度和高度必须是正数。',
             reasonKey: 'sizeError.positive'
         };
     }
     if (!Number.isInteger(width) || !Number.isInteger(height)) {
         return {
             valid: false,
-            reason: 'Width and height must be whole numbers.',
+            reason: '宽度和高度必须是整数。',
             reasonKey: 'sizeError.whole'
         };
     }
     if (width % GPT_IMAGE_2_EDGE_MULTIPLE !== 0 || height % GPT_IMAGE_2_EDGE_MULTIPLE !== 0) {
         return {
             valid: false,
-            reason: `Both edges must be multiples of ${GPT_IMAGE_2_EDGE_MULTIPLE}.`,
+            reason: `宽边和高边都必须是 ${GPT_IMAGE_2_EDGE_MULTIPLE} 的倍数。`,
             reasonKey: 'sizeError.multiple',
             values: { multiple: GPT_IMAGE_2_EDGE_MULTIPLE }
         };
@@ -48,7 +48,7 @@ export function validateGptImage2Size(width: number, height: number): SizeValida
     if (long / short > GPT_IMAGE_2_MAX_ASPECT) {
         return {
             valid: false,
-            reason: `Aspect ratio (long:short) must be <= ${GPT_IMAGE_2_MAX_ASPECT}:1.`,
+            reason: `宽高比（长边:短边）必须小于等于 ${GPT_IMAGE_2_MAX_ASPECT}:1。`,
             reasonKey: 'sizeError.aspect',
             values: { max: GPT_IMAGE_2_MAX_ASPECT }
         };
@@ -57,7 +57,7 @@ export function validateGptImage2Size(width: number, height: number): SizeValida
     if (pixels < GPT_IMAGE_2_MIN_PIXELS) {
         return {
             valid: false,
-            reason: `Total pixels must be at least ${GPT_IMAGE_2_MIN_PIXELS.toLocaleString()}.`,
+            reason: `总像素必须至少为 ${GPT_IMAGE_2_MIN_PIXELS.toLocaleString()}。`,
             reasonKey: 'sizeError.minPixels',
             values: { min: GPT_IMAGE_2_MIN_PIXELS.toLocaleString() }
         };
@@ -65,7 +65,7 @@ export function validateGptImage2Size(width: number, height: number): SizeValida
     if (pixels > GPT_IMAGE_2_MAX_PIXELS) {
         return {
             valid: false,
-            reason: `Total pixels must be no more than ${GPT_IMAGE_2_MAX_PIXELS.toLocaleString()}.`,
+            reason: `总像素不能超过 ${GPT_IMAGE_2_MAX_PIXELS.toLocaleString()}。`,
             reasonKey: 'sizeError.maxPixels',
             values: { max: GPT_IMAGE_2_MAX_PIXELS.toLocaleString() }
         };

@@ -43,7 +43,7 @@ export function assertArtifactFilepathAllowed(filepath: string): void {
     if (isArtifactFilepathAllowed(filepath)) return;
     throw new AgentApiError({
         code: 'artifact_not_found',
-        message: 'Artifact file path is outside the configured image directory.',
+        message: '产物文件路径位于已配置图片目录之外。',
         status: 404,
         retryable: false
     });

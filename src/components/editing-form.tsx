@@ -202,14 +202,14 @@ export function EditingForm({
 
     const streamingDisabledByCount = editN[0] > 1 && !allowStreamingBatch;
 
-    // Disable streaming when editN > 1 unless batch streaming fanout is explicitly enabled.
+    // 未显式开启批量流式分发时，editN > 1 会禁用流式输出。
     React.useEffect(() => {
         if (streamingDisabledByCount && enableStreaming) {
             setEnableStreaming(false);
         }
     }, [streamingDisabledByCount, enableStreaming, setEnableStreaming]);
 
-    // 'custom' is only valid on gpt-image-2; reset when switching to a legacy model
+    // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
         if (!isGptImage2 && editSize === 'custom') {
             setEditSize('auto');
@@ -386,7 +386,7 @@ export function EditingForm({
             const dataUrl = offscreenCanvas.toDataURL('image/png');
             setEditMaskPreviewUrl(dataUrl);
         } catch (e) {
-            console.error('Error generating mask preview data URL:', e);
+            console.error('生成遮罩预览 data URL 失败：', e);
             setEditMaskPreviewUrl(null);
         }
 
@@ -396,7 +396,7 @@ export function EditingForm({
                 setEditGeneratedMaskFile(maskFile);
                 setEditIsMaskSaved(true);
             } else {
-                console.error('Failed to generate mask blob.');
+                console.error('生成遮罩 blob 失败。');
                 setEditIsMaskSaved(false);
                 setEditMaskPreviewUrl(null);
             }
@@ -434,7 +434,7 @@ export function EditingForm({
                     setSourceImagePreviewUrls((prevUrls) => [...prevUrls, ...newUrls]);
                 })
                 .catch((error) => {
-                    console.error('Error reading new image files:', error);
+                    console.error('读取新图片文件失败：', error);
                 });
 
             event.target.value = '';
@@ -485,7 +485,7 @@ export function EditingForm({
                 URL.revokeObjectURL(objectUrl);
             };
             reader.onerror = () => {
-                console.error('Error reading mask file for preview.');
+                console.error('读取遮罩预览文件失败。');
                 setEditMaskPreviewUrl(null);
                 URL.revokeObjectURL(objectUrl);
             };

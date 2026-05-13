@@ -126,8 +126,8 @@ describe('Agent route integration', () => {
         assert.equal(response.status, 422);
         const body = await response.json();
         assert.equal(body.error.code, 'validation_error');
-        assert.match(body.error.details.fields.prompt, /required/);
-        assert.match(body.error.details.fields.n, /between 1 and 10/);
+        assert.match(body.error.details.fields.prompt, /必填/);
+        assert.match(body.error.details.fields.n, /1 到 10/);
         assert.match(body.error.details.fields.response_mode, /path/);
     });
 
@@ -585,7 +585,7 @@ async function startImageUpstream(handler: () => unknown | Promise<unknown>): Pr
             response.end(JSON.stringify(body));
         } catch (error) {
             response.writeHead(500, { 'Content-Type': 'application/json' });
-            response.end(JSON.stringify({ error: { message: error instanceof Error ? error.message : 'upstream failure' } }));
+            response.end(JSON.stringify({ error: { message: error instanceof Error ? error.message : '上游失败' } }));
         }
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -635,5 +635,5 @@ async function waitFor(predicate: () => boolean): Promise<void> {
         if (predicate()) return;
         await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    throw new Error('condition was not met in time');
+    throw new Error('等待条件超时');
 }

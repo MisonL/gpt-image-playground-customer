@@ -32,7 +32,7 @@ export async function GET() {
         });
     } catch (error) {
         return NextResponse.json(
-            { error: error instanceof Error ? error.message : 'Configuration error' },
+            { error: error instanceof Error ? error.message : '配置错误' },
             { status: 500 }
         );
     }

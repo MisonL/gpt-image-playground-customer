@@ -64,7 +64,7 @@ export function readIdempotencyKey(headers: Headers): string {
     if (!value) {
         throw new AgentApiError({
             code: 'idempotency_key_required',
-            message: 'Idempotency-Key header is required for Agent image requests.',
+            message: 'Agent 图片请求必须提供 Idempotency-Key header。',
             status: 400,
             retryable: false
         });
@@ -75,7 +75,7 @@ export function readIdempotencyKey(headers: Headers): string {
             message: 'Idempotency-Key is too long.',
             status: 422,
             retryable: false,
-            details: { fields: { 'Idempotency-Key': 'must be 200 characters or fewer' } }
+            details: { fields: { 'Idempotency-Key': '长度不能超过 200 个字符' } }
         });
     }
     return value;
@@ -209,13 +209,13 @@ export async function executeAgentEdit(options: {
 export async function parseAgentGenerateRequest(request: Request): Promise<AgentGenerateRequest> {
     const contentType = request.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-        throw new RequestValidationError('Agent generate endpoint requires application/json.', 415);
+        throw new RequestValidationError('Agent 生成端点要求使用 application/json。', 415);
     }
     let body: unknown;
     try {
         body = await request.json();
     } catch {
-        throw new RequestValidationError('Request body must be valid JSON.', 422);
+        throw new RequestValidationError('请求正文必须是有效 JSON。', 422);
     }
     return validateAgentGenerateRequest(body);
 }
@@ -223,12 +223,12 @@ export async function parseAgentGenerateRequest(request: Request): Promise<Agent
 export async function parseAgentEditFormData(request: Request): Promise<FormData> {
     const contentType = request.headers.get('content-type') || '';
     if (!contentType.includes('multipart/form-data')) {
-        throw new RequestValidationError('Agent edit endpoint requires multipart/form-data.', 415);
+        throw new RequestValidationError('Agent 编辑端点要求使用 multipart/form-data。', 415);
     }
     try {
         return await request.formData();
     } catch {
-        throw new RequestValidationError('Request body must be valid multipart/form-data.', 422);
+        throw new RequestValidationError('请求正文必须是有效的 multipart/form-data。', 422);
     }
 }
 
@@ -242,7 +242,7 @@ export async function deleteAgentArtifactFiles(store: AgentStateStore, id: strin
         error: {
             error: {
                 code: 'artifact_not_found',
-                message: 'Artifact was deleted.',
+                message: '产物已删除。',
                 retryable: false,
                 request_id: artifact.requestId
             }
@@ -282,7 +282,7 @@ export async function completeAgentExecutionState(
 export function createArtifactPersistenceError(): AgentApiError {
     return new AgentApiError({
         code: 'unexpected_error',
-        message: 'Failed to persist artifact metadata.',
+        message: '保存产物元数据失败。',
         status: 500,
         retryable: true
     });
@@ -291,7 +291,7 @@ export function createArtifactPersistenceError(): AgentApiError {
 export function createCompletionPersistenceError(): AgentApiError {
     return new AgentApiError({
         code: 'unexpected_error',
-        message: 'Failed to persist request completion state.',
+        message: '保存请求完成状态失败。',
         status: 500,
         retryable: true
     });
@@ -349,7 +349,7 @@ function createOpenAiClient(headers: Headers): CredentialContext {
     if (!apiKey) {
         throw new AgentApiError({
             code: 'configuration_error',
-            message: 'No server API key is configured. Set OPENAI_API_KEY or OPENAI_CHANNEL_N_API_KEYS.',
+            message: '未配置服务端 API Key。请设置 OPENAI_API_KEY 或 OPENAI_CHANNEL_N_API_KEYS。',
             status: 500,
             retryable: false
         });
@@ -406,8 +406,8 @@ async function persistOpenAiImages(options: {
             code: 'upstream_unavailable',
             message:
                 error instanceof MissingOpenAiImageDataError
-                    ? `Image data at index ${error.index} is missing base64 data.`
-                    : 'Upstream returned an empty Images response.',
+                    ? `索引 ${error.index} 的图片数据缺少 base64 数据。`
+                    : '上游返回了空的 Images 响应。',
             status: 502,
             retryable: true,
             upstreamStatus: 502,
@@ -475,7 +475,7 @@ function readAgentResponseModeFromForm(formData: FormData): AgentResponseMode {
     const value = formData.get('response_mode');
     if (value === null) return 'path';
     if (value === 'path' || value === 'base64' || value === 'both') return value;
-    throw new RequestValidationError('response_mode must be path, base64, or both.', 422);
+    throw new RequestValidationError('response_mode 必须是 path、base64 或 both。', 422);
 }
 
 function readAgentResponseModeFromRequestJson(requestJson: unknown): AgentResponseMode {

@@ -47,7 +47,7 @@ export function getAgentStateStore(env: Record<string, string | undefined> = pro
     }
     if (backend === 'postgres') {
         if (!env.AGENT_DATABASE_URL) {
-            throw new Error('AGENT_DATABASE_URL is required when AGENT_STATE_BACKEND=postgres.');
+            throw new Error('AGENT_STATE_BACKEND=postgres 时必须设置 AGENT_DATABASE_URL。');
         }
         const store = new PostgresAgentStateStore(env.AGENT_DATABASE_URL);
         cachedStore = { backend, key, store, initPromise: store.init() };
