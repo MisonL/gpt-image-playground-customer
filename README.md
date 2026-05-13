@@ -15,7 +15,7 @@ GPT Image Playground 是一个用于本地部署的 `gpt-image-2` 图片服务�
 - 使用 OpenAI 兼容接口时，快速确认 API URL、模型、尺寸、质量、输出格式和错误响应是否正确。
 
 <p align="center">
-  <img src="./readme-images/interface.jpg" alt="GPT Image Playground interface" width="900"/>
+  <img src="./readme-images/interface.jpg" alt="GPT Image Playground 界面" width="900"/>
 </p>
 
 > **4K 出图提示**：如果遇到 4K 分辨率出图失败问题（状态码 `524`），请使用 [superapi 站](https://superapi.buzz/register?aff=W0rz) 提供的 `gpt-image-2` 渠道。该渠道已适配支持 4K 流式出图，价格便宜（`0.0075` 元/张）。
@@ -124,18 +124,24 @@ http://localhost:4783
 - 内置遮罩工具：直接在图片上绘制遮罩，也可以上传 PNG 遮罩。
 - 完整参数控制：模型、尺寸、质量、输出格式、压缩、背景、审核级别、生成数量。
 - 4K 与自定义尺寸：支持 2K/4K 预设和手动输入宽高，并在前端校验尺寸约束。
-- 流式输出：支持生成和编辑过程中的 partial image 预览。
-- 历史记录：保留提示词、参数、图片、耗时、token usage 和估算费用。
+- 流式输出：默认开启，支持生成和编辑过程中的局部图片预览。
+- 历史记录：保留提示词、参数、图片、耗时、token 使用量和估算费用。
 - 发送到编辑：从生成结果或历史记录直接进入编辑模式。
 - 双语和主题：支持中文、英文、亮色、暗色。
 - 两种图片存储模式：服务端文件系统或浏览器 IndexedDB。
+
+## 默认行为
+
+- 图片生成默认使用 `quality=high`。如需降低成本或让上游自行选择质量，可在页面或 Agent 请求中显式改为 `auto`、`medium` 或 `low`。
+- 页面默认开启流式预览；并发流式批处理仍默认关闭，只有设置 `ENABLE_STREAMING_BATCH=true` 后才会把 `n>1` 拆成多个流式任务。
+- 流式请求失败时会显示原始错误状态和排查建议，不会自动改用非流式请求，以避免隐藏网关、限流或上游故障。
 
 ## 编辑与遮罩
 
 编辑模式支持最多 10 张源图。遮罩必须与源图尺寸一致，绘制或上传后会随编辑请求一起提交。
 
 <p align="center">
-  <img src="./readme-images/mask-creation.jpg" alt="Mask creation" width="460"/>
+  <img src="./readme-images/mask-creation.jpg" alt="遮罩创建" width="460"/>
 </p>
 
 ## 历史与费用
@@ -143,11 +149,11 @@ http://localhost:4783
 历史面板会记录每次生成或编辑的参数和结果。返回 usage 的接口会显示 token 明细和估算费用，方便对比不同模型和参数的成本。
 
 <p align="center">
-  <img src="./readme-images/history.jpg" alt="History panel" width="900"/>
+  <img src="./readme-images/history.jpg" alt="历史面板" width="900"/>
 </p>
 
 <p align="center">
-  <img src="./readme-images/cost-breakdown.jpg" alt="Cost breakdown" width="460"/>
+  <img src="./readme-images/cost-breakdown.jpg" alt="费用明细" width="460"/>
 </p>
 
 ## API 设置
@@ -222,17 +228,19 @@ curl -s http://localhost:4783/api/agent/images/generate \
 }
 ```
 
+未显式传 `quality` 时，Agent 生成接口默认使用 `high`。需要使用其他质量时，在 JSON 请求中传入 `"quality":"auto"`、`"medium"` 或 `"low"`。
+
 错误响应固定为：
 
 ```json
 {
   "error": {
     "code": "validation_error",
-    "message": "Request validation failed.",
+    "message": "请求校验失败。",
     "retryable": false,
     "details": {
       "fields": {
-        "n": "must be an integer between 1 and 10"
+        "n": "必须是 1 到 10 之间的整数"
       }
     },
     "request_id": "uuid"
@@ -449,6 +457,6 @@ docker logs -f gpt-image-playground-customer
 
 版本变更和未发布改动记录在 [CHANGELOG.md](./CHANGELOG.md)。
 
-## License
+## 许可证
 
 MIT

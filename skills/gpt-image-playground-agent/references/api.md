@@ -1,14 +1,14 @@
-# GPT Image Playground Agent API Reference
+# GPT Image Playground Agent API 参考
 
-## Capabilities
+## 能力查询
 
 ```http
 GET /api/agent/capabilities
 ```
 
-Returns API version, supported models, limits, authentication schemes, storage mode, idempotency settings, and endpoint paths.
+返回 API 版本、支持的模型、限制、鉴权方式、存储模式、幂等设置和端点路径。
 
-## Generate
+## 生成图片
 
 ```http
 POST /api/agent/images/generate
@@ -17,7 +17,7 @@ Idempotency-Key: <stable-key>
 Content-Type: application/json
 ```
 
-Request:
+请求：
 
 ```json
 {
@@ -25,7 +25,7 @@ Request:
   "model": "gpt-image-2",
   "n": 1,
   "size": "1024x1024",
-  "quality": "auto",
+  "quality": "high",
   "output_format": "png",
   "background": "auto",
   "moderation": "auto",
@@ -33,7 +33,7 @@ Request:
 }
 ```
 
-Response:
+响应：
 
 ```json
 {
@@ -58,7 +58,7 @@ Response:
 }
 ```
 
-## Edit
+## 编辑图片
 
 ```http
 POST /api/agent/images/edit
@@ -67,18 +67,18 @@ Idempotency-Key: <stable-key>
 Content-Type: multipart/form-data
 ```
 
-Fields:
+字段：
 
-- `prompt`: required.
-- `model`: defaults to `gpt-image-2`.
-- `n`: `1..10`, defaults to `1`.
-- `size`: `auto` or a supported size.
-- `quality`: `low`, `medium`, `high`, or `auto`.
-- `response_mode`: `path`, `base64`, or `both`.
-- `image_0..image_9`: source images.
-- `mask`: optional PNG mask.
+- `prompt`：必填。
+- `model`：默认 `gpt-image-2`。
+- `n`：`1..10`，默认 `1`。
+- `size`：`auto` 或支持的尺寸。
+- `quality`：`low`、`medium`、`high` 或 `auto`。
+- `response_mode`：`path`、`base64` 或 `both`。
+- `image_0..image_9`：源图片。
+- `mask`：可选 PNG 遮罩。
 
-## Artifact Metadata
+## 产物元数据
 
 ```http
 GET /api/agent/artifacts/{id}
@@ -86,21 +86,21 @@ GET /api/agent/artifacts/{id}/content
 DELETE /api/agent/artifacts/{id}
 ```
 
-All artifact endpoints require the same authentication as generation.
+所有产物端点都需要和生成接口相同的鉴权。
 
-## Errors
+## 错误
 
-Errors are structured:
+错误使用结构化格式：
 
 ```json
 {
   "error": {
     "code": "validation_error",
-    "message": "Request validation failed.",
+    "message": "请求校验失败。",
     "retryable": false,
     "details": {
       "fields": {
-        "n": "must be an integer between 1 and 10"
+        "n": "必须是 1 到 10 之间的整数"
       }
     },
     "request_id": "uuid"
@@ -108,7 +108,7 @@ Errors are structured:
 }
 ```
 
-Common codes:
+常见错误码：
 
 - `validation_error`
 - `unauthorized`
