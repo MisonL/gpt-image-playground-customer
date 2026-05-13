@@ -15,15 +15,16 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=4783
+ENV HOSTNAME=0.0.0.0
 
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/package-lock.json ./package-lock.json
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 
-RUN mkdir -p /app/generated-images && chown -R node:node /app
+RUN printf '{"name":"gpt-image-playground","version":"1.3.0","private":true,"scripts":{"start":"node server.js"}}\n' > package.json \
+    && mkdir -p /app/generated-images \
+    && chown -R node:node /app
 USER node
 
 EXPOSE 4783
-CMD ["npm", "run", "start"]
+CMD ["node", "server.js"]

@@ -5,6 +5,7 @@ import type { ValidOutputFormat } from './image-request-utils';
 export type FilenameClock = () => number;
 
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
+const ONE_DAY_SECONDS = 24 * 60 * 60;
 
 export const outputDir = path.resolve(process.cwd(), 'generated-images');
 
@@ -20,6 +21,42 @@ export function verifyPasswordHash(clientPasswordHash: string, serverPassword: s
     const clientBuffer = Buffer.from(clientPasswordHash, 'hex');
     const serverBuffer = Buffer.from(serverPasswordHash, 'hex');
     return clientBuffer.length === serverBuffer.length && crypto.timingSafeEqual(clientBuffer, serverBuffer);
+}
+
+export function createAccessToken(serverPassword: string): string {
+    return sha256(`gpt-image-access:${serverPassword}`);
+}
+
+export function verifyAccessToken(clientAccessToken: string | undefined, serverPassword: string | undefined): boolean {
+    if (!serverPassword) {
+        return true;
+    }
+    if (!clientAccessToken || !SHA256_HEX_PATTERN.test(clientAccessToken)) {
+        return false;
+    }
+
+    const expectedAccessToken = createAccessToken(serverPassword);
+    const clientBuffer = Buffer.from(clientAccessToken, 'hex');
+    const expectedBuffer = Buffer.from(expectedAccessToken, 'hex');
+    return clientBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(clientBuffer, expectedBuffer);
+}
+
+export function isHttpsRequest(headers: Headers): boolean {
+    const forwardedProto = headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+    const forwardedSsl = headers.get('x-forwarded-ssl')?.trim().toLowerCase();
+    const forwardedScheme = headers.get('x-forwarded-scheme')?.split(',')[0]?.trim().toLowerCase();
+
+    return forwardedProto === 'https' || forwardedScheme === 'https' || forwardedSsl === 'on';
+}
+
+export function buildAccessCookieOptions(headers?: Headers) {
+    return {
+        httpOnly: true,
+        sameSite: 'lax' as const,
+        secure: headers ? isHttpsRequest(headers) : false,
+        path: '/',
+        maxAge: ONE_DAY_SECONDS
+    };
 }
 
 export function createBatchId(): string {

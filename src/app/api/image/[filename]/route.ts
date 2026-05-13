@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import { RequestValidationError, isValidImageFilename } from '@/lib/image-request-utils';
+import { verifyAccessToken } from '@/lib/server-runtime';
 import { lookup } from 'mime-types';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
@@ -9,6 +10,10 @@ const imageBaseDir = path.resolve(process.cwd(), 'generated-images');
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ filename: string }> }) {
     const { filename } = await params;
+    const appPassword = process.env.APP_PASSWORD;
+    if (!verifyAccessToken(request.cookies.get('gptImageAccess')?.value, appPassword)) {
+        return NextResponse.json({ error: 'Unauthorized: Invalid access token.' }, { status: 401 });
+    }
 
     if (!filename) {
         return NextResponse.json({ error: 'Filename is required' }, { status: 400 });

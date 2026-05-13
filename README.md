@@ -342,3 +342,62 @@ docker logs -f gpt-image-playground-customer
 ## License
 
 MIT
+
+## Docker Hub 发布与运行
+
+镜像不会内置 `OPENAI_API_KEY`、`OPENAI_API_BASE_URL` 或 `APP_PASSWORD`。运行容器时通过环境变量传入。
+
+### docker run
+
+Linux/macOS：
+
+```bash
+docker run -d \
+  --name gpt-image-playground-customer \
+  --restart unless-stopped \
+  -p 4783:4783 \
+  -e OPENAI_API_KEY \
+  -e OPENAI_API_BASE_URL \
+  -e APP_PASSWORD \
+  -e NEXT_PUBLIC_IMAGE_STORAGE_MODE="fs" \
+  -v "$(pwd)/generated-images:/app/generated-images" \
+  kwokyde/gpt-image-playground:latest
+```
+
+Windows PowerShell：
+
+```powershell
+docker run -d `
+  --name gpt-image-playground-customer `
+  --restart unless-stopped `
+  -p 4783:4783 `
+  -e OPENAI_API_KEY `
+  -e OPENAI_API_BASE_URL `
+  -e APP_PASSWORD `
+  -e NEXT_PUBLIC_IMAGE_STORAGE_MODE="fs" `
+  -v "${PWD}\generated-images:/app/generated-images" `
+  kwokyde/gpt-image-playground:latest
+```
+
+### Docker Compose 拉取镜像运行
+
+`docker-compose.yml` 已使用镜像 `kwokyde/gpt-image-playground:latest`。准备 `.env.local`：
+
+```dotenv
+# Add your own OPENAI_API_KEY, OPENAI_API_BASE_URL, and APP_PASSWORD values here.
+```
+
+拉取 Docker Hub 镜像并运行：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+如果要在本地重新构建镜像再运行：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+当前 Dockerfile 使用 Next.js standalone 输出，运行镜像只包含独立服务文件、静态资源和必要依赖，不再复制完整 `node_modules`。

@@ -54,6 +54,45 @@ type StreamingEvent = {
     error?: string;
 };
 
+function isClosedStreamControllerError(error: unknown): boolean {
+    return error instanceof TypeError && /controller is already closed|invalid state/i.test(error.message);
+}
+
+function createSseWriter(controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder) {
+    let isClosed = false;
+
+    return {
+        send(event: StreamingEvent): boolean {
+            if (isClosed) {
+                return false;
+            }
+            try {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+                return true;
+            } catch (error) {
+                if (isClosedStreamControllerError(error)) {
+                    isClosed = true;
+                    return false;
+                }
+                throw error;
+            }
+        },
+        close() {
+            if (isClosed) {
+                return;
+            }
+            isClosed = true;
+            try {
+                controller.close();
+            } catch (error) {
+                if (!isClosedStreamControllerError(error)) {
+                    throw error;
+                }
+            }
+        }
+    };
+}
+
 function reportServerCredentialFailure(credential: ChannelCredential | undefined, error: unknown) {
     const serverChannelRouter = getServerChannelState().router;
     if (!credential || !serverChannelRouter) {
@@ -220,6 +259,7 @@ export async function POST(request: NextRequest) {
 
                 const readableStream = new ReadableStream({
                     async start(controller) {
+                        const sse = createSseWriter(controller, encoder);
                         try {
                             const completedImages: Array<{
                                 filename: string;
@@ -238,7 +278,7 @@ export async function POST(request: NextRequest) {
                                         partial_image_index: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
+                                    sse.send(partialEvent);
                                 } else if (event.type === 'image_generation.completed') {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
@@ -267,7 +307,7 @@ export async function POST(request: NextRequest) {
                                         path: effectiveStorageMode === 'fs' ? `/api/image/${filename}` : undefined,
                                         output_format: fileExtension
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
+                                    sse.send(completedEvent);
 
                                     imageIndex++;
 
@@ -284,8 +324,8 @@ export async function POST(request: NextRequest) {
                                 images: completedImages,
                                 usage: finalUsage
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
-                            controller.close();
+                            sse.send(doneEvent);
+                            sse.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
                             appLogger.error('Streaming error:', error);
@@ -293,8 +333,8 @@ export async function POST(request: NextRequest) {
                                 type: 'error',
                                 error: error instanceof Error ? error.message : 'Streaming error occurred'
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
-                            controller.close();
+                            sse.send(errorEvent);
+                            sse.close();
                         }
                     }
                 });
@@ -353,6 +393,7 @@ export async function POST(request: NextRequest) {
 
                 const readableStream = new ReadableStream({
                     async start(controller) {
+                        const sse = createSseWriter(controller, encoder);
                         try {
                             const completedImages: Array<{
                                 filename: string;
@@ -371,7 +412,7 @@ export async function POST(request: NextRequest) {
                                         partial_image_index: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
+                                    sse.send(partialEvent);
                                 } else if (event.type === 'image_edit.completed') {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
@@ -400,7 +441,7 @@ export async function POST(request: NextRequest) {
                                         path: effectiveStorageMode === 'fs' ? `/api/image/${filename}` : undefined,
                                         output_format: fileExtension
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
+                                    sse.send(completedEvent);
 
                                     imageIndex++;
 
@@ -417,8 +458,8 @@ export async function POST(request: NextRequest) {
                                 images: completedImages,
                                 usage: finalUsage
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
-                            controller.close();
+                            sse.send(doneEvent);
+                            sse.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
                             appLogger.error('Streaming edit error:', error);
@@ -426,8 +467,8 @@ export async function POST(request: NextRequest) {
                                 type: 'error',
                                 error: error instanceof Error ? error.message : 'Streaming error occurred'
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
-                            controller.close();
+                            sse.send(errorEvent);
+                            sse.close();
                         }
                     }
                 });

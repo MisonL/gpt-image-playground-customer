@@ -8,9 +8,11 @@ import { HistoryPanel } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { sha256Hex } from '@/lib/sha256';
 import { getPresetDimensions } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
@@ -23,6 +25,7 @@ import {
     type StreamingBatchJob
 } from '@/lib/streaming-batch';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { Lock } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -200,6 +203,7 @@ export default function HomePage() {
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
+    const [isEntryAuthenticated, setIsEntryAuthenticated] = React.useState(false);
     const [isLoading, setIsLoading] = React.useState(false);
     const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
@@ -253,8 +257,8 @@ export default function HomePage() {
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
 
     // Streaming state (shared between generate and edit modes)
-    const [enableStreaming, setEnableStreaming] = React.useState(false);
-    const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(2);
+    const [enableStreaming, setEnableStreaming] = React.useState(true);
+    const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(1);
     // Streaming preview images (base64 data URLs for partial images during streaming)
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
@@ -305,6 +309,16 @@ export default function HomePage() {
         };
     }, [editSourceImagePreviewUrls]);
 
+    const verifyEntryPasswordHash = React.useCallback(async (passwordHash: string): Promise<boolean> => {
+        const response = await fetch('/api/auth-verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ passwordHash })
+        });
+
+        return response.ok;
+    }, []);
+
     React.useEffect(() => {
         const fetchAuthStatus = async () => {
             try {
@@ -313,19 +327,38 @@ export default function HomePage() {
                     throw new Error('Failed to fetch auth status');
                 }
                 const data = await response.json();
-                setIsPasswordRequiredByBackend(data.passwordRequired);
+                const passwordRequired = Boolean(data.passwordRequired);
+                setIsPasswordRequiredByBackend(passwordRequired);
+
+                const storedPasswordHash = readLocalStorageValue('clientPasswordHash');
+                if (!passwordRequired) {
+                    setClientPasswordHash(storedPasswordHash);
+                    setIsEntryAuthenticated(true);
+                    return;
+                }
+
+                if (storedPasswordHash && (await verifyEntryPasswordHash(storedPasswordHash))) {
+                    setClientPasswordHash(storedPasswordHash);
+                    setIsEntryAuthenticated(true);
+                    return;
+                }
+
+                localStorage.removeItem('clientPasswordHash');
+                setClientPasswordHash(null);
+                setPasswordDialogContext('initial');
+                setIsEntryAuthenticated(false);
             } catch (error) {
                 console.error('Error fetching auth status:', error);
                 setIsPasswordRequiredByBackend(false);
+                setIsEntryAuthenticated(true);
             }
         };
 
         fetchAuthStatus();
         queueMicrotask(() => {
-            setClientPasswordHash(readLocalStorageValue('clientPasswordHash'));
             setApiSettings(readStoredApiSettings());
         });
-    }, []);
+    }, [verifyEntryPasswordHash]);
 
     const refreshRuntimeCapabilities = React.useCallback(async (): Promise<RuntimeCapabilities | null> => {
         try {
@@ -410,24 +443,25 @@ export default function HomePage() {
         };
     }, [mode, editImageFiles.length, t]);
 
-    async function sha256Client(text: string): Promise<string> {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(text);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-        return hashHex;
-    }
-
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
             setError(t('password.empty'));
             return;
         }
         try {
-            const hash = await sha256Client(password);
+            const hash = await sha256Hex(password);
+            if (isPasswordRequiredByBackend && !(await verifyEntryPasswordHash(hash))) {
+                localStorage.removeItem('clientPasswordHash');
+                setClientPasswordHash(null);
+                setIsEntryAuthenticated(false);
+                setError(t('error.unauthorized'));
+                setIsPasswordDialogOpen(true);
+                return;
+            }
+
             localStorage.setItem('clientPasswordHash', hash);
             setClientPasswordHash(hash);
+            setIsEntryAuthenticated(true);
             setError(null);
             setIsPasswordDialogOpen(false);
             if (passwordDialogContext === 'retry' && lastApiCallArgs) {
@@ -1042,6 +1076,8 @@ export default function HomePage() {
         setItemToDeleteConfirm(null);
     }, []);
 
+    const showEntryLock = isPasswordRequiredByBackend === true && !isEntryAuthenticated;
+
     return (
         <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 md:p-8 lg:p-12'>
             <PasswordDialog
@@ -1063,6 +1099,34 @@ export default function HomePage() {
                     onSave={handleSaveApiSettings}
                 />
             ) : null}
+            {showEntryLock ? (
+                <div className='flex min-h-[70vh] w-full max-w-md flex-col items-center justify-center gap-6 text-center'>
+                    <div className='flex size-14 items-center justify-center rounded-full border border-white/15 bg-black text-white'>
+                        <Lock className='h-6 w-6' />
+                    </div>
+                    <div className='space-y-2'>
+                        <h1 className='text-2xl font-semibold text-white'>{t('password.required')}</h1>
+                        <p className='text-sm text-white/60'>{t('password.entryDescription')}</p>
+                    </div>
+                    {error && (
+                        <Alert variant='destructive' className='border-red-500/50 bg-red-900/20 text-left text-red-300'>
+                            <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
+                            <AlertDescription>{error}</AlertDescription>
+                        </Alert>
+                    )}
+                    <Button
+                        type='button'
+                        onClick={() => {
+                            setError(null);
+                            setPasswordDialogContext('initial');
+                            setIsPasswordDialogOpen(true);
+                        }}
+                        className='bg-white px-6 text-black hover:bg-white/90'>
+                        {t('password.unlock')}
+                    </Button>
+                </div>
+            ) : null}
+            {!showEntryLock && isPasswordRequiredByBackend !== null ? (
             <div className='w-full max-w-screen-2xl space-y-6'>
                 <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
                 <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
@@ -1191,6 +1255,7 @@ export default function HomePage() {
                     />
                 </div>
             </div>
+            ) : null}
         </main>
     );
 }
