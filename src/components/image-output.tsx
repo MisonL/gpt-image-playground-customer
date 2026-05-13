@@ -1,10 +1,19 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle
+} from '@/components/ui/dialog';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
-import { Loader2, Send, Grid } from 'lucide-react';
+import { Grid, Loader2, Send, Terminal, Trash2 } from 'lucide-react';
 import Image from 'next/image';
+import * as React from 'react';
 
 type ImageInfo = {
     path: string;
@@ -21,7 +30,24 @@ type ImageOutputProps = {
     currentMode: 'generate' | 'edit';
     baseImagePreviewUrl: string | null;
     streamingPreviewImages?: Map<number, string>;
+    clientPasswordHash: string | null;
+    canOpenLogs: boolean;
+    openLogsSignal?: number;
 };
+
+type LogEntry = {
+    id: number;
+    at: string;
+    level: 'debug' | 'info' | 'warn' | 'error';
+    message: string;
+    context?: string;
+};
+
+function formatLogTime(value: string): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleTimeString();
+}
 
 const getGridColsClass = (count: number): string => {
     if (count <= 1) return 'grid-cols-1';
@@ -39,15 +65,111 @@ export function ImageOutput({
     onSendToEdit,
     currentMode,
     baseImagePreviewUrl,
-    streamingPreviewImages
+    streamingPreviewImages,
+    clientPasswordHash,
+    canOpenLogs,
+    openLogsSignal
 }: ImageOutputProps) {
     const { t } = useI18n();
+    const [isLogDialogOpen, setIsLogDialogOpen] = React.useState(false);
+    const [logs, setLogs] = React.useState<LogEntry[]>([]);
+    const [logConnectionState, setLogConnectionState] = React.useState<'idle' | 'connected' | 'error'>('idle');
+    const logEndRef = React.useRef<HTMLDivElement | null>(null);
+
     const handleSendClick = () => {
         // 只有选中单张图片时才允许发送到编辑。
         if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
             onSendToEdit(imageBatch[viewMode].filename);
         }
     };
+
+    const handleLogDialogOpenChange = (open: boolean) => {
+        setIsLogDialogOpen(open);
+        if (!open) {
+            setLogConnectionState('idle');
+        }
+    };
+
+    React.useEffect(() => {
+        if (!isLogDialogOpen || !canOpenLogs) return;
+
+        const abortController = new AbortController();
+        const readLogs = async () => {
+            try {
+                const response = await fetch('/api/logs', {
+                    headers: clientPasswordHash ? { Authorization: `Bearer ${clientPasswordHash}` } : {},
+                    signal: abortController.signal
+                });
+                if (!response.ok || !response.body) {
+                    setLogConnectionState('error');
+                    return;
+                }
+
+                setLogConnectionState('connected');
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                const processEvent = (rawEvent: string) => {
+                    const dataLines = rawEvent
+                        .split(/\r?\n/)
+                        .filter((line) => line.startsWith('data: '))
+                        .map((line) => line.slice(6));
+                    if (dataLines.length === 0) return;
+
+                    let entry: LogEntry;
+                    try {
+                        entry = JSON.parse(dataLines.join('\n')) as LogEntry;
+                    } catch (error) {
+                        console.error('解析日志事件失败。', error);
+                        return;
+                    }
+
+                    setLogs((prevLogs) => {
+                        const nextLogs = prevLogs.some((log) => log.id === entry.id)
+                            ? prevLogs
+                            : [...prevLogs, entry].slice(-300);
+                        return nextLogs;
+                    });
+                };
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const events = buffer.split(/\n\n|\r\n\r\n/);
+                    buffer = events.pop() || '';
+                    events.forEach(processEvent);
+                }
+
+                const remainingEvent = buffer.trim();
+                if (remainingEvent) {
+                    processEvent(remainingEvent);
+                }
+            } catch (error) {
+                if (abortController.signal.aborted) return;
+                console.error('读取日志流失败。', error);
+                setLogConnectionState('error');
+            }
+        };
+
+        void readLogs();
+
+        return () => {
+            abortController.abort();
+        };
+    }, [canOpenLogs, clientPasswordHash, isLogDialogOpen]);
+
+    React.useEffect(() => {
+        if (!isLogDialogOpen) return;
+        logEndRef.current?.scrollIntoView({ block: 'end' });
+    }, [isLogDialogOpen, logs]);
+
+    React.useEffect(() => {
+        if (!openLogsSignal || !canOpenLogs) return;
+        queueMicrotask(() => setIsLogDialogOpen(true));
+    }, [canOpenLogs, openLogsSignal]);
 
     const showCarousel = imageBatch && imageBatch.length > 1;
     const isSingleImageView = typeof viewMode === 'number';
@@ -138,13 +260,76 @@ export function ImageOutput({
                         </div>
                     )
                 ) : (
-                    <div className='text-center text-white/60'>
-                        <p>{t('output.empty')}</p>
+                    <div className='mx-auto max-w-sm text-center'>
+                        <p className='text-base font-medium text-white/70'>{t('output.emptyTitle')}</p>
+                        <p className='mt-2 text-sm leading-6 text-white/45'>{t('output.emptyDescription')}</p>
+                        {canOpenLogs && (
+                            <Button
+                                variant='outline'
+                                size='sm'
+                                onClick={() => setIsLogDialogOpen(true)}
+                                className='mt-4 border-white/20 text-white/75 hover:bg-white/10 hover:text-white'>
+                                <Terminal className='mr-2 h-4 w-4' />
+                                {t('logs.open')}
+                            </Button>
+                        )}
                     </div>
                 )}
             </div>
 
-            <div className='flex h-10 w-full shrink-0 items-center justify-center gap-4'>
+            <Dialog open={isLogDialogOpen} onOpenChange={handleLogDialogOpenChange}>
+                <DialogContent className='border-white/20 bg-black text-white sm:max-w-[760px]'>
+                    <DialogHeader>
+                        <DialogTitle className='text-white'>{t('logs.title')}</DialogTitle>
+                        <DialogDescription className='text-white/60'>{t('logs.description')}</DialogDescription>
+                    </DialogHeader>
+                    <div className='flex items-center justify-between rounded-md border border-white/10 bg-neutral-900 px-3 py-2 text-xs text-white/60'>
+                        <span>{t(`logs.status.${logConnectionState}`)}</span>
+                        <span>{t('logs.count', { count: logs.length })}</span>
+                    </div>
+                    <div className='h-[420px] overflow-y-auto rounded-md border border-white/10 bg-neutral-950 p-3 font-mono text-xs leading-5 text-white/80'>
+                        {logs.length === 0 ? (
+                            <p className='text-white/40'>{t('logs.empty')}</p>
+                        ) : (
+                            logs.map((entry) => (
+                                <div key={entry.id} className='border-b border-white/5 py-2 last:border-b-0'>
+                                    <div className='flex flex-wrap items-center gap-2'>
+                                        <span className='text-white/40'>{formatLogTime(entry.at)}</span>
+                                        <span
+                                            className={cn(
+                                                'rounded border px-1.5 py-0.5 uppercase',
+                                                entry.level === 'error' && 'border-red-400/40 text-red-200',
+                                                entry.level === 'warn' && 'border-yellow-400/40 text-yellow-200',
+                                                entry.level === 'info' && 'border-blue-300/30 text-blue-100',
+                                                entry.level === 'debug' && 'border-white/20 text-white/50'
+                                            )}>
+                                            {entry.level}
+                                        </span>
+                                        <span className='break-all text-white/90'>{entry.message}</span>
+                                    </div>
+                                    {entry.context ? (
+                                        <pre className='mt-1 whitespace-pre-wrap break-words text-white/50'>{entry.context}</pre>
+                                    ) : null}
+                                </div>
+                            ))
+                        )}
+                        <div ref={logEndRef} />
+                    </div>
+                    <DialogFooter>
+                        <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            onClick={() => setLogs([])}
+                            className='border-white/20 text-white/80 hover:bg-white/10 hover:text-white'>
+                            <Trash2 className='mr-2 h-4 w-4' />
+                            {t('logs.clear')}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <div className='flex h-10 w-full shrink-0 items-center justify-center gap-3'>
                 {showCarousel && (
                     <div className='flex items-center gap-1.5 rounded-md border border-white/10 bg-neutral-800/50 p-1'>
                         <Button
@@ -186,13 +371,24 @@ export function ImageOutput({
                     </div>
                 )}
 
+                {canOpenLogs && (
+                    <Button
+                        variant='outline'
+                        size='sm'
+                        onClick={() => setIsLogDialogOpen(true)}
+                        className='shrink-0 border-white/20 text-white/80 hover:bg-white/10 hover:text-white'>
+                        <Terminal className='mr-2 h-4 w-4' />
+                        {t('logs.open')}
+                    </Button>
+                )}
+
                 <Button
                     variant='outline'
                     size='sm'
                     onClick={handleSendClick}
                     disabled={!canSendToEdit}
                     className={cn(
-                        'shrink-0 border-white/20 text-white/80 hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-50',
+                        'shrink-0 border-white/20 text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50',
                         // 多图网格视图下完全隐藏按钮。
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
                     )}>

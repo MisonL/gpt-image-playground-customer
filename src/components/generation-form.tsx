@@ -20,6 +20,8 @@ import {
     RectangleHorizontal,
     RectangleVertical,
     Sparkles,
+    SlidersHorizontal,
+    ChevronDown,
     Eraser,
     ShieldCheck,
     ShieldAlert,
@@ -100,16 +102,20 @@ const RadioItemWithIcon = ({
     Icon: React.ElementType;
     disabled?: boolean;
 }) => (
-    <div className='flex items-center space-x-2'>
+    <div className='group relative'>
         <RadioGroupItem
             value={value}
             id={id}
-            className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
+            className='peer sr-only'
         />
         <Label
             htmlFor={id}
-            className={`flex items-center gap-2 text-base ${disabled ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
-            <Icon className='h-5 w-5 text-white/60' />
+            className={`flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm transition-all peer-data-[state=checked]:border-white peer-data-[state=checked]:bg-white peer-data-[state=checked]:text-black ${
+                disabled
+                    ? 'cursor-not-allowed border-white/10 text-white/40'
+                    : 'cursor-pointer border-white/20 text-white/80 hover:-translate-y-0.5 hover:border-white/50 hover:bg-white/10 hover:text-white active:translate-y-0'
+            }`}>
+            <Icon className='h-4 w-4 text-current opacity-70' />
             {label}
         </Label>
     </div>
@@ -169,6 +175,13 @@ export function GenerationForm({
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
     const streamingDisabledByCount = n[0] > 1 && !allowStreamingBatch;
+    const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
+    const submitDisabledReason = React.useMemo(() => {
+        if (isLoading) return '';
+        if (!prompt.trim()) return t('ux.disabledPrompt');
+        if (customSizeInvalid) return customSizeError || t('ux.disabledCustomSize');
+        return '';
+    }, [customSizeError, customSizeInvalid, isLoading, prompt, t]);
 
     // 未显式开启批量流式分发时，n > 1 会禁用流式输出。
     React.useEffect(() => {
@@ -240,7 +253,7 @@ export function GenerationForm({
                         <Label htmlFor='model-select' className='text-white'>
                             {t('form.model')}
                         </Label>
-                        <div className='flex items-center gap-4'>
+                        <div className='flex flex-wrap items-center gap-4'>
                             <Select
                                 value={model}
                                 onValueChange={(value) => setModel(value as GenerationFormData['model'])}
@@ -295,60 +308,6 @@ export function GenerationForm({
                         </div>
                     </div>
 
-                    {enableStreaming && (
-                        <div className='space-y-3'>
-                            <div className='flex items-center gap-2'>
-                                <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
-                                    {t('streaming.previewImages')}
-                                </div>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <HelpCircle className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
-                                    </TooltipTrigger>
-                                    <TooltipContent className='max-w-[250px]'>{t('streaming.costHint')}</TooltipContent>
-                                </Tooltip>
-                            </div>
-                            <RadioGroup
-                                value={String(partialImages)}
-                                onValueChange={(value) => setPartialImages(Number(value) as 1 | 2 | 3)}
-                                disabled={isLoading}
-                                name='partial_images'
-                                aria-label={t('streaming.previewImages')}
-                                className='flex gap-x-5'>
-                                <div className='flex items-center space-x-2'>
-                                    <RadioGroupItem
-                                        value='1'
-                                        id='partial-1'
-                                        className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
-                                    />
-                                    <Label htmlFor='partial-1' className='cursor-pointer text-white/80'>
-                                        1
-                                    </Label>
-                                </div>
-                                <div className='flex items-center space-x-2'>
-                                    <RadioGroupItem
-                                        value='2'
-                                        id='partial-2'
-                                        className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
-                                    />
-                                    <Label htmlFor='partial-2' className='cursor-pointer text-white/80'>
-                                        2
-                                    </Label>
-                                </div>
-                                <div className='flex items-center space-x-2'>
-                                    <RadioGroupItem
-                                        value='3'
-                                        id='partial-3'
-                                        className='border-white/40 text-white data-[state=checked]:border-white data-[state=checked]:text-white'
-                                    />
-                                    <Label htmlFor='partial-3' className='cursor-pointer text-white/80'>
-                                        3
-                                    </Label>
-                                </div>
-                            </RadioGroup>
-                        </div>
-                    )}
-
                     <div className='space-y-1.5'>
                         <Label htmlFor='prompt' className='text-white'>
                             {t('form.prompt')}
@@ -392,7 +351,7 @@ export function GenerationForm({
                             disabled={isLoading}
                             name='size'
                             aria-label={t('form.size')}
-                            className='flex flex-wrap gap-x-5 gap-y-3'>
+                            className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
                             <RadioItemWithIcon
                                 value='auto'
                                 id='size-auto'
@@ -502,177 +461,241 @@ export function GenerationForm({
                         )}
                     </div>
 
-                    <div className='space-y-3'>
-                        <div className='block text-sm leading-none font-medium text-white select-none'>
-                            {t('form.quality')}
-                        </div>
-                        <RadioGroup
-                            value={quality}
-                            onValueChange={(value) => setQuality(value as GenerationFormData['quality'])}
-                            disabled={isLoading}
-                            name='quality'
-                            aria-label={t('form.quality')}
-                            className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon
-                                value='auto'
-                                id='quality-auto'
-                                label={t('common.auto')}
-                                Icon={Sparkles}
-                                disabled={isLoading}
+                    <div className='rounded-md border border-white/10 bg-white/[0.03]'>
+                        <button
+                            type='button'
+                            onClick={() => setIsAdvancedOpen((open) => !open)}
+                            className='flex w-full cursor-pointer items-center justify-between px-3 py-3 text-left text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white'
+                            aria-expanded={isAdvancedOpen}>
+                            <span className='flex items-center gap-2'>
+                                <SlidersHorizontal className='h-4 w-4' />
+                                {t('ux.advanced')}
+                            </span>
+                            <ChevronDown
+                                className={`h-4 w-4 transition-transform ${isAdvancedOpen ? 'rotate-180' : ''}`}
                             />
-                            <RadioItemWithIcon
-                                value='low'
-                                id='quality-low'
-                                label={t('common.low')}
-                                Icon={Tally1}
-                                disabled={isLoading}
-                            />
-                            <RadioItemWithIcon
-                                value='medium'
-                                id='quality-medium'
-                                label={t('common.medium')}
-                                Icon={Tally2}
-                                disabled={isLoading}
-                            />
-                            <RadioItemWithIcon
-                                value='high'
-                                id='quality-high'
-                                label={t('common.high')}
-                                Icon={Tally3}
-                                disabled={isLoading}
-                            />
-                        </RadioGroup>
-                    </div>
+                        </button>
+                        {isAdvancedOpen && (
+                            <div className='space-y-5 border-t border-white/10 p-3'>
+                                {enableStreaming && (
+                                    <div className='space-y-3'>
+                                        <div className='flex items-center gap-2'>
+                                            <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                                {t('streaming.previewImages')}
+                                            </div>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <HelpCircle className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
+                                                </TooltipTrigger>
+                                                <TooltipContent className='max-w-[250px]'>
+                                                    {t('streaming.costHint')}
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </div>
+                                        <RadioGroup
+                                            value={String(partialImages)}
+                                            onValueChange={(value) => setPartialImages(Number(value) as 1 | 2 | 3)}
+                                            disabled={isLoading}
+                                            name='partial_images'
+                                            aria-label={t('streaming.previewImages')}
+                                            className='grid grid-cols-3 gap-2'>
+                                            {[1, 2, 3].map((value) => (
+                                                <RadioItemWithIcon
+                                                    key={value}
+                                                    value={String(value)}
+                                                    id={`partial-${value}`}
+                                                    label={String(value)}
+                                                    Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                                    disabled={isLoading}
+                                                />
+                                            ))}
+                                        </RadioGroup>
+                                    </div>
+                                )}
 
-                    {!isGptImage2 && (
-                        <div className='space-y-3'>
-                            <div className='block text-sm leading-none font-medium text-white select-none'>
-                                {t('form.background')}
+                                <div className='space-y-3'>
+                                    <div className='block text-sm leading-none font-medium text-white select-none'>
+                                        {t('form.quality')}
+                                    </div>
+                                    <RadioGroup
+                                        value={quality}
+                                        onValueChange={(value) => setQuality(value as GenerationFormData['quality'])}
+                                        disabled={isLoading}
+                                        name='quality'
+                                        aria-label={t('form.quality')}
+                                        className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
+                                        <RadioItemWithIcon
+                                            value='auto'
+                                            id='quality-auto'
+                                            label={t('common.auto')}
+                                            Icon={Sparkles}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='low'
+                                            id='quality-low'
+                                            label={t('common.low')}
+                                            Icon={Tally1}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='medium'
+                                            id='quality-medium'
+                                            label={t('common.medium')}
+                                            Icon={Tally2}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='high'
+                                            id='quality-high'
+                                            label={t('common.high')}
+                                            Icon={Tally3}
+                                            disabled={isLoading}
+                                        />
+                                    </RadioGroup>
+                                </div>
+
+                                {!isGptImage2 && (
+                                    <div className='space-y-3'>
+                                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                                            {t('form.background')}
+                                        </div>
+                                        <RadioGroup
+                                            value={background}
+                                            onValueChange={(value) =>
+                                                setBackground(value as GenerationFormData['background'])
+                                            }
+                                            disabled={isLoading}
+                                            name='background'
+                                            aria-label={t('form.background')}
+                                            className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
+                                            <RadioItemWithIcon
+                                                value='auto'
+                                                id='bg-auto'
+                                                label={t('common.auto')}
+                                                Icon={Sparkles}
+                                                disabled={isLoading}
+                                            />
+                                            <RadioItemWithIcon
+                                                value='opaque'
+                                                id='bg-opaque'
+                                                label={t('form.backgroundOpaque')}
+                                                Icon={BrickWall}
+                                                disabled={isLoading}
+                                            />
+                                            <RadioItemWithIcon
+                                                value='transparent'
+                                                id='bg-transparent'
+                                                label={t('form.backgroundTransparent')}
+                                                Icon={Eraser}
+                                                disabled={isLoading}
+                                            />
+                                        </RadioGroup>
+                                    </div>
+                                )}
+
+                                <div className='space-y-3'>
+                                    <div className='block text-sm leading-none font-medium text-white select-none'>
+                                        {t('form.outputFormat')}
+                                    </div>
+                                    <RadioGroup
+                                        value={outputFormat}
+                                        onValueChange={(value) =>
+                                            setOutputFormat(value as GenerationFormData['output_format'])
+                                        }
+                                        disabled={isLoading}
+                                        name='output_format'
+                                        aria-label={t('form.outputFormat')}
+                                        className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
+                                        <RadioItemWithIcon
+                                            value='png'
+                                            id='format-png'
+                                            label='PNG'
+                                            Icon={FileImage}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='jpeg'
+                                            id='format-jpeg'
+                                            label='JPEG'
+                                            Icon={FileImage}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='webp'
+                                            id='format-webp'
+                                            label='WebP'
+                                            Icon={FileImage}
+                                            disabled={isLoading}
+                                        />
+                                    </RadioGroup>
+                                </div>
+
+                                {showCompression && (
+                                    <div className='space-y-2 pt-2 transition-opacity duration-300'>
+                                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                            {t('form.compression', { value: compression[0] })}
+                                        </div>
+                                        <Slider
+                                            id='compression-slider'
+                                            name='output_compression'
+                                            thumbLabel={t('form.compression', { value: compression[0] })}
+                                            min={0}
+                                            max={100}
+                                            step={1}
+                                            value={compression}
+                                            onValueChange={setCompression}
+                                            disabled={isLoading}
+                                            className='mt-3 [&>button]:border-black [&>button]:bg-white [&>button]:ring-offset-black [&>span:first-child]:h-1 [&>span:first-child>span]:bg-white'
+                                        />
+                                    </div>
+                                )}
+
+                                <div className='space-y-3'>
+                                    <div className='block text-sm leading-none font-medium text-white select-none'>
+                                        {t('form.moderation')}
+                                    </div>
+                                    <RadioGroup
+                                        value={moderation}
+                                        onValueChange={(value) =>
+                                            setModeration(value as GenerationFormData['moderation'])
+                                        }
+                                        disabled={isLoading}
+                                        name='moderation'
+                                        aria-label={t('form.moderation')}
+                                        className='grid grid-cols-2 gap-2'>
+                                        <RadioItemWithIcon
+                                            value='auto'
+                                            id='mod-auto'
+                                            label={t('common.auto')}
+                                            Icon={ShieldCheck}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='low'
+                                            id='mod-low'
+                                            label={t('common.low')}
+                                            Icon={ShieldAlert}
+                                            disabled={isLoading}
+                                        />
+                                    </RadioGroup>
+                                </div>
                             </div>
-                            <RadioGroup
-                                value={background}
-                                onValueChange={(value) => setBackground(value as GenerationFormData['background'])}
-                                disabled={isLoading}
-                                name='background'
-                                aria-label={t('form.background')}
-                                className='flex flex-wrap gap-x-5 gap-y-3'>
-                                <RadioItemWithIcon
-                                    value='auto'
-                                    id='bg-auto'
-                                    label={t('common.auto')}
-                                    Icon={Sparkles}
-                                    disabled={isLoading}
-                                />
-                                <RadioItemWithIcon
-                                    value='opaque'
-                                    id='bg-opaque'
-                                    label={t('form.backgroundOpaque')}
-                                    Icon={BrickWall}
-                                    disabled={isLoading}
-                                />
-                                <RadioItemWithIcon
-                                    value='transparent'
-                                    id='bg-transparent'
-                                    label={t('form.backgroundTransparent')}
-                                    Icon={Eraser}
-                                    disabled={isLoading}
-                                />
-                            </RadioGroup>
-                        </div>
-                    )}
-
-                    <div className='space-y-3'>
-                        <div className='block text-sm leading-none font-medium text-white select-none'>
-                            {t('form.outputFormat')}
-                        </div>
-                        <RadioGroup
-                            value={outputFormat}
-                            onValueChange={(value) => setOutputFormat(value as GenerationFormData['output_format'])}
-                            disabled={isLoading}
-                            name='output_format'
-                            aria-label={t('form.outputFormat')}
-                            className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon
-                                value='png'
-                                id='format-png'
-                                label='PNG'
-                                Icon={FileImage}
-                                disabled={isLoading}
-                            />
-                            <RadioItemWithIcon
-                                value='jpeg'
-                                id='format-jpeg'
-                                label='JPEG'
-                                Icon={FileImage}
-                                disabled={isLoading}
-                            />
-                            <RadioItemWithIcon
-                                value='webp'
-                                id='format-webp'
-                                label='WebP'
-                                Icon={FileImage}
-                                disabled={isLoading}
-                            />
-                        </RadioGroup>
-                    </div>
-
-                    {showCompression && (
-                        <div className='space-y-2 pt-2 transition-opacity duration-300'>
-                            <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
-                                {t('form.compression', { value: compression[0] })}
-                            </div>
-                            <Slider
-                                id='compression-slider'
-                                name='output_compression'
-                                thumbLabel={t('form.compression', { value: compression[0] })}
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={compression}
-                                onValueChange={setCompression}
-                                disabled={isLoading}
-                                className='mt-3 [&>button]:border-black [&>button]:bg-white [&>button]:ring-offset-black [&>span:first-child]:h-1 [&>span:first-child>span]:bg-white'
-                            />
-                        </div>
-                    )}
-
-                    <div className='space-y-3'>
-                        <div className='block text-sm leading-none font-medium text-white select-none'>
-                            {t('form.moderation')}
-                        </div>
-                        <RadioGroup
-                            value={moderation}
-                            onValueChange={(value) => setModeration(value as GenerationFormData['moderation'])}
-                            disabled={isLoading}
-                            name='moderation'
-                            aria-label={t('form.moderation')}
-                            className='flex flex-wrap gap-x-5 gap-y-3'>
-                            <RadioItemWithIcon
-                                value='auto'
-                                id='mod-auto'
-                                label={t('common.auto')}
-                                Icon={ShieldCheck}
-                                disabled={isLoading}
-                            />
-                            <RadioItemWithIcon
-                                value='low'
-                                id='mod-low'
-                                label={t('common.low')}
-                                Icon={ShieldAlert}
-                                disabled={isLoading}
-                            />
-                        </RadioGroup>
+                        )}
                     </div>
                 </CardContent>
                 <CardFooter className='border-t border-white/10 p-4'>
-                    <Button
-                        type='button'
-                        onClick={handleSubmit}
-                        disabled={isLoading || !prompt || customSizeInvalid}
-                        className='flex w-full items-center justify-center gap-2 rounded-md bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
-                        {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
-                        {isLoading ? t('generate.loading') : t('generate.submit')}
-                    </Button>
+                    <div className='w-full space-y-2'>
+                        {submitDisabledReason && <p className='text-center text-xs text-white/50'>{submitDisabledReason}</p>}
+                        <Button
+                            type='button'
+                            onClick={handleSubmit}
+                            disabled={isLoading || !!submitDisabledReason}
+                            className='flex w-full items-center justify-center gap-2 rounded-md bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
+                            {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
+                            {isLoading ? t('generate.loading') : t('generate.submit')}
+                        </Button>
+                    </div>
                 </CardFooter>
             </div>
         </Card>
