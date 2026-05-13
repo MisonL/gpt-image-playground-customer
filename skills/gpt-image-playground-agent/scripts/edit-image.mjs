@@ -10,7 +10,7 @@ const prompt = promptParts.join(' ');
 const maxAttempts = Number(process.env.GPT_IMAGE_AGENT_MAX_ATTEMPTS || '3');
 
 if (!imagePath || !prompt) {
-  console.error('Usage: edit-image.mjs <image-path> <prompt>');
+  console.error('用法：edit-image.mjs <image-path> <prompt>');
   process.exit(2);
 }
 
@@ -24,7 +24,7 @@ async function readCapabilities() {
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`capabilities request failed with ${response.status}: ${body}`);
+    throw new Error(`capabilities 请求失败，状态码 ${response.status}：${body}`);
   }
   return response.json();
 }

@@ -7,7 +7,7 @@ const prompt = process.argv.slice(2).join(' ');
 const maxAttempts = Number(process.env.GPT_IMAGE_AGENT_MAX_ATTEMPTS || '3');
 
 if (!prompt) {
-  console.error('Usage: generate-image.mjs <prompt>');
+  console.error('用法：generate-image.mjs <prompt>');
   process.exit(2);
 }
 
@@ -21,7 +21,7 @@ async function readCapabilities() {
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`capabilities request failed with ${response.status}: ${body}`);
+    throw new Error(`capabilities 请求失败，状态码 ${response.status}：${body}`);
   }
   return response.json();
 }

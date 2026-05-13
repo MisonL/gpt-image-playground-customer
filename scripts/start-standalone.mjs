@@ -22,7 +22,7 @@ async function copyIfPresent(source, destination) {
 }
 
 if (!(await exists(serverPath))) {
-  console.error('[ERROR] Standalone build was not found. Run npm run build before npm run start.');
+  console.error('[ERROR] 未找到 standalone 构建产物。请先运行 npm run build，再运行 npm run start。');
   process.exit(1);
 }
 

@@ -35,18 +35,18 @@ function waitForPostgres(containerName) {
     if (result.status === 0) return;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
   }
-  throw new Error('temporary postgres container did not become ready');
+  throw new Error('临时 PostgreSQL 容器未就绪');
 }
 
 function readMappedPort(containerName) {
   const result = run('docker', ['port', containerName, '5432/tcp'], { capture: true });
   if (result.status !== 0) {
-    throw new Error(result.stderr || 'failed to read postgres mapped port');
+    throw new Error(result.stderr || '读取 PostgreSQL 映射端口失败');
   }
   const line = result.stdout.trim().split('\n')[0] || '';
   const match = line.match(/:(\d+)$/);
   if (!match) {
-    throw new Error(`unexpected docker port output: ${line}`);
+    throw new Error(`docker port 输出不符合预期：${line}`);
   }
   return match[1];
 }

@@ -23,7 +23,7 @@ const targetDir = path.join(
 async function assertFile(filepath) {
   const info = await stat(filepath);
   if (!info.isFile()) {
-    throw new Error(`Expected file but found non-file path: ${filepath}`);
+    throw new Error(`预期是文件，但实际不是文件路径：${filepath}`);
   }
 }
 
