@@ -56,7 +56,7 @@ OPENAI_MAX_STREAMS_PER_CREDENTIAL=1
 2. 启动服务：
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --remove-orphans
 ```
 
 3. 打开：
@@ -368,7 +368,7 @@ Agent 状态库只保存请求、幂等和产物元数据，不保存图片二�
 SQLite 单实例默认部署：
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --remove-orphans
 ```
 
 PostgreSQL 高并发部署：
@@ -376,8 +376,10 @@ PostgreSQL 高并发部署：
 ```bash
 GPT_IMAGE_POSTGRES_PASSWORD='database-password' \
 AGENT_DATABASE_URL='postgres://gpt_image:database-password@postgres:5432/gpt_image_playground' \
-docker compose -f docker-compose.postgres.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
 ```
+
+SQLite 与 PostgreSQL 模式共享同一个 Compose project、应用容器名和图片目录。切回 SQLite 模式时使用 `--remove-orphans` 会清理 PostgreSQL service，避免保留不再属于当前配置的容器。
 
 `GPT_IMAGE_POSTGRES_PASSWORD` 只在 PostgreSQL volume 首次初始化时生效。已有 `postgres-data` volume 的部署如果要更换密码，需要先在数据库内修改用户密码，或备份后重建 volume；仅修改环境变量不会自动轮换现有数据库密码。
 
