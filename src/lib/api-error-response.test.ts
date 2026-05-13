@@ -20,6 +20,36 @@ describe('normalizeAgentError', () => {
         assert.equal(error.retryable, true);
         assert.equal(error.upstreamStatus, 429);
     });
+
+    it('maps upstream image input errors to agent-correctable validation errors', () => {
+        const error = normalizeAgentError({
+            status: 400,
+            message: 'The image data you provided does not represent a valid image.'
+        });
+
+        assert.equal(error.code, 'validation_error');
+        assert.equal(error.status, 422);
+        assert.equal(error.retryable, false);
+        assert.equal(error.upstreamStatus, 400);
+        assert.deepEqual(error.details, {
+            fields: {
+                image_0: 'The image data you provided does not represent a valid image.'
+            }
+        });
+    });
+
+    it('maps upstream connection errors to retryable unavailable errors', () => {
+        const error = normalizeAgentError(
+            Object.assign(new Error('Connection error.'), {
+                name: 'APIConnectionError'
+            })
+        );
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, true);
+        assert.equal(error.retryAfterSeconds, 15);
+    });
 });
 
 describe('createAgentErrorBody', () => {

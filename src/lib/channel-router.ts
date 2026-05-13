@@ -473,12 +473,24 @@ function isConnectionFailure(error: unknown): boolean {
     }
 
     const code = readErrorString(error, 'code') || readCauseChainString(error, 'code');
-    return (
+    if (
         code === 'ENOTFOUND' ||
         code === 'ECONNRESET' ||
         code === 'ECONNREFUSED' ||
         code === 'ETIMEDOUT' ||
         code === 'EAI_AGAIN'
+    ) {
+        return true;
+    }
+
+    const message = (readErrorString(error, 'message') || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[.!?]+$/, '');
+    return (
+        message.includes('connection error') ||
+        message.includes('request timed out') ||
+        message.includes('fetch failed')
     );
 }
 

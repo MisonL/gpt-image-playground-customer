@@ -1,4 +1,5 @@
 import { RequestValidationError } from './image-request-utils';
+import { isChannelFailure } from './channel-router';
 import { NextResponse } from 'next/server';
 
 export type AgentErrorCode =
@@ -71,6 +72,12 @@ function readNumberField(error: unknown, field: string): number | undefined {
     return typeof value === 'number' ? value : undefined;
 }
 
+function readStringField(error: unknown, field: string): string | undefined {
+    if (typeof error !== 'object' || error === null || !(field in error)) return undefined;
+    const value = (error as Record<string, unknown>)[field];
+    return typeof value === 'string' ? value : undefined;
+}
+
 function parseValidationDetails(message: string): Record<string, unknown> | undefined {
     try {
         const parsed = JSON.parse(message);
@@ -94,7 +101,7 @@ function inferValidationDetails(message: string): Record<string, unknown> | unde
         fields.n = message;
     } else if (lowerMessage.includes('model')) {
         fields.model = message;
-    } else if (lowerMessage.includes('image file')) {
+    } else if (lowerMessage.includes('image file') || lowerMessage.includes('image data')) {
         fields.image_0 = message;
     } else if (lowerMessage.includes('mask')) {
         fields.mask = message;
@@ -150,13 +157,23 @@ export function normalizeAgentError(error: unknown): AgentApiError {
     }
 
     const status = readNumberField(error, 'status') ?? readNumberField(error, 'statusCode');
-    const message = error instanceof Error ? error.message : '发生未知错误。';
+    const message = error instanceof Error ? error.message : (readStringField(error, 'message') ?? '发生未知错误。');
     if (status === 401 || status === 403) {
         return new AgentApiError({
             code: 'upstream_auth_failed',
             message,
             status,
             retryable: false,
+            upstreamStatus: status
+        });
+    }
+    if (status === 400) {
+        return new AgentApiError({
+            code: 'validation_error',
+            message: '上游拒绝了请求参数。',
+            status: 422,
+            retryable: false,
+            details: inferValidationDetails(message),
             upstreamStatus: status
         });
     }
@@ -177,6 +194,15 @@ export function normalizeAgentError(error: unknown): AgentApiError {
             status: 502,
             retryable: true,
             upstreamStatus: status,
+            retryAfterSeconds: 15
+        });
+    }
+    if (isChannelFailure(error)) {
+        return new AgentApiError({
+            code: 'upstream_unavailable',
+            message,
+            status: 502,
+            retryable: true,
             retryAfterSeconds: 15
         });
     }
