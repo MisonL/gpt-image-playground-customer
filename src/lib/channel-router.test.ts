@@ -581,10 +581,12 @@ describe('isChannelFailure', () => {
                 })
             })
         });
+        const messageOnlyConnectionError = new Error('Connection error.');
 
         assert.equal(isChannelFailure(connectionError), true);
         assert.equal(isChannelFailure(timeoutError), true);
         assert.equal(isChannelFailure(dnsError), true);
         assert.equal(isChannelFailure(nestedConnectionError), true);
+        assert.equal(isChannelFailure(messageOnlyConnectionError), true);
     });
 });
