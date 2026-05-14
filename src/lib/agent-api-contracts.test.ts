@@ -87,6 +87,7 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.defaults.state_backend, 'postgres');
         assert.equal(capabilities.auth.required, true);
         assert.equal(capabilities.storage.postgres_configured, true);
+        assert.equal('sqlite_path' in capabilities.storage, false);
         assert.equal(capabilities.idempotency.header, 'Idempotency-Key');
         assert.ok(capabilities.supported.models.includes('gpt-image-2'));
     });
@@ -104,6 +105,15 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentError' in document.components.schemas);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['200']);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['422']);
+    });
+
+    it('describes public capabilities without server-local SQLite paths', () => {
+        const document = buildAgentOpenApiDocument({});
+        const storageSchema = document.components.schemas.AgentCapabilities.properties.storage;
+
+        assert.ok(storageSchema.properties.image_storage_mode);
+        assert.ok(storageSchema.properties.postgres_configured);
+        assert.equal('sqlite_path' in storageSchema.properties, false);
     });
 
     it('describes Agent authentication and common runtime failures in OpenAPI', () => {

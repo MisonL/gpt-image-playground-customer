@@ -54,10 +54,13 @@ export type StreamingClientEvent = {
     filename?: string;
     path?: string;
     output_format?: string;
+    outputFormat?: string;
     images?: ApiImageResponseItem[];
     usage?: unknown;
     actual_cost?: ActualCostDetails | null;
+    actualCost?: ActualCostDetails | null;
     client_request_id?: string;
+    clientRequestId?: string;
 };
 
 export type StreamingClientState = {
@@ -98,6 +101,18 @@ function isActualCostDetails(value: unknown): value is ActualCostDetails {
         validOptionalNumbers &&
         validOptionalStrings
     );
+}
+
+function readStreamingEventClientRequestId(event: StreamingClientEvent): string | undefined {
+    if (typeof event.clientRequestId === 'string') return event.clientRequestId;
+    if (typeof event.client_request_id === 'string') return event.client_request_id;
+    return undefined;
+}
+
+function readStreamingEventActualCost(event: StreamingClientEvent): ActualCostDetails | null {
+    if (event.actualCost !== undefined && event.actualCost !== null) return event.actualCost;
+    if (event.actual_cost !== undefined && event.actual_cost !== null) return event.actual_cost;
+    return null;
 }
 
 export function computeStreamingConcurrency(options: StreamingConcurrencyOptions): number {
@@ -147,10 +162,11 @@ export function applyStreamingClientEvent(
     event: StreamingClientEvent
 ): StreamingClientState {
     if (event.type === 'completed' && event.filename) {
-        if (typeof event.output_format !== 'string' || event.output_format.length === 0) {
-            throw new Error(`流式完成事件缺少有效 output_format：${String(event.output_format)}`);
+        const outputFormat = typeof event.outputFormat === 'string' ? event.outputFormat : event.output_format;
+        if (typeof outputFormat !== 'string' || outputFormat.length === 0) {
+            throw new Error(`流式完成事件缺少有效 output_format：${String(outputFormat)}`);
         }
-        const clientRequestId = typeof event.client_request_id === 'string' ? event.client_request_id : undefined;
+        const clientRequestId = readStreamingEventClientRequestId(event);
         return {
             ...state,
             completedImages: [
@@ -159,7 +175,7 @@ export function applyStreamingClientEvent(
                     filename: event.filename,
                     b64_json: event.b64_json,
                     path: event.path,
-                    output_format: event.output_format,
+                    output_format: outputFormat,
                     ...(clientRequestId ? { clientRequestId } : {})
                 }
             ]
@@ -167,11 +183,13 @@ export function applyStreamingClientEvent(
     }
 
     if (event.type === 'done') {
-        const clientRequestId = typeof event.client_request_id === 'string' ? event.client_request_id : undefined;
+        const clientRequestId = readStreamingEventClientRequestId(event);
         const eventImages = event.images && event.images.length > 0 ? event.images : state.completedImages;
-        const actualCost = event.actual_cost === undefined || event.actual_cost === null ? null : event.actual_cost;
+        const actualCost = readStreamingEventActualCost(event);
         if (actualCost !== null && !isActualCostDetails(actualCost)) {
-            throw new Error(`流式完成事件包含无效 actual_cost：${JSON.stringify(event.actual_cost)}`);
+            throw new Error(
+                `流式完成事件包含无效 actual_cost：${JSON.stringify(event.actualCost ?? event.actual_cost)}`
+            );
         }
         return {
             completedImages: eventImages.map((image) => ({

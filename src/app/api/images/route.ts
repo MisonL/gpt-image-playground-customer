@@ -47,10 +47,12 @@ type StreamingEvent = {
     type: 'partial_image' | 'completed' | 'error' | 'done';
     index?: number;
     partial_image_index?: number;
+    partialImageIndex?: number;
     b64_json?: string;
     filename?: string;
     path?: string;
     output_format?: string;
+    outputFormat?: string;
     usage?: OpenAI.Images.ImagesResponse['usage'];
     images?: Array<{
         filename: string;
@@ -60,7 +62,9 @@ type StreamingEvent = {
         clientRequestId?: string;
     }>;
     client_request_id?: string;
+    clientRequestId?: string;
     actual_cost?: ActualCostDetails;
+    actualCost?: ActualCostDetails;
     error?: string;
     status?: number;
 };
@@ -324,6 +328,7 @@ export async function POST(request: NextRequest) {
                                         type: 'partial_image',
                                         index: imageIndex,
                                         partial_image_index: event.partial_image_index,
+                                        partialImageIndex: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
                                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
@@ -357,7 +362,9 @@ export async function POST(request: NextRequest) {
                                         b64_json: event.b64_json,
                                         path: effectiveStorageMode === 'fs' ? `/api/image/${filename}` : undefined,
                                         output_format: fileExtension,
-                                        client_request_id: clientRequestId
+                                        outputFormat: fileExtension,
+                                        client_request_id: clientRequestId,
+                                        clientRequestId
                                     };
                                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
 
@@ -385,7 +392,9 @@ export async function POST(request: NextRequest) {
                                 images: completedImages,
                                 usage: finalUsage,
                                 actual_cost: actualCost,
-                                client_request_id: clientRequestId
+                                actualCost,
+                                client_request_id: clientRequestId,
+                                clientRequestId
                             };
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
                             controller.close();
@@ -478,6 +487,7 @@ export async function POST(request: NextRequest) {
                                         type: 'partial_image',
                                         index: imageIndex,
                                         partial_image_index: event.partial_image_index,
+                                        partialImageIndex: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
                                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
@@ -511,7 +521,9 @@ export async function POST(request: NextRequest) {
                                         b64_json: event.b64_json,
                                         path: effectiveStorageMode === 'fs' ? `/api/image/${filename}` : undefined,
                                         output_format: fileExtension,
-                                        client_request_id: clientRequestId
+                                        outputFormat: fileExtension,
+                                        client_request_id: clientRequestId,
+                                        clientRequestId
                                     };
                                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
 
@@ -539,7 +551,9 @@ export async function POST(request: NextRequest) {
                                 images: completedImages,
                                 usage: finalUsage,
                                 actual_cost: actualCost,
-                                client_request_id: clientRequestId
+                                actualCost,
+                                client_request_id: clientRequestId,
+                                clientRequestId
                             };
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
                             controller.close();
