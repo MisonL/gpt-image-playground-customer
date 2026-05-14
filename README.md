@@ -374,8 +374,8 @@ docker compose up -d --build --remove-orphans
 PostgreSQL 高并发部署：
 
 ```bash
-GPT_IMAGE_POSTGRES_PASSWORD='database-password' \
-AGENT_DATABASE_URL='postgres://gpt_image:database-password@postgres:5432/gpt_image_playground' \
+GPT_IMAGE_POSTGRES_PASSWORD='<database-password>' \
+AGENT_DATABASE_URL='postgres://gpt_image:<database-password>@postgres:5432/gpt_image_playground' \
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
 ```
 
