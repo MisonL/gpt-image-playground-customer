@@ -1,5 +1,13 @@
 # GPT Image Playground Agent API 参考
 
+## 辅助脚本
+
+- `skills/gpt-image-playground-agent/scripts/generate-image.mjs`：JSON 文生图调用。
+- `skills/gpt-image-playground-agent/scripts/edit-image.mjs`：multipart 编辑调用。
+
+脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 做只读契约检查，不触发真实生图或编辑。
+鉴权支持 `GPT_IMAGE_AGENT_TOKEN` 或 `GPT_IMAGE_APP_PASSWORD_HASH`。
+
 ## 能力查询
 
 ```http

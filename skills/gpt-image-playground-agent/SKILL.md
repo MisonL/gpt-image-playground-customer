@@ -39,15 +39,17 @@ Authorization: Bearer <token>
 
 ## 可用脚本
 
-- `scripts/generate-image.mjs`：JSON 文生图调用。
-- `scripts/edit-image.mjs`：multipart 编辑调用。
+- `skills/gpt-image-playground-agent/scripts/generate-image.mjs`：JSON 文生图调用。
+- `skills/gpt-image-playground-agent/scripts/edit-image.mjs`：multipart 编辑调用。
 
 脚本读取以下环境变量：
 
 - `GPT_IMAGE_PLAYGROUND_URL`：服务基础地址，可指向本机、局域网、云服务器或域名；脚本未设置时默认尝试 `http://localhost:4783`。
 - `GPT_IMAGE_AGENT_TOKEN`：Bearer token。
+- `GPT_IMAGE_APP_PASSWORD_HASH`：使用 `APP_PASSWORD` 部署时发送的 `X-App-Password-Hash`。
 - `GPT_IMAGE_AGENT_IDEMPOTENCY_KEY`：跨脚本进程恢复同一操作时复用的幂等键。
 - `GPT_IMAGE_AGENT_MAX_ATTEMPTS`：最大尝试次数，默认 `3`。
+- `GPT_IMAGE_AGENT_CONTRACT_CHECK=1`：只检查 capabilities 和错误契约，不触发真实生图或编辑。
 
 ## 参考
 
