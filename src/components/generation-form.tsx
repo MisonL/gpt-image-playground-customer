@@ -94,32 +94,37 @@ const RadioItemWithIcon = ({
     id,
     label,
     Icon,
-    disabled = false
+    disabled = false,
+    tooltip
 }: {
     value: string;
     id: string;
     label: string;
     Icon: React.ElementType;
     disabled?: boolean;
-}) => (
-    <div className='group relative'>
+    tooltip?: React.ReactNode;
+}) => {
+    const item = (
         <RadioGroupItem
             value={value}
             id={id}
-            className='peer sr-only'
-        />
-        <Label
-            htmlFor={id}
-            className={`flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm transition-all peer-data-[state=checked]:border-white peer-data-[state=checked]:bg-white peer-data-[state=checked]:text-black ${
-                disabled
-                    ? 'cursor-not-allowed border-white/10 text-white/40'
-                    : 'cursor-pointer border-white/20 text-white/80 hover:-translate-y-0.5 hover:border-white/50 hover:bg-white/10 hover:text-white active:translate-y-0'
-            }`}>
+            disabled={disabled}
+            aria-label={label}
+            className='flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md border-border px-3 py-2 text-sm text-muted-foreground shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground enabled:active:translate-y-0 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground [&_[data-slot=radio-group-indicator]]:hidden'>
             <Icon className='h-4 w-4 text-current opacity-70' />
-            {label}
-        </Label>
-    </div>
-);
+            <span>{label}</span>
+        </RadioGroupItem>
+    );
+
+    if (!tooltip) return item;
+
+    return (
+        <Tooltip>
+            <TooltipTrigger asChild>{item}</TooltipTrigger>
+            <TooltipContent>{tooltip}</TooltipContent>
+        </Tooltip>
+    );
+};
 
 export function GenerationForm({
     onSubmit,
@@ -227,76 +232,72 @@ export function GenerationForm({
     };
 
     return (
-        <Card className='flex h-full w-full flex-col overflow-hidden rounded-lg border border-white/10 bg-black'>
-            <CardHeader className='flex items-start justify-between border-b border-white/10 pb-4'>
+        <Card className='bg-card text-card-foreground flex w-full flex-col overflow-hidden rounded-lg border border-border lg:h-full'>
+            <CardHeader className='flex items-start justify-between border-b border-border pb-4'>
                 <div>
                     <div className='flex items-center'>
-                        <CardTitle className='py-1 text-lg font-medium text-white'>{t('generate.title')}</CardTitle>
+                        <CardTitle className='py-1 text-lg font-medium'>{t('generate.title')}</CardTitle>
                         {isPasswordRequiredByBackend && (
                             <Button
                                 variant='ghost'
                                 size='icon'
                                 onClick={onOpenPasswordDialog}
-                                className='ml-2 text-white/60 hover:text-white'
+                                className='text-muted-foreground ml-2 hover:text-foreground'
                                 aria-label={t('password.configure')}>
                                 {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                             </Button>
                         )}
                     </div>
-                    <CardDescription className='mt-1 text-white/60'>{t('generate.description')}</CardDescription>
+                    <CardDescription className='mt-1'>{t('generate.description')}</CardDescription>
                 </div>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
-            <div className='flex h-full flex-1 flex-col overflow-hidden'>
-                <CardContent className='flex-1 space-y-5 overflow-y-auto p-4'>
+            <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
+                <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
                     <div className='space-y-1.5'>
-                        <Label htmlFor='model-select' className='text-white'>
-                            {t('form.model')}
-                        </Label>
+                        <Label htmlFor='model-select'>{t('form.model')}</Label>
                         <div className='flex flex-wrap items-center gap-4'>
                             <Select
                                 value={model}
                                 onValueChange={(value) => setModel(value as GenerationFormData['model'])}
                                 disabled={isLoading}
                                 name='model'>
-                                <SelectTrigger
-                                    id='model-select'
-                                    className='w-[180px] rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'>
+                                <SelectTrigger id='model-select' className='w-[180px]'>
                                     <SelectValue placeholder={t('form.selectModel')} />
                                 </SelectTrigger>
-                                <SelectContent className='border-white/20 bg-black text-white'>
-                                    <SelectItem value='gpt-image-2' className='focus:bg-white/10'>
+                                <SelectContent>
+                                    <SelectItem value='gpt-image-2'>
                                         gpt-image-2
                                     </SelectItem>
-                                    <SelectItem value='gpt-image-1.5' className='focus:bg-white/10'>
+                                    <SelectItem value='gpt-image-1.5'>
                                         gpt-image-1.5
                                     </SelectItem>
-                                    <SelectItem value='gpt-image-1' className='focus:bg-white/10'>
+                                    <SelectItem value='gpt-image-1'>
                                         gpt-image-1
                                     </SelectItem>
-                                    <SelectItem value='gpt-image-1-mini' className='focus:bg-white/10'>
+                                    <SelectItem value='gpt-image-1-mini'>
                                         gpt-image-1-mini
                                     </SelectItem>
                                 </SelectContent>
                             </Select>
                             <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div className='flex items-center gap-2'>
+                                <div className='flex items-center gap-2'>
+                                    <TooltipTrigger asChild>
                                         <Checkbox
                                             id='enable-streaming'
                                             name='enable-streaming'
                                             checked={enableStreaming}
                                             onCheckedChange={(checked) => setEnableStreaming(!!checked)}
                                             disabled={isLoading || streamingDisabledByCount}
-                                            className='border-white/40 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black'
+                                            className='data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground'
                                         />
-                                        <Label
-                                            htmlFor='enable-streaming'
-                                            className={`text-sm ${streamingDisabledByCount ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
-                                            {t('streaming.enable')}
-                                        </Label>
-                                    </div>
-                                </TooltipTrigger>
+                                    </TooltipTrigger>
+                                    <Label
+                                        htmlFor='enable-streaming'
+                                        className={`text-sm ${streamingDisabledByCount ? 'cursor-not-allowed text-muted-foreground' : 'cursor-pointer text-foreground'}`}>
+                                        {t('streaming.enable')}
+                                    </Label>
+                                </div>
                                 <TooltipContent className='max-w-[250px]'>
                                     {streamingDisabledByCount
                                         ? t('streaming.disabledByCount')
@@ -309,22 +310,21 @@ export function GenerationForm({
                     </div>
 
                     <div className='space-y-1.5'>
-                        <Label htmlFor='prompt' className='text-white'>
-                            {t('form.prompt')}
-                        </Label>
+                        <Label htmlFor='prompt'>{t('form.prompt')}</Label>
                         <Textarea
                             id='prompt'
+                            name='prompt'
                             placeholder={t('form.promptPlaceholder')}
                             value={prompt}
                             onChange={(e) => setPrompt(e.target.value)}
                             required
                             disabled={isLoading}
-                            className='min-h-[80px] rounded-md border border-white/20 bg-black text-white placeholder:text-white/40 focus:border-white/50 focus:ring-white/50'
+                            className='min-h-[80px]'
                         />
                     </div>
 
                     <div className='space-y-2'>
-                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                             {t('form.numberOfImages', { count: n[0] })}
                         </div>
                         <Slider
@@ -337,12 +337,12 @@ export function GenerationForm({
                             value={n}
                             onValueChange={setN}
                             disabled={isLoading}
-                            className='mt-3 [&>button]:border-black [&>button]:bg-white [&>button]:ring-offset-black [&>span:first-child]:h-1 [&>span:first-child>span]:bg-white'
+                            className='mt-3'
                         />
                     </div>
 
                     <div className='space-y-3'>
-                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                        <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('form.size')}
                         </div>
                         <RadioGroup
@@ -368,105 +368,90 @@ export function GenerationForm({
                                     disabled={isLoading}
                                 />
                             )}
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <RadioItemWithIcon
-                                            value='square'
-                                            id='size-square'
-                                            label={t('common.square')}
-                                            Icon={Square}
-                                            disabled={isLoading}
-                                        />
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent>{getPresetTooltip('square', model)}</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <RadioItemWithIcon
-                                            value='landscape'
-                                            id='size-landscape'
-                                            label={t('common.landscape')}
-                                            Icon={RectangleHorizontal}
-                                            disabled={isLoading}
-                                        />
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent>{getPresetTooltip('landscape', model)}</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <RadioItemWithIcon
-                                            value='portrait'
-                                            id='size-portrait'
-                                            label={t('common.portrait')}
-                                            Icon={RectangleVertical}
-                                            disabled={isLoading}
-                                        />
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent>{getPresetTooltip('portrait', model)}</TooltipContent>
-                            </Tooltip>
+                            <RadioItemWithIcon
+                                value='square'
+                                id='size-square'
+                                label={t('common.square')}
+                                Icon={Square}
+                                disabled={isLoading}
+                                tooltip={getPresetTooltip('square', model)}
+                            />
+                            <RadioItemWithIcon
+                                value='landscape'
+                                id='size-landscape'
+                                label={t('common.landscape')}
+                                Icon={RectangleHorizontal}
+                                disabled={isLoading}
+                                tooltip={getPresetTooltip('landscape', model)}
+                            />
+                            <RadioItemWithIcon
+                                value='portrait'
+                                id='size-portrait'
+                                label={t('common.portrait')}
+                                Icon={RectangleVertical}
+                                disabled={isLoading}
+                                tooltip={getPresetTooltip('portrait', model)}
+                            />
                         </RadioGroup>
                         {isGptImage2 && size === 'custom' && (
-                            <div className='space-y-2 rounded-md border border-white/10 bg-white/5 p-3'>
+                            <div className='bg-muted/30 space-y-2 rounded-md border border-border p-3'>
                                 <div className='flex items-center gap-3'>
                                     <div className='flex-1 space-y-1'>
-                                        <Label htmlFor='custom-width' className='text-xs text-white/70'>
+                                        <Label htmlFor='custom-width' className='text-muted-foreground text-xs'>
                                             {t('form.width')}
                                         </Label>
                                         <Input
                                             id='custom-width'
+                                            name='customWidth'
                                             type='number'
+                                            inputMode='numeric'
                                             min={16}
                                             max={3840}
                                             step={16}
                                             value={customWidth}
                                             onChange={(e) => setCustomWidth(parseInt(e.target.value, 10) || 0)}
                                             disabled={isLoading}
-                                            className='rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'
                                         />
                                     </div>
-                                    <span className='pt-5 text-white/60'>x</span>
+                                    <span className='text-muted-foreground pt-5'>x</span>
                                     <div className='flex-1 space-y-1'>
-                                        <Label htmlFor='custom-height' className='text-xs text-white/70'>
+                                        <Label htmlFor='custom-height' className='text-muted-foreground text-xs'>
                                             {t('form.height')}
                                         </Label>
                                         <Input
                                             id='custom-height'
+                                            name='customHeight'
                                             type='number'
+                                            inputMode='numeric'
                                             min={16}
                                             max={3840}
                                             step={16}
                                             value={customHeight}
                                             onChange={(e) => setCustomHeight(parseInt(e.target.value, 10) || 0)}
                                             disabled={isLoading}
-                                            className='rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'
                                         />
                                     </div>
                                 </div>
-                                <p className='text-xs text-white/50'>
+                                <p className='text-muted-foreground text-xs'>
                                     {t('form.pixelsMeta', {
                                         pixels: customPixels.toLocaleString(locale),
                                         percent: ((customPixels / 8_294_400) * 100).toFixed(1),
                                         ratio: customRatio
                                     })}
                                 </p>
-                                {customSizeError && <p className='text-xs text-red-400'>{customSizeError}</p>}
-                                <p className='text-xs text-white/40'>{t('form.customConstraints')}</p>
+                                {customSizeError && <p className='text-destructive text-xs'>{customSizeError}</p>}
+                                <p className='text-muted-foreground text-xs'>{t('form.customConstraints')}</p>
                             </div>
                         )}
                     </div>
 
-                    <div className='rounded-md border border-white/10 bg-white/[0.03]'>
+                    <div className='bg-muted/20 rounded-md border border-border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
-                            className='flex w-full cursor-pointer items-center justify-between px-3 py-3 text-left text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white'
-                            aria-expanded={isAdvancedOpen}>
+                            className='text-muted-foreground hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center justify-between px-3 py-3 text-left text-sm font-medium transition-[background-color,color,transform] active:scale-[0.995] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                            aria-expanded={isAdvancedOpen}
+                            aria-controls='generation-advanced-panel'>
                             <span className='flex items-center gap-2'>
                                 <SlidersHorizontal className='h-4 w-4' />
                                 {t('ux.advanced')}
@@ -476,16 +461,21 @@ export function GenerationForm({
                             />
                         </button>
                         {isAdvancedOpen && (
-                            <div className='space-y-5 border-t border-white/10 p-3'>
+                            <div id='generation-advanced-panel' className='space-y-5 border-t border-border p-3'>
                                 {enableStreaming && (
                                     <div className='space-y-3'>
                                         <div className='flex items-center gap-2'>
-                                            <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                            <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                                                 {t('streaming.previewImages')}
                                             </div>
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
-                                                    <HelpCircle className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
+                                                    <button
+                                                        type='button'
+                                                        className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 inline-flex h-5 w-5 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                                                        aria-label={t('streaming.costHint')}>
+                                                        <HelpCircle className='h-4 w-4' />
+                                                    </button>
                                                 </TooltipTrigger>
                                                 <TooltipContent className='max-w-[250px]'>
                                                     {t('streaming.costHint')}
@@ -514,7 +504,7 @@ export function GenerationForm({
                                 )}
 
                                 <div className='space-y-3'>
-                                    <div className='block text-sm leading-none font-medium text-white select-none'>
+                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
                                         {t('form.quality')}
                                     </div>
                                     <RadioGroup
@@ -557,7 +547,7 @@ export function GenerationForm({
 
                                 {!isGptImage2 && (
                                     <div className='space-y-3'>
-                                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                                        <div className='text-foreground block text-sm leading-none font-medium select-none'>
                                             {t('form.background')}
                                         </div>
                                         <RadioGroup
@@ -595,7 +585,7 @@ export function GenerationForm({
                                 )}
 
                                 <div className='space-y-3'>
-                                    <div className='block text-sm leading-none font-medium text-white select-none'>
+                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
                                         {t('form.outputFormat')}
                                     </div>
                                     <RadioGroup
@@ -633,7 +623,7 @@ export function GenerationForm({
 
                                 {showCompression && (
                                     <div className='space-y-2 pt-2 transition-opacity duration-300'>
-                                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                                             {t('form.compression', { value: compression[0] })}
                                         </div>
                                         <Slider
@@ -646,13 +636,13 @@ export function GenerationForm({
                                             value={compression}
                                             onValueChange={setCompression}
                                             disabled={isLoading}
-                                            className='mt-3 [&>button]:border-black [&>button]:bg-white [&>button]:ring-offset-black [&>span:first-child]:h-1 [&>span:first-child>span]:bg-white'
+                                            className='mt-3'
                                         />
                                     </div>
                                 )}
 
                                 <div className='space-y-3'>
-                                    <div className='block text-sm leading-none font-medium text-white select-none'>
+                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
                                         {t('form.moderation')}
                                     </div>
                                     <RadioGroup
@@ -684,14 +674,14 @@ export function GenerationForm({
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='border-t border-white/10 p-4'>
+                <CardFooter className='hidden border-t border-border p-4 lg:flex'>
                     <div className='w-full space-y-2'>
-                        {submitDisabledReason && <p className='text-center text-xs text-white/50'>{submitDisabledReason}</p>}
+                        {submitDisabledReason && <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>}
                         <Button
                             type='button'
                             onClick={handleSubmit}
                             disabled={isLoading || !!submitDisabledReason}
-                            className='flex w-full items-center justify-center gap-2 rounded-md bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
+                            className='flex w-full items-center justify-center gap-2'>
                             {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
                             {isLoading ? t('generate.loading') : t('generate.submit')}
                         </Button>

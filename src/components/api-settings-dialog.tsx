@@ -86,56 +86,52 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
 
     return (
         <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-            <DialogContent className='border-white/20 bg-black text-white sm:max-w-[520px]'>
+            <DialogContent className='sm:max-w-[520px]'>
                 <DialogHeader>
-                    <DialogTitle className='text-white'>{t('api.title')}</DialogTitle>
-                    <DialogDescription className='text-white/60'>{t('api.description')}</DialogDescription>
+                    <DialogTitle>{t('api.title')}</DialogTitle>
+                    <DialogDescription>{t('api.description')}</DialogDescription>
                 </DialogHeader>
                 <div className='grid gap-4 py-2'>
                     <div className='grid gap-2'>
-                        <Label htmlFor='api-key-input' className='text-white'>
-                            {t('api.key')}
-                        </Label>
+                        <Label htmlFor='api-key-input'>{t('api.key')}</Label>
                         <Input
                             id='api-key-input'
+                            name='apiKey'
                             type='password'
                             autoComplete='off'
+                            spellCheck={false}
                             placeholder='sk-...'
                             value={draft.apiKey}
                             onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))}
-                            className='border-white/20 bg-black text-white placeholder:text-white/40 focus:border-white/50 focus:ring-white/50'
                         />
                     </div>
                     <div className='grid gap-2'>
-                        <Label htmlFor='api-base-url-input' className='text-white'>
-                            {t('api.url')}
-                        </Label>
+                        <Label htmlFor='api-base-url-input'>{t('api.url')}</Label>
                         <Input
                             id='api-base-url-input'
+                            name='baseUrl'
                             type='url'
+                            inputMode='url'
+                            autoComplete='off'
+                            spellCheck={false}
                             placeholder='https://api.openai.com/v1'
                             value={draft.baseUrl}
                             onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))}
-                            className='border-white/20 bg-black text-white placeholder:text-white/40 focus:border-white/50 focus:ring-white/50'
                         />
-                        <p className='text-xs leading-5 text-white/50'>{t('api.urlHint')}</p>
+                        <p className='text-muted-foreground text-xs leading-5'>{t('api.urlHint')}</p>
                     </div>
                 </div>
                 <DialogFooter>
                     {saveStatus === 'saved' && (
-                        <p className='mr-auto self-center text-sm text-green-300'>{t('api.saved')}</p>
+                        <p className='mr-auto self-center text-sm text-emerald-600 dark:text-emerald-400' aria-live='polite'>{t('api.saved')}</p>
                     )}
                     {saveStatus === 'error' && (
-                        <p className='mr-auto self-center text-sm text-red-300'>{t('api.saveFailed')}</p>
+                        <p className='text-destructive mr-auto self-center text-sm' aria-live='polite'>{t('api.saveFailed')}</p>
                     )}
-                    <Button
-                        type='button'
-                        variant='ghost'
-                        onClick={handleClear}
-                        className='text-white/70 hover:bg-white/10 hover:text-white'>
+                    <Button type='button' variant='ghost' onClick={handleClear} className='text-muted-foreground hover:text-foreground'>
                         {t('common.clear')}
                     </Button>
-                    <Button type='button' onClick={handleSave} className='bg-white px-6 text-black hover:bg-white/90'>
+                    <Button type='button' onClick={handleSave} className='px-6'>
                         {t('common.save')}
                     </Button>
                 </DialogFooter>

@@ -10,6 +10,7 @@ import {
     DialogTitle
 } from '@/components/ui/dialog';
 import { useI18n } from '@/lib/i18n';
+import { filterLogsByScope, resolveLogClientRequestIds } from '@/lib/log-filter';
 import { cn } from '@/lib/utils';
 import { Grid, Loader2, Send, Terminal, Trash2 } from 'lucide-react';
 import Image from 'next/image';
@@ -18,6 +19,7 @@ import * as React from 'react';
 type ImageInfo = {
     path: string;
     filename: string;
+    clientRequestId?: string;
 };
 
 type ImageOutputProps = {
@@ -33,6 +35,8 @@ type ImageOutputProps = {
     clientPasswordHash: string | null;
     canOpenLogs: boolean;
     openLogsSignal?: number;
+    logClientRequestIds?: string[];
+    logFilenames?: string[];
 };
 
 type LogEntry = {
@@ -41,6 +45,8 @@ type LogEntry = {
     level: 'debug' | 'info' | 'warn' | 'error';
     message: string;
     context?: string;
+    clientRequestId?: string;
+    filenames?: string[];
 };
 
 function formatLogTime(value: string): string {
@@ -68,13 +74,30 @@ export function ImageOutput({
     streamingPreviewImages,
     clientPasswordHash,
     canOpenLogs,
-    openLogsSignal
+    openLogsSignal,
+    logClientRequestIds = [],
+    logFilenames = []
 }: ImageOutputProps) {
     const { t } = useI18n();
     const [isLogDialogOpen, setIsLogDialogOpen] = React.useState(false);
     const [logs, setLogs] = React.useState<LogEntry[]>([]);
     const [logConnectionState, setLogConnectionState] = React.useState<'idle' | 'connected' | 'error'>('idle');
     const logEndRef = React.useRef<HTMLDivElement | null>(null);
+    const resolvedLogClientRequestIds = React.useMemo(
+        () => resolveLogClientRequestIds({ logs, clientRequestIds: logClientRequestIds, filenames: logFilenames }),
+        [logClientRequestIds, logFilenames, logs]
+    );
+    const filteredLogs = React.useMemo(
+        () => filterLogsByScope({ logs, clientRequestIds: resolvedLogClientRequestIds, filenames: [] }) as LogEntry[],
+        [logs, resolvedLogClientRequestIds]
+    );
+    const hasSelectedImageBatch = !!imageBatch && imageBatch.length > 0;
+    const hasLogScope = resolvedLogClientRequestIds.length > 0;
+    const hasScopeCandidate = logClientRequestIds.length > 0 || logFilenames.length > 0;
+    const visibleLogs = React.useMemo(
+        () => (hasLogScope ? filteredLogs : []),
+        [filteredLogs, hasLogScope]
+    );
 
     const handleSendClick = () => {
         // 只有选中单张图片时才允许发送到编辑。
@@ -164,7 +187,7 @@ export function ImageOutput({
     React.useEffect(() => {
         if (!isLogDialogOpen) return;
         logEndRef.current?.scrollIntoView({ block: 'end' });
-    }, [isLogDialogOpen, logs]);
+    }, [isLogDialogOpen, visibleLogs]);
 
     React.useEffect(() => {
         if (!openLogsSignal || !canOpenLogs) return;
@@ -176,7 +199,7 @@ export function ImageOutput({
     const canSendToEdit = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
 
     return (
-        <div className='flex h-full min-h-[300px] w-full flex-col items-center justify-between gap-4 overflow-hidden rounded-lg border border-white/20 bg-black p-4'>
+        <div className='bg-card text-card-foreground flex h-full min-h-[300px] w-full flex-col items-center justify-between gap-4 overflow-hidden rounded-lg border border-border p-4'>
             <div className='relative flex h-full w-full flex-grow items-center justify-center overflow-hidden'>
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
@@ -221,7 +244,7 @@ export function ImageOutput({
                             </div>
                         </div>
                     ) : (
-                        <div className='flex flex-col items-center justify-center text-white/60'>
+                        <div className='text-muted-foreground flex flex-col items-center justify-center'>
                             <Loader2 className='mb-2 h-8 w-8 animate-spin' />
                             <p>{t('output.generating')}</p>
                         </div>
@@ -233,7 +256,7 @@ export function ImageOutput({
                             {imageBatch.map((img, index) => (
                                 <div
                                     key={img.filename}
-                                    className='relative aspect-square overflow-hidden rounded border border-white/10'>
+                                    className='relative aspect-square overflow-hidden rounded border border-border'>
                                     <Image
                                         src={img.path}
                                         alt={t('output.generatedImage', { index: index + 1 })}
@@ -255,60 +278,72 @@ export function ImageOutput({
                             unoptimized
                         />
                     ) : (
-                        <div className='text-center text-white/60'>
+                        <div className='text-muted-foreground text-center'>
                             <p>{t('output.error')}</p>
                         </div>
                     )
                 ) : (
                     <div className='mx-auto max-w-sm text-center'>
-                        <p className='text-base font-medium text-white/70'>{t('output.emptyTitle')}</p>
-                        <p className='mt-2 text-sm leading-6 text-white/45'>{t('output.emptyDescription')}</p>
-                        {canOpenLogs && (
-                            <Button
-                                variant='outline'
-                                size='sm'
-                                onClick={() => setIsLogDialogOpen(true)}
-                                className='mt-4 border-white/20 text-white/75 hover:bg-white/10 hover:text-white'>
-                                <Terminal className='mr-2 h-4 w-4' />
-                                {t('logs.open')}
-                            </Button>
-                        )}
+                        <p className='text-foreground text-base font-medium'>{t('output.emptyTitle')}</p>
+                        <p className='text-muted-foreground mt-2 text-sm leading-6'>{t('output.emptyDescription')}</p>
                     </div>
                 )}
             </div>
 
             <Dialog open={isLogDialogOpen} onOpenChange={handleLogDialogOpenChange}>
-                <DialogContent className='border-white/20 bg-black text-white sm:max-w-[760px]'>
+                <DialogContent className='sm:max-w-[760px]'>
                     <DialogHeader>
-                        <DialogTitle className='text-white'>{t('logs.title')}</DialogTitle>
-                        <DialogDescription className='text-white/60'>{t('logs.description')}</DialogDescription>
+                        <DialogTitle>{t('logs.title')}</DialogTitle>
+                        <DialogDescription>{t('logs.description')}</DialogDescription>
                     </DialogHeader>
-                    <div className='flex items-center justify-between rounded-md border border-white/10 bg-neutral-900 px-3 py-2 text-xs text-white/60'>
+                    <div className='text-muted-foreground bg-muted/40 flex items-center justify-between rounded-md border border-border px-3 py-2 text-xs'>
                         <span>{t(`logs.status.${logConnectionState}`)}</span>
-                        <span>{t('logs.count', { count: logs.length })}</span>
+                        <span>{t('logs.count', { count: visibleLogs.length })}</span>
                     </div>
-                    <div className='h-[420px] overflow-y-auto rounded-md border border-white/10 bg-neutral-950 p-3 font-mono text-xs leading-5 text-white/80'>
-                        {logs.length === 0 ? (
-                            <p className='text-white/40'>{t('logs.empty')}</p>
+                    {hasLogScope ? (
+                        <div className='text-muted-foreground rounded-md border border-border bg-muted/20 px-3 py-2 text-xs'>
+                            {t('logs.scopeSelected')}
+                        </div>
+                    ) : hasSelectedImageBatch ? (
+                        <div className='text-muted-foreground rounded-md border border-dashed border-border px-3 py-2 text-xs'>
+                            {t('logs.scopeMissing')}
+                        </div>
+                    ) : (
+                        <div className='text-muted-foreground rounded-md border border-dashed border-border px-3 py-2 text-xs'>
+                            {t('logs.scopeNone')}
+                        </div>
+                    )}
+                    <div className='bg-muted/30 h-[420px] overflow-y-auto rounded-md border border-border p-3 font-mono text-xs leading-5 text-foreground/80'>
+                        {visibleLogs.length === 0 ? (
+                            <p className='text-muted-foreground'>
+                                {hasLogScope
+                                    ? t('logs.emptyForSelection')
+                                    : hasSelectedImageBatch && !hasScopeCandidate
+                                      ? t('logs.historyWithoutScope')
+                                      : t('logs.selectImage')}
+                            </p>
                         ) : (
-                            logs.map((entry) => (
-                                <div key={entry.id} className='border-b border-white/5 py-2 last:border-b-0'>
+                            visibleLogs.map((entry) => (
+                                <div key={entry.id} className='border-border/50 border-b py-2 last:border-b-0'>
                                     <div className='flex flex-wrap items-center gap-2'>
-                                        <span className='text-white/40'>{formatLogTime(entry.at)}</span>
+                                        <span className='text-muted-foreground'>{formatLogTime(entry.at)}</span>
                                         <span
                                             className={cn(
                                                 'rounded border px-1.5 py-0.5 uppercase',
-                                                entry.level === 'error' && 'border-red-400/40 text-red-200',
-                                                entry.level === 'warn' && 'border-yellow-400/40 text-yellow-200',
-                                                entry.level === 'info' && 'border-blue-300/30 text-blue-100',
-                                                entry.level === 'debug' && 'border-white/20 text-white/50'
+                                                entry.level === 'error' &&
+                                                    'border-red-500/40 text-red-700 dark:border-red-400/40 dark:text-red-200',
+                                                entry.level === 'warn' &&
+                                                    'border-yellow-500/40 text-yellow-700 dark:border-yellow-400/40 dark:text-yellow-200',
+                                                entry.level === 'info' &&
+                                                    'border-blue-500/40 text-blue-700 dark:border-blue-300/30 dark:text-blue-100',
+                                                entry.level === 'debug' && 'border-border text-muted-foreground'
                                             )}>
                                             {entry.level}
                                         </span>
-                                        <span className='break-all text-white/90'>{entry.message}</span>
+                                        <span className='text-foreground break-all'>{entry.message}</span>
                                     </div>
                                     {entry.context ? (
-                                        <pre className='mt-1 whitespace-pre-wrap break-words text-white/50'>{entry.context}</pre>
+                                        <pre className='text-muted-foreground mt-1 whitespace-pre-wrap break-words'>{entry.context}</pre>
                                     ) : null}
                                 </div>
                             ))
@@ -320,8 +355,7 @@ export function ImageOutput({
                             type='button'
                             variant='outline'
                             size='sm'
-                            onClick={() => setLogs([])}
-                            className='border-white/20 text-white/80 hover:bg-white/10 hover:text-white'>
+                            onClick={() => setLogs([])}>
                             <Trash2 className='mr-2 h-4 w-4' />
                             {t('logs.clear')}
                         </Button>
@@ -331,15 +365,13 @@ export function ImageOutput({
 
             <div className='flex h-10 w-full shrink-0 items-center justify-center gap-3'>
                 {showCarousel && (
-                    <div className='flex items-center gap-1.5 rounded-md border border-white/10 bg-neutral-800/50 p-1'>
+                    <div className='bg-muted/50 flex items-center gap-1.5 rounded-md border border-border p-1'>
                         <Button
                             variant='ghost'
                             size='icon'
                             className={cn(
                                 'h-8 w-8 rounded p-1',
-                                viewMode === 'grid'
-                                    ? 'bg-white/20 text-white'
-                                    : 'text-white/50 hover:bg-white/10 hover:text-white/80'
+                                viewMode === 'grid' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
                             )}
                             onClick={() => onViewChange('grid')}
                             aria-label={t('output.showGrid')}>
@@ -353,7 +385,7 @@ export function ImageOutput({
                                 className={cn(
                                     'h-8 w-8 overflow-hidden rounded p-0.5',
                                     viewMode === index
-                                        ? 'ring-2 ring-white ring-offset-1 ring-offset-black'
+                                        ? 'ring-2 ring-ring ring-offset-1 ring-offset-background'
                                         : 'opacity-60 hover:opacity-100'
                                 )}
                                 onClick={() => onViewChange(index)}
@@ -376,7 +408,7 @@ export function ImageOutput({
                         variant='outline'
                         size='sm'
                         onClick={() => setIsLogDialogOpen(true)}
-                        className='shrink-0 border-white/20 text-white/80 hover:bg-white/10 hover:text-white'>
+                        className='shrink-0'>
                         <Terminal className='mr-2 h-4 w-4' />
                         {t('logs.open')}
                     </Button>
@@ -388,7 +420,7 @@ export function ImageOutput({
                     onClick={handleSendClick}
                     disabled={!canSendToEdit}
                     className={cn(
-                        'shrink-0 border-white/20 text-white/80 hover:bg-white/10 hover:text-white disabled:opacity-50',
+                        'shrink-0 disabled:opacity-50',
                         // 多图网格视图下完全隐藏按钮。
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
                     )}>

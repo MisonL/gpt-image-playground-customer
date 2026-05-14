@@ -18,7 +18,7 @@ export default function RootLayout({
 }>) {
     return (
         <html lang='zh-CN' suppressHydrationWarning>
-            <body className='theme-adapt antialiased'>
+            <body className='antialiased'>
                 <ThemeProvider attribute='class' defaultTheme='light' enableSystem={false} disableTransitionOnChange>
                     <I18nProvider>{children}</I18nProvider>
                 </ThemeProvider>
