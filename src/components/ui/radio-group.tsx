@@ -43,7 +43,14 @@ function RadioGroupItem({
       >
         <CircleIcon className="fill-primary absolute top-1/2 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2" />
       </RadioGroupPrimitive.Indicator>
-      {children}
+      {children ? (
+        <span
+          data-slot="radio-group-item-content"
+          className="pointer-events-none flex min-w-0 items-center gap-2 overflow-hidden"
+        >
+          {children}
+        </span>
+      ) : null}
     </RadioGroupPrimitive.Item>
   )
 }

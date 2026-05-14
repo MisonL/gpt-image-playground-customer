@@ -9,7 +9,6 @@ export async function GET() {
 function readPublicCapabilitiesEnv(): Record<string, string | undefined> {
     return {
         AGENT_STATE_BACKEND: process.env.AGENT_STATE_BACKEND,
-        AGENT_SQLITE_PATH: process.env.AGENT_SQLITE_PATH,
         AGENT_DATABASE_URL: process.env.AGENT_DATABASE_URL ? 'configured' : undefined,
         AGENT_DB_PASSWORD: process.env.AGENT_DB_PASSWORD ? 'configured' : undefined,
         AGENT_DB_PASSWORD_FILE: process.env.AGENT_DB_PASSWORD_FILE ? 'configured' : undefined,
