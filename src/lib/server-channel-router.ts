@@ -11,6 +11,10 @@ export function getServerChannelState() {
 }
 
 export function resetServerChannelStateForTests(): void {
+    const isTestRuntime = process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test';
+    if (!isTestRuntime) {
+        throw new Error('resetServerChannelStateForTests 只能在测试环境中调用。');
+    }
     cachedServerChannelState = undefined;
 }
 

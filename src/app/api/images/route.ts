@@ -138,6 +138,14 @@ async function resolveRequestActualCost(input: {
     expectedImageCount: number;
 }): Promise<ActualCostDetails> {
     const finishedAtMs = Date.now();
+    if (!input.apiBaseUrl) {
+        return resolveActualCost({
+            model: input.model,
+            startedAtMs: input.startedAtMs,
+            finishedAtMs,
+            expectedImageCount: input.expectedImageCount
+        });
+    }
     return resolveActualCost({
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
@@ -146,6 +154,31 @@ async function resolveRequestActualCost(input: {
         finishedAtMs,
         expectedImageCount: input.expectedImageCount
     });
+}
+
+async function resolveRequestActualCostSafely(input: {
+    apiBaseUrl?: string;
+    apiKey: string;
+    model: string;
+    startedAtMs: number;
+    expectedImageCount: number;
+    requestLogContext?: { clientRequestId: string };
+}): Promise<ActualCostDetails> {
+    try {
+        return await resolveRequestActualCost(input);
+    } catch (error) {
+        appLogger.warn('解析实际扣费失败，继续返回图片结果。', {
+            ...input.requestLogContext,
+            error: error instanceof Error ? error.message : String(error)
+        });
+        return {
+            currency: 'usd-equivalent',
+            source: 'unavailable',
+            confidence: 'none',
+            upstreamProvider: 'unknown',
+            reason: '解析实际扣费失败。'
+        };
+    }
 }
 
 export async function POST(request: NextRequest) {
@@ -337,12 +370,13 @@ export async function POST(request: NextRequest) {
                                 }
                             }
 
-                            const actualCost = await resolveRequestActualCost({
+                            const actualCost = await resolveRequestActualCostSafely({
                                 apiBaseUrl: effectiveApiBaseUrl,
                                 apiKey: effectiveApiKey,
                                 model,
                                 startedAtMs: upstreamStartedAtMs,
-                                expectedImageCount: completedImages.length
+                                expectedImageCount: completedImages.length,
+                                requestLogContext
                             });
 
                             // 发送包含全部图片、用量和实际扣费状态的最终 done 事件。
@@ -490,12 +524,13 @@ export async function POST(request: NextRequest) {
                                 }
                             }
 
-                            const actualCost = await resolveRequestActualCost({
+                            const actualCost = await resolveRequestActualCostSafely({
                                 apiBaseUrl: effectiveApiBaseUrl,
                                 apiKey: effectiveApiKey,
                                 model,
                                 startedAtMs: upstreamStartedAtMs,
-                                expectedImageCount: completedImages.length
+                                expectedImageCount: completedImages.length,
+                                requestLogContext
                             });
 
                             // 发送包含全部图片、用量和实际扣费状态的最终 done 事件。
@@ -563,12 +598,13 @@ export async function POST(request: NextRequest) {
                 ...persistedImageToLegacyResponse(image),
                 ...(clientRequestId ? { clientRequestId } : {})
             }));
-            const actualCost = await resolveRequestActualCost({
+            const actualCost = await resolveRequestActualCostSafely({
                 apiBaseUrl: effectiveApiBaseUrl,
                 apiKey: effectiveApiKey,
                 model,
                 startedAtMs: upstreamStartedAtMs,
-                expectedImageCount: savedImagesData.length
+                expectedImageCount: savedImagesData.length,
+                requestLogContext
             });
 
             appLogger.info(`所有图片已处理。模式：${effectiveStorageMode}`, {

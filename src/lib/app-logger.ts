@@ -212,7 +212,7 @@ function appendLogEntry(level: LogLevel, message: string, context?: unknown) {
         try {
             subscriber(entry);
         } catch (error) {
-            console.error('Log subscriber processing failed.', error);
+            console.error('日志订阅者处理失败。', error);
         }
     });
 }

@@ -6,8 +6,28 @@ export type FilenameClock = () => number;
 
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
 const DEFAULT_OUTPUT_DIR = ['generated', 'images'].join('-');
+const SAFE_OUTPUT_DIR_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 
-export const outputDir = path.resolve(/* turbopackIgnore: true */ process.cwd(), process.env.IMAGE_OUTPUT_DIR || DEFAULT_OUTPUT_DIR);
+export function readOutputDirEnv(env: Record<string, string | undefined>, fieldName = 'IMAGE_OUTPUT_DIR'): string {
+    const value = env[fieldName]?.trim();
+    if (!value) return DEFAULT_OUTPUT_DIR;
+    const cwd = path.resolve(/* turbopackIgnore: true */ process.cwd());
+    const resolvedValue = path.resolve(/* turbopackIgnore: true */ process.cwd(), value);
+    const insideCwd = resolvedValue === cwd || resolvedValue.startsWith(`${cwd}${path.sep}`);
+    if (
+        value.startsWith('/') ||
+        value.startsWith('\\') ||
+        path.isAbsolute(value) ||
+        value.split(/[\\/]+/).includes('..') ||
+        !SAFE_OUTPUT_DIR_PATTERN.test(value) ||
+        !insideCwd
+    ) {
+        throw new Error(`${fieldName} 必须是安全的相对路径，且不能包含路径穿越片段。`);
+    }
+    return value;
+}
+
+export const outputDir = path.resolve(/* turbopackIgnore: true */ process.cwd(), readOutputDirEnv(process.env));
 
 function sha256(data: string): string {
     return crypto.createHash('sha256').update(data).digest('hex');

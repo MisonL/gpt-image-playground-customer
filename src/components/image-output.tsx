@@ -170,6 +170,7 @@ export function ImageOutput({
                 if (remainingEvent) {
                     processEvent(remainingEvent);
                 }
+                setLogConnectionState('idle');
             } catch (error) {
                 if (abortController.signal.aborted) return;
                 console.error('读取日志流失败。', error);

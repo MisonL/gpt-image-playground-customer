@@ -1,4 +1,5 @@
 import path from 'path';
+import { readFileSync } from 'fs';
 import {
     readAgentRecoveryIntervalMs,
     readAgentStateBackend,
@@ -21,6 +22,33 @@ type CachedStore = {
 let cachedStore: CachedStore | undefined;
 let storeFactoryForTests: ((backend: AgentStateBackend, key: string, env: Record<string, string | undefined>) => AgentStateStore) | undefined;
 
+function readEnvValue(env: Record<string, string | undefined>, fieldName: string): string | undefined {
+    const value = env[fieldName]?.trim();
+    return value ? value : undefined;
+}
+
+function readEnvSecret(env: Record<string, string | undefined>, fieldName: string, fileFieldName: string): string | undefined {
+    const directValue = readEnvValue(env, fieldName);
+    if (directValue) return directValue;
+    const filePath = readEnvValue(env, fileFieldName);
+    if (!filePath) return undefined;
+    return readFileSync(filePath, 'utf8').trim() || undefined;
+}
+
+export function readAgentDatabaseUrl(env: Record<string, string | undefined> = process.env): string | undefined {
+    const configuredUrl = readEnvValue(env, 'AGENT_DATABASE_URL');
+    if (configuredUrl) return configuredUrl;
+
+    const password = readEnvSecret(env, 'AGENT_DB_PASSWORD', 'AGENT_DB_PASSWORD_FILE');
+    if (!password) return undefined;
+
+    const host = readEnvValue(env, 'AGENT_DB_HOST') || 'localhost';
+    const port = readEnvValue(env, 'AGENT_DB_PORT') || '5432';
+    const database = readEnvValue(env, 'AGENT_DB_NAME') || 'gpt_image_playground';
+    const user = readEnvValue(env, 'AGENT_DB_USER') || 'gpt_image';
+    return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(database)}`;
+}
+
 export function resetAgentStateStoreForTests(): void {
     cachedStore = undefined;
 }
@@ -33,9 +61,10 @@ export function setAgentStateStoreFactoryForTests(
 
 export function getAgentStateStore(env: Record<string, string | undefined> = process.env): AgentStateStore {
     const backend = readAgentStateBackend(env);
+    const databaseUrl = backend === 'postgres' ? readAgentDatabaseUrl(env) : undefined;
     const key =
         backend === 'postgres'
-            ? env.AGENT_DATABASE_URL || ''
+            ? databaseUrl || ''
             : path.resolve(/* turbopackIgnore: true */ process.cwd(), readAgentSqlitePath(env));
     if (cachedStore && cachedStore.backend === backend && cachedStore.key === key) {
         return cachedStore.store;
@@ -46,10 +75,10 @@ export function getAgentStateStore(env: Record<string, string | undefined> = pro
         return store;
     }
     if (backend === 'postgres') {
-        if (!env.AGENT_DATABASE_URL) {
-            throw new Error('AGENT_STATE_BACKEND=postgres 时必须设置 AGENT_DATABASE_URL。');
+        if (!databaseUrl) {
+            throw new Error('AGENT_STATE_BACKEND=postgres 时必须设置 AGENT_DATABASE_URL 或 AGENT_DB_PASSWORD。');
         }
-        const store = new PostgresAgentStateStore(env.AGENT_DATABASE_URL);
+        const store = new PostgresAgentStateStore(databaseUrl);
         cachedStore = { backend, key, store, initPromise: store.init() };
         return store;
     }

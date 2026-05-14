@@ -17,9 +17,9 @@ export type ActualCostDetails = {
     reason?: string;
 };
 
-export type ResolveActualCostInput = {
-    apiBaseUrl?: string;
-    apiKey?: string;
+type UpstreamCostCredentials = { apiBaseUrl: string; apiKey: string } | { apiBaseUrl?: undefined; apiKey?: undefined };
+
+export type ResolveActualCostInput = UpstreamCostCredentials & {
     model: string;
     startedAtMs: number;
     finishedAtMs: number;

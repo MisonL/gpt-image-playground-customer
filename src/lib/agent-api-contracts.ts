@@ -362,7 +362,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         storage: {
             image_storage_mode: env.NEXT_PUBLIC_IMAGE_STORAGE_MODE || (env.VERCEL === '1' ? 'indexeddb' : 'fs'),
             sqlite_path: readAgentSqlitePath(env),
-            postgres_configured: Boolean(env.AGENT_DATABASE_URL)
+            postgres_configured: Boolean(env.AGENT_DATABASE_URL || env.AGENT_DB_PASSWORD || env.AGENT_DB_PASSWORD_FILE)
         },
         idempotency: {
             required: true,

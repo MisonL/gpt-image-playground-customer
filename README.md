@@ -266,7 +266,9 @@ curl -s http://localhost:4783/api/agent/images/generate \
 | `AGENT_API_TOKEN` | 否 | 无 | 设置后，`/api/agent/*` 需要 Bearer token。 |
 | `AGENT_STATE_BACKEND` | 否 | `sqlite` | Agent 状态后端，可选 `sqlite` 或 `postgres`。 |
 | `AGENT_SQLITE_PATH` | 否 | `generated-images/.agent-state/agent.sqlite` | SQLite 状态库路径。 |
-| `AGENT_DATABASE_URL` | PostgreSQL 模式必填 | 无 | PostgreSQL 连接串。 |
+| `AGENT_DATABASE_URL` | PostgreSQL 模式可选 | 无 | PostgreSQL 连接串；也可改用下面的拆分字段。 |
+| `AGENT_DB_HOST` / `AGENT_DB_PORT` / `AGENT_DB_NAME` / `AGENT_DB_USER` | PostgreSQL 模式可选 | `localhost` / `5432` / `gpt_image_playground` / `gpt_image` | 未设置 `AGENT_DATABASE_URL` 时用于组装 PostgreSQL 连接串。 |
+| `AGENT_DB_PASSWORD` / `AGENT_DB_PASSWORD_FILE` | PostgreSQL 模式必填其一 | 无 | PostgreSQL 密码或 Docker secret file 路径。 |
 | `GPT_IMAGE_POSTGRES_PASSWORD` | Docker PostgreSQL 模式必填 | 无 | `docker-compose.postgres.yml` 中 PostgreSQL 容器密码，通过 Docker secret file 注入，不提供默认值。 |
 | `AGENT_REQUEST_LEASE_MS` | 否 | `600000` | Agent 请求运行锁租约时间。 |
 | `AGENT_REQUEST_TTL_SECONDS` | 否 | `86400` | 幂等请求记录保留秒数。 |
@@ -375,7 +377,6 @@ PostgreSQL 高并发部署：
 
 ```bash
 GPT_IMAGE_POSTGRES_PASSWORD='<database-password>' \
-AGENT_DATABASE_URL='postgres://gpt_image:<database-password>@postgres:5432/gpt_image_playground' \
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
 ```
 

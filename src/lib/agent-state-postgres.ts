@@ -136,12 +136,20 @@ export class PostgresAgentStateStore implements AgentStateStore {
 	                                  typeof filepath === 'string' && isArtifactFilepathAllowed(filepath)
 	                          )
 	                    : [];
-            await Promise.all([...new Set(artifactFilepaths)].map((filepath) => deleteFileIfExists(filepath)));
             if (requestIds.length > 0) {
                 await client.query('DELETE FROM agent_artifacts WHERE request_id = ANY($1)', [requestIds]);
                 await client.query('DELETE FROM agent_requests WHERE request_id = ANY($1)', [requestIds]);
             }
             await client.query('COMMIT');
+            await Promise.all(
+                [...new Set(artifactFilepaths)].map(async (filepath) => {
+                    try {
+                        await deleteFileIfExists(filepath);
+                    } catch (error) {
+                        console.error('删除已过期 Agent 产物文件失败。', error);
+                    }
+                })
+            );
             return requestIds.length;
         } catch (error) {
             await client.query('ROLLBACK');
