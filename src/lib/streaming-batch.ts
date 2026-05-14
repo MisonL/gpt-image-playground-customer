@@ -42,6 +42,7 @@ export type ApiImageResponseItem = {
     b64_json?: string;
     output_format: string;
     path?: string;
+    clientRequestId?: string;
 };
 
 export type StreamingClientEvent = {
@@ -53,11 +54,14 @@ export type StreamingClientEvent = {
     output_format?: string;
     images?: ApiImageResponseItem[];
     usage?: unknown;
+    actual_cost?: unknown;
+    client_request_id?: string;
 };
 
 export type StreamingClientState = {
     completedImages: ApiImageResponseItem[];
     usage?: unknown;
+    actualCost?: unknown;
 };
 
 export function computeStreamingConcurrency(options: StreamingConcurrencyOptions): number {
@@ -107,6 +111,7 @@ export function applyStreamingClientEvent(
     event: StreamingClientEvent
 ): StreamingClientState {
     if (event.type === 'completed' && event.filename) {
+        const clientRequestId = typeof event.client_request_id === 'string' ? event.client_request_id : undefined;
         return {
             ...state,
             completedImages: [
@@ -115,16 +120,23 @@ export function applyStreamingClientEvent(
                     filename: event.filename,
                     b64_json: event.b64_json,
                     path: event.path,
-                    output_format: event.output_format || 'png'
+                    output_format: event.output_format || 'png',
+                    ...(clientRequestId ? { clientRequestId } : {})
                 }
             ]
         };
     }
 
     if (event.type === 'done') {
+        const clientRequestId = typeof event.client_request_id === 'string' ? event.client_request_id : undefined;
+        const eventImages = event.images && event.images.length > 0 ? event.images : state.completedImages;
         return {
-            completedImages: event.images && event.images.length > 0 ? event.images : state.completedImages,
-            usage: event.usage
+            completedImages: eventImages.map((image) => ({
+                ...image,
+                ...(image.clientRequestId || !clientRequestId ? {} : { clientRequestId })
+            })),
+            usage: event.usage,
+            actualCost: event.actual_cost
         };
     }
 

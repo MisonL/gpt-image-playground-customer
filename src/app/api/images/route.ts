@@ -36,6 +36,7 @@ import {
 } from '@/lib/image-service';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { createBatchId, createImageFilename, outputDir, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
+import { resolveActualCost, type ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
@@ -56,10 +57,21 @@ type StreamingEvent = {
         b64_json: string;
         path?: string;
         output_format: string;
+        clientRequestId?: string;
     }>;
+    client_request_id?: string;
+    actual_cost?: ActualCostDetails;
     error?: string;
     status?: number;
 };
+
+function readClientRequestId(formData: FormData): string | undefined {
+    const value = formData.get('clientRequestId');
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    if (!normalized) return undefined;
+    return normalized.slice(0, 128);
+}
 
 function readErrorStatus(error: unknown): number | undefined {
     if (typeof error !== 'object' || error === null) return undefined;
@@ -118,11 +130,37 @@ async function ensureOutputDirExists() {
     }
 }
 
+async function resolveRequestActualCost(input: {
+    apiBaseUrl?: string;
+    apiKey: string;
+    model: string;
+    startedAtMs: number;
+    expectedImageCount: number;
+}): Promise<ActualCostDetails> {
+    const finishedAtMs = Date.now();
+    return resolveActualCost({
+        apiBaseUrl: input.apiBaseUrl,
+        apiKey: input.apiKey,
+        model: input.model,
+        startedAtMs: input.startedAtMs,
+        finishedAtMs,
+        expectedImageCount: input.expectedImageCount
+    });
+}
+
 export async function POST(request: NextRequest) {
     let selectedServerCredential: ChannelCredential | undefined;
+    let clientRequestId: string | undefined;
+    let requestLogContext: { clientRequestId: string } | undefined;
     try {
         const serverChannelRouter = getServerChannelState().router;
+        const contentType = request.headers.get('content-type') || '';
+        if (!contentType.includes('multipart/form-data') && !contentType.includes('application/x-www-form-urlencoded')) {
+            return NextResponse.json({ error: '请求正文无效：必须是 multipart/form-data。' }, { status: 400 });
+        }
         const formData = await request.formData();
+        clientRequestId = readClientRequestId(formData);
+        requestLogContext = clientRequestId ? { clientRequestId } : undefined;
         const requestApiKey = String(formData.get('apiKey') || '').trim();
         const requestApiBaseUrl = String(formData.get('apiBaseUrl') || '').trim();
         assertSafeApiOverride(requestApiKey, requestApiBaseUrl);
@@ -143,7 +181,7 @@ export async function POST(request: NextRequest) {
         validateApiBaseUrl(effectiveApiBaseUrl || '');
 
         if (!effectiveApiKey) {
-            appLogger.error('未设置 OPENAI_API_KEY，且请求未提供 API Key。');
+            appLogger.error('未设置 OPENAI_API_KEY，且请求未提供 API Key。', requestLogContext);
             return NextResponse.json(
                 { error: '请在 API 设置中填写 API Key，或配置 OPENAI_API_KEY 环境变量。' },
                 { status: 400 }
@@ -151,7 +189,8 @@ export async function POST(request: NextRequest) {
         }
         if (selectedCredential) {
             appLogger.info(
-                `已选择 API 渠道：${selectedCredential.channelId}，凭证：${selectedCredential.id}，策略：server`
+                `已选择 API 渠道：${selectedCredential.channelId}，凭证：${selectedCredential.id}，策略：server`,
+                requestLogContext
             );
         }
 
@@ -161,7 +200,7 @@ export async function POST(request: NextRequest) {
         });
 
         const effectiveStorageMode = readStorageMode(process.env);
-        appLogger.info(`实际图片存储模式：${effectiveStorageMode}`);
+        appLogger.info(`实际图片存储模式：${effectiveStorageMode}`, requestLogContext);
 
         if (effectiveStorageMode === 'fs') {
             await ensureOutputDirExists();
@@ -171,11 +210,11 @@ export async function POST(request: NextRequest) {
         if (appPassword) {
             const clientPasswordHash = formData.get('passwordHash');
             if (typeof clientPasswordHash !== 'string' || !clientPasswordHash) {
-                appLogger.error('缺少密码哈希。');
+                appLogger.error('缺少密码哈希。', requestLogContext);
                 return NextResponse.json({ error: '未授权：缺少密码哈希。' }, { status: 401 });
             }
             if (!verifyPasswordHash(clientPasswordHash, appPassword)) {
-                appLogger.error('密码哈希无效。');
+                appLogger.error('密码哈希无效。', requestLogContext);
                 return NextResponse.json({ error: '未授权：密码无效。' }, { status: 401 });
             }
         }
@@ -183,8 +222,10 @@ export async function POST(request: NextRequest) {
         const mode = readMode(formData);
         const prompt = readRequiredText(formData, 'prompt');
         const model = readModel(formData);
+        const upstreamStartedAtMs = Date.now();
 
-        appLogger.debug(`模式：${mode}，模型：${model}，提示词：${prompt ? prompt.substring(0, 50) + '...' : 'N/A'}`);
+        appLogger.info(`开始处理图片请求。模式：${mode}，模型：${model}`, requestLogContext);
+        appLogger.debug(`模式：${mode}，模型：${model}，提示词：${prompt ? prompt.substring(0, 50) + '...' : 'N/A'}`, requestLogContext);
 
         const streamEnabled = formData.get('stream') === 'true';
         const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
@@ -262,7 +303,10 @@ export async function POST(request: NextRequest) {
                                         const buffer = Buffer.from(event.b64_json, 'base64');
                                         const filepath = path.join(outputDir, filename);
                                         await fs.writeFile(filepath, buffer);
-                                        appLogger.debug(`流式生成：已保存图片 ${filename}`);
+                                        appLogger.info(`流式生成：已保存图片 ${filename}`, {
+                                            ...requestLogContext,
+                                            filenames: [filename]
+                                        });
                                     }
 
                                     const imageData = createImageResult(
@@ -279,7 +323,8 @@ export async function POST(request: NextRequest) {
                                         filename,
                                         b64_json: event.b64_json,
                                         path: effectiveStorageMode === 'fs' ? `/api/image/${filename}` : undefined,
-                                        output_format: fileExtension
+                                        output_format: fileExtension,
+                                        client_request_id: clientRequestId
                                     };
                                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
 
@@ -292,17 +337,27 @@ export async function POST(request: NextRequest) {
                                 }
                             }
 
-                            // 发送包含全部图片和用量的最终 done 事件。
+                            const actualCost = await resolveRequestActualCost({
+                                apiBaseUrl: effectiveApiBaseUrl,
+                                apiKey: effectiveApiKey,
+                                model,
+                                startedAtMs: upstreamStartedAtMs,
+                                expectedImageCount: completedImages.length
+                            });
+
+                            // 发送包含全部图片、用量和实际扣费状态的最终 done 事件。
                             const doneEvent: StreamingEvent = {
                                 type: 'done',
                                 images: completedImages,
-                                usage: finalUsage
+                                usage: finalUsage,
+                                actual_cost: actualCost,
+                                client_request_id: clientRequestId
                             };
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
                             controller.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
-                            appLogger.error('流式生成失败：', error);
+                            appLogger.error('流式生成失败：', { ...requestLogContext, error: error instanceof Error ? error.message : String(error) });
                             const status = readErrorStatus(error);
                             const errorEvent: StreamingEvent = {
                                 type: 'error',
@@ -319,13 +374,15 @@ export async function POST(request: NextRequest) {
                     headers: {
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
-                        Connection: 'keep-alive'
+                        Connection: 'keep-alive',
+                        ...(clientRequestId ? { 'X-Client-Request-Id': clientRequestId } : {})
                     }
                 });
             }
 
             const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...baseParams, stream: false };
-            appLogger.debug('调用 OpenAI generate，参数：', params);
+            appLogger.info('调用 OpenAI generate。', requestLogContext);
+            appLogger.debug('调用 OpenAI generate，参数：', { ...params, ...requestLogContext });
             result = await openai.images.generate(params);
         } else if (mode === 'edit') {
             const n = readCount(formData, 'n', 1, 1, 10);
@@ -345,12 +402,14 @@ export async function POST(request: NextRequest) {
 
             // 处理编辑模式的流式响应。
             if (streamEnabled) {
+                appLogger.info('调用 OpenAI edit 流式接口。', requestLogContext);
                 appLogger.debug('调用 OpenAI edit 流式接口，参数：', {
                     ...baseEditParams,
                     stream: true,
                     partial_images: partialImagesCount,
                     image: `[${imageFiles.map((f) => f.name).join(', ')}]`,
-                    mask: maskFile ? maskFile.name : 'N/A'
+                    mask: maskFile ? maskFile.name : 'N/A',
+                    ...requestLogContext
                 });
 
                 const streamEditParams = {
@@ -397,7 +456,10 @@ export async function POST(request: NextRequest) {
                                         const buffer = Buffer.from(event.b64_json, 'base64');
                                         const filepath = path.join(outputDir, filename);
                                         await fs.writeFile(filepath, buffer);
-                                        appLogger.debug(`流式编辑：已保存图片 ${filename}`);
+                                        appLogger.info(`流式编辑：已保存图片 ${filename}`, {
+                                            ...requestLogContext,
+                                            filenames: [filename]
+                                        });
                                     }
 
                                     const imageData = createImageResult(
@@ -414,7 +476,8 @@ export async function POST(request: NextRequest) {
                                         filename,
                                         b64_json: event.b64_json,
                                         path: effectiveStorageMode === 'fs' ? `/api/image/${filename}` : undefined,
-                                        output_format: fileExtension
+                                        output_format: fileExtension,
+                                        client_request_id: clientRequestId
                                     };
                                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
 
@@ -427,17 +490,27 @@ export async function POST(request: NextRequest) {
                                 }
                             }
 
-                            // 发送包含全部图片和用量的最终 done 事件。
+                            const actualCost = await resolveRequestActualCost({
+                                apiBaseUrl: effectiveApiBaseUrl,
+                                apiKey: effectiveApiKey,
+                                model,
+                                startedAtMs: upstreamStartedAtMs,
+                                expectedImageCount: completedImages.length
+                            });
+
+                            // 发送包含全部图片、用量和实际扣费状态的最终 done 事件。
                             const doneEvent: StreamingEvent = {
                                 type: 'done',
                                 images: completedImages,
-                                usage: finalUsage
+                                usage: finalUsage,
+                                actual_cost: actualCost,
+                                client_request_id: clientRequestId
                             };
                             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
                             controller.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
-                            appLogger.error('流式编辑失败：', error);
+                            appLogger.error('流式编辑失败：', { ...requestLogContext, error: error instanceof Error ? error.message : String(error) });
                             const status = readErrorStatus(error);
                             const errorEvent: StreamingEvent = {
                                 type: 'error',
@@ -454,7 +527,8 @@ export async function POST(request: NextRequest) {
                     headers: {
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
-                        Connection: 'keep-alive'
+                        Connection: 'keep-alive',
+                        ...(clientRequestId ? { 'X-Client-Request-Id': clientRequestId } : {})
                     }
                 });
             }
@@ -464,17 +538,19 @@ export async function POST(request: NextRequest) {
                 ...(maskFile ? { mask: maskFile } : {})
             };
 
+            appLogger.info('调用 OpenAI edit。', requestLogContext);
             appLogger.debug('调用 OpenAI edit，参数：', {
                 ...params,
                 image: `[${imageFiles.map((f) => f.name).join(', ')}]`,
-                mask: maskFile ? maskFile.name : 'N/A'
+                mask: maskFile ? maskFile.name : 'N/A',
+                ...requestLogContext
             });
             result = await openai.images.edit(params);
         } else {
             return NextResponse.json({ error: 'mode 无效' }, { status: 400 });
         }
 
-        appLogger.info('OpenAI API 调用成功。');
+        appLogger.info('OpenAI API 调用成功。', requestLogContext);
 
         try {
             const savedImages = await persistOpenAiImages({
@@ -483,14 +559,27 @@ export async function POST(request: NextRequest) {
                 storageMode: effectiveStorageMode,
                 includeBase64: true
             });
-            const savedImagesData = savedImages.map((image) => persistedImageToLegacyResponse(image));
+            const savedImagesData = savedImages.map((image) => ({
+                ...persistedImageToLegacyResponse(image),
+                ...(clientRequestId ? { clientRequestId } : {})
+            }));
+            const actualCost = await resolveRequestActualCost({
+                apiBaseUrl: effectiveApiBaseUrl,
+                apiKey: effectiveApiKey,
+                model,
+                startedAtMs: upstreamStartedAtMs,
+                expectedImageCount: savedImagesData.length
+            });
 
-            appLogger.info(`所有图片已处理。模式：${effectiveStorageMode}`);
+            appLogger.info(`所有图片已处理。模式：${effectiveStorageMode}`, {
+                ...requestLogContext,
+                filenames: savedImagesData.map((image) => image.filename)
+            });
 
-            return NextResponse.json({ images: savedImagesData, usage: result.usage });
+            return NextResponse.json({ images: savedImagesData, usage: result.usage, actualCost, clientRequestId });
         } catch (persistError) {
             if (persistError instanceof MissingOpenAiImageDataError) {
-                appLogger.error(`第 ${persistError.index} 个图片数据缺少 b64_json。`);
+                appLogger.error(`第 ${persistError.index} 个图片数据缺少 b64_json。`, requestLogContext);
                 throw persistError;
             }
             if (!(persistError instanceof InvalidOpenAiImagesResponseError)) {
@@ -499,14 +588,15 @@ export async function POST(request: NextRequest) {
             const invalidResult: unknown = persistError.result;
             appLogger.error('OpenAI API 返回的数据无效或为空：', {
                 type: typeof invalidResult,
-                preview: typeof invalidResult === 'string' ? invalidResult.slice(0, 300) : invalidResult
+                preview: typeof invalidResult === 'string' ? invalidResult.slice(0, 300) : invalidResult,
+                ...requestLogContext
             });
             reportServerCredentialFailure(selectedCredential, { status: 502 });
             return NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
         }
     } catch (error: unknown) {
         reportServerCredentialFailure(selectedServerCredential, error);
-        appLogger.error('/api/images 处理失败：', error);
+        appLogger.error('/api/images 处理失败：', { ...requestLogContext, error: error instanceof Error ? error.message : String(error) });
 
         let errorMessage = '发生未知错误。';
         let status = 500;
