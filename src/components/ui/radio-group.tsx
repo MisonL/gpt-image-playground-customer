@@ -19,6 +19,10 @@ function RadioGroup({
   )
 }
 
+/**
+ * children is visual content inside the radio button. Provide aria-label or
+ * aria-labelledby on the item when that content is the visible label.
+ */
 function RadioGroupItem({
   className,
   children,

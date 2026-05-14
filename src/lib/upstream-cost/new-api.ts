@@ -97,10 +97,7 @@ export function matchNewApiCostLog(input: {
     }
 
     const match = matches[0];
-    const quota = readNumber(match.quota);
-    if (quota === undefined) {
-        return unavailable('new-api 日志缺少有效 quota。');
-    }
+    const quota = readNumber(match.quota) as number;
 
     const id = readNumber(match.id);
     const requestId = typeof match.request_id === 'string' && match.request_id ? match.request_id : undefined;

@@ -14,13 +14,20 @@ function unavailable(reason: string, upstreamProvider: UpstreamCostProvider = 'u
 }
 
 function detectKnownProvider(apiBaseUrl: string): UpstreamCostProvider {
+    let upstreamProvider: UpstreamCostProvider = 'unknown';
     try {
         const parsed = new URL(apiBaseUrl);
-        if (parsed.hostname === 'api.openai.com') return 'openai';
-    } catch {
-        return 'unknown';
+        const pathIsOpenAiApiRoot = parsed.pathname === '/' || parsed.pathname === '/v1' || parsed.pathname.startsWith('/v1/');
+        if (parsed.protocol === 'https:' && parsed.hostname === 'api.openai.com' && pathIsOpenAiApiRoot) {
+            upstreamProvider = 'openai';
+        }
+    } catch (error) {
+        console.debug('解析上游 API URL 失败。', { apiBaseUrl, error });
+        if (!(error instanceof TypeError)) {
+            throw error;
+        }
     }
-    return 'unknown';
+    return upstreamProvider;
 }
 
 export async function resolveActualCost(input: ResolveActualCostInput): Promise<ActualCostDetails> {

@@ -41,13 +41,23 @@ export async function GET(request: NextRequest) {
             const sendEntry = (entry: AppLogEntry) => {
                 try {
                     controller.enqueue(encodeSseEvent(encoder, entry));
-                } catch {
+                } catch (error) {
+                    appLogger.warn('日志查看器发送实时日志失败。', {
+                        error: error instanceof Error ? error.message : String(error)
+                    });
                     unsubscribe();
                 }
             };
 
             readAppLogEntries().forEach((entry) => {
-                controller.enqueue(encodeSseEvent(encoder, entry));
+                try {
+                    controller.enqueue(encodeSseEvent(encoder, entry));
+                } catch (error) {
+                    appLogger.warn('日志查看器发送历史日志失败。', {
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                    unsubscribe();
+                }
             });
             unsubscribe = subscribeAppLogs(sendEntry);
 

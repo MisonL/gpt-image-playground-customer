@@ -27,7 +27,9 @@ import {
     scheduleStreamingBatch,
     shouldUseStreamingBatch,
     type ApiImageResponseItem,
-    type StreamingBatchJob
+    type StreamingBatchJob,
+    type StreamingClientEvent,
+    type StreamingClientState
 } from '@/lib/streaming-batch';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -822,11 +824,7 @@ export default function HomePage() {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
-                let streamingState: {
-                    completedImages: ApiImageResponseItem[];
-                    usage?: unknown;
-                    actualCost?: unknown;
-                } = {
+                let streamingState: StreamingClientState = {
                     completedImages: []
                 };
 
@@ -849,7 +847,7 @@ export default function HomePage() {
                     } else if (event.type === 'error') {
                         throw new ApiRequestError(event.error || t('error.streaming'), event.status);
                     } else if (event.type === 'completed' || event.type === 'done') {
-                        streamingState = applyStreamingClientEvent(streamingState, event);
+                        streamingState = applyStreamingClientEvent(streamingState, event as StreamingClientEvent);
                     }
                 };
 
@@ -876,7 +874,7 @@ export default function HomePage() {
                         ...(image.clientRequestId || !formClientRequestId ? {} : { clientRequestId: formClientRequestId })
                     })),
                     usage: streamingState.usage,
-                    actualCost: streamingState.actualCost as ActualCostDetails | undefined
+                    actualCost: streamingState.actualCost ?? undefined
                 };
             }
 

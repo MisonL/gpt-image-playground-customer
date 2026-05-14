@@ -292,16 +292,51 @@ describe('applyStreamingClientEvent', () => {
                 type: 'done',
                 images: [],
                 actual_cost: {
+                    currency: 'usd-equivalent',
+                    confidence: 'high',
                     source: 'new-api-log-token',
-                    actualAmount: 0.0075
+                    actualAmount: 0.0075,
+                    upstreamProvider: 'new-api'
                 }
             }
         );
 
         assert.deepEqual(withDone.actualCost, {
+            currency: 'usd-equivalent',
+            confidence: 'high',
             source: 'new-api-log-token',
-            actualAmount: 0.0075
+            actualAmount: 0.0075,
+            upstreamProvider: 'new-api'
         });
+    });
+
+    it('rejects completed events that omit output format', () => {
+        const initial = {
+            completedImages: []
+        };
+
+        assert.throws(
+            () =>
+                applyStreamingClientEvent(initial, {
+                    type: 'completed',
+                    filename: 'image-1.png'
+                }),
+            /output_format/
+        );
+    });
+
+    it('rejects malformed actual cost details from the final done event', () => {
+        assert.throws(
+            () =>
+                applyStreamingClientEvent(
+                    { completedImages: [] },
+                    {
+                        type: 'done',
+                        actual_cost: { source: 'new-api-log-token' } as never
+                    }
+                ),
+            /actual_cost/
+        );
     });
 });
 

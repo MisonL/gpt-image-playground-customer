@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -18,7 +18,7 @@ afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
 });
 
-describe('image share store', () => {
+describe('image share store', { concurrency: false }, () => {
     it('stores a copied image share with hashed access code and expiry', async () => {
         const {
             createImageShare,
@@ -58,11 +58,12 @@ describe('image share store', () => {
     });
 
     it('creates public shares without access code or expiry', async () => {
-        const { createImageShare, isImageShareExpired, readImageShare, verifyImageShareAccess } = await import('./share-store');
+        const { createImageShare, isImageShareExpired, readImageShare, readImageShareContent, verifyImageShareAccess } =
+            await import('./share-store');
 
         const created = await createImageShare({
             imageBuffer: Buffer.from('public-image'),
-            sourceFilename: 'public.webp',
+            sourceFilename: 'public',
             mimeType: 'image/webp',
             expiresInMinutes: null,
             now: new Date('2026-05-14T08:00:00.000Z')
@@ -74,6 +75,26 @@ describe('image share store', () => {
         assert.equal(record.expiresAt, undefined);
         assert.equal(verifyImageShareAccess(record, ''), true);
         assert.equal(isImageShareExpired(record, new Date('2027-05-14T08:00:00.000Z')), false);
+        assert.equal(record.contentFilename.endsWith('.webp'), true);
+        assert.equal((await readImageShareContent(record)).buffer.toString(), 'public-image');
+    });
+
+    it('treats malformed expiry timestamps as expired', async () => {
+        const { isImageShareExpired } = await import('./share-store');
+
+        assert.equal(
+            isImageShareExpired({
+                token: 'a'.repeat(24),
+                sourceFilename: 'source.png',
+                contentFilename: 'source.png',
+                mimeType: 'image/png',
+                sizeBytes: 1,
+                createdAt: '2026-05-14T08:00:00.000Z',
+                accessCodeRequired: false,
+                expiresAt: 'not-a-date'
+            }),
+            true
+        );
     });
 
     it('rejects unsafe share tokens', async () => {
@@ -83,7 +104,7 @@ describe('image share store', () => {
     });
 
     it('resolves the share directory from the active working directory', async () => {
-        const { createImageShare, getShareMetadataPathForTest, readImageShare } = await import('./share-store');
+        const { createImageShare, readImageShare, readImageShareContent } = await import('./share-store');
 
         const first = await createImageShare({
             imageBuffer: Buffer.from('first-image'),
@@ -91,25 +112,40 @@ describe('image share store', () => {
             mimeType: 'image/png',
             expiresInMinutes: null
         });
-        const firstMetadataPath = getShareMetadataPathForTest(first.token);
         const secondDir = await mkdtemp(path.join(os.tmpdir(), 'image-share-second-'));
 
         try {
             process.chdir(secondDir);
+            assert.equal(await readImageShare(first.token), undefined);
             const second = await createImageShare({
                 imageBuffer: Buffer.from('second-image'),
                 sourceFilename: 'second.png',
                 mimeType: 'image/png',
                 expiresInMinutes: null
             });
-            const secondMetadataPath = getShareMetadataPathForTest(second.token);
+            const secondRecord = await readImageShare(second.token);
+            assert.ok(secondRecord);
+            const secondContent = await readImageShareContent(secondRecord);
 
-            assert.notEqual(path.dirname(secondMetadataPath), path.dirname(firstMetadataPath));
-            assert.ok(await readImageShare(second.token));
-            await stat(secondMetadataPath);
+            assert.equal(secondContent.buffer.toString(), 'second-image');
+            process.chdir(tempDir);
+            assert.equal(await readImageShare(second.token), undefined);
+            assert.ok(await readImageShare(first.token));
         } finally {
             process.chdir(tempDir);
             await rm(secondDir, { recursive: true, force: true });
         }
+    });
+
+    it('rejects share content paths outside the share directory', async () => {
+        const { createImageShare, readImageShareContent } = await import('./share-store');
+        const created = await createImageShare({
+            imageBuffer: Buffer.from('image-bytes'),
+            sourceFilename: 'source.png',
+            mimeType: 'image/png',
+            expiresInMinutes: null
+        });
+
+        await assert.rejects(() => readImageShareContent({ ...created, contentFilename: '../outside.png' }), /分享目录之外/);
     });
 });

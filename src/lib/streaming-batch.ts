@@ -1,3 +1,5 @@
+import type { ActualCostDetails } from './upstream-cost/types';
+
 export type StreamingBatchJob = {
     id: string;
     outputIndex: number;
@@ -54,15 +56,49 @@ export type StreamingClientEvent = {
     output_format?: string;
     images?: ApiImageResponseItem[];
     usage?: unknown;
-    actual_cost?: unknown;
+    actual_cost?: ActualCostDetails | null;
     client_request_id?: string;
 };
 
 export type StreamingClientState = {
     completedImages: ApiImageResponseItem[];
     usage?: unknown;
-    actualCost?: unknown;
+    actualCost?: ActualCostDetails | null;
 };
+
+function isActualCostDetails(value: unknown): value is ActualCostDetails {
+    if (typeof value !== 'object' || value === null) return false;
+    const record = value as Record<string, unknown>;
+    const validCurrency = record.currency === 'usd-equivalent' || record.currency === 'quota-unit';
+    const validSource =
+        record.source === 'estimate' ||
+        record.source === 'new-api-log-token' ||
+        record.source === 'pending' ||
+        record.source === 'unavailable';
+    const validConfidence =
+        record.confidence === 'exact' || record.confidence === 'high' || record.confidence === 'low' || record.confidence === 'none';
+    const validProvider =
+        record.upstreamProvider === 'new-api' ||
+        record.upstreamProvider === 'openai' ||
+        record.upstreamProvider === 'sub2api' ||
+        record.upstreamProvider === 'unknown';
+    const validOptionalNumbers =
+        (record.estimatedUsd === undefined || typeof record.estimatedUsd === 'number') &&
+        (record.actualAmount === undefined || typeof record.actualAmount === 'number') &&
+        (record.actualQuota === undefined || typeof record.actualQuota === 'number') &&
+        (record.matchedLogId === undefined || typeof record.matchedLogId === 'number');
+    const validOptionalStrings =
+        (record.matchedRequestId === undefined || typeof record.matchedRequestId === 'string') &&
+        (record.reason === undefined || typeof record.reason === 'string');
+    return (
+        validCurrency &&
+        validSource &&
+        validConfidence &&
+        validProvider &&
+        validOptionalNumbers &&
+        validOptionalStrings
+    );
+}
 
 export function computeStreamingConcurrency(options: StreamingConcurrencyOptions): number {
     const credentialCount = Math.max(1, Math.floor(options.credentialCount));
@@ -111,6 +147,9 @@ export function applyStreamingClientEvent(
     event: StreamingClientEvent
 ): StreamingClientState {
     if (event.type === 'completed' && event.filename) {
+        if (typeof event.output_format !== 'string' || event.output_format.length === 0) {
+            throw new Error(`流式完成事件缺少有效 output_format：${String(event.output_format)}`);
+        }
         const clientRequestId = typeof event.client_request_id === 'string' ? event.client_request_id : undefined;
         return {
             ...state,
@@ -120,7 +159,7 @@ export function applyStreamingClientEvent(
                     filename: event.filename,
                     b64_json: event.b64_json,
                     path: event.path,
-                    output_format: event.output_format || 'png',
+                    output_format: event.output_format,
                     ...(clientRequestId ? { clientRequestId } : {})
                 }
             ]
@@ -130,13 +169,17 @@ export function applyStreamingClientEvent(
     if (event.type === 'done') {
         const clientRequestId = typeof event.client_request_id === 'string' ? event.client_request_id : undefined;
         const eventImages = event.images && event.images.length > 0 ? event.images : state.completedImages;
+        const actualCost = event.actual_cost === undefined || event.actual_cost === null ? null : event.actual_cost;
+        if (actualCost !== null && !isActualCostDetails(actualCost)) {
+            throw new Error(`流式完成事件包含无效 actual_cost：${JSON.stringify(event.actual_cost)}`);
+        }
         return {
             completedImages: eventImages.map((image) => ({
                 ...image,
                 ...(image.clientRequestId || !clientRequestId ? {} : { clientRequestId })
             })),
             usage: event.usage,
-            actualCost: event.actual_cost
+            actualCost
         };
     }
 

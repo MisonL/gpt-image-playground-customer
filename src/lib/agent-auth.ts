@@ -18,7 +18,7 @@ export function assertAgentAuthorized(headers: Headers, env: Record<string, stri
         return;
     }
 
-    const appPassword = env.APP_PASSWORD;
+    const appPassword = env.APP_PASSWORD?.trim();
     if (!appPassword) return;
 
     const passwordHash = headers.get('x-app-password-hash');

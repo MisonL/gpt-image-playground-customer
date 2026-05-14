@@ -54,10 +54,14 @@ export function buildApiErrorNotice(message: string, superApiLabel: string): Api
     }
 
     return {
-        message: message
-            .replace(`：${superApiReferralUrl}`, '')
-            .replace(`: ${superApiReferralUrl}`, '')
-            .replace(superApiReferralUrl, 'SuperAPI'),
+        message: message.replace(
+            new RegExp(`(SuperAPI)?(：|:\\s*)?${escapeRegExp(superApiReferralUrl)}`, 'g'),
+            (_match, existingLabel: string | undefined, punctuation: string | undefined) => {
+                if (existingLabel) return 'SuperAPI';
+                if (!punctuation) return 'SuperAPI';
+                return `${punctuation.startsWith(':') ? ': ' : '：'}SuperAPI`;
+            }
+        ),
         links: [
             {
                 label: superApiLabel,
@@ -65,6 +69,10 @@ export function buildApiErrorNotice(message: string, superApiLabel: string): Api
             }
         ]
     };
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function buildApiErrorAdvice(status: number | undefined, t: Translate): string | null {

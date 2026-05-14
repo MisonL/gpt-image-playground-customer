@@ -1,5 +1,6 @@
 import {
     ensureAgentStateStoreReady,
+    readAgentDatabaseUrl,
     recoverAgentStateOnStartup,
     resetAgentStateStoreForTests,
     setAgentStateStoreFactoryForTests
@@ -53,6 +54,28 @@ describe('agent-state-runtime recovery scheduling', () => {
         await ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.100Z'));
 
         assert.equal(store.recoveryCalls, 2);
+    });
+});
+
+describe('readAgentDatabaseUrl', () => {
+    it('prefers an explicit AGENT_DATABASE_URL', () => {
+        assert.equal(
+            readAgentDatabaseUrl({ AGENT_DATABASE_URL: 'postgres://gpt_image:password@postgres:5432/gpt_image_playground' }),
+            'postgres://gpt_image:password@postgres:5432/gpt_image_playground'
+        );
+    });
+
+    it('builds a PostgreSQL URL from individual environment fields', () => {
+        assert.equal(
+            readAgentDatabaseUrl({
+                AGENT_DB_HOST: 'postgres',
+                AGENT_DB_PORT: '5432',
+                AGENT_DB_NAME: 'gpt_image_playground',
+                AGENT_DB_USER: 'gpt_image',
+                AGENT_DB_PASSWORD: 'database password'
+            }),
+            'postgres://gpt_image:database%20password@postgres:5432/gpt_image_playground'
+        );
     });
 });
 

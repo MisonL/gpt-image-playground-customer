@@ -37,7 +37,7 @@ const child = spawn(process.execPath, [serverPath], {
   stdio: 'inherit',
   env: {
     ...process.env,
-    IMAGE_OUTPUT_DIR: process.env.IMAGE_OUTPUT_DIR || path.join(root, 'generated-images'),
+    IMAGE_OUTPUT_DIR: process.env.IMAGE_OUTPUT_DIR || 'generated-images',
     AGENT_SQLITE_PATH: process.env.AGENT_SQLITE_PATH || path.join(root, 'generated-images', '.agent-state', 'agent.sqlite'),
     PORT: process.env.PORT || '4783',
     HOSTNAME: process.env.HOSTNAME || '0.0.0.0'

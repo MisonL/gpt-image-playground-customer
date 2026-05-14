@@ -8,8 +8,10 @@ const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const [imagePath, ...promptParts] = process.argv.slice(2);
 const prompt = promptParts.join(' ');
-const maxAttempts = Number(process.env.GPT_IMAGE_AGENT_MAX_ATTEMPTS || '3');
+const parsedMaxAttempts = parseInt(process.env.GPT_IMAGE_AGENT_MAX_ATTEMPTS || '3', 10);
+const maxAttempts = Number.isInteger(parsedMaxAttempts) && parsedMaxAttempts > 0 ? parsedMaxAttempts : 3;
 const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1';
+const idempotencyKey = process.env.GPT_IMAGE_AGENT_IDEMPOTENCY_KEY || `agent-edit-${crypto.randomUUID()}`;
 
 if ((!imagePath || !prompt) && !contractCheck) {
   console.error('用法：edit-image.mjs <image-path> <prompt>');
@@ -40,8 +42,7 @@ async function readCapabilities() {
   return response.json();
 }
 
-function parseRetryAfter(response) {
-  const value = response.headers.get('retry-after');
+function parseRetryAfterValue(value) {
   if (!value || !/^\d+$/.test(value)) return 1;
   return Math.max(1, Number(value));
 }
@@ -65,7 +66,7 @@ if (contractCheck) {
   const response = await fetch(`${baseUrl}/api/agent/images/edit`, {
     method: 'POST',
     headers: {
-      'Idempotency-Key': `agent-edit-contract-${crypto.randomUUID()}`,
+      'Idempotency-Key': idempotencyKey,
       'Content-Type': 'application/json',
       ...authHeaders()
     },
@@ -94,7 +95,6 @@ try {
 
 const imageBuffer = fs.readFileSync(imagePath);
 const imageType = mimeTypeForPath(imagePath);
-const idempotencyKey = process.env.GPT_IMAGE_AGENT_IDEMPOTENCY_KEY || `agent-edit-${crypto.randomUUID()}`;
 
 function buildFormData() {
   const formData = new FormData();
@@ -113,29 +113,40 @@ function mimeTypeForPath(filePath) {
 }
 
 let lastResult;
-let lastRetryAfter = 0;
+let lastRetryAfter = null;
 
 for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-  const response = await fetch(`${baseUrl}/api/agent/images/edit`, {
-    method: 'POST',
-    headers: {
-      'Idempotency-Key': idempotencyKey,
-      ...authHeaders()
-    },
-    body: buildFormData()
-  });
-
-  const result = await response.json();
+  let response;
+  let result;
+  try {
+    response = await fetch(`${baseUrl}/api/agent/images/edit`, {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+        ...authHeaders()
+      },
+      body: buildFormData()
+    });
+    result = await response.json();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    result = { error: { code: 'network_error', message, retryable: true } };
+    lastResult = result;
+    lastRetryAfter = 1;
+    if (attempt === maxAttempts) break;
+    await sleep(lastRetryAfter);
+    continue;
+  }
   if (response.ok) {
     console.log(JSON.stringify(result, null, 2));
     process.exit(0);
   }
 
-  const retryAfter = response.headers.get('retry-after');
+  const retryAfter = parseRetryAfterValue(response.headers.get('retry-after'));
   lastResult = result;
   lastRetryAfter = retryAfter;
   if (!shouldRetry(result) || attempt === maxAttempts) break;
-  await sleep(parseRetryAfter(response));
+  await sleep(retryAfter);
 }
 
 console.error(JSON.stringify({ ...lastResult, retry_after: lastRetryAfter }, null, 2));

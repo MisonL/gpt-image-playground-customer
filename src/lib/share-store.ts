@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { mimeTypeForOutputFormat, writeFileAtomic } from './agent-file-utils';
+import { writeFileAtomic } from './agent-file-utils';
 
 const SHARE_TOKEN_BYTES = 12;
 
@@ -48,10 +48,10 @@ function isShareToken(value: string): boolean {
     return /^[a-f0-9]{24}$/i.test(value);
 }
 
-function shareContentFilename(token: string, sourceFilename: string): string {
+function shareContentFilename(token: string, sourceFilename: string, mimeType: string): string {
     const ext = path.extname(sourceFilename);
     if (ext) return `${token}${ext}`;
-    const mimeExtension = mimeTypeToExtension(mimeTypeForOutputFormat(sourceFilename));
+    const mimeExtension = mimeTypeToExtension(mimeType);
     return `${token}${mimeExtension}`;
 }
 
@@ -81,13 +81,28 @@ function readShareTokenPath(token: string): string | undefined {
 
 function isExpired(expiresAt: string | undefined, now: Date): boolean {
     if (!expiresAt) return false;
-    return now.getTime() >= new Date(expiresAt).getTime();
+    const expiresAtMs = new Date(expiresAt).getTime();
+    if (Number.isNaN(expiresAtMs)) return true;
+    return now.getTime() >= expiresAtMs;
+}
+
+function isNodeError(error: unknown, code: string): boolean {
+    return typeof error === 'object' && error !== null && 'code' in error && error.code === code;
+}
+
+function assertShareContentPathAllowed(contentFilename: string): string {
+    const resolvedShareDir = path.resolve(shareDir());
+    const resolvedContentPath = path.resolve(shareContentPath(contentFilename));
+    if (resolvedContentPath === resolvedShareDir || resolvedContentPath.startsWith(`${resolvedShareDir}${path.sep}`)) {
+        return resolvedContentPath;
+    }
+    throw new Error('分享内容文件路径位于分享目录之外。');
 }
 
 export async function createImageShare(input: CreateImageShareInput): Promise<ImageShareRecord> {
     await fs.mkdir(shareDir(), { recursive: true });
     const token = crypto.randomBytes(SHARE_TOKEN_BYTES).toString('hex');
-    const contentFilename = shareContentFilename(token, input.sourceFilename);
+    const contentFilename = shareContentFilename(token, input.sourceFilename, input.mimeType);
     const createdAt = (input.now || new Date()).toISOString();
     const expiresAt =
         typeof input.expiresInMinutes === 'number'
@@ -145,15 +160,15 @@ export async function readImageShare(token: string): Promise<ImageShareRecord | 
             ...(typeof parsed.accessCodeHash === 'string' ? { accessCodeHash: parsed.accessCodeHash } : {})
         };
     } catch (error) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+        if (isNodeError(error, 'ENOENT')) {
             return undefined;
         }
-        return undefined;
+        throw error;
     }
 }
 
 export async function readImageShareContent(record: ImageShareRecord): Promise<ImageShareContent> {
-    const buffer = await fs.readFile(shareContentPath(record.contentFilename));
+    const buffer = await fs.readFile(assertShareContentPathAllowed(record.contentFilename));
     return { buffer, mimeType: record.mimeType };
 }
 
@@ -171,8 +186,4 @@ export function verifyImageShareAccess(record: ImageShareRecord, accessCode?: st
 
 export function isImageShareExpired(record: ImageShareRecord, now = new Date()): boolean {
     return isExpired(record.expiresAt, now);
-}
-
-export function getShareMetadataPathForTest(token: string): string {
-    return readShareFilepath(token);
 }

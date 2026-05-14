@@ -22,7 +22,11 @@ export async function writeFileAtomic(filepath: string, buffer: Buffer): Promise
         await fs.writeFile(tmpPath, buffer);
         await fs.rename(tmpPath, filepath);
     } catch (error) {
-        await deleteFileIfExists(tmpPath);
+        try {
+            await deleteFileIfExists(tmpPath);
+        } catch (cleanupError) {
+            console.error('清理临时产物文件失败。', cleanupError);
+        }
         throw error;
     }
 }

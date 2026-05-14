@@ -12,14 +12,25 @@ function parseContext(context: string | undefined): unknown {
     if (!context) return undefined;
     try {
         return JSON.parse(context);
-    } catch {
+    } catch (error) {
+        console.warn('解析日志上下文失败。', { context, error });
         return undefined;
     }
 }
 
 function readContextArray(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
+    if (!Array.isArray(value)) {
+        throw new TypeError(`日志上下文字段类型无效：期望数组，实际为 ${typeof value}。`);
+    }
     return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+}
+
+function readParsedFilenames(context: string | undefined): string[] {
+    const parsed = parseContext(context);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return [];
+    const filenames = (parsed as Record<string, unknown>).filenames;
+    if (!Array.isArray(filenames)) return [];
+    return readContextArray(filenames);
 }
 
 export function resolveLogClientRequestIds(input: {
@@ -33,7 +44,7 @@ export function resolveLogClientRequestIds(input: {
     if (filenames.size > 0) {
         input.logs.forEach((entry) => {
             if (!entry.clientRequestId) return;
-            const entryFilenames = entry.filenames ?? readContextArray((parseContext(entry.context) as Record<string, unknown> | undefined)?.filenames);
+            const entryFilenames = entry.filenames ?? readParsedFilenames(entry.context);
             if (entryFilenames.some((filename) => filenames.has(filename))) {
                 requestIds.add(entry.clientRequestId);
             }

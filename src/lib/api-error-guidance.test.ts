@@ -93,4 +93,11 @@ describe('buildApiErrorNotice', () => {
         assert.equal(notice.links[0].label, '打开 SuperAPI');
         assert.equal(notice.links[0].url, superApiReferralUrl);
     });
+
+    it('preserves the SuperAPI label when the referral URL follows punctuation', () => {
+        const notice = buildApiErrorNotice(`例如 SuperAPI：${superApiReferralUrl}`, '打开 SuperAPI');
+
+        assert.equal(notice.message, '例如 SuperAPI');
+        assert.equal(notice.links[0].url, superApiReferralUrl);
+    });
 });

@@ -93,7 +93,9 @@ export async function POST(request: NextRequest) {
             await completeAgentExecutionState(store, execution);
         } catch (error) {
             appLogger.error('保存 Agent 编辑完成状态失败。', error);
-            throw createCompletionPersistenceError();
+            const persistenceError = createCompletionPersistenceError();
+            await store.failRequest({ requestId, error: errorToAgentErrorBody(persistenceError, requestId) });
+            throw persistenceError;
         }
         return NextResponse.json(execution.response, { headers });
     } catch (error) {
