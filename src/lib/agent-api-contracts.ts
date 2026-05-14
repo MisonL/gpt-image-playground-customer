@@ -95,7 +95,6 @@ export type AgentCapabilities = {
     };
     storage: {
         image_storage_mode: string;
-        sqlite_path?: string;
         postgres_configured: boolean;
     };
     idempotency: {
@@ -361,7 +360,6 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         },
         storage: {
             image_storage_mode: env.NEXT_PUBLIC_IMAGE_STORAGE_MODE || (env.VERCEL === '1' ? 'indexeddb' : 'fs'),
-            sqlite_path: readAgentSqlitePath(env),
             postgres_configured: Boolean(env.AGENT_DATABASE_URL || env.AGENT_DB_PASSWORD || env.AGENT_DB_PASSWORD_FILE)
         },
         idempotency: {
@@ -538,7 +536,14 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         defaults: { type: 'object' },
                         limits: { type: 'object' },
                         supported: { type: 'object' },
-                        storage: { type: 'object' },
+                        storage: {
+                            type: 'object',
+                            required: ['image_storage_mode', 'postgres_configured'],
+                            properties: {
+                                image_storage_mode: { type: 'string' },
+                                postgres_configured: { type: 'boolean' }
+                            }
+                        },
                         idempotency: { type: 'object' }
                     }
                 },

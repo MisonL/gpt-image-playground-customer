@@ -255,6 +255,43 @@ describe('applyStreamingClientEvent', () => {
         ]);
     });
 
+    it('accepts camelCase aliases from streaming events', () => {
+        const withCompleted = applyStreamingClientEvent(
+            { completedImages: [] },
+            {
+                type: 'completed',
+                filename: 'image-1.png',
+                b64_json: 'base64',
+                outputFormat: 'png',
+                path: '/api/image/image-1.png',
+                clientRequestId: 'web-request-camel'
+            }
+        );
+
+        const withDone = applyStreamingClientEvent(withCompleted, {
+            type: 'done',
+            clientRequestId: 'web-request-camel',
+            actualCost: {
+                currency: 'usd-equivalent',
+                confidence: 'high',
+                source: 'new-api-log-token',
+                actualAmount: 0.0075,
+                upstreamProvider: 'new-api'
+            }
+        });
+
+        assert.deepEqual(withDone.completedImages, [
+            {
+                filename: 'image-1.png',
+                b64_json: 'base64',
+                output_format: 'png',
+                path: '/api/image/image-1.png',
+                clientRequestId: 'web-request-camel'
+            }
+        ]);
+        assert.equal(withDone.actualCost?.actualAmount, 0.0075);
+    });
+
     it('fills missing image request ids from the final done event', () => {
         const withDone = applyStreamingClientEvent(
             {

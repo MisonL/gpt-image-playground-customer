@@ -180,7 +180,7 @@ Agent API 面向自动化调用，不要求 Agent 模拟网页表单。接口统
 
 | 接口 | 用途 |
 | --- | --- |
-| `GET /api/agent/capabilities` | 查询模型、限制、认证方式、状态后端和端点列表。 |
+| `GET /api/agent/capabilities` | 查询模型、限制、认证方式、状态后端和端点列表，不公开服务端本地 SQLite 路径。 |
 | `GET /api/agent/openapi.json` | 获取机器可读 OpenAPI 描述。 |
 | `POST /api/agent/images/generate` | JSON 文生图，默认只返回文件路径和元数据。 |
 | `POST /api/agent/images/edit` | multipart 图片编辑，支持源图和 PNG mask。 |
@@ -229,6 +229,21 @@ curl -s http://localhost:4783/api/agent/images/generate \
 ```
 
 未显式传 `quality` 时，Agent 生成接口默认使用 `high`。需要使用其他质量时，在 JSON 请求中传入 `"quality":"auto"`、`"medium"` 或 `"low"`。
+
+Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case 字段，例如 `outputFormat`/`output_format`、`clientRequestId`/`client_request_id`、`actualCost`/`actual_cost`。新客户端优先读取 camelCase，旧字段继续保留用于兼容。最终事件中的实际扣费字段含义如下：
+
+| 字段 | 说明 |
+| --- | --- |
+| `estimatedUsd` | 本地按 token 价格估算的美元成本。 |
+| `actualAmount` | 上游返回的实际扣费金额，单位由 `currency` 定义。 |
+| `actualQuota` | 上游以 quota 计费时的原始扣减值。 |
+| `currency` | `usd-equivalent` 或 `quota-unit`。 |
+| `source` | 成本来源，如估算、New API 日志匹配、结算中或不可用。 |
+| `confidence` | 成本可信度，取值为 `exact`、`high`、`low` 或 `none`。 |
+| `upstreamProvider` | 提供扣费或日志数据的上游。 |
+| `matchedLogId` | 匹配到的上游日志 ID。 |
+| `matchedRequestId` | 用于匹配或关联的上游请求 ID。 |
+| `reason` | 结算中、不可用或低可信度时的说明。 |
 
 错误响应固定为：
 
