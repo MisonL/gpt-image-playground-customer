@@ -12,6 +12,7 @@ services:
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
+      APP_LOG_LEVEL: info
       NEXT_PUBLIC_IMAGE_STORAGE_MODE: fs
       PORT: "4783"
     ports:
