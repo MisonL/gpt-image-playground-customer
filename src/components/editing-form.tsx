@@ -112,32 +112,37 @@ const RadioItemWithIcon = ({
     id,
     label,
     Icon,
-    disabled = false
+    disabled = false,
+    tooltip
 }: {
     value: string;
     id: string;
     label: string;
     Icon: React.ElementType;
     disabled?: boolean;
-}) => (
-    <div className='group relative'>
+    tooltip?: React.ReactNode;
+}) => {
+    const item = (
         <RadioGroupItem
             value={value}
             id={id}
-            className='peer sr-only'
-        />
-        <Label
-            htmlFor={id}
-            className={`flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-sm transition-all peer-data-[state=checked]:border-white peer-data-[state=checked]:bg-white peer-data-[state=checked]:text-black ${
-                disabled
-                    ? 'cursor-not-allowed border-white/10 text-white/40'
-                    : 'cursor-pointer border-white/20 text-white/80 hover:-translate-y-0.5 hover:border-white/50 hover:bg-white/10 hover:text-white active:translate-y-0'
-            }`}>
+            disabled={disabled}
+            aria-label={label}
+            className='flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md border-border px-3 py-2 text-sm text-muted-foreground shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground enabled:active:translate-y-0 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground [&_[data-slot=radio-group-indicator]]:hidden'>
             <Icon className='h-4 w-4 text-current opacity-70' />
-            {label}
-        </Label>
-    </div>
-);
+            <span>{label}</span>
+        </RadioGroupItem>
+    );
+
+    if (!tooltip) return item;
+
+    return (
+        <Tooltip>
+            <TooltipTrigger asChild>{item}</TooltipTrigger>
+            <TooltipContent>{tooltip}</TooltipContent>
+        </Tooltip>
+    );
+};
 
 export function EditingForm({
     onSubmit,
@@ -564,54 +569,50 @@ export function EditingForm({
     };
 
     return (
-        <Card className='flex h-full w-full flex-col overflow-hidden rounded-lg border border-white/10 bg-black'>
-            <CardHeader className='flex items-start justify-between border-b border-white/10 pb-4'>
+        <Card className='bg-card text-card-foreground flex w-full flex-col overflow-hidden rounded-lg border border-border lg:h-full'>
+            <CardHeader className='flex items-start justify-between border-b border-border pb-4'>
                 <div>
                     <div className='flex items-center'>
-                        <CardTitle className='py-1 text-lg font-medium text-white'>{t('edit.title')}</CardTitle>
+                        <CardTitle className='py-1 text-lg font-medium'>{t('edit.title')}</CardTitle>
                         {isPasswordRequiredByBackend && (
                             <Button
                                 variant='ghost'
                                 size='icon'
                                 onClick={onOpenPasswordDialog}
-                                className='ml-2 text-white/60 hover:text-white'
+                                className='text-muted-foreground ml-2 hover:text-foreground'
                                 aria-label={t('password.configure')}>
                                 {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                             </Button>
                         )}
                     </div>
-                    <CardDescription className='mt-1 text-white/60'>{t('edit.description')}</CardDescription>
+                    <CardDescription className='mt-1'>{t('edit.description')}</CardDescription>
                 </div>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
-            <div className='flex h-full flex-1 flex-col overflow-hidden'>
-                <CardContent className='flex-1 space-y-5 overflow-y-auto p-4'>
+            <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
+                <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
                     <div className='space-y-1.5'>
-                        <Label htmlFor='edit-model-select' className='text-white'>
-                            {t('form.model')}
-                        </Label>
+                        <Label htmlFor='edit-model-select'>{t('form.model')}</Label>
                         <div className='flex flex-wrap items-center gap-4'>
                             <Select
                                 value={editModel}
                                 onValueChange={(value) => setEditModel(value as EditingFormData['model'])}
                                 disabled={isLoading}
                                 name='edit-model'>
-                                <SelectTrigger
-                                    id='edit-model-select'
-                                    className='w-[180px] rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'>
+                                <SelectTrigger id='edit-model-select' className='w-[180px]'>
                                     <SelectValue placeholder={t('form.selectModel')} />
                                 </SelectTrigger>
-                                <SelectContent className='border-white/20 bg-black text-white'>
-                                    <SelectItem value='gpt-image-2' className='focus:bg-white/10'>
+                                <SelectContent>
+                                    <SelectItem value='gpt-image-2'>
                                         gpt-image-2
                                     </SelectItem>
-                                    <SelectItem value='gpt-image-1.5' className='focus:bg-white/10'>
+                                    <SelectItem value='gpt-image-1.5'>
                                         gpt-image-1.5
                                     </SelectItem>
-                                    <SelectItem value='gpt-image-1' className='focus:bg-white/10'>
+                                    <SelectItem value='gpt-image-1'>
                                         gpt-image-1
                                     </SelectItem>
-                                    <SelectItem value='gpt-image-1-mini' className='focus:bg-white/10'>
+                                    <SelectItem value='gpt-image-1-mini'>
                                         gpt-image-1-mini
                                     </SelectItem>
                                 </SelectContent>
@@ -619,29 +620,34 @@ export function EditingForm({
                             {isGptImage2 && (
                                 <Tooltip>
                                     <TooltipTrigger asChild>
-                                        <Info className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
+                                        <button
+                                            type='button'
+                                            className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 inline-flex h-5 w-5 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                                            aria-label={t('edit.fidelityHint')}>
+                                            <Info className='h-4 w-4' />
+                                        </button>
                                     </TooltipTrigger>
                                     <TooltipContent className='max-w-[280px]'>{t('edit.fidelityHint')}</TooltipContent>
                                 </Tooltip>
                             )}
                             <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div className='flex items-center gap-2'>
+                                <div className='flex items-center gap-2'>
+                                    <TooltipTrigger asChild>
                                         <Checkbox
                                             id='edit-enable-streaming'
                                             name='edit-enable-streaming'
                                             checked={enableStreaming}
                                             onCheckedChange={(checked) => setEnableStreaming(!!checked)}
                                             disabled={isLoading || streamingDisabledByCount}
-                                            className='border-white/40 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black'
+                                            className='data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground'
                                         />
-                                        <Label
-                                            htmlFor='edit-enable-streaming'
-                                            className={`text-sm ${streamingDisabledByCount ? 'cursor-not-allowed text-white/40' : 'cursor-pointer text-white/80'}`}>
-                                            {t('streaming.enable')}
-                                        </Label>
-                                    </div>
-                                </TooltipTrigger>
+                                    </TooltipTrigger>
+                                    <Label
+                                        htmlFor='edit-enable-streaming'
+                                        className={`text-sm ${streamingDisabledByCount ? 'cursor-not-allowed text-muted-foreground' : 'cursor-pointer text-foreground'}`}>
+                                        {t('streaming.enable')}
+                                    </Label>
+                                </div>
                                 <TooltipContent className='max-w-[250px]'>
                                     {streamingDisabledByCount
                                         ? t('streaming.disabledByCount')
@@ -654,34 +660,34 @@ export function EditingForm({
                     </div>
 
                     <div className='space-y-1.5'>
-                        <Label htmlFor='edit-prompt' className='text-white'>
-                            {t('form.prompt')}
-                        </Label>
+                        <Label htmlFor='edit-prompt'>{t('form.prompt')}</Label>
                         <Textarea
                             id='edit-prompt'
+                            name='editPrompt'
                             placeholder={t('form.editPromptPlaceholder')}
                             value={editPrompt}
                             onChange={(e) => setEditPrompt(e.target.value)}
                             required
                             disabled={isLoading}
-                            className='min-h-[80px] rounded-md border border-white/20 bg-black text-white placeholder:text-white/40 focus:border-white/50 focus:ring-white/50'
+                            className='min-h-[80px]'
                         />
                     </div>
 
                     <div className='space-y-2'>
-                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                             {t('edit.sourceImages', { count: maxImages })}
                         </div>
                         <Label
                             htmlFor='image-files-input'
-                            className='flex h-10 w-full cursor-pointer items-center justify-between rounded-md border border-white/20 bg-black px-3 py-2 text-sm transition-colors hover:bg-white/5'>
-                            <span className='truncate pr-2 text-white/60'>{displayFileNames(imageFiles)}</span>
-                            <span className='flex shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-3 py-1 text-xs font-medium text-white/80 hover:bg-white/20'>
+                            className='flex h-10 w-full cursor-pointer items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm transition-colors hover:bg-accent'>
+                            <span className='text-muted-foreground truncate pr-2'>{displayFileNames(imageFiles)}</span>
+                            <span className='bg-muted text-muted-foreground hover:text-foreground flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium hover:bg-accent'>
                                 <Upload className='h-3 w-3' /> {t('edit.browse')}
                             </span>
                         </Label>
                         <Input
                             id='image-files-input'
+                            name='sourceImages'
                             type='file'
                             accept='image/png, image/jpeg, image/webp'
                             multiple
@@ -698,14 +704,14 @@ export function EditingForm({
                                             alt={t('edit.sourcePreview', { index: index + 1 })}
                                             width={80}
                                             height={80}
-                                            className='rounded border border-white/10 object-cover'
+                                            className='rounded border border-border object-cover'
                                             unoptimized
                                         />
                                         <Button
                                             type='button'
                                             variant='destructive'
                                             size='icon'
-                                            className='absolute top-0 right-0 h-5 w-5 translate-x-1/3 -translate-y-1/3 transform rounded-full bg-red-600 p-0.5 text-white hover:bg-red-700'
+                                            className='absolute top-0 right-0 h-5 w-5 translate-x-1/3 -translate-y-1/3 transform rounded-full p-0.5'
                                             onClick={() => handleRemoveImage(index)}
                                             aria-label={t('edit.removeImage', { index: index + 1 })}>
                                             <X className='h-3 w-3' />
@@ -717,7 +723,7 @@ export function EditingForm({
                     </div>
 
                     <div className='space-y-3'>
-                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                        <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('edit.mask')}
                         </div>
                         <Button
@@ -726,23 +732,23 @@ export function EditingForm({
                             size='sm'
                             onClick={() => setEditShowMaskEditor(!editShowMaskEditor)}
                             disabled={isLoading || !editOriginalImageSize}
-                            className='w-full justify-start border-white/20 px-3 text-white/80 hover:bg-white/10 hover:text-white'>
+                            className='w-full justify-start px-3'>
                             {editShowMaskEditor
                                 ? t('edit.closeMaskEditor')
                                 : editGeneratedMaskFile
                                   ? t('edit.editSavedMask')
                                   : t('edit.createMask')}
                             {editIsMaskSaved && !editShowMaskEditor && (
-                                <span className='ml-auto text-xs text-green-400'>({t('common.saved')})</span>
+                                <span className='ml-auto text-xs text-emerald-600 dark:text-emerald-400'>({t('common.saved')})</span>
                             )}
                             <ScanEye className='mt-0.5' />
                         </Button>
 
                         {editShowMaskEditor && firstImagePreviewUrl && editOriginalImageSize && (
-                            <div className='space-y-3 rounded-md border border-white/20 bg-black p-3'>
-                                <p className='text-xs text-white/60'>{t('edit.drawMaskHint')}</p>
+                            <div className='bg-muted/20 space-y-3 rounded-md border border-border p-3'>
+                                <p className='text-muted-foreground text-xs'>{t('edit.drawMaskHint')}</p>
                                 <div
-                                    className='relative mx-auto w-full overflow-hidden rounded border border-white/10'
+                                    className='relative mx-auto w-full overflow-hidden rounded border border-border'
                                     style={{
                                         maxWidth: `min(100%, ${editOriginalImageSize.width}px)`,
                                         aspectRatio: `${editOriginalImageSize.width} / ${editOriginalImageSize.height}`
@@ -771,7 +777,7 @@ export function EditingForm({
                                 </div>
                                 <div className='grid grid-cols-1 gap-4 pt-2'>
                                     <div className='space-y-2'>
-                                        <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                                             {t('edit.brushSize', { value: editBrushSize[0] })}
                                         </div>
                                         <Slider
@@ -784,7 +790,7 @@ export function EditingForm({
                                             value={editBrushSize}
                                             onValueChange={setEditBrushSize}
                                             disabled={isLoading}
-                                            className='mt-1 [&>button]:border-black [&>button]:bg-white [&>button]:ring-offset-black [&>span:first-child]:h-1 [&>span:first-child>span]:bg-white'
+                                            className='mt-1'
                                         />
                                     </div>
                                 </div>
@@ -795,12 +801,13 @@ export function EditingForm({
                                         size='sm'
                                         onClick={() => maskInputRef.current?.click()}
                                         disabled={isLoading || !editOriginalImageSize}
-                                        className='mr-auto border-white/20 text-white/80 hover:bg-white/10 hover:text-white'>
+                                        className='mr-auto'>
                                         <UploadCloud className='mr-1.5 h-4 w-4' /> {t('edit.uploadMask')}
                                     </Button>
                                     <Input
                                         ref={maskInputRef}
                                         id='mask-file-input'
+                                        name='maskFile'
                                         type='file'
                                         accept='image/png'
                                         onChange={handleMaskFileChange}
@@ -812,8 +819,7 @@ export function EditingForm({
                                             variant='outline'
                                             size='sm'
                                             onClick={handleClearMask}
-                                            disabled={isLoading}
-                                            className='border-white/20 text-white/80 hover:bg-white/10 hover:text-white'>
+                                            disabled={isLoading}>
                                             <Eraser className='mr-1.5 h-4 w-4' /> {t('edit.clearMask')}
                                         </Button>
                                         <Button
@@ -821,18 +827,17 @@ export function EditingForm({
                                             variant='default'
                                             size='sm'
                                             onClick={generateAndSaveMask}
-                                            disabled={isLoading || editDrawnPoints.length === 0}
-                                            className='bg-white text-black hover:bg-white/90 disabled:opacity-50'>
+                                            disabled={isLoading || editDrawnPoints.length === 0}>
                                             <Save className='mr-1.5 h-4 w-4' /> {t('edit.saveMask')}
                                         </Button>
                                     </div>
                                 </div>
                                 {editMaskPreviewUrl && (
-                                    <div className='mt-3 border-t border-white/10 pt-3 text-center'>
-                                        <div className='mb-1.5 block text-sm leading-none font-medium text-white select-none'>
+                                    <div className='mt-3 border-t border-border pt-3 text-center'>
+                                        <div className='text-foreground mb-1.5 block text-sm leading-none font-medium select-none'>
                                             {t('edit.maskPreview')}
                                         </div>
-                                        <div className='inline-block rounded border border-gray-300 bg-white p-1'>
+                                        <div className='inline-block rounded border border-border bg-background p-1'>
                                             <Image
                                                 src={editMaskPreviewUrl}
                                                 alt={t('edit.generatedMaskPreviewAlt')}
@@ -846,24 +851,24 @@ export function EditingForm({
                                     </div>
                                 )}
                                 {editIsMaskSaved && !editMaskPreviewUrl && (
-                                    <p className='pt-1 text-center text-xs text-yellow-400'>
+                                    <p className='pt-1 text-center text-xs text-yellow-600 dark:text-yellow-400'>
                                         {t('edit.maskPreviewLoading')}
                                     </p>
                                 )}
                                 {editIsMaskSaved && editMaskPreviewUrl && (
-                                    <p className='pt-1 text-center text-xs text-green-400'>{t('edit.maskSaved')}</p>
+                                    <p className='pt-1 text-center text-xs text-emerald-600 dark:text-emerald-400'>{t('edit.maskSaved')}</p>
                                 )}
                             </div>
                         )}
                         {!editShowMaskEditor && editGeneratedMaskFile && (
-                            <p className='pt-1 text-xs text-green-400'>
+                            <p className='pt-1 text-xs text-emerald-600 dark:text-emerald-400'>
                                 {t('edit.maskApplied', { name: editGeneratedMaskFile.name })}
                             </p>
                         )}
                     </div>
 
                     <div className='space-y-3'>
-                        <div className='block text-sm leading-none font-medium text-white select-none'>
+                        <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('form.size')}
                         </div>
                         <RadioGroup
@@ -889,105 +894,90 @@ export function EditingForm({
                                     disabled={isLoading}
                                 />
                             )}
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <RadioItemWithIcon
-                                            value='square'
-                                            id='edit-size-square'
-                                            label={t('common.square')}
-                                            Icon={Square}
-                                            disabled={isLoading}
-                                        />
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent>{getPresetTooltip('square', editModel)}</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <RadioItemWithIcon
-                                            value='landscape'
-                                            id='edit-size-landscape'
-                                            label={t('common.landscape')}
-                                            Icon={RectangleHorizontal}
-                                            disabled={isLoading}
-                                        />
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent>{getPresetTooltip('landscape', editModel)}</TooltipContent>
-                            </Tooltip>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <RadioItemWithIcon
-                                            value='portrait'
-                                            id='edit-size-portrait'
-                                            label={t('common.portrait')}
-                                            Icon={RectangleVertical}
-                                            disabled={isLoading}
-                                        />
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent>{getPresetTooltip('portrait', editModel)}</TooltipContent>
-                            </Tooltip>
+                            <RadioItemWithIcon
+                                value='square'
+                                id='edit-size-square'
+                                label={t('common.square')}
+                                Icon={Square}
+                                disabled={isLoading}
+                                tooltip={getPresetTooltip('square', editModel)}
+                            />
+                            <RadioItemWithIcon
+                                value='landscape'
+                                id='edit-size-landscape'
+                                label={t('common.landscape')}
+                                Icon={RectangleHorizontal}
+                                disabled={isLoading}
+                                tooltip={getPresetTooltip('landscape', editModel)}
+                            />
+                            <RadioItemWithIcon
+                                value='portrait'
+                                id='edit-size-portrait'
+                                label={t('common.portrait')}
+                                Icon={RectangleVertical}
+                                disabled={isLoading}
+                                tooltip={getPresetTooltip('portrait', editModel)}
+                            />
                         </RadioGroup>
                         {isGptImage2 && editSize === 'custom' && (
-                            <div className='space-y-2 rounded-md border border-white/10 bg-white/5 p-3'>
+                            <div className='bg-muted/30 space-y-2 rounded-md border border-border p-3'>
                                 <div className='flex items-center gap-3'>
                                     <div className='flex-1 space-y-1'>
-                                        <Label htmlFor='edit-custom-width' className='text-xs text-white/70'>
+                                        <Label htmlFor='edit-custom-width' className='text-muted-foreground text-xs'>
                                             {t('form.width')}
                                         </Label>
                                         <Input
                                             id='edit-custom-width'
+                                            name='editCustomWidth'
                                             type='number'
+                                            inputMode='numeric'
                                             min={16}
                                             max={3840}
                                             step={16}
                                             value={editCustomWidth}
                                             onChange={(e) => setEditCustomWidth(parseInt(e.target.value, 10) || 0)}
                                             disabled={isLoading}
-                                            className='rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'
                                         />
                                     </div>
-                                    <span className='pt-5 text-white/60'>x</span>
+                                    <span className='text-muted-foreground pt-5'>x</span>
                                     <div className='flex-1 space-y-1'>
-                                        <Label htmlFor='edit-custom-height' className='text-xs text-white/70'>
+                                        <Label htmlFor='edit-custom-height' className='text-muted-foreground text-xs'>
                                             {t('form.height')}
                                         </Label>
                                         <Input
                                             id='edit-custom-height'
+                                            name='editCustomHeight'
                                             type='number'
+                                            inputMode='numeric'
                                             min={16}
                                             max={3840}
                                             step={16}
                                             value={editCustomHeight}
                                             onChange={(e) => setEditCustomHeight(parseInt(e.target.value, 10) || 0)}
                                             disabled={isLoading}
-                                            className='rounded-md border border-white/20 bg-black text-white focus:border-white/50 focus:ring-white/50'
                                         />
                                     </div>
                                 </div>
-                                <p className='text-xs text-white/50'>
+                                <p className='text-muted-foreground text-xs'>
                                     {t('form.pixelsMeta', {
                                         pixels: editCustomPixels.toLocaleString(locale),
                                         percent: ((editCustomPixels / 8_294_400) * 100).toFixed(1),
                                         ratio: editCustomRatio
                                     })}
                                 </p>
-                                {editCustomSizeError && <p className='text-xs text-red-400'>{editCustomSizeError}</p>}
-                                <p className='text-xs text-white/40'>{t('form.customConstraints')}</p>
+                                {editCustomSizeError && <p className='text-destructive text-xs'>{editCustomSizeError}</p>}
+                                <p className='text-muted-foreground text-xs'>{t('form.customConstraints')}</p>
                             </div>
                         )}
                     </div>
 
-                    <div className='rounded-md border border-white/10 bg-white/[0.03]'>
+                    <div className='bg-muted/20 rounded-md border border-border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
-                            className='flex w-full cursor-pointer items-center justify-between px-3 py-3 text-left text-sm font-medium text-white/80 transition-colors hover:bg-white/5 hover:text-white'
-                            aria-expanded={isAdvancedOpen}>
+                            className='text-muted-foreground hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center justify-between px-3 py-3 text-left text-sm font-medium transition-[background-color,color,transform] active:scale-[0.995] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                            aria-expanded={isAdvancedOpen}
+                            aria-controls='editing-advanced-panel'>
                             <span className='flex items-center gap-2'>
                                 <SlidersHorizontal className='h-4 w-4' />
                                 {t('ux.advanced')}
@@ -997,16 +987,21 @@ export function EditingForm({
                             />
                         </button>
                         {isAdvancedOpen && (
-                            <div className='space-y-5 border-t border-white/10 p-3'>
+                            <div id='editing-advanced-panel' className='space-y-5 border-t border-border p-3'>
                                 {enableStreaming && (
                                     <div className='space-y-3'>
                                         <div className='flex items-center gap-2'>
-                                            <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                            <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                                                 {t('streaming.previewImages')}
                                             </div>
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
-                                                    <HelpCircle className='h-4 w-4 cursor-help text-white/40 hover:text-white/60' />
+                                                    <button
+                                                        type='button'
+                                                        className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 inline-flex h-5 w-5 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                                                        aria-label={t('streaming.costHint')}>
+                                                        <HelpCircle className='h-4 w-4' />
+                                                    </button>
                                                 </TooltipTrigger>
                                                 <TooltipContent className='max-w-[250px]'>
                                                     {t('streaming.costHint')}
@@ -1035,7 +1030,7 @@ export function EditingForm({
                                 )}
 
                                 <div className='space-y-3'>
-                                    <div className='block text-sm leading-none font-medium text-white select-none'>
+                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
                                         {t('form.quality')}
                                     </div>
                                     <RadioGroup
@@ -1077,7 +1072,7 @@ export function EditingForm({
                                 </div>
 
                                 <div className='space-y-2'>
-                                    <div className='flex items-center gap-2 text-sm leading-none font-medium text-white select-none'>
+                                    <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                                         {t('form.numberOfImages', { count: editN[0] })}
                                     </div>
                                     <Slider
@@ -1090,21 +1085,23 @@ export function EditingForm({
                                         value={editN}
                                         onValueChange={setEditN}
                                         disabled={isLoading}
-                                        className='mt-3 [&>button]:border-black [&>button]:bg-white [&>button]:ring-offset-black [&>span:first-child]:h-1 [&>span:first-child>span]:bg-white'
+                                        className='mt-3'
                                     />
                                 </div>
                             </div>
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='border-t border-white/10 p-4'>
+                <CardFooter className='hidden border-t border-border p-4 lg:flex'>
                     <div className='w-full space-y-2'>
-                        {submitDisabledReason && <p className='text-center text-xs text-white/50'>{submitDisabledReason}</p>}
+                        {submitDisabledReason && (
+                            <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>
+                        )}
                         <Button
                             type='button'
                             onClick={handleSubmit}
                             disabled={isLoading || !!submitDisabledReason}
-                            className='flex w-full items-center justify-center gap-2 rounded-md bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
+                            className='flex w-full items-center justify-center gap-2 rounded-md'>
                             {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
                             {isLoading ? t('edit.loading') : t('edit.submit')}
                         </Button>

@@ -29,12 +29,14 @@ import {
     type ApiImageResponseItem,
     type StreamingBatchJob
 } from '@/lib/streaming-batch';
+import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ArrowDown, Loader2, Terminal } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
     filename: string;
+    clientRequestId?: string;
 };
 
 export type HistoryMetadata = {
@@ -48,8 +50,11 @@ export type HistoryMetadata = {
     prompt: string;
     mode: 'generate' | 'edit';
     costDetails: CostDetails | null;
+    actualCostDetails?: ActualCostDetails;
     output_format?: GenerationFormData['output_format'];
     model?: GptImageModel;
+    size?: string;
+    clientRequestIds?: string[];
 };
 
 type DrawnPoint = {
@@ -64,6 +69,26 @@ const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
 type RequestMode = 'generate' | 'edit';
 type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, boolean, 1 | 2 | 3];
+
+function createClientRequestId(): string {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+        return `web-${crypto.randomUUID()}`;
+    }
+    return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+    return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0)));
+}
+
+function resolveHistoryImageClientRequestId(item: HistoryMetadata, imageIndex: number): string | undefined {
+    const imageRequestId = item.images[imageIndex]?.clientRequestId;
+    if (imageRequestId) return imageRequestId;
+    if (!item.clientRequestIds || item.clientRequestIds.length === 0) return undefined;
+    if (item.clientRequestIds.length === item.images.length) return item.clientRequestIds[imageIndex];
+    if (item.images.length === 1) return item.clientRequestIds[0];
+    return undefined;
+}
 
 function readLocalStorageValue(key: string): string | null {
     if (typeof window === 'undefined') return null;
@@ -132,6 +157,7 @@ if (explicitModeClient === 'fs') {
 type ApiImageResult = {
     path: string;
     filename: string;
+    clientRequestId?: string;
 };
 
 type ApiUsage = {
@@ -232,6 +258,34 @@ function mergeUsageValues(usages: unknown[]): ApiUsage | undefined {
     return hasUsage ? merged : undefined;
 }
 
+function mergeActualCostValues(costs: Array<ActualCostDetails | undefined>): ActualCostDetails | undefined {
+    const present = costs.filter((cost): cost is ActualCostDetails => cost !== undefined);
+    if (present.length === 0) return undefined;
+
+    const actualCosts = present.filter((cost) => cost.source === 'new-api-log-token');
+    if (actualCosts.length === present.length) {
+        const actualQuota = actualCosts.reduce((sum, cost) => sum + (cost.actualQuota ?? 0), 0);
+        const actualAmount = actualCosts.reduce((sum, cost) => sum + (cost.actualAmount ?? 0), 0);
+        return {
+            actualAmount: Math.round(actualAmount * 1_000_000) / 1_000_000,
+            actualQuota,
+            currency: 'usd-equivalent',
+            source: 'new-api-log-token',
+            confidence: actualCosts.every((cost) => cost.confidence === 'high') ? 'high' : 'low',
+            upstreamProvider: 'new-api',
+            reason: actualCosts.length > 1 ? `已汇总 ${actualCosts.length} 个子请求的实际扣费。` : undefined
+        };
+    }
+
+    return {
+        currency: 'usd-equivalent',
+        source: 'unavailable',
+        confidence: 'low',
+        upstreamProvider: 'new-api',
+        reason: '批量请求中存在未匹配到实际扣费的子请求，未将估算值标记为实际扣费。'
+    };
+}
+
 export default function HomePage() {
     const { t } = useI18n();
     const createErrorNotice = React.useCallback(
@@ -244,7 +298,7 @@ export default function HomePage() {
     const [isLoading, setIsLoading] = React.useState(false);
     const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
     const [error, setError] = React.useState<ApiErrorNotice | null>(null);
-    const [latestImageBatch, setLatestImageBatch] = React.useState<{ path: string; filename: string }[] | null>(null);
+    const [latestImageBatch, setLatestImageBatch] = React.useState<ApiImageResult[] | null>(null);
     const [imageOutputView, setImageOutputView] = React.useState<'grid' | number>('grid');
     const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
     const hasLoadedStoredHistoryRef = React.useRef(false);
@@ -316,6 +370,20 @@ export default function HomePage() {
     const currentEditSizeValidation =
         editSize === 'custom' ? validateGptImage2Size(editCustomWidth, editCustomHeight) : { valid: true as const };
     const canOpenLogs = isPasswordRequiredByBackend === true && !!clientPasswordHash;
+    const activeLogClientRequestIds = React.useMemo(() => {
+        if (!latestImageBatch || latestImageBatch.length === 0) return [];
+        if (typeof imageOutputView === 'number') {
+            return uniqueStrings([latestImageBatch[imageOutputView]?.clientRequestId]);
+        }
+        return uniqueStrings(latestImageBatch.map((image) => image.clientRequestId));
+    }, [imageOutputView, latestImageBatch]);
+    const activeLogFilenames = React.useMemo(() => {
+        if (!latestImageBatch || latestImageBatch.length === 0) return [];
+        if (typeof imageOutputView === 'number') {
+            return uniqueStrings([latestImageBatch[imageOutputView]?.filename]);
+        }
+        return uniqueStrings(latestImageBatch.map((image) => image.filename));
+    }, [imageOutputView, latestImageBatch]);
     const mobilePrimaryDisabled =
         isLoading ||
         isSendingToEdit ||
@@ -518,12 +586,29 @@ export default function HomePage() {
     };
 
     const buildHistoryEntry = React.useCallback(
-        (images: ApiImageResponseItem[], usage: unknown, durationMsValue: number): HistoryMetadata => {
+        (
+            images: ApiImageResponseItem[],
+            usage: unknown,
+            actualCost: ActualCostDetails | undefined,
+            durationMsValue: number
+        ): HistoryMetadata => {
             const isGenerateMode = mode === 'generate';
             const currentModel = isGenerateMode ? genModel : editModel;
+            const clientRequestIds = uniqueStrings(images.map((img) => img.clientRequestId));
+            const requestSize = isGenerateMode
+                ? genSize === 'custom'
+                    ? `${genCustomWidth}x${genCustomHeight}`
+                    : (getPresetDimensions(genSize, genModel) ?? genSize)
+                : editSize === 'custom'
+                  ? `${editCustomWidth}x${editCustomHeight}`
+                  : (getPresetDimensions(editSize, editModel) ?? editSize);
+            const costDetails = calculateApiCost(usage as Parameters<typeof calculateApiCost>[0], currentModel);
             return {
                 timestamp: Date.now(),
-                images: images.map((img) => ({ filename: img.filename })),
+                images: images.map((img) => ({
+                    filename: img.filename,
+                    ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {})
+                })),
                 storageModeUsed: effectiveStorageModeClient,
                 durationMs: durationMsValue,
                 quality: isGenerateMode ? genQuality : editQuality,
@@ -532,20 +617,36 @@ export default function HomePage() {
                 output_format: isGenerateMode ? genOutputFormat : 'png',
                 prompt: isGenerateMode ? genPrompt : editPrompt,
                 mode,
-                costDetails: calculateApiCost(usage as Parameters<typeof calculateApiCost>[0], currentModel),
-                model: currentModel
+                costDetails,
+                ...(actualCost
+                    ? {
+                          actualCostDetails: {
+                              ...actualCost,
+                              ...(costDetails ? { estimatedUsd: costDetails.estimated_cost_usd } : {})
+                          }
+                      }
+                    : {}),
+                model: currentModel,
+                size: requestSize,
+                ...(clientRequestIds.length > 0 ? { clientRequestIds } : {})
             };
         },
         [
+            editCustomHeight,
+            editCustomWidth,
             editModel,
             editPrompt,
             editQuality,
+            editSize,
             genBackground,
+            genCustomHeight,
+            genCustomWidth,
             genModel,
             genModeration,
             genOutputFormat,
             genPrompt,
             genQuality,
+            genSize,
             mode
         ]
     );
@@ -574,7 +675,7 @@ export default function HomePage() {
                         }
                         const blobUrl = URL.createObjectURL(blob);
                         blobUrlCacheRef.current.set(img.filename, blobUrl);
-                        return { filename: img.filename, path: blobUrl };
+                        return { filename: img.filename, path: blobUrl, ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {}) };
                     })
                 );
                 return indexedDbImages;
@@ -582,7 +683,7 @@ export default function HomePage() {
 
             const fsImages = images
                 .filter((img) => !!img.path)
-                .map((img) => ({ path: img.path!, filename: img.filename }));
+                .map((img) => ({ path: img.path!, filename: img.filename, ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {}) }));
             if (fsImages.length !== images.length) {
                 throw new Error(t('error.apiOmittedPaths'));
             }
@@ -592,7 +693,13 @@ export default function HomePage() {
     );
 
     const commitCompletedImages = React.useCallback(
-        async (images: ApiImageResponseItem[], usage: unknown, durationMsValue: number, clearStreaming = false) => {
+        async (
+            images: ApiImageResponseItem[],
+            usage: unknown,
+            actualCost: ActualCostDetails | undefined,
+            durationMsValue: number,
+            clearStreaming = false
+        ) => {
             if (images.length === 0) {
                 throw new Error(t('error.noImages'));
             }
@@ -603,7 +710,7 @@ export default function HomePage() {
             if (clearStreaming) {
                 setStreamingPreviewImages(new Map());
             }
-            setHistory((prevHistory) => [buildHistoryEntry(images, usage, durationMsValue), ...prevHistory]);
+            setHistory((prevHistory) => [buildHistoryEntry(images, usage, actualCost, durationMsValue), ...prevHistory]);
         },
         [buildHistoryEntry, materializeImages, t]
     );
@@ -636,6 +743,7 @@ export default function HomePage() {
                 apiFormData.append('stream', 'true');
                 apiFormData.append('partial_images', options.partialImages.toString());
             }
+            apiFormData.append('clientRequestId', createClientRequestId());
 
             if (requestMode === 'generate') {
                 const genData = formData as GenerationFormData;
@@ -698,7 +806,8 @@ export default function HomePage() {
                 retryStreaming?: boolean;
                 retryPartialImages?: 1 | 2 | 3;
             } = {}
-        ): Promise<{ images: ApiImageResponseItem[]; usage: unknown }> => {
+        ): Promise<{ images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails }> => {
+            const formClientRequestId = String(apiFormData.get('clientRequestId') || '');
             const response = await fetch('/api/images', {
                 method: 'POST',
                 body: apiFormData
@@ -716,6 +825,7 @@ export default function HomePage() {
                 let streamingState: {
                     completedImages: ApiImageResponseItem[];
                     usage?: unknown;
+                    actualCost?: unknown;
                 } = {
                     completedImages: []
                 };
@@ -760,13 +870,22 @@ export default function HomePage() {
                     await processSseEvent(remainingEvent);
                 }
 
-                return { images: streamingState.completedImages, usage: streamingState.usage };
+                return {
+                    images: streamingState.completedImages.map((image) => ({
+                        ...image,
+                        ...(image.clientRequestId || !formClientRequestId ? {} : { clientRequestId: formClientRequestId })
+                    })),
+                    usage: streamingState.usage,
+                    actualCost: streamingState.actualCost as ActualCostDetails | undefined
+                };
             }
 
             let result: {
                 error?: string;
                 images?: ApiImageResponseItem[];
                 usage?: unknown;
+                actualCost?: ActualCostDetails;
+                clientRequestId?: string;
             };
             try {
                 result = await response.json();
@@ -800,7 +919,16 @@ export default function HomePage() {
                 throw new ApiRequestError(result.error || t('error.apiFailed', { status: response.status }), response.status);
             }
 
-            return { images: result.images || [], usage: result.usage };
+            return {
+                images: (result.images || []).map((image) => ({
+                    ...image,
+                    ...(image.clientRequestId || !(result.clientRequestId || formClientRequestId)
+                        ? {}
+                        : { clientRequestId: result.clientRequestId || formClientRequestId })
+                })),
+                usage: result.usage,
+                actualCost: result.actualCost
+            };
         },
         [createErrorNotice, isPasswordRequiredByBackend, t]
     );
@@ -877,7 +1005,8 @@ export default function HomePage() {
                 );
                 const errors = batchResults.filter((result): result is Error => result instanceof Error);
                 const successes = batchResults.filter(
-                    (result): result is { images: ApiImageResponseItem[]; usage: unknown } => !(result instanceof Error)
+                    (result): result is { images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails } =>
+                        !(result instanceof Error)
                 );
                 if (errors.some((error) => error instanceof ApiRequestError && error.status === 401)) {
                     return;
@@ -887,8 +1016,9 @@ export default function HomePage() {
                 }
                 const images = successes.flatMap((result) => result.images);
                 const usage = mergeUsageValues(successes.map((result) => result.usage));
+                const actualCost = mergeActualCostValues(successes.map((result) => result.actualCost));
                 durationMs = Date.now() - startTime;
-                await commitCompletedImages(images, usage, durationMs, true);
+                await commitCompletedImages(images, usage, actualCost, durationMs, true);
                 if (errors.length > 0) {
                     await refreshRuntimeCapabilities();
                     setError(
@@ -907,7 +1037,7 @@ export default function HomePage() {
 
             const result = await executeImageRequestForCurrentOptions();
             durationMs = Date.now() - startTime;
-            await commitCompletedImages(result.images || [], result.usage, durationMs);
+            await commitCompletedImages(result.images || [], result.usage, result.actualCost, durationMs);
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
             console.error(`API 调用在 ${durationMs}ms 后失败：`, err);
@@ -958,7 +1088,7 @@ export default function HomePage() {
         (item: HistoryMetadata) => {
             const originalStorageMode = item.storageModeUsed || 'fs';
 
-            const selectedBatchPromises = item.images.map(async (imgInfo) => {
+            const selectedBatchPromises = item.images.map(async (imgInfo, imageIndex) => {
                 let path: string | undefined;
                 if (originalStorageMode === 'indexeddb') {
                     path = getImageSrc(imgInfo.filename);
@@ -966,8 +1096,13 @@ export default function HomePage() {
                     path = `/api/image/${imgInfo.filename}`;
                 }
 
+                const clientRequestId = resolveHistoryImageClientRequestId(item, imageIndex);
                 if (path) {
-                    return { path, filename: imgInfo.filename };
+                    return {
+                        path,
+                        filename: imgInfo.filename,
+                        ...(clientRequestId ? { clientRequestId } : {})
+                    };
                 } else {
                     console.warn(
                         `Could not get image source for history item: ${imgInfo.filename} (mode: ${originalStorageMode})`
@@ -978,7 +1113,7 @@ export default function HomePage() {
             });
 
             Promise.all(selectedBatchPromises).then((resolvedBatch) => {
-                const validImages = resolvedBatch.filter(Boolean) as { path: string; filename: string }[];
+                const validImages = resolvedBatch.filter(Boolean) as ApiImageResult[];
 
                 if (validImages.length !== item.images.length) {
                     setError(createErrorNotice(t('error.historySomeMissing')));
@@ -1156,7 +1291,7 @@ export default function HomePage() {
     }, []);
 
     return (
-        <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 pb-24 md:p-8 md:pb-24 lg:p-12'>
+        <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:p-8 md:pb-[calc(6rem+env(safe-area-inset-bottom))] lg:p-12'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -1179,8 +1314,8 @@ export default function HomePage() {
             <div className='w-full max-w-screen-2xl space-y-6'>
                 <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
                 <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
-                    <div className='relative flex h-[70vh] min-h-[600px] flex-col lg:col-span-1'>
-                        <div className={mode === 'generate' ? 'block h-full w-full' : 'hidden'}>
+                    <div className='relative flex flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
+                        <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
                             <GenerationForm
                                 onSubmit={handleApiCall}
                                 isLoading={isLoading}
@@ -1218,7 +1353,7 @@ export default function HomePage() {
                                 setPartialImages={setPartialImages}
                             />
                         </div>
-                        <div className={mode === 'edit' ? 'block h-full w-full' : 'hidden'}>
+                        <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
                             <EditingForm
                                 onSubmit={handleApiCall}
                                 isLoading={isLoading || isSendingToEdit}
@@ -1268,7 +1403,9 @@ export default function HomePage() {
                             />
                         </div>
                     </div>
-                    <div ref={outputPanelRef} className='scroll-mt-4 flex h-[70vh] min-h-[600px] flex-col lg:col-span-1'>
+                    <div
+                        ref={outputPanelRef}
+                        className='scroll-mt-4 flex min-h-[420px] flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
                         {error && (
                             <Alert variant='destructive' className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
                                 <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
@@ -1288,6 +1425,8 @@ export default function HomePage() {
                             clientPasswordHash={clientPasswordHash}
                             canOpenLogs={canOpenLogs}
                             openLogsSignal={openLogsSignal}
+                            logClientRequestIds={activeLogClientRequestIds}
+                            logFilenames={activeLogFilenames}
                         />
                     </div>
                 </div>
@@ -1307,13 +1446,13 @@ export default function HomePage() {
                     />
                 </div>
             </div>
-            <div className='fixed right-0 bottom-0 left-0 z-40 border-t border-white/10 bg-black/90 p-3 backdrop-blur lg:hidden'>
+            <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
                 <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
                     <Button
                         type='button'
                         onClick={handleMobilePrimaryAction}
                         disabled={mobilePrimaryDisabled}
-                        className='bg-white text-black hover:bg-white/90 disabled:bg-white/10 disabled:text-white/40'>
+                        className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground'>
                         {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
                         {mode === 'generate'
                             ? isLoading
@@ -1328,7 +1467,7 @@ export default function HomePage() {
                         variant='outline'
                         size='icon'
                         onClick={scrollToOutput}
-                        className='border-white/20 text-white/80 hover:bg-white/10 hover:text-white'
+                        className='text-muted-foreground hover:text-foreground'
                         aria-label={t('ux.jumpToResult')}>
                         <ArrowDown className='h-4 w-4' />
                     </Button>
@@ -1338,7 +1477,7 @@ export default function HomePage() {
                             variant='outline'
                             size='icon'
                             onClick={() => setOpenLogsSignal((value) => value + 1)}
-                            className='border-white/20 text-white/80 hover:bg-white/10 hover:text-white'
+                            className='text-muted-foreground hover:text-foreground'
                             aria-label={t('logs.open')}>
                             <Terminal className='h-4 w-4' />
                         </Button>
