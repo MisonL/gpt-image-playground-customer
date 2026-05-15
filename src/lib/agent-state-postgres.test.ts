@@ -317,6 +317,24 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
             await pool.end();
         }
     });
+
+    it('records schema migrations and keeps repeated init idempotent', async () => {
+        assert.ok(livePostgresUrl);
+        const { store, admin, pool, cleanup, schema } = await createLivePostgresStore();
+
+        try {
+            await store.init();
+            const result = await admin.query(`SELECT id FROM ${schema}.state_schema_migrations ORDER BY id ASC`);
+            assert.deepEqual(
+                result.rows.map((row: { id: string }) => row.id),
+                ['001_agent_state_core', '002_image_shares']
+            );
+        } finally {
+            await cleanup();
+            admin.release();
+            await pool.end();
+        }
+    });
 });
 
 async function createLivePostgresStore() {

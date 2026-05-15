@@ -78,7 +78,7 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
     }
 
     async init(): Promise<void> {
-        await this.pool.query(POSTGRES_SCHEMA);
+        await runPostgresMigrations(this.pool);
     }
 
     async close(): Promise<void> {
@@ -477,7 +477,21 @@ function toIso(value: Date | string | null): string {
     return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-export const POSTGRES_SCHEMA = `
+type PostgresMigration = {
+    id: string;
+    sql: string;
+};
+
+const POSTGRES_MIGRATION_TABLE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS state_schema_migrations (
+    id TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL
+);`;
+
+const POSTGRES_MIGRATIONS: PostgresMigration[] = [
+    {
+        id: '001_agent_state_core',
+        sql: `
 CREATE TABLE IF NOT EXISTS agent_requests (
     request_id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -519,7 +533,11 @@ CREATE TABLE IF NOT EXISTS agent_recovery_events (
     details_json JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
 );
-
+`
+    },
+    {
+        id: '002_image_shares',
+        sql: `
 CREATE TABLE IF NOT EXISTS image_shares (
     token TEXT PRIMARY KEY,
     source_filename TEXT NOT NULL,
@@ -533,4 +551,38 @@ CREATE TABLE IF NOT EXISTS image_shares (
     access_code_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
-`;
+`
+    }
+];
+
+async function runPostgresMigrations(pool: Pool): Promise<void> {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(POSTGRES_MIGRATION_TABLE_SCHEMA);
+        await client.query('LOCK TABLE state_schema_migrations IN EXCLUSIVE MODE');
+        const appliedResult = await client.query('SELECT id FROM state_schema_migrations');
+        const applied = new Set(appliedResult.rows.map((row: { id: string }) => row.id));
+        for (const migration of POSTGRES_MIGRATIONS) {
+            if (applied.has(migration.id)) continue;
+            await client.query(migration.sql);
+            await client.query('INSERT INTO state_schema_migrations (id, applied_at) VALUES ($1, $2)', [
+                migration.id,
+                isoDate(new Date())
+            ]);
+        }
+        await client.query('COMMIT');
+    } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export const POSTGRES_SCHEMA = [
+    POSTGRES_MIGRATION_TABLE_SCHEMA,
+    ...POSTGRES_MIGRATIONS.map((migration) => migration.sql)
+]
+    .map((sql) => sql.trim())
+    .join('\n\n');

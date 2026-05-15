@@ -2,6 +2,7 @@ import { SqliteAgentStateStore } from './agent-state-sqlite';
 import { hashAgentPayload, type AgentArtifactRecord, type AgentImageResponse } from './agent-state-store';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import Database from 'better-sqlite3';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -543,6 +544,27 @@ describe('SqliteAgentStateStore', () => {
         assert.equal(record.sourceFilename, 'source.png');
         assert.equal(record.accessCodeRequired, true);
         assert.equal(record.expiresAt, '2026-05-14T09:00:00.000Z');
+    });
+
+    it('records schema migrations and keeps repeated init idempotent', async () => {
+        const dbPath = path.join(tempDir, 'migration-idempotent.sqlite');
+        const first = new SqliteAgentStateStore(dbPath);
+        await first.init();
+        const second = new SqliteAgentStateStore(dbPath);
+        await second.init();
+        const db = new Database(dbPath, { readonly: true });
+
+        try {
+            const rows = db
+                .prepare('SELECT id FROM state_schema_migrations ORDER BY id ASC')
+                .all() as Array<{ id: string }>;
+            assert.deepEqual(
+                rows.map((row) => row.id),
+                ['001_agent_state_core', '002_image_shares']
+            );
+        } finally {
+            db.close();
+        }
     });
 });
 

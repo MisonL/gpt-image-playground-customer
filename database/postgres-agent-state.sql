@@ -1,3 +1,8 @@
+CREATE TABLE IF NOT EXISTS state_schema_migrations (
+    id TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agent_requests (
     request_id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,

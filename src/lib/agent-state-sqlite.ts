@@ -87,7 +87,7 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('synchronous = NORMAL');
         this.db.pragma('busy_timeout = 5000');
-        this.db.exec(SQLITE_SCHEMA);
+        runSqliteMigrations(this.db);
     }
 
     async recoverExpiredRequests(now = new Date()): Promise<number> {
@@ -422,7 +422,21 @@ function cryptoRandomId(): string {
     return crypto.randomUUID();
 }
 
-export const SQLITE_SCHEMA = `
+type SqliteMigration = {
+    id: string;
+    sql: string;
+};
+
+const SQLITE_MIGRATION_TABLE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS state_schema_migrations (
+    id TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);`;
+
+const SQLITE_MIGRATIONS: SqliteMigration[] = [
+    {
+        id: '001_agent_state_core',
+        sql: `
 CREATE TABLE IF NOT EXISTS agent_requests (
     request_id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -465,7 +479,11 @@ CREATE TABLE IF NOT EXISTS agent_recovery_events (
     details_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-
+`
+    },
+    {
+        id: '002_image_shares',
+        sql: `
 CREATE TABLE IF NOT EXISTS image_shares (
     token TEXT PRIMARY KEY,
     source_filename TEXT NOT NULL,
@@ -479,4 +497,32 @@ CREATE TABLE IF NOT EXISTS image_shares (
     access_code_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
-`;
+`
+    }
+];
+
+function runSqliteMigrations(db: Database.Database): void {
+    db.exec(SQLITE_MIGRATION_TABLE_SCHEMA);
+    const applied = new Set(
+        (
+            db.prepare('SELECT id FROM state_schema_migrations').all() as Array<{
+                id: string;
+            }>
+        ).map((row) => row.id)
+    );
+    const applyPending = db.transaction(() => {
+        for (const migration of SQLITE_MIGRATIONS) {
+            if (applied.has(migration.id)) continue;
+            db.exec(migration.sql);
+            db.prepare('INSERT INTO state_schema_migrations (id, applied_at) VALUES (?, ?)').run(
+                migration.id,
+                isoDate(new Date())
+            );
+        }
+    });
+    applyPending();
+}
+
+export const SQLITE_SCHEMA = [SQLITE_MIGRATION_TABLE_SCHEMA, ...SQLITE_MIGRATIONS.map((migration) => migration.sql)]
+    .map((sql) => sql.trim())
+    .join('\n\n');
