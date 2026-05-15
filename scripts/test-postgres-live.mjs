@@ -22,6 +22,7 @@ function runTests(databaseUrl) {
   run('node', ['--test', '--import', 'tsx', ...testFiles], {
     env: {
       ...process.env,
+      NODE_ENV: 'test',
       AGENT_POSTGRES_TEST_DATABASE_URL: databaseUrl
     }
   });
