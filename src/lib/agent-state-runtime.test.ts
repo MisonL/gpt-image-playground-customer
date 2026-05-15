@@ -1,5 +1,6 @@
 import {
     ensureAgentStateStoreReady,
+    getAgentStateStore,
     readAgentDatabaseUrl,
     recoverAgentStateOnStartup,
     resetAgentStateStoreForTests,
@@ -8,6 +9,7 @@ import {
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import type { AgentStateStore } from './agent-state-store';
+import { MemoryAgentStateStore } from './agent-state-memory';
 import { runAgentStateStartupRecovery } from '../instrumentation';
 
 afterEach(() => {
@@ -16,6 +18,12 @@ afterEach(() => {
 });
 
 describe('agent-state-runtime recovery scheduling', () => {
+    it('creates a memory store for ephemeral deployments', () => {
+        const store = getAgentStateStore({ AGENT_STATE_BACKEND: 'memory' });
+
+        assert.ok(store instanceof MemoryAgentStateStore);
+    });
+
     it('throttles request-time recovery checks by interval', async () => {
         const store = createFakeStore();
         setAgentStateStoreFactoryForTests(() => store);

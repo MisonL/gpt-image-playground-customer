@@ -6,6 +6,7 @@ import {
     readAgentSqlitePath,
     type AgentStateBackend
 } from './agent-api-contracts';
+import { MemoryAgentStateStore } from './agent-state-memory';
 import { PostgresAgentStateStore } from './agent-state-postgres';
 import { SqliteAgentStateStore } from './agent-state-sqlite';
 import type { AgentStateStore } from './agent-state-store';
@@ -76,7 +77,9 @@ export function getAgentStateStore(env: Record<string, string | undefined> = pro
     const key =
         backend === 'postgres'
             ? databaseUrl || ''
-            : path.resolve(/* turbopackIgnore: true */ process.cwd(), readAgentSqlitePath(env));
+            : backend === 'memory'
+              ? 'memory'
+              : path.resolve(/* turbopackIgnore: true */ process.cwd(), readAgentSqlitePath(env));
     if (cachedStore && cachedStore.backend === backend && cachedStore.key === key) {
         return cachedStore.store;
     }
@@ -88,6 +91,9 @@ export function getAgentStateStore(env: Record<string, string | undefined> = pro
             throw new Error('AGENT_STATE_BACKEND=postgres 时必须设置 AGENT_DATABASE_URL 或 AGENT_DB_PASSWORD。');
         }
         return cacheAgentStateStore(backend, key, new PostgresAgentStateStore(databaseUrl));
+    }
+    if (backend === 'memory') {
+        return cacheAgentStateStore(backend, key, new MemoryAgentStateStore());
     }
     return cacheAgentStateStore(backend, key, new SqliteAgentStateStore(key));
 }

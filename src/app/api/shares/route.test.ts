@@ -1,4 +1,5 @@
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
+import { resetAgentStateStoreForTests } from '@/lib/agent-state-runtime';
 import { createAccessToken } from '@/lib/server-runtime';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -23,6 +24,7 @@ async function withTempCwd() {
 }
 
 afterEach(async () => {
+    resetAgentStateStoreForTests();
     if (previousCwd) process.chdir(previousCwd);
     if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
     previousCwd = '';

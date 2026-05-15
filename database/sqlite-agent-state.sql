@@ -40,3 +40,17 @@ CREATE TABLE IF NOT EXISTS agent_recovery_events (
     details_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS image_shares (
+    token TEXT PRIMARY KEY,
+    source_filename TEXT NOT NULL,
+    content_filename TEXT NOT NULL UNIQUE,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    access_code_required INTEGER NOT NULL CHECK (access_code_required IN (0, 1)),
+    expires_at TEXT,
+    access_code_salt TEXT,
+    access_code_hash TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);

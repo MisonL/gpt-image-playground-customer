@@ -23,6 +23,7 @@ import {
 } from './agent-state-store';
 import type { AgentImageResponse } from './agent-api-contracts';
 import type { AgentErrorBody } from './api-error-response';
+import type { ImageShareRecord, ImageShareStateStore } from './share-store';
 
 type PostgresRequestRow = {
     request_id: string;
@@ -56,7 +57,20 @@ type PostgresArtifactRow = {
     created_at: Date | string;
 };
 
-export class PostgresAgentStateStore implements AgentStateStore {
+type PostgresShareRow = {
+    token: string;
+    source_filename: string;
+    content_filename: string;
+    mime_type: string;
+    size_bytes: number | string;
+    created_at: Date | string;
+    access_code_required: boolean;
+    expires_at: Date | string | null;
+    access_code_salt: string | null;
+    access_code_hash: string | null;
+};
+
+export class PostgresAgentStateStore implements AgentStateStore, ImageShareStateStore {
     private readonly pool: Pool;
 
     constructor(connectionString: string) {
@@ -238,6 +252,32 @@ export class PostgresAgentStateStore implements AgentStateStore {
         return (result.rowCount ?? 0) > 0;
     }
 
+    async createImageShareRecord(record: ImageShareRecord): Promise<void> {
+        await this.pool.query(
+            `INSERT INTO image_shares
+                (token, source_filename, content_filename, mime_type, size_bytes, created_at, access_code_required, expires_at, access_code_salt, access_code_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+                record.token,
+                record.sourceFilename,
+                record.contentFilename,
+                record.mimeType,
+                record.sizeBytes,
+                record.createdAt,
+                record.accessCodeRequired,
+                record.expiresAt ?? null,
+                record.accessCodeSalt ?? null,
+                record.accessCodeHash ?? null
+            ]
+        );
+    }
+
+    async readImageShareRecord(token: string): Promise<ImageShareRecord | undefined> {
+        const result = await this.pool.query('SELECT * FROM image_shares WHERE token = $1', [token]);
+        const row = result.rows[0] as PostgresShareRow | undefined;
+        return row ? this.mapShareRow(row) : undefined;
+    }
+
     private async beginRequestInTransaction(
         client: PoolClient,
         input: BeginAgentRequestInput
@@ -348,6 +388,21 @@ export class PostgresAgentStateStore implements AgentStateStore {
             model: row.model,
             promptHash: row.prompt_hash,
             createdAt: toIso(row.created_at)
+        };
+    }
+
+    private mapShareRow(row: PostgresShareRow): ImageShareRecord {
+        return {
+            token: row.token,
+            sourceFilename: row.source_filename,
+            contentFilename: row.content_filename,
+            mimeType: row.mime_type,
+            sizeBytes: Number(row.size_bytes),
+            createdAt: toIso(row.created_at),
+            accessCodeRequired: row.access_code_required,
+            ...(row.expires_at ? { expiresAt: toIso(row.expires_at) } : {}),
+            ...(row.access_code_salt ? { accessCodeSalt: row.access_code_salt } : {}),
+            ...(row.access_code_hash ? { accessCodeHash: row.access_code_hash } : {})
         };
     }
 
@@ -464,4 +519,18 @@ CREATE TABLE IF NOT EXISTS agent_recovery_events (
     details_json JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS image_shares (
+    token TEXT PRIMARY KEY,
+    source_filename TEXT NOT NULL,
+    content_filename TEXT NOT NULL UNIQUE,
+    mime_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    access_code_required BOOLEAN NOT NULL,
+    expires_at TIMESTAMPTZ,
+    access_code_salt TEXT,
+    access_code_hash TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
 `;

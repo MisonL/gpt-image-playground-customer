@@ -18,8 +18,10 @@ describe('PostgresAgentStateStore schema contract', () => {
     it('uses unique keys and indexes required for idempotency and artifact lookup', () => {
         assert.match(POSTGRES_SCHEMA, /idempotency_key TEXT NOT NULL UNIQUE/);
         assert.match(POSTGRES_SCHEMA, /filename TEXT NOT NULL UNIQUE/);
+        assert.match(POSTGRES_SCHEMA, /content_filename TEXT NOT NULL UNIQUE/);
         assert.match(POSTGRES_SCHEMA, /idx_agent_requests_status_locked_until/);
         assert.match(POSTGRES_SCHEMA, /idx_agent_artifacts_request_id/);
+        assert.match(POSTGRES_SCHEMA, /idx_image_shares_expires_at/);
     });
 
     it('uses SKIP LOCKED for recovery selection so concurrent workers do not block each other', () => {
@@ -280,6 +282,36 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
             assert.ok(await store.getArtifact('pg-artifact-purge-restore-file'));
         } finally {
             await rm(path.dirname(artifactPath), { recursive: true, force: true });
+            await cleanup();
+            admin.release();
+            await pool.end();
+        }
+    });
+
+    it('stores and reads image share metadata', async () => {
+        assert.ok(livePostgresUrl);
+        const { store, admin, pool, cleanup } = await createLivePostgresStore();
+
+        try {
+            await store.createImageShareRecord({
+                token: 'a'.repeat(24),
+                sourceFilename: 'source.png',
+                contentFilename: 'a'.repeat(24) + '.png',
+                mimeType: 'image/png',
+                sizeBytes: 12,
+                createdAt: '2026-05-14T08:00:00.000Z',
+                accessCodeRequired: true,
+                expiresAt: '2026-05-14T09:00:00.000Z',
+                accessCodeSalt: 'salt',
+                accessCodeHash: 'hash'
+            });
+
+            const record = await store.readImageShareRecord('a'.repeat(24));
+            assert.ok(record);
+            assert.equal(record.sourceFilename, 'source.png');
+            assert.equal(record.accessCodeRequired, true);
+            assert.equal(record.expiresAt, '2026-05-14T09:00:00.000Z');
+        } finally {
             await cleanup();
             admin.release();
             await pool.end();

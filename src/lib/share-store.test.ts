@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { resetAgentStateStoreForTests } from './agent-state-runtime';
 
 let originalCwd = '';
 let tempDir = '';
@@ -14,6 +15,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+    resetAgentStateStoreForTests();
     process.chdir(originalCwd);
     await rm(tempDir, { recursive: true, force: true });
 });

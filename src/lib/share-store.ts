@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { writeFileAtomic } from './agent-file-utils';
+import { deleteFileIfExists, writeFileAtomic } from './agent-file-utils';
+import { ensureAgentStateStoreReady } from './agent-state-runtime';
 
 const SHARE_TOKEN_BYTES = 12;
 
@@ -32,12 +33,13 @@ export type ImageShareContent = {
     mimeType: string;
 };
 
+export type ImageShareStateStore = {
+    createImageShareRecord(record: ImageShareRecord): Promise<void>;
+    readImageShareRecord(token: string): Promise<ImageShareRecord | undefined>;
+};
+
 function shareDir(): string {
     return path.join(/* turbopackIgnore: true */ process.cwd(), 'generated-images', '.shares');
-}
-
-function shareMetadataPath(token: string): string {
-    return path.join(shareDir(), `${token}.json`);
 }
 
 function shareContentPath(contentFilename: string): string {
@@ -70,24 +72,11 @@ function hashAccessCode(accessCode: string, salt: string): string {
     return crypto.createHash('sha256').update(`${salt}:${accessCode}`).digest('hex');
 }
 
-function readShareFilepath(token: string): string {
-    return shareMetadataPath(token);
-}
-
-function readShareTokenPath(token: string): string | undefined {
-    if (!isShareToken(token)) return undefined;
-    return readShareFilepath(token);
-}
-
 function isExpired(expiresAt: string | undefined, now: Date): boolean {
     if (!expiresAt) return false;
     const expiresAtMs = new Date(expiresAt).getTime();
     if (Number.isNaN(expiresAtMs)) return true;
     return now.getTime() >= expiresAtMs;
-}
-
-function isNodeError(error: unknown, code: string): boolean {
-    return typeof error === 'object' && error !== null && 'code' in error && error.code === code;
 }
 
 function assertShareContentPathAllowed(contentFilename: string): string {
@@ -124,47 +113,21 @@ export async function createImageShare(input: CreateImageShareInput): Promise<Im
         ...(accessCodeHash ? { accessCodeHash } : {})
     };
 
-    await writeFileAtomic(shareContentPath(contentFilename), input.imageBuffer);
-    await writeFileAtomic(readShareFilepath(token), Buffer.from(`${JSON.stringify(record, null, 2)}\n`, 'utf8'));
+    const contentPath = shareContentPath(contentFilename);
+    await writeFileAtomic(contentPath, input.imageBuffer);
+    try {
+        await getImageShareStore().then((store) => store.createImageShareRecord(record));
+    } catch (error) {
+        await deleteFileIfExists(contentPath).catch(() => {});
+        throw error;
+    }
 
     return record;
 }
 
 export async function readImageShare(token: string): Promise<ImageShareRecord | undefined> {
-    const metadataPath = readShareTokenPath(token);
-    if (!metadataPath) return undefined;
-    try {
-        const raw = await fs.readFile(metadataPath, 'utf8');
-        const parsed = JSON.parse(raw) as Partial<ImageShareRecord>;
-        if (
-            typeof parsed.token !== 'string' ||
-            parsed.token !== token ||
-            typeof parsed.sourceFilename !== 'string' ||
-            typeof parsed.contentFilename !== 'string' ||
-            typeof parsed.mimeType !== 'string' ||
-            typeof parsed.sizeBytes !== 'number' ||
-            typeof parsed.createdAt !== 'string'
-        ) {
-            return undefined;
-        }
-        return {
-            token: parsed.token,
-            sourceFilename: parsed.sourceFilename,
-            contentFilename: parsed.contentFilename,
-            mimeType: parsed.mimeType,
-            sizeBytes: parsed.sizeBytes,
-            createdAt: parsed.createdAt,
-            accessCodeRequired: Boolean(parsed.accessCodeHash && parsed.accessCodeSalt),
-            ...(typeof parsed.expiresAt === 'string' ? { expiresAt: parsed.expiresAt } : {}),
-            ...(typeof parsed.accessCodeSalt === 'string' ? { accessCodeSalt: parsed.accessCodeSalt } : {}),
-            ...(typeof parsed.accessCodeHash === 'string' ? { accessCodeHash: parsed.accessCodeHash } : {})
-        };
-    } catch (error) {
-        if (isNodeError(error, 'ENOENT')) {
-            return undefined;
-        }
-        throw error;
-    }
+    if (!isShareToken(token)) return undefined;
+    return getImageShareStore().then((store) => store.readImageShareRecord(token));
 }
 
 export async function readImageShareContent(record: ImageShareRecord): Promise<ImageShareContent> {
@@ -186,4 +149,23 @@ export function verifyImageShareAccess(record: ImageShareRecord, accessCode?: st
 
 export function isImageShareExpired(record: ImageShareRecord, now = new Date()): boolean {
     return isExpired(record.expiresAt, now);
+}
+
+async function getImageShareStore(): Promise<ImageShareStateStore> {
+    const store = await ensureAgentStateStoreReady();
+    if (isImageShareStateStore(store)) {
+        return store;
+    }
+    throw new Error('当前状态后端不支持图片分享元数据。');
+}
+
+function isImageShareStateStore(value: unknown): value is ImageShareStateStore {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        'createImageShareRecord' in value &&
+        'readImageShareRecord' in value &&
+        typeof value.createImageShareRecord === 'function' &&
+        typeof value.readImageShareRecord === 'function'
+    );
 }

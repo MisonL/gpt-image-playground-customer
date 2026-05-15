@@ -279,7 +279,7 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 否 | `60000` | 服务端 credential 或 channel 失败后的默认冷却时间。 |
 | `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问密码。 |
 | `AGENT_API_TOKEN` | 否 | 无 | 设置后，`/api/agent/*` 需要 Bearer token。 |
-| `AGENT_STATE_BACKEND` | 否 | `sqlite` | Agent 状态后端，可选 `sqlite` 或 `postgres`。 |
+| `AGENT_STATE_BACKEND` | 否 | `sqlite` | Agent 状态后端，可选 `memory`、`sqlite` 或 `postgres`。 |
 | `AGENT_SQLITE_PATH` | 否 | `generated-images/.agent-state/agent.sqlite` | SQLite 状态库路径。 |
 | `AGENT_DATABASE_URL` | PostgreSQL 模式可选 | 无 | PostgreSQL 连接串；也可改用下面的拆分字段。 |
 | `AGENT_DB_HOST` / `AGENT_DB_PORT` / `AGENT_DB_NAME` / `AGENT_DB_USER` | PostgreSQL 模式可选 | `localhost` / `5432` / `gpt_image_playground` / `gpt_image` | 未设置 `AGENT_DATABASE_URL` 时用于组装 PostgreSQL 连接串。 |
@@ -376,7 +376,7 @@ Agent API 读取图片时走鉴权接口：
 /api/agent/artifacts/{id}/content
 ```
 
-Agent 状态库只保存请求、幂等和产物元数据，不保存图片二进制。备份时需要同时备份状态库和 `generated-images/`。
+状态库保存 Agent 请求、幂等、产物元数据和分享元数据，不保存图片二进制。备份时需要同时备份状态库和 `generated-images/`。
 
 如果部署到只读或临时文件系统，可以把 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 设置为 `indexeddb`。这时图片会保存在浏览器 IndexedDB 中，服务端不落盘。
 
@@ -400,6 +400,26 @@ SQLite 与 PostgreSQL 模式共享同一个 Compose project、应用容器名和
 `GPT_IMAGE_POSTGRES_PASSWORD` 只在 PostgreSQL volume 首次初始化时生效。已有 `postgres-data` volume 的部署如果要更换密码，需要先在数据库内修改用户密码，或备份后重建 volume；仅修改环境变量不会自动轮换现有数据库密码。
 
 SQLite 适合单实例本地服务。多实例或长期高并发 Agent 服务应使用 PostgreSQL，不要让多个容器共享同一个 SQLite 文件作为主状态库。
+
+Hugging Face Space 免费层或其他临时容器演示可以使用纯内存状态后端：
+
+```dotenv
+AGENT_STATE_BACKEND=memory
+NEXT_PUBLIC_IMAGE_STORAGE_MODE=fs
+```
+
+`memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。图片二进制仍按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存，默认 `fs` 会写入当前容器文件系统。
+
+如果把当前 Dockerfile 直接部署到 Hugging Face Docker Space，Space README 顶部 YAML 需要使用 Docker SDK，并把应用端口指向本项目默认端口：
+
+```yaml
+---
+sdk: docker
+app_port: 4783
+---
+```
+
+免费层文件系统不是长期持久化介质，因此 `memory` 模式只用于公开演示或临时体验。需要长期保留图片、分享和 Agent replay 状态时，应改用 PostgreSQL 加持久卷或外部对象存储。
 
 PostgreSQL live 并发测试可用以下命令单独执行。未提供 `AGENT_POSTGRES_TEST_DATABASE_URL` 时，脚本会自动启动临时 PostgreSQL 容器并在结束后清理。
 

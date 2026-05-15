@@ -28,6 +28,7 @@ import {
 } from './agent-state-store';
 import type { AgentErrorBody } from './api-error-response';
 import type { AgentImageResponse } from './agent-api-contracts';
+import type { ImageShareRecord, ImageShareStateStore } from './share-store';
 
 type SqliteRequestRow = {
     request_id: string;
@@ -61,7 +62,20 @@ type SqliteArtifactRow = {
     created_at: string;
 };
 
-export class SqliteAgentStateStore implements AgentStateStore {
+type SqliteShareRow = {
+    token: string;
+    source_filename: string;
+    content_filename: string;
+    mime_type: string;
+    size_bytes: number;
+    created_at: string;
+    access_code_required: number;
+    expires_at: string | null;
+    access_code_salt: string | null;
+    access_code_hash: string | null;
+};
+
+export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateStore {
     private db: Database.Database | undefined;
 
     constructor(private readonly dbPath: string) {}
@@ -241,6 +255,32 @@ export class SqliteAgentStateStore implements AgentStateStore {
         return result.changes > 0;
     }
 
+    async createImageShareRecord(record: ImageShareRecord): Promise<void> {
+        this.requireDb()
+            .prepare(
+                `INSERT INTO image_shares
+                    (token, source_filename, content_filename, mime_type, size_bytes, created_at, access_code_required, expires_at, access_code_salt, access_code_hash)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .run(
+                record.token,
+                record.sourceFilename,
+                record.contentFilename,
+                record.mimeType,
+                record.sizeBytes,
+                record.createdAt,
+                record.accessCodeRequired ? 1 : 0,
+                record.expiresAt ?? null,
+                record.accessCodeSalt ?? null,
+                record.accessCodeHash ?? null
+            );
+    }
+
+    async readImageShareRecord(token: string): Promise<ImageShareRecord | undefined> {
+        const row = this.requireDb().prepare('SELECT * FROM image_shares WHERE token = ?').get(token) as SqliteShareRow | undefined;
+        return row ? this.mapShareRow(row) : undefined;
+    }
+
     private requireDb(): Database.Database {
         if (!this.db) {
             throw new Error('SQLite Agent 状态库尚未初始化。');
@@ -337,6 +377,21 @@ export class SqliteAgentStateStore implements AgentStateStore {
             createdAt: row.created_at
         };
     }
+
+    private mapShareRow(row: SqliteShareRow): ImageShareRecord {
+        return {
+            token: row.token,
+            sourceFilename: row.source_filename,
+            contentFilename: row.content_filename,
+            mimeType: row.mime_type,
+            sizeBytes: row.size_bytes,
+            createdAt: row.created_at,
+            accessCodeRequired: Boolean(row.access_code_required),
+            ...(row.expires_at ? { expiresAt: row.expires_at } : {}),
+            ...(row.access_code_salt ? { accessCodeSalt: row.access_code_salt } : {}),
+            ...(row.access_code_hash ? { accessCodeHash: row.access_code_hash } : {})
+        };
+    }
 }
 
 async function moveArtifactFilesForDeletion(filepaths: string[]): Promise<MovedFileForDeletion[]> {
@@ -410,4 +465,18 @@ CREATE TABLE IF NOT EXISTS agent_recovery_events (
     details_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS image_shares (
+    token TEXT PRIMARY KEY,
+    source_filename TEXT NOT NULL,
+    content_filename TEXT NOT NULL UNIQUE,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    access_code_required INTEGER NOT NULL CHECK (access_code_required IN (0, 1)),
+    expires_at TEXT,
+    access_code_salt TEXT,
+    access_code_hash TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
 `;

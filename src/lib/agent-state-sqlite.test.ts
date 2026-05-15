@@ -523,6 +523,27 @@ describe('SqliteAgentStateStore', () => {
             await rm(path.dirname(artifactPath), { recursive: true, force: true });
         }
     });
+
+    it('stores and reads image share metadata', async () => {
+        await store.createImageShareRecord({
+            token: 'b'.repeat(24),
+            sourceFilename: 'source.png',
+            contentFilename: `${'b'.repeat(24)}.png`,
+            mimeType: 'image/png',
+            sizeBytes: 12,
+            createdAt: '2026-05-14T08:00:00.000Z',
+            accessCodeRequired: true,
+            expiresAt: '2026-05-14T09:00:00.000Z',
+            accessCodeSalt: 'salt',
+            accessCodeHash: 'hash'
+        });
+
+        const record = await store.readImageShareRecord('b'.repeat(24));
+        assert.ok(record);
+        assert.equal(record.sourceFilename, 'source.png');
+        assert.equal(record.accessCodeRequired, true);
+        assert.equal(record.expiresAt, '2026-05-14T09:00:00.000Z');
+    });
 });
 
 function buildArtifact(input: {

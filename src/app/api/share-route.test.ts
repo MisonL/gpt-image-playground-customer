@@ -1,4 +1,5 @@
 import { createImageShare } from '@/lib/share-store';
+import { resetAgentStateStoreForTests } from '@/lib/agent-state-runtime';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -21,6 +22,7 @@ function params(token: string) {
 }
 
 afterEach(async () => {
+    resetAgentStateStoreForTests();
     if (previousCwd) process.chdir(previousCwd);
     if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
     previousCwd = '';
@@ -56,10 +58,9 @@ describe('share metadata and content routes', { concurrency: false }, () => {
             sourceFilename: 'image.png',
             mimeType: 'image/png',
             accessCode: undefined,
-            expiresInMinutes: null
+            expiresInMinutes: 1,
+            now: new Date(Date.now() - 120_000)
         });
-        const expiredRecord = { ...record, expiresAt: new Date(Date.now() - 60_000).toISOString() };
-        await fs.writeFile(path.join(tempDir, 'generated-images', '.shares', `${record.token}.json`), `${JSON.stringify(expiredRecord)}\n`);
 
         const response = await getShare(new Request(`http://localhost/api/shares/${record.token}`), params(record.token));
         assert.equal(response.status, 200);
@@ -188,10 +189,9 @@ describe('share metadata and content routes', { concurrency: false }, () => {
             sourceFilename: 'image.png',
             mimeType: 'image/png',
             accessCode: undefined,
-            expiresInMinutes: null
+            expiresInMinutes: 1,
+            now: new Date(Date.now() - 120_000)
         });
-        const expiredRecord = { ...record, expiresAt: new Date(Date.now() - 60_000).toISOString() };
-        await fs.writeFile(path.join(tempDir, 'generated-images', '.shares', `${record.token}.json`), `${JSON.stringify(expiredRecord)}\n`);
 
         const response = await getShareContent(
             new Request(`http://localhost/api/shares/${record.token}/content`, {
