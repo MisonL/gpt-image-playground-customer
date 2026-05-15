@@ -18,6 +18,7 @@ import {
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { sha256Hex } from '@/lib/sha256';
 import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
@@ -33,7 +34,7 @@ import {
 } from '@/lib/streaming-batch';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowDown, Loader2, Terminal } from 'lucide-react';
+import { ArrowDown, Loader2, Lock, Terminal } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -297,6 +298,7 @@ export default function HomePage() {
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
+    const [isEntryAuthenticated, setIsEntryAuthenticated] = React.useState(false);
     const [isLoading, setIsLoading] = React.useState(false);
     const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
     const [error, setError] = React.useState<ApiErrorNotice | null>(null);
@@ -353,7 +355,7 @@ export default function HomePage() {
 
     // 流式状态，由生成和编辑模式共用。
     const [enableStreaming, setEnableStreaming] = React.useState(true);
-    const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(2);
+    const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(1);
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
@@ -437,6 +439,16 @@ export default function HomePage() {
         };
     }, [editSourceImagePreviewUrls]);
 
+    const verifyEntryPasswordHash = React.useCallback(async (passwordHash: string): Promise<boolean> => {
+        const response = await fetch('/api/auth-verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ passwordHash })
+        });
+
+        return response.ok;
+    }, []);
+
     React.useEffect(() => {
         const fetchAuthStatus = async () => {
             try {
@@ -445,19 +457,38 @@ export default function HomePage() {
                     throw new Error('获取鉴权状态失败');
                 }
                 const data = await response.json();
-                setIsPasswordRequiredByBackend(data.passwordRequired);
+                const passwordRequired = Boolean(data.passwordRequired);
+                setIsPasswordRequiredByBackend(passwordRequired);
+
+                const storedPasswordHash = readLocalStorageValue('clientPasswordHash');
+                if (!passwordRequired) {
+                    setClientPasswordHash(storedPasswordHash);
+                    setIsEntryAuthenticated(true);
+                    return;
+                }
+
+                if (storedPasswordHash && (await verifyEntryPasswordHash(storedPasswordHash))) {
+                    setClientPasswordHash(storedPasswordHash);
+                    setIsEntryAuthenticated(true);
+                    return;
+                }
+
+                localStorage.removeItem('clientPasswordHash');
+                setClientPasswordHash(null);
+                setPasswordDialogContext('initial');
+                setIsEntryAuthenticated(false);
             } catch (error) {
                 console.error('获取鉴权状态失败：', error);
                 setIsPasswordRequiredByBackend(false);
+                setIsEntryAuthenticated(true);
             }
         };
 
         fetchAuthStatus();
         queueMicrotask(() => {
-            setClientPasswordHash(readLocalStorageValue('clientPasswordHash'));
             setApiSettings(readStoredApiSettings());
         });
-    }, []);
+    }, [verifyEntryPasswordHash]);
 
     const refreshRuntimeCapabilities = React.useCallback(async (): Promise<RuntimeCapabilities | null> => {
         try {
@@ -542,24 +573,25 @@ export default function HomePage() {
         };
     }, [mode, editImageFiles.length, t]);
 
-    async function sha256Client(text: string): Promise<string> {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(text);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-        return hashHex;
-    }
-
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
             setError(createErrorNotice(t('password.empty')));
             return;
         }
         try {
-            const hash = await sha256Client(password);
+            const hash = await sha256Hex(password);
+            if (isPasswordRequiredByBackend && !(await verifyEntryPasswordHash(hash))) {
+                localStorage.removeItem('clientPasswordHash');
+                setClientPasswordHash(null);
+                setIsEntryAuthenticated(false);
+                setError(createErrorNotice(t('error.unauthorized')));
+                setIsPasswordDialogOpen(true);
+                return;
+            }
+
             localStorage.setItem('clientPasswordHash', hash);
             setClientPasswordHash(hash);
+            setIsEntryAuthenticated(true);
             setError(null);
             setIsPasswordDialogOpen(false);
             if (passwordDialogContext === 'retry' && lastApiCallArgs) {
@@ -1288,6 +1320,8 @@ export default function HomePage() {
         setItemToDeleteConfirm(null);
     }, []);
 
+    const showEntryLock = isPasswordRequiredByBackend === true && !isEntryAuthenticated;
+
     return (
         <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:p-8 md:pb-[calc(6rem+env(safe-area-inset-bottom))] lg:p-12'>
             <PasswordDialog
@@ -1309,179 +1343,212 @@ export default function HomePage() {
                     onSave={handleSaveApiSettings}
                 />
             ) : null}
-            <div className='w-full max-w-screen-2xl space-y-6'>
-                <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
-                <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
-                    <div className='relative flex flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
-                        <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
-                            <GenerationForm
-                                onSubmit={handleApiCall}
-                                isLoading={isLoading}
-                                currentMode={mode}
-                                onModeChange={setMode}
-                                isPasswordRequiredByBackend={isPasswordRequiredByBackend}
-                                clientPasswordHash={clientPasswordHash}
-                                onOpenPasswordDialog={handleOpenPasswordDialog}
-                                model={genModel}
-                                setModel={setGenModel}
-                                prompt={genPrompt}
-                                setPrompt={setGenPrompt}
-                                n={genN}
-                                setN={setGenN}
-                                size={genSize}
-                                setSize={setGenSize}
-                                customWidth={genCustomWidth}
-                                setCustomWidth={setGenCustomWidth}
-                                customHeight={genCustomHeight}
-                                setCustomHeight={setGenCustomHeight}
-                                quality={genQuality}
-                                setQuality={setGenQuality}
-                                outputFormat={genOutputFormat}
-                                setOutputFormat={setGenOutputFormat}
-                                compression={genCompression}
-                                setCompression={setGenCompression}
-                                background={genBackground}
-                                setBackground={setGenBackground}
-                                moderation={genModeration}
-                                setModeration={setGenModeration}
-                                enableStreaming={enableStreaming}
-                                setEnableStreaming={setEnableStreaming}
-                                allowStreamingBatch={streamingBatchEnabled}
-                                partialImages={partialImages}
-                                setPartialImages={setPartialImages}
-                            />
-                        </div>
-                        <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
-                            <EditingForm
-                                onSubmit={handleApiCall}
-                                isLoading={isLoading || isSendingToEdit}
-                                currentMode={mode}
-                                onModeChange={setMode}
-                                isPasswordRequiredByBackend={isPasswordRequiredByBackend}
-                                clientPasswordHash={clientPasswordHash}
-                                onOpenPasswordDialog={handleOpenPasswordDialog}
-                                editModel={editModel}
-                                setEditModel={setEditModel}
-                                imageFiles={editImageFiles}
-                                sourceImagePreviewUrls={editSourceImagePreviewUrls}
-                                setImageFiles={setEditImageFiles}
-                                setSourceImagePreviewUrls={setEditSourceImagePreviewUrls}
-                                maxImages={MAX_EDIT_IMAGES}
-                                editPrompt={editPrompt}
-                                setEditPrompt={setEditPrompt}
-                                editN={editN}
-                                setEditN={setEditN}
-                                editSize={editSize}
-                                setEditSize={setEditSize}
-                                editCustomWidth={editCustomWidth}
-                                setEditCustomWidth={setEditCustomWidth}
-                                editCustomHeight={editCustomHeight}
-                                setEditCustomHeight={setEditCustomHeight}
-                                editQuality={editQuality}
-                                setEditQuality={setEditQuality}
-                                editBrushSize={editBrushSize}
-                                setEditBrushSize={setEditBrushSize}
-                                editShowMaskEditor={editShowMaskEditor}
-                                setEditShowMaskEditor={setEditShowMaskEditor}
-                                editGeneratedMaskFile={editGeneratedMaskFile}
-                                setEditGeneratedMaskFile={setEditGeneratedMaskFile}
-                                editIsMaskSaved={editIsMaskSaved}
-                                setEditIsMaskSaved={setEditIsMaskSaved}
-                                editOriginalImageSize={editOriginalImageSize}
-                                setEditOriginalImageSize={setEditOriginalImageSize}
-                                editDrawnPoints={editDrawnPoints}
-                                setEditDrawnPoints={setEditDrawnPoints}
-                                editMaskPreviewUrl={editMaskPreviewUrl}
-                                setEditMaskPreviewUrl={setEditMaskPreviewUrl}
-                                enableStreaming={enableStreaming}
-                                setEnableStreaming={setEnableStreaming}
-                                allowStreamingBatch={streamingBatchEnabled}
-                                partialImages={partialImages}
-                                setPartialImages={setPartialImages}
-                            />
-                        </div>
+            {showEntryLock ? (
+                <div className='flex min-h-[70vh] w-full max-w-md flex-col items-center justify-center gap-6 text-center'>
+                    <div className='flex size-14 items-center justify-center rounded-full border border-white/15 bg-black text-white'>
+                        <Lock className='h-6 w-6' />
                     </div>
-                    <div
-                        ref={outputPanelRef}
-                        className='scroll-mt-4 flex min-h-[420px] flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
-                        {error && (
-                            <Alert variant='destructive' className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
-                                <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
-                                <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
-                            </Alert>
-                        )}
-                        <ImageOutput
-                            imageBatch={latestImageBatch}
-                            viewMode={imageOutputView}
-                            onViewChange={setImageOutputView}
-                            altText={t('output.alt')}
-                            isLoading={isLoading || isSendingToEdit}
-                            onSendToEdit={handleSendToEdit}
-                            currentMode={mode}
-                            baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
-                            streamingPreviewImages={streamingPreviewImages}
-                            clientPasswordHash={clientPasswordHash}
-                            canOpenLogs={canOpenLogs}
-                            openLogsSignal={openLogsSignal}
-                            logClientRequestIds={activeLogClientRequestIds}
-                            logFilenames={activeLogFilenames}
-                        />
+                    <div className='space-y-2'>
+                        <h1 className='text-2xl font-semibold text-white'>{t('password.required')}</h1>
+                        <p className='text-sm text-white/60'>{t('password.entryDescription')}</p>
                     </div>
-                </div>
-
-                <div className='min-h-[450px]'>
-                    <HistoryPanel
-                        history={history}
-                        onSelectImage={handleHistorySelect}
-                        onClearHistory={handleClearHistory}
-                        getImageSrc={getImageSrc}
-                        onDeleteItemRequest={handleRequestDeleteItem}
-                        itemPendingDeleteConfirmation={itemToDeleteConfirm}
-                        onConfirmDeletion={handleConfirmDeletion}
-                        onCancelDeletion={handleCancelDeletion}
-                        deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
-                        onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
-                    />
-                </div>
-            </div>
-            <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
-                <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
-                    <Button
-                        type='button'
-                        onClick={handleMobilePrimaryAction}
-                        disabled={mobilePrimaryDisabled}
-                        className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground'>
-                        {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-                        {mode === 'generate'
-                            ? isLoading
-                                ? t('generate.loading')
-                                : t('generate.submit')
-                            : isLoading || isSendingToEdit
-                              ? t('edit.loading')
-                              : t('edit.submit')}
-                    </Button>
-                    <Button
-                        type='button'
-                        variant='outline'
-                        size='icon'
-                        onClick={scrollToOutput}
-                        className='text-muted-foreground hover:text-foreground'
-                        aria-label={t('ux.jumpToResult')}>
-                        <ArrowDown className='h-4 w-4' />
-                    </Button>
-                    {canOpenLogs && (
-                        <Button
-                            type='button'
-                            variant='outline'
-                            size='icon'
-                            onClick={() => setOpenLogsSignal((value) => value + 1)}
-                            className='text-muted-foreground hover:text-foreground'
-                            aria-label={t('logs.open')}>
-                            <Terminal className='h-4 w-4' />
-                        </Button>
+                    {error && (
+                        <Alert variant='destructive' className='border-red-500/50 bg-red-900/20 text-left text-red-300'>
+                            <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
+                            <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
+                        </Alert>
                     )}
+                    <Button
+                        type='button'
+                        onClick={() => {
+                            setError(null);
+                            setPasswordDialogContext('initial');
+                            setIsPasswordDialogOpen(true);
+                        }}
+                        className='bg-white px-6 text-black hover:bg-white/90'>
+                        {t('password.unlock')}
+                    </Button>
                 </div>
-            </div>
+            ) : null}
+            {!showEntryLock && isPasswordRequiredByBackend !== null ? (
+                <>
+                    <div className='w-full max-w-screen-2xl space-y-6'>
+                        <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
+                        <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
+                            <div className='relative flex flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
+                                <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
+                                    <GenerationForm
+                                        onSubmit={handleApiCall}
+                                        isLoading={isLoading}
+                                        currentMode={mode}
+                                        onModeChange={setMode}
+                                        isPasswordRequiredByBackend={isPasswordRequiredByBackend}
+                                        clientPasswordHash={clientPasswordHash}
+                                        onOpenPasswordDialog={handleOpenPasswordDialog}
+                                        model={genModel}
+                                        setModel={setGenModel}
+                                        prompt={genPrompt}
+                                        setPrompt={setGenPrompt}
+                                        n={genN}
+                                        setN={setGenN}
+                                        size={genSize}
+                                        setSize={setGenSize}
+                                        customWidth={genCustomWidth}
+                                        setCustomWidth={setGenCustomWidth}
+                                        customHeight={genCustomHeight}
+                                        setCustomHeight={setGenCustomHeight}
+                                        quality={genQuality}
+                                        setQuality={setGenQuality}
+                                        outputFormat={genOutputFormat}
+                                        setOutputFormat={setGenOutputFormat}
+                                        compression={genCompression}
+                                        setCompression={setGenCompression}
+                                        background={genBackground}
+                                        setBackground={setGenBackground}
+                                        moderation={genModeration}
+                                        setModeration={setGenModeration}
+                                        enableStreaming={enableStreaming}
+                                        setEnableStreaming={setEnableStreaming}
+                                        allowStreamingBatch={streamingBatchEnabled}
+                                        partialImages={partialImages}
+                                        setPartialImages={setPartialImages}
+                                    />
+                                </div>
+                                <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
+                                    <EditingForm
+                                        onSubmit={handleApiCall}
+                                        isLoading={isLoading || isSendingToEdit}
+                                        currentMode={mode}
+                                        onModeChange={setMode}
+                                        isPasswordRequiredByBackend={isPasswordRequiredByBackend}
+                                        clientPasswordHash={clientPasswordHash}
+                                        onOpenPasswordDialog={handleOpenPasswordDialog}
+                                        editModel={editModel}
+                                        setEditModel={setEditModel}
+                                        imageFiles={editImageFiles}
+                                        sourceImagePreviewUrls={editSourceImagePreviewUrls}
+                                        setImageFiles={setEditImageFiles}
+                                        setSourceImagePreviewUrls={setEditSourceImagePreviewUrls}
+                                        maxImages={MAX_EDIT_IMAGES}
+                                        editPrompt={editPrompt}
+                                        setEditPrompt={setEditPrompt}
+                                        editN={editN}
+                                        setEditN={setEditN}
+                                        editSize={editSize}
+                                        setEditSize={setEditSize}
+                                        editCustomWidth={editCustomWidth}
+                                        setEditCustomWidth={setEditCustomWidth}
+                                        editCustomHeight={editCustomHeight}
+                                        setEditCustomHeight={setEditCustomHeight}
+                                        editQuality={editQuality}
+                                        setEditQuality={setEditQuality}
+                                        editBrushSize={editBrushSize}
+                                        setEditBrushSize={setEditBrushSize}
+                                        editShowMaskEditor={editShowMaskEditor}
+                                        setEditShowMaskEditor={setEditShowMaskEditor}
+                                        editGeneratedMaskFile={editGeneratedMaskFile}
+                                        setEditGeneratedMaskFile={setEditGeneratedMaskFile}
+                                        editIsMaskSaved={editIsMaskSaved}
+                                        setEditIsMaskSaved={setEditIsMaskSaved}
+                                        editOriginalImageSize={editOriginalImageSize}
+                                        setEditOriginalImageSize={setEditOriginalImageSize}
+                                        editDrawnPoints={editDrawnPoints}
+                                        setEditDrawnPoints={setEditDrawnPoints}
+                                        editMaskPreviewUrl={editMaskPreviewUrl}
+                                        setEditMaskPreviewUrl={setEditMaskPreviewUrl}
+                                        enableStreaming={enableStreaming}
+                                        setEnableStreaming={setEnableStreaming}
+                                        allowStreamingBatch={streamingBatchEnabled}
+                                        partialImages={partialImages}
+                                        setPartialImages={setPartialImages}
+                                    />
+                                </div>
+                            </div>
+                            <div
+                                ref={outputPanelRef}
+                                className='scroll-mt-4 flex min-h-[420px] flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
+                                {error && (
+                                    <Alert
+                                        variant='destructive'
+                                        className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
+                                        <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
+                                        <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
+                                    </Alert>
+                                )}
+                                <ImageOutput
+                                    imageBatch={latestImageBatch}
+                                    viewMode={imageOutputView}
+                                    onViewChange={setImageOutputView}
+                                    altText={t('output.alt')}
+                                    isLoading={isLoading || isSendingToEdit}
+                                    onSendToEdit={handleSendToEdit}
+                                    currentMode={mode}
+                                    baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
+                                    streamingPreviewImages={streamingPreviewImages}
+                                    clientPasswordHash={clientPasswordHash}
+                                    canOpenLogs={canOpenLogs}
+                                    openLogsSignal={openLogsSignal}
+                                    logClientRequestIds={activeLogClientRequestIds}
+                                    logFilenames={activeLogFilenames}
+                                />
+                            </div>
+                        </div>
+
+                        <div className='min-h-[450px]'>
+                            <HistoryPanel
+                                history={history}
+                                onSelectImage={handleHistorySelect}
+                                onClearHistory={handleClearHistory}
+                                getImageSrc={getImageSrc}
+                                onDeleteItemRequest={handleRequestDeleteItem}
+                                itemPendingDeleteConfirmation={itemToDeleteConfirm}
+                                onConfirmDeletion={handleConfirmDeletion}
+                                onCancelDeletion={handleCancelDeletion}
+                                deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
+                                onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
+                            />
+                        </div>
+                    </div>
+                    <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
+                        <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
+                            <Button
+                                type='button'
+                                onClick={handleMobilePrimaryAction}
+                                disabled={mobilePrimaryDisabled}
+                                className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground'>
+                                {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+                                {mode === 'generate'
+                                    ? isLoading
+                                        ? t('generate.loading')
+                                        : t('generate.submit')
+                                    : isLoading || isSendingToEdit
+                                      ? t('edit.loading')
+                                      : t('edit.submit')}
+                            </Button>
+                            <Button
+                                type='button'
+                                variant='outline'
+                                size='icon'
+                                onClick={scrollToOutput}
+                                className='text-muted-foreground hover:text-foreground'
+                                aria-label={t('ux.jumpToResult')}>
+                                <ArrowDown className='h-4 w-4' />
+                            </Button>
+                            {canOpenLogs && (
+                                <Button
+                                    type='button'
+                                    variant='outline'
+                                    size='icon'
+                                    onClick={() => setOpenLogsSignal((value) => value + 1)}
+                                    className='text-muted-foreground hover:text-foreground'
+                                    aria-label={t('logs.open')}>
+                                    <Terminal className='h-4 w-4' />
+                                </Button>
+                            )}
+                        </div>
+                    </div>
+                </>
+            ) : null}
         </main>
     );
 }

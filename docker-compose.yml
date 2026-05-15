@@ -2,9 +2,8 @@ name: gpt-image-playground-customer
 
 services:
   gpt-image-playground:
-    build:
-      context: .
-    image: gpt-image-playground-customer:local
+    image: kwokyde/gpt-image-playground:latest
+    pull_policy: always
     container_name: gpt-image-playground-customer
     restart: unless-stopped
     env_file:

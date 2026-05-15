@@ -84,6 +84,45 @@ function readErrorStatus(error: unknown): number | undefined {
     return undefined;
 }
 
+function isClosedStreamControllerError(error: unknown): boolean {
+    return error instanceof TypeError && /controller is already closed|invalid state/i.test(error.message);
+}
+
+function createSseWriter(controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder) {
+    let isClosed = false;
+
+    return {
+        send(event: StreamingEvent): boolean {
+            if (isClosed) {
+                return false;
+            }
+            try {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+                return true;
+            } catch (error) {
+                if (isClosedStreamControllerError(error)) {
+                    isClosed = true;
+                    return false;
+                }
+                throw error;
+            }
+        },
+        close() {
+            if (isClosed) {
+                return;
+            }
+            isClosed = true;
+            try {
+                controller.close();
+            } catch (error) {
+                if (!isClosedStreamControllerError(error)) {
+                    throw error;
+                }
+            }
+        }
+    };
+}
+
 function reportServerCredentialFailure(credential: ChannelCredential | undefined, error: unknown) {
     const serverChannelRouter = getServerChannelState().router;
     if (!credential || !serverChannelRouter) {
@@ -312,6 +351,7 @@ export async function POST(request: NextRequest) {
 
                 const readableStream = new ReadableStream({
                     async start(controller) {
+                        const sse = createSseWriter(controller, encoder);
                         try {
                             const completedImages: Array<{
                                 filename: string;
@@ -331,7 +371,7 @@ export async function POST(request: NextRequest) {
                                         partialImageIndex: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
+                                    sse.send(partialEvent);
                                 } else if (event.type === 'image_generation.completed') {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
@@ -366,7 +406,7 @@ export async function POST(request: NextRequest) {
                                         client_request_id: clientRequestId,
                                         clientRequestId
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
+                                    sse.send(completedEvent);
 
                                     imageIndex++;
 
@@ -396,8 +436,8 @@ export async function POST(request: NextRequest) {
                                 client_request_id: clientRequestId,
                                 clientRequestId
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
-                            controller.close();
+                            sse.send(doneEvent);
+                            sse.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
                             appLogger.error('流式生成失败：', { ...requestLogContext, error: error instanceof Error ? error.message : String(error) });
@@ -407,8 +447,8 @@ export async function POST(request: NextRequest) {
                                 error: error instanceof Error ? error.message : '流式处理失败',
                                 ...(status ? { status } : {})
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
-                            controller.close();
+                            sse.send(errorEvent);
+                            sse.close();
                         }
                     }
                 });
@@ -471,6 +511,7 @@ export async function POST(request: NextRequest) {
 
                 const readableStream = new ReadableStream({
                     async start(controller) {
+                        const sse = createSseWriter(controller, encoder);
                         try {
                             const completedImages: Array<{
                                 filename: string;
@@ -490,7 +531,7 @@ export async function POST(request: NextRequest) {
                                         partialImageIndex: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
+                                    sse.send(partialEvent);
                                 } else if (event.type === 'image_edit.completed') {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
@@ -525,7 +566,7 @@ export async function POST(request: NextRequest) {
                                         client_request_id: clientRequestId,
                                         clientRequestId
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
+                                    sse.send(completedEvent);
 
                                     imageIndex++;
 
@@ -555,8 +596,8 @@ export async function POST(request: NextRequest) {
                                 client_request_id: clientRequestId,
                                 clientRequestId
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
-                            controller.close();
+                            sse.send(doneEvent);
+                            sse.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
                             appLogger.error('流式编辑失败：', { ...requestLogContext, error: error instanceof Error ? error.message : String(error) });
@@ -566,8 +607,8 @@ export async function POST(request: NextRequest) {
                                 error: error instanceof Error ? error.message : '流式处理失败',
                                 ...(status ? { status } : {})
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
-                            controller.close();
+                            sse.send(errorEvent);
+                            sse.close();
                         }
                     }
                 });

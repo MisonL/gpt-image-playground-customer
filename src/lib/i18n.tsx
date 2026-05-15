@@ -209,6 +209,8 @@ const messages: Record<Locale, Record<string, string>> = {
         'password.required': '需要密码',
         'password.initialDescription': '设置用于 API 请求的密码。',
         'password.retryDescription': '服务器要求密码，或上一次密码不正确。请输入密码后继续。',
+        'password.entryDescription': '请输入访问密码以使用 GPT Image 生成服务。',
+        'password.unlock': '解锁',
         'password.placeholder': '输入密码',
         'password.empty': '密码不能为空。',
         'password.hashError': '保存密码失败：哈希计算出错。',
@@ -458,6 +460,8 @@ const messages: Record<Locale, Record<string, string>> = {
         'password.initialDescription': 'Set a password to use for API requests.',
         'password.retryDescription':
             'The server requires a password, or the previous one was incorrect. Please enter it to continue.',
+        'password.entryDescription': 'Enter the access password to use the GPT Image generation service.',
+        'password.unlock': 'Unlock',
         'password.placeholder': 'Enter your password',
         'password.empty': 'Password cannot be empty.',
         'password.hashError': 'Failed to save password due to a hashing error.',

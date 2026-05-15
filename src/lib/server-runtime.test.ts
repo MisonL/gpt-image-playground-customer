@@ -1,10 +1,14 @@
 import {
     createBatchId,
     createImageFilename,
+    createAccessToken,
+    buildAccessCookieOptions,
+    isHttpsRequest,
     readBooleanEnv,
     readOutputDirEnv,
     readPositiveIntegerEnv,
     readAffinityKey,
+    verifyAccessToken,
     verifyPasswordHash,
     type FilenameClock
 } from './server-runtime';
@@ -21,6 +25,42 @@ describe('verifyPasswordHash', () => {
 
     it('rejects malformed hex without throwing', () => {
         assert.equal(verifyPasswordHash('not-a-hex-digest', 'customer-password'), false);
+    });
+});
+
+describe('verifyAccessToken', () => {
+    it('accepts only the access token derived from the configured password', () => {
+        const accessToken = createAccessToken('test-fixture-access-code');
+
+        assert.equal(verifyAccessToken(accessToken, 'test-fixture-access-code'), true);
+        assert.equal(verifyAccessToken(accessToken, 'different-test-fixture-access-code'), false);
+    });
+
+    it('allows access when no server password is configured', () => {
+        assert.equal(verifyAccessToken(undefined, undefined), true);
+    });
+
+    it('rejects missing or malformed tokens when a server password is configured', () => {
+        assert.equal(verifyAccessToken(undefined, 'test-fixture-access-code'), false);
+        assert.equal(verifyAccessToken('not-a-hex-digest', 'test-fixture-access-code'), false);
+    });
+});
+
+describe('buildAccessCookieOptions', () => {
+    it('does not mark local http cookies as secure in production containers', () => {
+        assert.equal(buildAccessCookieOptions(new Headers()).secure, false);
+    });
+
+    it('marks cookies as secure behind an https proxy', () => {
+        assert.equal(buildAccessCookieOptions(new Headers({ 'x-forwarded-proto': 'https' })).secure, true);
+    });
+});
+
+describe('isHttpsRequest', () => {
+    it('recognizes common forwarded https headers', () => {
+        assert.equal(isHttpsRequest(new Headers({ 'x-forwarded-proto': 'https,http' })), true);
+        assert.equal(isHttpsRequest(new Headers({ 'x-forwarded-scheme': 'https' })), true);
+        assert.equal(isHttpsRequest(new Headers({ 'x-forwarded-ssl': 'on' })), true);
     });
 });
 
