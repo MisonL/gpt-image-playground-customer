@@ -35,6 +35,7 @@ dev-server*.log
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
+!.env.agent.example
 
 # vercel
 .vercel
@@ -47,4 +48,4 @@ next-env.d.ts
 generated-images/
 
 # generated verification artifacts
-artifacts/
+/artifacts/

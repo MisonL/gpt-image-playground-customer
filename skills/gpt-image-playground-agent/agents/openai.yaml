@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPT Image Agent API"
+  short_description: "定位部署地址后调用 Agent API 生成和编辑图片"
+  default_prompt: "使用 $gpt-image-playground-agent 先确认 GPT Image Playground 服务地址，再通过 Agent API 生成或编辑图片并返回产物 URL 和关键元数据。"

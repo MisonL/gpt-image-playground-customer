@@ -19,15 +19,20 @@ function RadioGroup({
   )
 }
 
+/**
+ * children is visual content inside the radio button. Provide aria-label or
+ * aria-labelledby on the item when that content is the visible label.
+ */
 function RadioGroupItem({
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof RadioGroupPrimitive.Item>) {
   return (
     <RadioGroupPrimitive.Item
       data-slot="radio-group-item"
       className={cn(
-        "border-input text-primary focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 aspect-square size-4 shrink-0 rounded-full border shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
+        "border-input text-primary focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 aspect-square size-4 shrink-0 cursor-pointer rounded-full border shadow-xs transition-[color,box-shadow,transform] outline-none enabled:motion-safe:hover:scale-105 enabled:hover:border-ring enabled:hover:shadow-sm enabled:motion-safe:active:scale-[0.98] motion-reduce:transform-none motion-reduce:transition-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:scale-100 disabled:opacity-50",
         className
       )}
       {...props}
@@ -38,6 +43,14 @@ function RadioGroupItem({
       >
         <CircleIcon className="fill-primary absolute top-1/2 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2" />
       </RadioGroupPrimitive.Indicator>
+      {children ? (
+        <span
+          data-slot="radio-group-item-content"
+          className="pointer-events-none flex min-w-0 items-center gap-2 overflow-hidden"
+        >
+          {children}
+        </span>
+      ) : null}
     </RadioGroupPrimitive.Item>
   )
 }

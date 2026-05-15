@@ -8,10 +8,17 @@ import { HistoryPanel } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import {
+    buildApiErrorNotice,
+    buildBatchPartialFailureMessage,
+    buildUserFacingApiErrorMessage,
+    type ApiErrorNotice
+} from '@/lib/api-error-guidance';
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
-import { getPresetDimensions } from '@/lib/size-utils';
+import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
     buildStreamingBatchJobs,
@@ -20,13 +27,18 @@ import {
     scheduleStreamingBatch,
     shouldUseStreamingBatch,
     type ApiImageResponseItem,
-    type StreamingBatchJob
+    type StreamingBatchJob,
+    type StreamingClientEvent,
+    type StreamingClientState
 } from '@/lib/streaming-batch';
+import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { ArrowDown, Loader2, Terminal } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
     filename: string;
+    clientRequestId?: string;
 };
 
 export type HistoryMetadata = {
@@ -40,8 +52,11 @@ export type HistoryMetadata = {
     prompt: string;
     mode: 'generate' | 'edit';
     costDetails: CostDetails | null;
+    actualCostDetails?: ActualCostDetails;
     output_format?: GenerationFormData['output_format'];
     model?: GptImageModel;
+    size?: string;
+    clientRequestIds?: string[];
 };
 
 type DrawnPoint = {
@@ -57,6 +72,26 @@ const sseEventDelimiterPattern = /\r?\n\r?\n/;
 type RequestMode = 'generate' | 'edit';
 type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, boolean, 1 | 2 | 3];
 
+function createClientRequestId(): string {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+        return `web-${crypto.randomUUID()}`;
+    }
+    return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+    return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0)));
+}
+
+function resolveHistoryImageClientRequestId(item: HistoryMetadata, imageIndex: number): string | undefined {
+    const imageRequestId = item.images[imageIndex]?.clientRequestId;
+    if (imageRequestId) return imageRequestId;
+    if (!item.clientRequestIds || item.clientRequestIds.length === 0) return undefined;
+    if (item.clientRequestIds.length === item.images.length) return item.clientRequestIds[imageIndex];
+    if (item.images.length === 1) return item.clientRequestIds[0];
+    return undefined;
+}
+
 function readLocalStorageValue(key: string): string | null {
     if (typeof window === 'undefined') return null;
     return window.localStorage.getItem(key);
@@ -68,10 +103,10 @@ function readStoredHistory(): HistoryMetadata[] {
     try {
         const parsedHistory: unknown = JSON.parse(storedHistory);
         if (Array.isArray(parsedHistory)) return parsedHistory as HistoryMetadata[];
-        console.warn('Invalid history data found in localStorage.');
+        console.warn('localStorage 中发现无效历史记录数据。');
         window.localStorage.removeItem('openaiImageHistory');
     } catch (e) {
-        console.error('Failed to load or parse history from localStorage:', e);
+        console.error('加载或解析 localStorage 历史记录失败：', e);
         window.localStorage.removeItem('openaiImageHistory');
     }
     return [];
@@ -87,7 +122,7 @@ function readStoredApiSettings(): ApiSettings {
             baseUrl: typeof parsedSettings.baseUrl === 'string' ? parsedSettings.baseUrl : ''
         };
     } catch (error) {
-        console.error('Failed to load API settings from localStorage:', error);
+        console.error('从 localStorage 加载 API 设置失败：', error);
         window.localStorage.removeItem(apiSettingsLocalStorageKey);
         return emptyApiSettings;
     }
@@ -124,6 +159,7 @@ if (explicitModeClient === 'fs') {
 type ApiImageResult = {
     path: string;
     filename: string;
+    clientRequestId?: string;
 };
 
 type ApiUsage = {
@@ -162,6 +198,35 @@ class ApiRequestError extends Error {
     }
 }
 
+function summarizeApiError(error: unknown, fallbackMessage: string): { message: string; status?: number } {
+    if (error instanceof ApiRequestError) {
+        return { message: error.message, status: error.status };
+    }
+    if (error instanceof Error) {
+        return { message: error.message };
+    }
+    return { message: fallbackMessage };
+}
+
+function renderErrorDescription(error: ApiErrorNotice): React.ReactNode {
+    return (
+        <div className='grid gap-2'>
+            <p>{error.message}</p>
+            {error.links.map((link) => (
+                <a
+                    className='w-fit rounded-md border border-red-400/50 px-2 py-1 font-medium text-red-100 underline-offset-2 hover:bg-red-900/30 hover:underline'
+                    href={link.url}
+                    key={link.url}
+                    rel='noreferrer'
+                    target='_blank'
+                >
+                    {link.label}
+                </a>
+            ))}
+        </div>
+    );
+}
+
 function mergeUsageValues(usages: unknown[]): ApiUsage | undefined {
     const merged: ApiUsage = {
         input_tokens_details: {
@@ -195,15 +260,47 @@ function mergeUsageValues(usages: unknown[]): ApiUsage | undefined {
     return hasUsage ? merged : undefined;
 }
 
+function mergeActualCostValues(costs: Array<ActualCostDetails | undefined>): ActualCostDetails | undefined {
+    const present = costs.filter((cost): cost is ActualCostDetails => cost !== undefined);
+    if (present.length === 0) return undefined;
+
+    const actualCosts = present.filter((cost) => cost.source === 'new-api-log-token');
+    if (actualCosts.length === present.length) {
+        const actualQuota = actualCosts.reduce((sum, cost) => sum + (cost.actualQuota ?? 0), 0);
+        const actualAmount = actualCosts.reduce((sum, cost) => sum + (cost.actualAmount ?? 0), 0);
+        return {
+            actualAmount: Math.round(actualAmount * 1_000_000) / 1_000_000,
+            actualQuota,
+            currency: 'usd-equivalent',
+            source: 'new-api-log-token',
+            confidence: actualCosts.every((cost) => cost.confidence === 'high') ? 'high' : 'low',
+            upstreamProvider: 'new-api',
+            reason: actualCosts.length > 1 ? `已汇总 ${actualCosts.length} 个子请求的实际扣费。` : undefined
+        };
+    }
+
+    return {
+        currency: 'usd-equivalent',
+        source: 'unavailable',
+        confidence: 'low',
+        upstreamProvider: 'new-api',
+        reason: '批量请求中存在未匹配到实际扣费的子请求，未将估算值标记为实际扣费。'
+    };
+}
+
 export default function HomePage() {
     const { t } = useI18n();
+    const createErrorNotice = React.useCallback(
+        (message: string) => buildApiErrorNotice(message, t('error.openSuperApi')),
+        [t]
+    );
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
     const [isLoading, setIsLoading] = React.useState(false);
     const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
-    const [error, setError] = React.useState<string | null>(null);
-    const [latestImageBatch, setLatestImageBatch] = React.useState<{ path: string; filename: string }[] | null>(null);
+    const [error, setError] = React.useState<ApiErrorNotice | null>(null);
+    const [latestImageBatch, setLatestImageBatch] = React.useState<ApiImageResult[] | null>(null);
     const [imageOutputView, setImageOutputView] = React.useState<'grid' | number>('grid');
     const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
     const hasLoadedStoredHistoryRef = React.useRef(false);
@@ -217,6 +314,8 @@ export default function HomePage() {
     const [skipDeleteConfirmation, setSkipDeleteConfirmation] = React.useState<boolean>(false);
     const [itemToDeleteConfirm, setItemToDeleteConfirm] = React.useState<HistoryMetadata | null>(null);
     const [dialogCheckboxStateSkipConfirm, setDialogCheckboxStateSkipConfirm] = React.useState<boolean>(false);
+    const [openLogsSignal, setOpenLogsSignal] = React.useState(0);
+    const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
 
     const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
 
@@ -244,7 +343,7 @@ export default function HomePage() {
     const [genSize, setGenSize] = React.useState<GenerationFormData['size']>('auto');
     const [genCustomWidth, setGenCustomWidth] = React.useState<number>(1024);
     const [genCustomHeight, setGenCustomHeight] = React.useState<number>(1024);
-    const [genQuality, setGenQuality] = React.useState<GenerationFormData['quality']>('auto');
+    const [genQuality, setGenQuality] = React.useState<GenerationFormData['quality']>('high');
     const [genOutputFormat, setGenOutputFormat] = React.useState<GenerationFormData['output_format']>('png');
     const [genCompression, setGenCompression] = React.useState([100]);
     const [genBackground, setGenBackground] = React.useState<GenerationFormData['background']>('auto');
@@ -252,10 +351,10 @@ export default function HomePage() {
 
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
 
-    // Streaming state (shared between generate and edit modes)
-    const [enableStreaming, setEnableStreaming] = React.useState(false);
+    // 流式状态，由生成和编辑模式共用。
+    const [enableStreaming, setEnableStreaming] = React.useState(true);
     const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(2);
-    // Streaming preview images (base64 data URLs for partial images during streaming)
+    // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
         featureEnabled: isRuntimeStreamingBatchEnabled({
@@ -266,6 +365,39 @@ export default function HomePage() {
         serverRecommendedConcurrency: runtimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
     });
     const streamingBatchEnabled = streamingBatchCapacity.enabled;
+    const currentPrompt = mode === 'generate' ? genPrompt : editPrompt;
+    const hasEditSourceImage = editImageFiles.length > 0;
+    const currentGenerateSizeValidation =
+        genSize === 'custom' ? validateGptImage2Size(genCustomWidth, genCustomHeight) : { valid: true as const };
+    const currentEditSizeValidation =
+        editSize === 'custom' ? validateGptImage2Size(editCustomWidth, editCustomHeight) : { valid: true as const };
+    const canOpenLogs = isPasswordRequiredByBackend === true && !!clientPasswordHash;
+    const activeLogClientRequestIds = React.useMemo(() => {
+        if (!latestImageBatch || latestImageBatch.length === 0) return [];
+        if (typeof imageOutputView === 'number') {
+            return uniqueStrings([latestImageBatch[imageOutputView]?.clientRequestId]);
+        }
+        return uniqueStrings(latestImageBatch.map((image) => image.clientRequestId));
+    }, [imageOutputView, latestImageBatch]);
+    const activeLogFilenames = React.useMemo(() => {
+        if (!latestImageBatch || latestImageBatch.length === 0) return [];
+        if (typeof imageOutputView === 'number') {
+            return uniqueStrings([latestImageBatch[imageOutputView]?.filename]);
+        }
+        return uniqueStrings(latestImageBatch.map((image) => image.filename));
+    }, [imageOutputView, latestImageBatch]);
+    const mobilePrimaryDisabled =
+        isLoading ||
+        isSendingToEdit ||
+        !currentPrompt.trim() ||
+        (mode === 'edit' && !hasEditSourceImage) ||
+        (mode === 'generate' && !currentGenerateSizeValidation.valid) ||
+        (mode === 'edit' && !currentEditSizeValidation.valid) ||
+        (mode === 'edit' && editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved);
+
+    const scrollToOutput = React.useCallback(() => {
+        outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, []);
 
     const getImageSrc = React.useCallback(
         (filename: string): string | undefined => {
@@ -310,12 +442,12 @@ export default function HomePage() {
             try {
                 const response = await fetch('/api/auth-status');
                 if (!response.ok) {
-                    throw new Error('Failed to fetch auth status');
+                    throw new Error('获取鉴权状态失败');
                 }
                 const data = await response.json();
                 setIsPasswordRequiredByBackend(data.passwordRequired);
             } catch (error) {
-                console.error('Error fetching auth status:', error);
+                console.error('获取鉴权状态失败：', error);
                 setIsPasswordRequiredByBackend(false);
             }
         };
@@ -331,13 +463,13 @@ export default function HomePage() {
         try {
             const response = await fetch('/api/runtime-capabilities');
             if (!response.ok) {
-                throw new Error('Failed to fetch runtime capabilities');
+                throw new Error('获取运行时能力失败');
             }
             const data = (await response.json()) as RuntimeCapabilities;
             setRuntimeCapabilities(data);
             return data;
         } catch (error) {
-            console.error('Error fetching runtime capabilities:', error);
+            console.error('获取运行时能力失败：', error);
             setRuntimeCapabilities(null);
             return null;
         }
@@ -354,7 +486,7 @@ export default function HomePage() {
         try {
             localStorage.setItem('openaiImageHistory', JSON.stringify(history));
         } catch (e) {
-            console.error('Failed to save history to localStorage:', e);
+            console.error('保存历史记录到 localStorage 失败：', e);
         }
     }, [history]);
 
@@ -421,7 +553,7 @@ export default function HomePage() {
 
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
-            setError(t('password.empty'));
+            setError(createErrorNotice(t('password.empty')));
             return;
         }
         try {
@@ -436,8 +568,8 @@ export default function HomePage() {
                 await handleApiCall(...retryArgs);
             }
         } catch (e) {
-            console.error('Error hashing password:', e);
-            setError(t('password.hashError'));
+            console.error('计算密码哈希失败：', e);
+            setError(createErrorNotice(t('password.hashError')));
         }
     };
 
@@ -456,12 +588,29 @@ export default function HomePage() {
     };
 
     const buildHistoryEntry = React.useCallback(
-        (images: ApiImageResponseItem[], usage: unknown, durationMsValue: number): HistoryMetadata => {
+        (
+            images: ApiImageResponseItem[],
+            usage: unknown,
+            actualCost: ActualCostDetails | undefined,
+            durationMsValue: number
+        ): HistoryMetadata => {
             const isGenerateMode = mode === 'generate';
             const currentModel = isGenerateMode ? genModel : editModel;
+            const clientRequestIds = uniqueStrings(images.map((img) => img.clientRequestId));
+            const requestSize = isGenerateMode
+                ? genSize === 'custom'
+                    ? `${genCustomWidth}x${genCustomHeight}`
+                    : (getPresetDimensions(genSize, genModel) ?? genSize)
+                : editSize === 'custom'
+                  ? `${editCustomWidth}x${editCustomHeight}`
+                  : (getPresetDimensions(editSize, editModel) ?? editSize);
+            const costDetails = calculateApiCost(usage as Parameters<typeof calculateApiCost>[0], currentModel);
             return {
                 timestamp: Date.now(),
-                images: images.map((img) => ({ filename: img.filename })),
+                images: images.map((img) => ({
+                    filename: img.filename,
+                    ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {})
+                })),
                 storageModeUsed: effectiveStorageModeClient,
                 durationMs: durationMsValue,
                 quality: isGenerateMode ? genQuality : editQuality,
@@ -470,20 +619,36 @@ export default function HomePage() {
                 output_format: isGenerateMode ? genOutputFormat : 'png',
                 prompt: isGenerateMode ? genPrompt : editPrompt,
                 mode,
-                costDetails: calculateApiCost(usage as Parameters<typeof calculateApiCost>[0], currentModel),
-                model: currentModel
+                costDetails,
+                ...(actualCost
+                    ? {
+                          actualCostDetails: {
+                              ...actualCost,
+                              ...(costDetails ? { estimatedUsd: costDetails.estimated_cost_usd } : {})
+                          }
+                      }
+                    : {}),
+                model: currentModel,
+                size: requestSize,
+                ...(clientRequestIds.length > 0 ? { clientRequestIds } : {})
             };
         },
         [
+            editCustomHeight,
+            editCustomWidth,
             editModel,
             editPrompt,
             editQuality,
+            editSize,
             genBackground,
+            genCustomHeight,
+            genCustomWidth,
             genModel,
             genModeration,
             genOutputFormat,
             genPrompt,
             genQuality,
+            genSize,
             mode
         ]
     );
@@ -512,7 +677,7 @@ export default function HomePage() {
                         }
                         const blobUrl = URL.createObjectURL(blob);
                         blobUrlCacheRef.current.set(img.filename, blobUrl);
-                        return { filename: img.filename, path: blobUrl };
+                        return { filename: img.filename, path: blobUrl, ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {}) };
                     })
                 );
                 return indexedDbImages;
@@ -520,7 +685,7 @@ export default function HomePage() {
 
             const fsImages = images
                 .filter((img) => !!img.path)
-                .map((img) => ({ path: img.path!, filename: img.filename }));
+                .map((img) => ({ path: img.path!, filename: img.filename, ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {}) }));
             if (fsImages.length !== images.length) {
                 throw new Error(t('error.apiOmittedPaths'));
             }
@@ -530,7 +695,13 @@ export default function HomePage() {
     );
 
     const commitCompletedImages = React.useCallback(
-        async (images: ApiImageResponseItem[], usage: unknown, durationMsValue: number, clearStreaming = false) => {
+        async (
+            images: ApiImageResponseItem[],
+            usage: unknown,
+            actualCost: ActualCostDetails | undefined,
+            durationMsValue: number,
+            clearStreaming = false
+        ) => {
             if (images.length === 0) {
                 throw new Error(t('error.noImages'));
             }
@@ -541,7 +712,7 @@ export default function HomePage() {
             if (clearStreaming) {
                 setStreamingPreviewImages(new Map());
             }
-            setHistory((prevHistory) => [buildHistoryEntry(images, usage, durationMsValue), ...prevHistory]);
+            setHistory((prevHistory) => [buildHistoryEntry(images, usage, actualCost, durationMsValue), ...prevHistory]);
         },
         [buildHistoryEntry, materializeImages, t]
     );
@@ -574,6 +745,7 @@ export default function HomePage() {
                 apiFormData.append('stream', 'true');
                 apiFormData.append('partial_images', options.partialImages.toString());
             }
+            apiFormData.append('clientRequestId', createClientRequestId());
 
             if (requestMode === 'generate') {
                 const genData = formData as GenerationFormData;
@@ -636,7 +808,8 @@ export default function HomePage() {
                 retryStreaming?: boolean;
                 retryPartialImages?: 1 | 2 | 3;
             } = {}
-        ): Promise<{ images: ApiImageResponseItem[]; usage: unknown }> => {
+        ): Promise<{ images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails }> => {
+            const formClientRequestId = String(apiFormData.get('clientRequestId') || '');
             const response = await fetch('/api/images', {
                 method: 'POST',
                 body: apiFormData
@@ -651,10 +824,7 @@ export default function HomePage() {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
-                let streamingState: {
-                    completedImages: ApiImageResponseItem[];
-                    usage?: unknown;
-                } = {
+                let streamingState: StreamingClientState = {
                     completedImages: []
                 };
 
@@ -675,9 +845,9 @@ export default function HomePage() {
                             return newMap;
                         });
                     } else if (event.type === 'error') {
-                        throw new Error(event.error || t('error.streaming'));
+                        throw new ApiRequestError(event.error || t('error.streaming'), event.status);
                     } else if (event.type === 'completed' || event.type === 'done') {
-                        streamingState = applyStreamingClientEvent(streamingState, event);
+                        streamingState = applyStreamingClientEvent(streamingState, event as StreamingClientEvent);
                     }
                 };
 
@@ -698,14 +868,35 @@ export default function HomePage() {
                     await processSseEvent(remainingEvent);
                 }
 
-                return { images: streamingState.completedImages, usage: streamingState.usage };
+                return {
+                    images: streamingState.completedImages.map((image) => ({
+                        ...image,
+                        ...(image.clientRequestId || !formClientRequestId ? {} : { clientRequestId: formClientRequestId })
+                    })),
+                    usage: streamingState.usage,
+                    actualCost: streamingState.actualCost ?? undefined
+                };
             }
 
-            const result = await response.json();
+            let result: {
+                error?: string;
+                images?: ApiImageResponseItem[];
+                usage?: unknown;
+                actualCost?: ActualCostDetails;
+                clientRequestId?: string;
+            };
+            try {
+                result = await response.json();
+            } catch (error) {
+                if (!response.ok) {
+                    throw new ApiRequestError(t('error.apiFailed', { status: response.status }), response.status);
+                }
+                throw error;
+            }
 
             if (!response.ok) {
                 if (response.status === 401 && isPasswordRequiredByBackend) {
-                    setError(t('error.unauthorized'));
+                    setError(createErrorNotice(t('error.unauthorized')));
                     setPasswordDialogContext('retry');
                     if (
                         options.retryFormData &&
@@ -726,17 +917,26 @@ export default function HomePage() {
                 throw new ApiRequestError(result.error || t('error.apiFailed', { status: response.status }), response.status);
             }
 
-            return { images: result.images || [], usage: result.usage };
+            return {
+                images: (result.images || []).map((image) => ({
+                    ...image,
+                    ...(image.clientRequestId || !(result.clientRequestId || formClientRequestId)
+                        ? {}
+                        : { clientRequestId: result.clientRequestId || formClientRequestId })
+                })),
+                usage: result.usage,
+                actualCost: result.actualCost
+            };
         },
-        [isPasswordRequiredByBackend, t]
+        [createErrorNotice, isPasswordRequiredByBackend, t]
     );
 
-    const handleApiCall = async (
+    async function handleApiCall(
         formData: GenerationFormData | EditingFormData,
         requestMode: RequestMode = mode,
         requestStreaming: boolean = enableStreaming,
         requestPartialImages: 1 | 2 | 3 = partialImages
-    ) => {
+    ) {
         const startTime = Date.now();
         let durationMs = 0;
 
@@ -745,6 +945,9 @@ export default function HomePage() {
         setLatestImageBatch(null);
         setImageOutputView('grid');
         setStreamingPreviewImages(new Map());
+        if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+            window.setTimeout(scrollToOutput, 80);
+        }
 
         try {
             const latestRuntimeCapabilities = await refreshRuntimeCapabilities();
@@ -757,7 +960,7 @@ export default function HomePage() {
                 serverRecommendedConcurrency: latestRuntimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
             });
             if (isPasswordRequiredByBackend && !clientPasswordHash) {
-                setError(t('error.passwordRequired'));
+                setError(createErrorNotice(t('error.passwordRequired')));
                 setPasswordDialogContext('initial');
                 setIsPasswordDialogOpen(true);
                 return;
@@ -770,6 +973,24 @@ export default function HomePage() {
                 streaming: requestStreaming,
                 imageCount
             });
+            const executeImageRequestForCurrentOptions = async (
+                options: { forceSingleImage: boolean; previewIndexOffset?: number } = { forceSingleImage: false }
+            ) => {
+                return executeImageRequest(
+                    buildApiFormData(formData, requestMode, {
+                        forceSingleImage: options.forceSingleImage,
+                        streaming: requestStreaming,
+                        partialImages: requestPartialImages
+                    }),
+                    {
+                        previewIndexOffset: options.previewIndexOffset,
+                        retryFormData: formData,
+                        retryMode: requestMode,
+                        retryStreaming: requestStreaming,
+                        retryPartialImages: requestPartialImages
+                    }
+                );
+            };
 
             if (useStreamingBatch) {
                 const jobs = buildStreamingBatchJobs(imageCount);
@@ -777,23 +998,13 @@ export default function HomePage() {
                     jobs,
                     currentStreamingBatchCapacity.concurrency,
                     async (job: StreamingBatchJob) => {
-                        const requestFormData = buildApiFormData(formData, requestMode, {
-                            forceSingleImage: true,
-                            streaming: requestStreaming,
-                            partialImages: requestPartialImages
-                        });
-                        return executeImageRequest(requestFormData, {
-                            previewIndexOffset: job.outputIndex,
-                            retryFormData: formData,
-                            retryMode: requestMode,
-                            retryStreaming: requestStreaming,
-                            retryPartialImages: requestPartialImages
-                        });
+                        return executeImageRequestForCurrentOptions({ forceSingleImage: true, previewIndexOffset: job.outputIndex });
                     }
                 );
                 const errors = batchResults.filter((result): result is Error => result instanceof Error);
                 const successes = batchResults.filter(
-                    (result): result is { images: ApiImageResponseItem[]; usage: unknown } => !(result instanceof Error)
+                    (result): result is { images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails } =>
+                        !(result instanceof Error)
                 );
                 if (errors.some((error) => error instanceof ApiRequestError && error.status === 401)) {
                     return;
@@ -803,35 +1014,33 @@ export default function HomePage() {
                 }
                 const images = successes.flatMap((result) => result.images);
                 const usage = mergeUsageValues(successes.map((result) => result.usage));
+                const actualCost = mergeActualCostValues(successes.map((result) => result.actualCost));
                 durationMs = Date.now() - startTime;
-                await commitCompletedImages(images, usage, durationMs, true);
+                await commitCompletedImages(images, usage, actualCost, durationMs, true);
                 if (errors.length > 0) {
                     await refreshRuntimeCapabilities();
-                    setError(t('error.batchPartialFailure', { failed: errors.length, total: jobs.length }));
+                    setError(
+                        createErrorNotice(
+                            buildBatchPartialFailureMessage({
+                                failed: errors.length,
+                                total: jobs.length,
+                                errors: errors.map((error) => summarizeApiError(error, t('error.unexpected'))),
+                                t
+                            })
+                        )
+                    );
                 }
                 return;
             }
 
-            const result = await executeImageRequest(
-                buildApiFormData(formData, requestMode, {
-                    forceSingleImage: false,
-                    streaming: requestStreaming,
-                    partialImages: requestPartialImages
-                }),
-                {
-                    retryFormData: formData,
-                    retryMode: requestMode,
-                    retryStreaming: requestStreaming,
-                    retryPartialImages: requestPartialImages
-                }
-            );
+            const result = await executeImageRequestForCurrentOptions();
             durationMs = Date.now() - startTime;
-            await commitCompletedImages(result.images || [], result.usage, durationMs);
+            await commitCompletedImages(result.images || [], result.usage, result.actualCost, durationMs);
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
-            console.error(`API Call Error after ${durationMs}ms:`, err);
-            const errorMessage = err instanceof Error ? err.message : t('error.unexpected');
-            setError(errorMessage);
+            console.error(`API 调用在 ${durationMs}ms 后失败：`, err);
+            const errorSummary = summarizeApiError(err, t('error.unexpected'));
+            setError(createErrorNotice(buildUserFacingApiErrorMessage({ ...errorSummary, t })));
             setLatestImageBatch(null);
             setStreamingPreviewImages(new Map());
             await refreshRuntimeCapabilities();
@@ -839,13 +1048,45 @@ export default function HomePage() {
             if (durationMs === 0) durationMs = Date.now() - startTime;
             setIsLoading(false);
         }
-    };
+    }
+
+    function handleMobilePrimaryAction() {
+        if (mode === 'generate') {
+            void handleApiCall({
+                prompt: genPrompt,
+                n: genN[0],
+                size: genSize,
+                customWidth: genCustomWidth,
+                customHeight: genCustomHeight,
+                quality: genQuality,
+                output_format: genOutputFormat,
+                ...(genOutputFormat === 'jpeg' || genOutputFormat === 'webp'
+                    ? { output_compression: genCompression[0] }
+                    : {}),
+                background: genBackground,
+                moderation: genModeration,
+                model: genModel
+            });
+            return;
+        }
+        void handleApiCall({
+            prompt: editPrompt,
+            n: editN[0],
+            size: editSize,
+            customWidth: editCustomWidth,
+            customHeight: editCustomHeight,
+            quality: editQuality,
+            imageFiles: editImageFiles,
+            maskFile: editGeneratedMaskFile,
+            model: editModel
+        });
+    }
 
     const handleHistorySelect = React.useCallback(
         (item: HistoryMetadata) => {
             const originalStorageMode = item.storageModeUsed || 'fs';
 
-            const selectedBatchPromises = item.images.map(async (imgInfo) => {
+            const selectedBatchPromises = item.images.map(async (imgInfo, imageIndex) => {
                 let path: string | undefined;
                 if (originalStorageMode === 'indexeddb') {
                     path = getImageSrc(imgInfo.filename);
@@ -853,22 +1094,27 @@ export default function HomePage() {
                     path = `/api/image/${imgInfo.filename}`;
                 }
 
+                const clientRequestId = resolveHistoryImageClientRequestId(item, imageIndex);
                 if (path) {
-                    return { path, filename: imgInfo.filename };
+                    return {
+                        path,
+                        filename: imgInfo.filename,
+                        ...(clientRequestId ? { clientRequestId } : {})
+                    };
                 } else {
                     console.warn(
                         `Could not get image source for history item: ${imgInfo.filename} (mode: ${originalStorageMode})`
                     );
-                    setError(t('error.historyImageLoad', { filename: imgInfo.filename }));
+                    setError(createErrorNotice(t('error.historyImageLoad', { filename: imgInfo.filename })));
                     return null;
                 }
             });
 
             Promise.all(selectedBatchPromises).then((resolvedBatch) => {
-                const validImages = resolvedBatch.filter(Boolean) as { path: string; filename: string }[];
+                const validImages = resolvedBatch.filter(Boolean) as ApiImageResult[];
 
                 if (validImages.length !== item.images.length) {
-                    setError(t('error.historySomeMissing'));
+                    setError(createErrorNotice(t('error.historySomeMissing')));
                 } else {
                     setError(null);
                 }
@@ -877,7 +1123,7 @@ export default function HomePage() {
                 setImageOutputView(validImages.length > 1 ? 'grid' : 0);
             });
         },
-        [getImageSrc, t]
+        [createErrorNotice, getImageSrc, t]
     );
 
     const handleClearHistory = React.useCallback(async () => {
@@ -901,11 +1147,11 @@ export default function HomePage() {
                     blobUrlCacheRef.current.clear();
                 }
             } catch (e) {
-                console.error('Failed during history clearing:', e);
-                setError(t('error.clearHistory', { message: e instanceof Error ? e.message : String(e) }));
+                console.error('清空历史记录失败：', e);
+                setError(createErrorNotice(t('error.clearHistory', { message: e instanceof Error ? e.message : String(e) })));
             }
         }
-    }, [t]);
+    }, [createErrorNotice, t]);
 
     const handleSendToEdit = async (filename: string) => {
         if (isSendingToEdit) return;
@@ -919,7 +1165,7 @@ export default function HomePage() {
         }
 
         if (mode === 'edit' && editImageFiles.length >= MAX_EDIT_IMAGES) {
-            setError(t('error.maxEditImages', { count: MAX_EDIT_IMAGES }));
+            setError(createErrorNotice(t('error.maxEditImages', { count: MAX_EDIT_IMAGES })));
             setIsSendingToEdit(false);
             return;
         }
@@ -961,9 +1207,9 @@ export default function HomePage() {
                 setMode('edit');
             }
         } catch (err: unknown) {
-            console.error('Error sending image to edit:', err);
+            console.error('发送图片到编辑模式失败：', err);
             const errorMessage = err instanceof Error ? err.message : t('error.sendToEdit');
-            setError(errorMessage);
+            setError(createErrorNotice(errorMessage));
         } finally {
             setIsSendingToEdit(false);
         }
@@ -1010,13 +1256,13 @@ export default function HomePage() {
                     prev && prev.some((img) => filenamesToDelete.includes(img.filename)) ? null : prev
                 );
             } catch (e: unknown) {
-                console.error('Error during item deletion:', e);
-                setError(e instanceof Error ? e.message : t('error.deleteUnexpected'));
+                console.error('删除条目失败：', e);
+                setError(createErrorNotice(e instanceof Error ? e.message : t('error.deleteUnexpected')));
             } finally {
                 setItemToDeleteConfirm(null);
             }
         },
-        [isPasswordRequiredByBackend, clientPasswordHash, t]
+        [clientPasswordHash, createErrorNotice, isPasswordRequiredByBackend, t]
     );
 
     const handleRequestDeleteItem = React.useCallback(
@@ -1043,7 +1289,7 @@ export default function HomePage() {
     }, []);
 
     return (
-        <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 md:p-8 lg:p-12'>
+        <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:p-8 md:pb-[calc(6rem+env(safe-area-inset-bottom))] lg:p-12'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -1066,8 +1312,8 @@ export default function HomePage() {
             <div className='w-full max-w-screen-2xl space-y-6'>
                 <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
                 <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
-                    <div className='relative flex h-[70vh] min-h-[600px] flex-col lg:col-span-1'>
-                        <div className={mode === 'generate' ? 'block h-full w-full' : 'hidden'}>
+                    <div className='relative flex flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
+                        <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
                             <GenerationForm
                                 onSubmit={handleApiCall}
                                 isLoading={isLoading}
@@ -1105,7 +1351,7 @@ export default function HomePage() {
                                 setPartialImages={setPartialImages}
                             />
                         </div>
-                        <div className={mode === 'edit' ? 'block h-full w-full' : 'hidden'}>
+                        <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
                             <EditingForm
                                 onSubmit={handleApiCall}
                                 isLoading={isLoading || isSendingToEdit}
@@ -1155,11 +1401,13 @@ export default function HomePage() {
                             />
                         </div>
                     </div>
-                    <div className='flex h-[70vh] min-h-[600px] flex-col lg:col-span-1'>
+                    <div
+                        ref={outputPanelRef}
+                        className='scroll-mt-4 flex min-h-[420px] flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
                         {error && (
                             <Alert variant='destructive' className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
                                 <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
-                                <AlertDescription>{error}</AlertDescription>
+                                <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                             </Alert>
                         )}
                         <ImageOutput
@@ -1172,6 +1420,11 @@ export default function HomePage() {
                             currentMode={mode}
                             baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
                             streamingPreviewImages={streamingPreviewImages}
+                            clientPasswordHash={clientPasswordHash}
+                            canOpenLogs={canOpenLogs}
+                            openLogsSignal={openLogsSignal}
+                            logClientRequestIds={activeLogClientRequestIds}
+                            logFilenames={activeLogFilenames}
                         />
                     </div>
                 </div>
@@ -1189,6 +1442,44 @@ export default function HomePage() {
                         deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
                         onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
                     />
+                </div>
+            </div>
+            <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
+                <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
+                    <Button
+                        type='button'
+                        onClick={handleMobilePrimaryAction}
+                        disabled={mobilePrimaryDisabled}
+                        className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground'>
+                        {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+                        {mode === 'generate'
+                            ? isLoading
+                                ? t('generate.loading')
+                                : t('generate.submit')
+                            : isLoading || isSendingToEdit
+                              ? t('edit.loading')
+                              : t('edit.submit')}
+                    </Button>
+                    <Button
+                        type='button'
+                        variant='outline'
+                        size='icon'
+                        onClick={scrollToOutput}
+                        className='text-muted-foreground hover:text-foreground'
+                        aria-label={t('ux.jumpToResult')}>
+                        <ArrowDown className='h-4 w-4' />
+                    </Button>
+                    {canOpenLogs && (
+                        <Button
+                            type='button'
+                            variant='outline'
+                            size='icon'
+                            onClick={() => setOpenLogsSignal((value) => value + 1)}
+                            className='text-muted-foreground hover:text-foreground'
+                            aria-label={t('logs.open')}>
+                            <Terminal className='h-4 w-4' />
+                        </Button>
+                    )}
                 </div>
             </div>
         </main>

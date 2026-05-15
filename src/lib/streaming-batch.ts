@@ -1,3 +1,5 @@
+import type { ActualCostDetails } from './upstream-cost/types';
+
 export type StreamingBatchJob = {
     id: string;
     outputIndex: number;
@@ -42,6 +44,7 @@ export type ApiImageResponseItem = {
     b64_json?: string;
     output_format: string;
     path?: string;
+    clientRequestId?: string;
 };
 
 export type StreamingClientEvent = {
@@ -51,14 +54,66 @@ export type StreamingClientEvent = {
     filename?: string;
     path?: string;
     output_format?: string;
+    outputFormat?: string;
     images?: ApiImageResponseItem[];
     usage?: unknown;
+    actual_cost?: ActualCostDetails | null;
+    actualCost?: ActualCostDetails | null;
+    client_request_id?: string;
+    clientRequestId?: string;
 };
 
 export type StreamingClientState = {
     completedImages: ApiImageResponseItem[];
     usage?: unknown;
+    actualCost?: ActualCostDetails | null;
 };
+
+function isActualCostDetails(value: unknown): value is ActualCostDetails {
+    if (typeof value !== 'object' || value === null) return false;
+    const record = value as Record<string, unknown>;
+    const validCurrency = record.currency === 'usd-equivalent' || record.currency === 'quota-unit';
+    const validSource =
+        record.source === 'estimate' ||
+        record.source === 'new-api-log-token' ||
+        record.source === 'pending' ||
+        record.source === 'unavailable';
+    const validConfidence =
+        record.confidence === 'exact' || record.confidence === 'high' || record.confidence === 'low' || record.confidence === 'none';
+    const validProvider =
+        record.upstreamProvider === 'new-api' ||
+        record.upstreamProvider === 'openai' ||
+        record.upstreamProvider === 'sub2api' ||
+        record.upstreamProvider === 'unknown';
+    const validOptionalNumbers =
+        (record.estimatedUsd === undefined || typeof record.estimatedUsd === 'number') &&
+        (record.actualAmount === undefined || typeof record.actualAmount === 'number') &&
+        (record.actualQuota === undefined || typeof record.actualQuota === 'number') &&
+        (record.matchedLogId === undefined || typeof record.matchedLogId === 'number');
+    const validOptionalStrings =
+        (record.matchedRequestId === undefined || typeof record.matchedRequestId === 'string') &&
+        (record.reason === undefined || typeof record.reason === 'string');
+    return (
+        validCurrency &&
+        validSource &&
+        validConfidence &&
+        validProvider &&
+        validOptionalNumbers &&
+        validOptionalStrings
+    );
+}
+
+function readStreamingEventClientRequestId(event: StreamingClientEvent): string | undefined {
+    if (typeof event.clientRequestId === 'string') return event.clientRequestId;
+    if (typeof event.client_request_id === 'string') return event.client_request_id;
+    return undefined;
+}
+
+function readStreamingEventActualCost(event: StreamingClientEvent): ActualCostDetails | null {
+    if (event.actualCost !== undefined && event.actualCost !== null) return event.actualCost;
+    if (event.actual_cost !== undefined && event.actual_cost !== null) return event.actual_cost;
+    return null;
+}
 
 export function computeStreamingConcurrency(options: StreamingConcurrencyOptions): number {
     const credentialCount = Math.max(1, Math.floor(options.credentialCount));
@@ -107,6 +162,11 @@ export function applyStreamingClientEvent(
     event: StreamingClientEvent
 ): StreamingClientState {
     if (event.type === 'completed' && event.filename) {
+        const outputFormat = typeof event.outputFormat === 'string' ? event.outputFormat : event.output_format;
+        if (typeof outputFormat !== 'string' || outputFormat.length === 0) {
+            throw new Error(`流式完成事件缺少有效 output_format：${String(outputFormat)}`);
+        }
+        const clientRequestId = readStreamingEventClientRequestId(event);
         return {
             ...state,
             completedImages: [
@@ -115,16 +175,29 @@ export function applyStreamingClientEvent(
                     filename: event.filename,
                     b64_json: event.b64_json,
                     path: event.path,
-                    output_format: event.output_format || 'png'
+                    output_format: outputFormat,
+                    ...(clientRequestId ? { clientRequestId } : {})
                 }
             ]
         };
     }
 
     if (event.type === 'done') {
+        const clientRequestId = readStreamingEventClientRequestId(event);
+        const eventImages = event.images && event.images.length > 0 ? event.images : state.completedImages;
+        const actualCost = readStreamingEventActualCost(event);
+        if (actualCost !== null && !isActualCostDetails(actualCost)) {
+            throw new Error(
+                `流式完成事件包含无效 actual_cost：${JSON.stringify(event.actualCost ?? event.actual_cost)}`
+            );
+        }
         return {
-            completedImages: event.images && event.images.length > 0 ? event.images : state.completedImages,
-            usage: event.usage
+            completedImages: eventImages.map((image) => ({
+                ...image,
+                ...(image.clientRequestId || !clientRequestId ? {} : { clientRequestId })
+            })),
+            usage: event.usage,
+            actualCost
         };
     }
 

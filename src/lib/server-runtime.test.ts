@@ -2,6 +2,7 @@ import {
     createBatchId,
     createImageFilename,
     readBooleanEnv,
+    readOutputDirEnv,
     readPositiveIntegerEnv,
     readAffinityKey,
     verifyPasswordHash,
@@ -70,6 +71,20 @@ describe('readBooleanEnv', () => {
         assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: 'false' }, 'ENABLE_STREAMING_BATCH'), false);
         assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: '1' }, 'ENABLE_STREAMING_BATCH'), true);
         assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: 'true' }, 'ENABLE_STREAMING_BATCH'), true);
+    });
+});
+
+describe('readOutputDirEnv', () => {
+    it('accepts safe relative output directories', () => {
+        assert.equal(readOutputDirEnv({}, 'IMAGE_OUTPUT_DIR'), 'generated-images');
+        assert.equal(readOutputDirEnv({ IMAGE_OUTPUT_DIR: 'custom/images_1' }, 'IMAGE_OUTPUT_DIR'), 'custom/images_1');
+    });
+
+    it('rejects absolute paths and path traversal', () => {
+        assert.throws(() => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '/tmp/generated-images' }, 'IMAGE_OUTPUT_DIR'), /安全的相对路径/);
+        assert.throws(() => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '\\tmp\\generated-images' }, 'IMAGE_OUTPUT_DIR'), /安全的相对路径/);
+        assert.throws(() => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '../generated-images' }, 'IMAGE_OUTPUT_DIR'), /安全的相对路径/);
+        assert.throws(() => readOutputDirEnv({ IMAGE_OUTPUT_DIR: 'generated/../images' }, 'IMAGE_OUTPUT_DIR'), /安全的相对路径/);
     });
 });
 
