@@ -13,6 +13,7 @@ services:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"
       APP_LOG_LEVEL: info
+      AGENT_STATE_BACKEND: sqlite
       NEXT_PUBLIC_IMAGE_STORAGE_MODE: fs
       PORT: "4783"
     ports:

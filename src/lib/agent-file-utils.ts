@@ -43,6 +43,32 @@ export async function deleteFileIfExists(filepath: string): Promise<boolean> {
     }
 }
 
+export type MovedFileForDeletion = {
+    originalPath: string;
+    tempPath: string;
+};
+
+export async function moveFileIfExists(filepath: string): Promise<MovedFileForDeletion | undefined> {
+    const tempPath = `${filepath}.purge-${crypto.randomUUID()}`;
+    try {
+        await fs.rename(filepath, tempPath);
+        return { originalPath: filepath, tempPath };
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            return undefined;
+        }
+        throw error;
+    }
+}
+
+export async function restoreMovedFile(file: MovedFileForDeletion): Promise<void> {
+    await fs.rename(file.tempPath, file.originalPath);
+}
+
+export async function discardMovedFile(file: MovedFileForDeletion): Promise<void> {
+    await fs.rm(file.tempPath, { force: true, recursive: true });
+}
+
 export function assertArtifactFilepathAllowed(filepath: string): void {
     if (isArtifactFilepathAllowed(filepath)) return;
     throw new AgentApiError({

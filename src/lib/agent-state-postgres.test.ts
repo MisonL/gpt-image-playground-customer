@@ -2,7 +2,7 @@ import { POSTGRES_SCHEMA, PostgresAgentStateStore } from './agent-state-postgres
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { access, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 import { Pool } from 'pg';
@@ -171,7 +171,7 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
         }
     });
 
-    it('keeps metadata when artifact file deletion fails during purge', async () => {
+    it('purges directory artifact paths through the same relocation flow', async () => {
         assert.ok(livePostgresUrl);
         const { store, admin, pool, cleanup } = await createLivePostgresStore();
         const artifactPath = path.join(process.cwd(), 'generated-images', '.pg-purge-test', `${crypto.randomUUID()}-dir`);
@@ -179,10 +179,10 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
         try {
             await mkdir(artifactPath, { recursive: true });
             const begin = await store.beginRequest({
-                idempotencyKey: 'pg-purge-blocked-file',
-                requestHash: 'pg-purge-blocked-file-hash',
+                idempotencyKey: 'pg-purge-directory-artifact',
+                requestHash: 'pg-purge-directory-artifact-hash',
                 mode: 'generate',
-                requestJson: { prompt: 'pg purge blocked file' },
+                requestJson: { prompt: 'pg purge directory artifact' },
                 leaseMs: 1000,
                 ttlSeconds: 1,
                 now: new Date('2026-05-12T00:00:00.000Z')
@@ -194,14 +194,14 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
                 requestId: begin.record.requestId,
                 response: {
                     request_id: begin.record.requestId,
-                    idempotency_key: 'pg-purge-blocked-file',
+                    idempotency_key: 'pg-purge-directory-artifact',
                     cached: false,
                     images: [],
                     created_at: '2026-05-12T00:00:00.500Z'
                 },
                 artifacts: [
                     buildArtifact({
-                        id: 'pg-artifact-purge-blocked-file',
+                        id: 'pg-artifact-purge-directory-artifact',
                         requestId: begin.record.requestId,
                         filepath: artifactPath
                     })
@@ -209,10 +209,77 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
                 now: new Date('2026-05-12T00:00:00.500Z')
             });
 
-            await assert.rejects(() => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')));
-            assert.ok(await store.getArtifact('pg-artifact-purge-blocked-file'));
+            const purged = await store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z'));
+            assert.equal(purged, 1);
+            await assert.rejects(() => access(artifactPath));
+            assert.equal(await store.getArtifact('pg-artifact-purge-directory-artifact'), undefined);
+            const entries = await readdir(path.dirname(artifactPath));
+            assert.deepEqual(
+                entries.filter((entry) => entry.startsWith(`${path.basename(artifactPath)}.purge-`)),
+                []
+            );
         } finally {
             await rm(artifactPath, { recursive: true, force: true });
+            await cleanup();
+            admin.release();
+            await pool.end();
+        }
+    });
+
+    it('restores moved artifact files when purge fails after file relocation', async () => {
+        assert.ok(livePostgresUrl);
+        const { store, admin, pool, cleanup, schema } = await createLivePostgresStore();
+        const artifactPath = path.join(process.cwd(), 'generated-images', '.pg-purge-test', `${crypto.randomUUID()}.png`);
+
+        try {
+            await mkdir(path.dirname(artifactPath), { recursive: true });
+            await writeFile(artifactPath, 'stale image');
+            const begin = await store.beginRequest({
+                idempotencyKey: 'pg-purge-restore-file',
+                requestHash: 'pg-purge-restore-file-hash',
+                mode: 'generate',
+                requestJson: { prompt: 'pg purge restore file' },
+                leaseMs: 1000,
+                ttlSeconds: 1,
+                now: new Date('2026-05-12T00:00:00.000Z')
+            });
+            assert.equal(begin.type, 'acquired');
+            if (begin.type !== 'acquired') throw new Error('expected acquired');
+
+            await store.completeRequest({
+                requestId: begin.record.requestId,
+                response: {
+                    request_id: begin.record.requestId,
+                    idempotency_key: 'pg-purge-restore-file',
+                    cached: false,
+                    images: [],
+                    created_at: '2026-05-12T00:00:00.500Z'
+                },
+                artifacts: [
+                    buildArtifact({
+                        id: 'pg-artifact-purge-restore-file',
+                        requestId: begin.record.requestId,
+                        filepath: artifactPath
+                    })
+                ],
+                now: new Date('2026-05-12T00:00:00.500Z')
+            });
+
+            await admin.query(
+                `CREATE TABLE ${schema}.${quoteIdent('pg_purge_blockers_restore')} (
+                    request_id TEXT NOT NULL REFERENCES ${schema}.${quoteIdent('agent_requests')}(request_id)
+                )`
+            );
+            await admin.query(
+                `INSERT INTO ${schema}.${quoteIdent('pg_purge_blockers_restore')} (request_id) VALUES ($1)`,
+                [begin.record.requestId]
+            );
+
+            await assert.rejects(() => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')));
+            await assert.doesNotReject(() => access(artifactPath));
+            assert.ok(await store.getArtifact('pg-artifact-purge-restore-file'));
+        } finally {
+            await rm(path.dirname(artifactPath), { recursive: true, force: true });
             await cleanup();
             admin.release();
             await pool.end();
@@ -234,6 +301,7 @@ async function createLivePostgresStore() {
         store,
         admin,
         pool,
+        schema,
         async cleanup() {
             await store.close();
             await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);

@@ -1,5 +1,11 @@
 import { Pool, type PoolClient } from 'pg';
-import { deleteFileIfExists, isArtifactFilepathAllowed } from './agent-file-utils';
+import {
+    discardMovedFile,
+    isArtifactFilepathAllowed,
+    moveFileIfExists,
+    restoreMovedFile,
+    type MovedFileForDeletion
+} from './agent-file-utils';
 import {
     addMilliseconds,
     addSeconds,
@@ -118,8 +124,11 @@ export class PostgresAgentStateStore implements AgentStateStore {
     async purgeExpiredRequests(now = new Date()): Promise<number> {
         const client = await this.pool.connect();
         const nowIso = isoDate(now);
+        let transactionStarted = false;
+        let movedFiles: MovedFileForDeletion[] = [];
         try {
             await client.query('BEGIN');
+            transactionStarted = true;
             const expiredResult = await client.query(
                 "SELECT request_id FROM agent_requests WHERE expires_at < $1 AND status IN ('succeeded', 'failed', 'orphaned') FOR UPDATE SKIP LOCKED",
                 [nowIso]
@@ -134,17 +143,22 @@ export class PostgresAgentStateStore implements AgentStateStore {
                           .filter(
                               (filepath): filepath is string =>
                                   typeof filepath === 'string' && isArtifactFilepathAllowed(filepath)
-                          )
+                    )
                     : [];
-            await Promise.all([...new Set(artifactFilepaths)].map((filepath) => deleteFileIfExists(filepath)));
+            movedFiles = await moveArtifactFilesForDeletion([...new Set(artifactFilepaths)]);
             if (requestIds.length > 0) {
                 await client.query('DELETE FROM agent_artifacts WHERE request_id = ANY($1)', [requestIds]);
                 await client.query('DELETE FROM agent_requests WHERE request_id = ANY($1)', [requestIds]);
             }
             await client.query('COMMIT');
+            transactionStarted = false;
+            await discardArtifactFiles(movedFiles);
             return requestIds.length;
         } catch (error) {
-            await client.query('ROLLBACK');
+            if (transactionStarted) {
+                await client.query('ROLLBACK').catch(() => {});
+            }
+            await restoreArtifactFiles(movedFiles);
             throw error;
         } finally {
             client.release();
@@ -377,6 +391,30 @@ export class PostgresAgentStateStore implements AgentStateStore {
         ]);
         return (result.rows as PostgresArtifactRow[]).map((row) => this.mapArtifactRow(row));
     }
+}
+
+async function moveArtifactFilesForDeletion(filepaths: string[]): Promise<MovedFileForDeletion[]> {
+    const movedFiles: MovedFileForDeletion[] = [];
+    try {
+        for (const filepath of filepaths) {
+            const moved = await moveFileIfExists(filepath);
+            if (moved) {
+                movedFiles.push(moved);
+            }
+        }
+        return movedFiles;
+    } catch (error) {
+        await restoreArtifactFiles(movedFiles);
+        throw error;
+    }
+}
+
+async function restoreArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
+    await Promise.allSettled(files.map((file) => restoreMovedFile(file)));
+}
+
+async function discardArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
+    await Promise.allSettled(files.map((file) => discardMovedFile(file)));
 }
 
 function toIso(value: Date | string | null): string {

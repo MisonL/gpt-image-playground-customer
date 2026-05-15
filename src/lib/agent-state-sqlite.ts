@@ -2,7 +2,13 @@ import Database from 'better-sqlite3';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { deleteFileIfExists, isArtifactFilepathAllowed } from './agent-file-utils';
+import {
+    discardMovedFile,
+    isArtifactFilepathAllowed,
+    moveFileIfExists,
+    restoreMovedFile,
+    type MovedFileForDeletion
+} from './agent-file-utils';
 import {
     addMilliseconds,
     addSeconds,
@@ -131,14 +137,20 @@ export class SqliteAgentStateStore implements AgentStateStore {
                     )
             )
         ];
-        await Promise.all(artifactFilepaths.map((filepath) => deleteFileIfExists(filepath)));
+        const movedFiles = await moveArtifactFilesForDeletion(artifactFilepaths);
         const transaction = db.transaction(() => {
             for (const requestId of requestIds) {
                 db.prepare('DELETE FROM agent_artifacts WHERE request_id = ?').run(requestId);
                 db.prepare('DELETE FROM agent_requests WHERE request_id = ?').run(requestId);
             }
         });
-        transaction();
+        try {
+            transaction();
+        } catch (error) {
+            await restoreArtifactFiles(movedFiles);
+            throw error;
+        }
+        await discardArtifactFiles(movedFiles);
         return requestIds.length;
     }
 
@@ -244,11 +256,25 @@ export class SqliteAgentStateStore implements AgentStateStore {
 
     private insertArtifacts(artifacts: AgentArtifactRecord[]): void {
         artifacts.forEach((artifact) => {
-            this.requireDb()
-                .prepare(
-                    `INSERT OR REPLACE INTO agent_artifacts
+                this.requireDb()
+                    .prepare(
+                        `INSERT INTO agent_artifacts
                         (id, request_id, filename, filepath, content_url, metadata_url, output_format, mime_type, size_bytes, width, height, model, prompt_hash, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(id) DO UPDATE SET
+                        request_id = excluded.request_id,
+                        filename = excluded.filename,
+                        filepath = excluded.filepath,
+                        content_url = excluded.content_url,
+                        metadata_url = excluded.metadata_url,
+                        output_format = excluded.output_format,
+                        mime_type = excluded.mime_type,
+                        size_bytes = excluded.size_bytes,
+                        width = excluded.width,
+                        height = excluded.height,
+                        model = excluded.model,
+                        prompt_hash = excluded.prompt_hash,
+                        created_at = excluded.created_at`
                 )
                 .run(
                     artifact.id,
@@ -311,6 +337,30 @@ export class SqliteAgentStateStore implements AgentStateStore {
             createdAt: row.created_at
         };
     }
+}
+
+async function moveArtifactFilesForDeletion(filepaths: string[]): Promise<MovedFileForDeletion[]> {
+    const movedFiles: MovedFileForDeletion[] = [];
+    try {
+        for (const filepath of filepaths) {
+            const moved = await moveFileIfExists(filepath);
+            if (moved) {
+                movedFiles.push(moved);
+            }
+        }
+        return movedFiles;
+    } catch (error) {
+        await restoreArtifactFiles(movedFiles);
+        throw error;
+    }
+}
+
+async function restoreArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
+    await Promise.allSettled(files.map((file) => restoreMovedFile(file)));
+}
+
+async function discardArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
+    await Promise.allSettled(files.map((file) => discardMovedFile(file)));
 }
 
 function cryptoRandomId(): string {

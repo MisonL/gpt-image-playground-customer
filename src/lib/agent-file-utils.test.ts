@@ -1,6 +1,6 @@
-import { readImageDimensions, writeFileAtomic } from './agent-file-utils';
+import { discardMovedFile, moveFileIfExists, readImageDimensions, restoreMovedFile, writeFileAtomic } from './agent-file-utils';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -36,6 +36,45 @@ describe('writeFileAtomic', () => {
                 entries.filter((entry) => entry.includes('.tmp-')),
                 []
             );
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('moveFileIfExists', () => {
+    it('moves a file and can restore it afterward', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'agent-move-'));
+        const sourcePath = path.join(tempDir, 'artifact.png');
+        await writeFile(sourcePath, 'image-data');
+
+        try {
+            const moved = await moveFileIfExists(sourcePath);
+            assert.ok(moved);
+            if (!moved) throw new Error('expected moved file');
+
+            await assert.rejects(() => readFile(sourcePath));
+            await restoreMovedFile(moved);
+            assert.equal(await readFile(sourcePath, 'utf8'), 'image-data');
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('discards moved directories without leaving purge paths behind', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'agent-move-dir-'));
+        const sourcePath = path.join(tempDir, 'artifact-dir');
+        await mkdir(sourcePath);
+        await writeFile(path.join(sourcePath, 'content.txt'), 'image-data');
+
+        try {
+            const moved = await moveFileIfExists(sourcePath);
+            assert.ok(moved);
+            if (!moved) throw new Error('expected moved directory');
+
+            await discardMovedFile(moved);
+            const entries = await readdir(tempDir);
+            assert.deepEqual(entries, []);
         } finally {
             await rm(tempDir, { recursive: true, force: true });
         }

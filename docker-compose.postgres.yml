@@ -33,6 +33,7 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
       NEXT_PUBLIC_IMAGE_STORAGE_MODE: fs
       AGENT_STATE_BACKEND: postgres
+      AGENT_DATABASE_URL: ""
       AGENT_DB_HOST: postgres
       AGENT_DB_PORT: "5432"
       AGENT_DB_NAME: gpt_image_playground
