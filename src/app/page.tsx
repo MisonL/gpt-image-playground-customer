@@ -7,6 +7,7 @@ import { GenerationForm, type GenerationFormData } from '@/components/generation
 import { HistoryPanel } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
+import { ShareDialog, type ShareDialogValues } from '@/components/share-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,6 +19,7 @@ import {
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
 import { sha256Hex } from '@/lib/sha256';
 import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
 import {
@@ -72,6 +74,7 @@ const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
 type RequestMode = 'generate' | 'edit';
 type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, boolean, 1 | 2 | 3];
+type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
 
 function createClientRequestId(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -191,11 +194,13 @@ type RuntimeCapabilities = {
 
 class ApiRequestError extends Error {
     readonly status?: number;
+    readonly preserveDisplayedError: boolean;
 
-    constructor(message: string, status?: number) {
+    constructor(message: string, status?: number, options: { preserveDisplayedError?: boolean } = {}) {
         super(message);
         this.name = 'ApiRequestError';
         this.status = status;
+        this.preserveDisplayedError = options.preserveDisplayedError === true;
     }
 }
 
@@ -317,6 +322,11 @@ export default function HomePage() {
     const [itemToDeleteConfirm, setItemToDeleteConfirm] = React.useState<HistoryMetadata | null>(null);
     const [dialogCheckboxStateSkipConfirm, setDialogCheckboxStateSkipConfirm] = React.useState<boolean>(false);
     const [openLogsSignal, setOpenLogsSignal] = React.useState(0);
+    const [shareDialogOpen, setShareDialogOpen] = React.useState(false);
+    const [shareTargetFilename, setShareTargetFilename] = React.useState<string | null>(null);
+    const [shareUrl, setShareUrl] = React.useState<string | null>(null);
+    const [shareError, setShareError] = React.useState<string | null>(null);
+    const [isCreatingShare, setIsCreatingShare] = React.useState(false);
     const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
 
     const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
@@ -439,15 +449,70 @@ export default function HomePage() {
         };
     }, [editSourceImagePreviewUrls]);
 
-    const verifyEntryPasswordHash = React.useCallback(async (passwordHash: string): Promise<boolean> => {
-        const response = await fetch('/api/auth-verify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ passwordHash })
-        });
+    const verifyEntryPasswordHash = React.useCallback(async (passwordHash: string): Promise<PasswordVerificationResult> => {
+        try {
+            const response = await fetch('/api/auth-verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ passwordHash })
+            });
 
-        return response.ok;
+            if (response.ok) {
+                return 'valid';
+            }
+            if (response.status === 401) {
+                try {
+                    const result = (await response.json()) as { code?: string };
+                    return isPagePasswordAuthErrorCode(result.code) ? 'invalid' : 'unavailable';
+                } catch {
+                    return 'unavailable';
+                }
+            }
+            return 'unavailable';
+        } catch (error) {
+            console.error('验证入口密码失败：', error);
+            return 'unavailable';
+        }
     }, []);
+
+    const promptForExpiredPassword = React.useCallback(() => {
+        localStorage.removeItem('clientPasswordHash');
+        setClientPasswordHash(null);
+        setIsEntryAuthenticated(false);
+        setPasswordDialogContext('retry');
+        setIsPasswordDialogOpen(true);
+        setError(createErrorNotice(t('error.passwordExpired')));
+    }, [createErrorNotice, t]);
+
+    const refreshImageAccessCookie = React.useCallback(async (passwordHash = clientPasswordHash): Promise<boolean> => {
+        if (!isPasswordRequiredByBackend) {
+            return true;
+        }
+        if (!passwordHash) {
+            promptForExpiredPassword();
+            return false;
+        }
+
+        const verificationResult = await verifyEntryPasswordHash(passwordHash);
+        if (verificationResult === 'valid') {
+            setIsEntryAuthenticated(true);
+            return true;
+        }
+        if (verificationResult === 'unavailable') {
+            setError(createErrorNotice(t('error.authVerifyUnavailable')));
+            return false;
+        }
+
+        promptForExpiredPassword();
+        return false;
+    }, [
+        clientPasswordHash,
+        createErrorNotice,
+        isPasswordRequiredByBackend,
+        promptForExpiredPassword,
+        t,
+        verifyEntryPasswordHash
+    ]);
 
     React.useEffect(() => {
         const fetchAuthStatus = async () => {
@@ -467,10 +532,20 @@ export default function HomePage() {
                     return;
                 }
 
-                if (storedPasswordHash && (await verifyEntryPasswordHash(storedPasswordHash))) {
-                    setClientPasswordHash(storedPasswordHash);
-                    setIsEntryAuthenticated(true);
-                    return;
+                if (storedPasswordHash) {
+                    const storedVerificationResult = await verifyEntryPasswordHash(storedPasswordHash);
+                    if (storedVerificationResult === 'valid') {
+                        setClientPasswordHash(storedPasswordHash);
+                        setIsEntryAuthenticated(true);
+                        return;
+                    }
+                    if (storedVerificationResult === 'unavailable') {
+                        setClientPasswordHash(storedPasswordHash);
+                        setPasswordDialogContext('retry');
+                        setIsEntryAuthenticated(false);
+                        setError(createErrorNotice(t('error.authVerifyUnavailable')));
+                        return;
+                    }
                 }
 
                 localStorage.removeItem('clientPasswordHash');
@@ -488,7 +563,7 @@ export default function HomePage() {
         queueMicrotask(() => {
             setApiSettings(readStoredApiSettings());
         });
-    }, [verifyEntryPasswordHash]);
+    }, [createErrorNotice, t, verifyEntryPasswordHash]);
 
     const refreshRuntimeCapabilities = React.useCallback(async (): Promise<RuntimeCapabilities | null> => {
         try {
@@ -580,7 +655,14 @@ export default function HomePage() {
         }
         try {
             const hash = await sha256Hex(password);
-            if (isPasswordRequiredByBackend && !(await verifyEntryPasswordHash(hash))) {
+            const passwordVerificationResult = isPasswordRequiredByBackend
+                ? await verifyEntryPasswordHash(hash)
+                : 'valid';
+            if (passwordVerificationResult === 'unavailable') {
+                setError(createErrorNotice(t('error.authVerifyUnavailable')));
+                return;
+            }
+            if (passwordVerificationResult === 'invalid') {
                 localStorage.removeItem('clientPasswordHash');
                 setClientPasswordHash(null);
                 setIsEntryAuthenticated(false);
@@ -597,7 +679,7 @@ export default function HomePage() {
             if (passwordDialogContext === 'retry' && lastApiCallArgs) {
                 const retryArgs = lastApiCallArgs;
                 setLastApiCallArgs(null);
-                await handleApiCall(...retryArgs);
+                await handleApiCall(...retryArgs, hash);
             }
         } catch (e) {
             console.error('计算密码哈希失败：', e);
@@ -757,12 +839,14 @@ export default function HomePage() {
                 forceSingleImage?: boolean;
                 streaming: boolean;
                 partialImages: 1 | 2 | 3;
+                passwordHash?: string | null;
             }
         ) => {
             const apiFormData = new FormData();
-            if (isPasswordRequiredByBackend && clientPasswordHash) {
-                apiFormData.append('passwordHash', clientPasswordHash);
-            } else if (isPasswordRequiredByBackend && !clientPasswordHash) {
+            const effectivePasswordHash = options.passwordHash ?? clientPasswordHash;
+            if (isPasswordRequiredByBackend && effectivePasswordHash) {
+                apiFormData.append('passwordHash', effectivePasswordHash);
+            } else if (isPasswordRequiredByBackend && !effectivePasswordHash) {
                 throw new Error(t('error.passwordRequired'));
             }
             apiFormData.append('mode', requestMode);
@@ -912,6 +996,7 @@ export default function HomePage() {
 
             let result: {
                 error?: string;
+                code?: string;
                 images?: ApiImageResponseItem[];
                 usage?: unknown;
                 actualCost?: ActualCostDetails;
@@ -927,9 +1012,7 @@ export default function HomePage() {
             }
 
             if (!response.ok) {
-                if (response.status === 401 && isPasswordRequiredByBackend) {
-                    setError(createErrorNotice(t('error.unauthorized')));
-                    setPasswordDialogContext('retry');
+                if (response.status === 401 && isPasswordRequiredByBackend && isPagePasswordAuthErrorCode(result.code)) {
                     if (
                         options.retryFormData &&
                         options.retryMode &&
@@ -943,8 +1026,8 @@ export default function HomePage() {
                             options.retryPartialImages
                         ]);
                     }
-                    setIsPasswordDialogOpen(true);
-                    throw new ApiRequestError(t('error.unauthorized'), 401);
+                    promptForExpiredPassword();
+                    throw new ApiRequestError(t('error.passwordExpired'), 401, { preserveDisplayedError: true });
                 }
                 throw new ApiRequestError(result.error || t('error.apiFailed', { status: response.status }), response.status);
             }
@@ -960,14 +1043,15 @@ export default function HomePage() {
                 actualCost: result.actualCost
             };
         },
-        [createErrorNotice, isPasswordRequiredByBackend, t]
+        [isPasswordRequiredByBackend, promptForExpiredPassword, t]
     );
 
     async function handleApiCall(
         formData: GenerationFormData | EditingFormData,
         requestMode: RequestMode = mode,
         requestStreaming: boolean = enableStreaming,
-        requestPartialImages: 1 | 2 | 3 = partialImages
+        requestPartialImages: 1 | 2 | 3 = partialImages,
+        requestPasswordHash: string | null = clientPasswordHash
     ) {
         const startTime = Date.now();
         let durationMs = 0;
@@ -991,10 +1075,13 @@ export default function HomePage() {
                 requestCredentialConcurrency: latestRuntimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
                 serverRecommendedConcurrency: latestRuntimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
             });
-            if (isPasswordRequiredByBackend && !clientPasswordHash) {
+            if (isPasswordRequiredByBackend && !requestPasswordHash) {
                 setError(createErrorNotice(t('error.passwordRequired')));
                 setPasswordDialogContext('initial');
                 setIsPasswordDialogOpen(true);
+                return;
+            }
+            if (!(await refreshImageAccessCookie(requestPasswordHash))) {
                 return;
             }
 
@@ -1012,7 +1099,8 @@ export default function HomePage() {
                     buildApiFormData(formData, requestMode, {
                         forceSingleImage: options.forceSingleImage,
                         streaming: requestStreaming,
-                        partialImages: requestPartialImages
+                        partialImages: requestPartialImages,
+                        passwordHash: requestPasswordHash
                     }),
                     {
                         previewIndexOffset: options.previewIndexOffset,
@@ -1038,7 +1126,7 @@ export default function HomePage() {
                     (result): result is { images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails } =>
                         !(result instanceof Error)
                 );
-                if (errors.some((error) => error instanceof ApiRequestError && error.status === 401)) {
+                if (errors.some(hasPreservedDisplayedAuthError)) {
                     return;
                 }
                 if (successes.length === 0) {
@@ -1071,6 +1159,11 @@ export default function HomePage() {
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
             console.error(`API 调用在 ${durationMs}ms 后失败：`, err);
+            if (hasPreservedDisplayedAuthError(err)) {
+                setLatestImageBatch(null);
+                setStreamingPreviewImages(new Map());
+                return;
+            }
             const errorSummary = summarizeApiError(err, t('error.unexpected'));
             setError(createErrorNotice(buildUserFacingApiErrorMessage({ ...errorSummary, t })));
             setLatestImageBatch(null);
@@ -1115,8 +1208,11 @@ export default function HomePage() {
     }
 
     const handleHistorySelect = React.useCallback(
-        (item: HistoryMetadata) => {
+        async (item: HistoryMetadata) => {
             const originalStorageMode = item.storageModeUsed || 'fs';
+            if (originalStorageMode === 'fs' && !(await refreshImageAccessCookie())) {
+                return;
+            }
 
             const selectedBatchPromises = item.images.map(async (imgInfo, imageIndex) => {
                 let path: string | undefined;
@@ -1155,7 +1251,7 @@ export default function HomePage() {
                 setImageOutputView(validImages.length > 1 ? 'grid' : 0);
             });
         },
-        [createErrorNotice, getImageSrc, t]
+        [createErrorNotice, getImageSrc, refreshImageAccessCookie, t]
     );
 
     const handleClearHistory = React.useCallback(async () => {
@@ -1184,6 +1280,87 @@ export default function HomePage() {
             }
         }
     }, [createErrorNotice, t]);
+
+    const resolveImageBlob = React.useCallback(
+        async (filename: string): Promise<Blob> => {
+            if (effectiveStorageModeClient === 'indexeddb') {
+                const record = allDbImages?.find((img) => img.filename === filename);
+                if (!record?.blob) {
+                    throw new Error(t('error.imageNotFoundDb', { filename }));
+                }
+                return record.blob;
+            }
+
+            if (!(await refreshImageAccessCookie())) {
+                throw new Error(t('error.imageAccessRefreshFailed'));
+            }
+            const response = await fetch(`/api/image/${filename}`);
+            if (!response.ok) {
+                throw new Error(t('error.fetchImage', { statusText: response.statusText }));
+            }
+            return response.blob();
+        },
+        [allDbImages, refreshImageAccessCookie, t]
+    );
+
+    const handleDownloadImage = React.useCallback(
+        async (filename: string) => {
+            try {
+                const blob = await resolveImageBlob(filename);
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                window.setTimeout(() => URL.revokeObjectURL(url), 150);
+            } catch (error) {
+                setError(createErrorNotice(error instanceof Error ? error.message : t('error.retrieveImage', { filename })));
+            }
+        },
+        [createErrorNotice, resolveImageBlob, t]
+    );
+
+    const handleOpenShareImage = React.useCallback((filename: string) => {
+        setShareTargetFilename(filename);
+        setShareUrl(null);
+        setShareError(null);
+        setShareDialogOpen(true);
+    }, []);
+
+    const handleCreateShare = React.useCallback(
+        async (values: ShareDialogValues) => {
+            if (!shareTargetFilename) return;
+            setIsCreatingShare(true);
+            setShareError(null);
+            try {
+                const blob = await resolveImageBlob(shareTargetFilename);
+                const form = new FormData();
+                form.set('sourceFilename', shareTargetFilename);
+                form.set('image', new File([blob], shareTargetFilename, { type: blob.type || 'image/png' }));
+                const accessCode = values.accessCode.trim();
+                if (accessCode) {
+                    form.set('accessCode', accessCode);
+                }
+                if (typeof values.expiresInMinutes === 'number') {
+                    form.set('expiresInMinutes', String(values.expiresInMinutes));
+                }
+
+                const response = await fetch('/api/shares', { method: 'POST', body: form });
+                const body = await response.json();
+                if (!response.ok) {
+                    throw new Error(body.error || t('share.createFailed'));
+                }
+                setShareUrl(body.url);
+            } catch (error) {
+                setShareError(error instanceof Error ? error.message : t('share.createFailed'));
+            } finally {
+                setIsCreatingShare(false);
+            }
+        },
+        [resolveImageBlob, shareTargetFilename, t]
+    );
 
     const handleSendToEdit = async (filename: string) => {
         if (isSendingToEdit) return;
@@ -1215,7 +1392,24 @@ export default function HomePage() {
                     throw new Error(t('error.imageNotFoundDb', { filename }));
                 }
             } else {
+                if (!(await refreshImageAccessCookie())) {
+                    return;
+                }
                 const response = await fetch(`/api/image/${filename}`);
+                if (response.status === 401 && isPasswordRequiredByBackend) {
+                    let result: { code?: string } = {};
+                    try {
+                        result = (await response.json()) as { code?: string };
+                    } catch {
+                        result = {};
+                    }
+                    if (isPagePasswordAuthErrorCode(result.code)) {
+                        promptForExpiredPassword();
+                    } else {
+                        setError(createErrorNotice(t('error.authVerifyUnavailable')));
+                    }
+                    return;
+                }
                 if (!response.ok) {
                     throw new Error(t('error.fetchImage', { statusText: response.statusText }));
                 }
@@ -1343,6 +1537,14 @@ export default function HomePage() {
                     onSave={handleSaveApiSettings}
                 />
             ) : null}
+            <ShareDialog
+                open={shareDialogOpen}
+                onOpenChange={setShareDialogOpen}
+                isCreating={isCreatingShare}
+                shareUrl={shareUrl}
+                error={shareError}
+                onCreate={handleCreateShare}
+            />
             {showEntryLock ? (
                 <div className='flex min-h-[70vh] w-full max-w-md flex-col items-center justify-center gap-6 text-center'>
                     <div className='flex size-14 items-center justify-center rounded-full border border-white/15 bg-black text-white'>
@@ -1482,6 +1684,8 @@ export default function HomePage() {
                                     altText={t('output.alt')}
                                     isLoading={isLoading || isSendingToEdit}
                                     onSendToEdit={handleSendToEdit}
+                                    onDownloadImage={handleDownloadImage}
+                                    onShareImage={handleOpenShareImage}
                                     currentMode={mode}
                                     baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
                                     streamingPreviewImages={streamingPreviewImages}
