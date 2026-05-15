@@ -1,5 +1,0 @@
-services:
-  gpt-image-playground:
-    build:
-      context: .
-    image: kwokyde/gpt-image-playground:latest
