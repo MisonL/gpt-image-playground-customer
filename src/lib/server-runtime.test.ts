@@ -2,12 +2,14 @@ import {
     createBatchId,
     createImageFilename,
     createAccessToken,
+    buildAccessCookie,
     buildAccessCookieOptions,
     isHttpsRequest,
     readBooleanEnv,
     readOutputDirEnv,
     readPositiveIntegerEnv,
     readAffinityKey,
+    serializeAccessCookie,
     verifyAccessToken,
     verifyPasswordHash,
     type FilenameClock
@@ -53,6 +55,29 @@ describe('buildAccessCookieOptions', () => {
 
     it('marks cookies as secure behind an https proxy', () => {
         assert.equal(buildAccessCookieOptions(new Headers({ 'x-forwarded-proto': 'https' })).secure, true);
+    });
+});
+
+describe('buildAccessCookie', () => {
+    it('builds the shared image access cookie from the configured password', () => {
+        const cookie = buildAccessCookie('customer-password', new Headers({ 'x-forwarded-proto': 'https' }));
+
+        assert.equal(cookie.name, 'gptImageAccess');
+        assert.equal(cookie.value, createAccessToken('customer-password'));
+        assert.equal(cookie.options.path, '/');
+        assert.equal(cookie.options.httpOnly, true);
+        assert.equal(cookie.options.secure, true);
+    });
+});
+
+describe('serializeAccessCookie', () => {
+    it('serializes access cookie attributes for streamed responses', () => {
+        const cookie = buildAccessCookie('customer-password', new Headers({ 'x-forwarded-proto': 'https' }));
+
+        assert.equal(
+            serializeAccessCookie(cookie),
+            `gptImageAccess=${createAccessToken('customer-password')}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure`
+        );
     });
 });
 

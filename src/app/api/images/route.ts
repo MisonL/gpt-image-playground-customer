@@ -34,8 +34,17 @@ import {
     persistedImageToLegacyResponse,
     persistOpenAiImages
 } from '@/lib/image-service';
+import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { getServerChannelState } from '@/lib/server-channel-router';
-import { createBatchId, createImageFilename, outputDir, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
+import {
+    buildAccessCookie,
+    createBatchId,
+    createImageFilename,
+    outputDir,
+    readAffinityKey,
+    serializeAccessCookie,
+    verifyPasswordHash
+} from '@/lib/server-runtime';
 import { resolveActualCost, type ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
@@ -152,6 +161,23 @@ function describeInvalidImagesResponse(result: unknown): string {
     return 'API 返回的数据不是 OpenAI Images 格式。请确认 API URL 是 OpenAI 兼容接口，并且该接口支持 Images generate/edit。';
 }
 
+function appendAccessCookie(response: Response, accessCookie: ReturnType<typeof buildAccessCookie> | undefined): Response {
+    if (accessCookie) {
+        response.headers.append('Set-Cookie', serializeAccessCookie(accessCookie));
+    }
+    return response;
+}
+
+function attachAccessCookie<T extends NextResponse>(
+    response: T,
+    accessCookie: ReturnType<typeof buildAccessCookie> | undefined
+): T {
+    if (accessCookie) {
+        response.cookies.set(accessCookie.name, accessCookie.value, accessCookie.options);
+    }
+    return response;
+}
+
 async function ensureOutputDirExists() {
     try {
         await fs.access(outputDir);
@@ -228,6 +254,7 @@ export async function POST(request: NextRequest) {
     let selectedServerCredential: ChannelCredential | undefined;
     let clientRequestId: string | undefined;
     let requestLogContext: { clientRequestId: string } | undefined;
+    let accessCookie: ReturnType<typeof buildAccessCookie> | undefined;
     try {
         const serverChannelRouter = getServerChannelState().router;
         const contentType = request.headers.get('content-type') || '';
@@ -287,12 +314,19 @@ export async function POST(request: NextRequest) {
             const clientPasswordHash = formData.get('passwordHash');
             if (typeof clientPasswordHash !== 'string' || !clientPasswordHash) {
                 appLogger.error('缺少密码哈希。', requestLogContext);
-                return NextResponse.json({ error: '未授权：缺少密码哈希。' }, { status: 401 });
+                return NextResponse.json(
+                    { error: '未授权：缺少密码哈希。', code: PAGE_PASSWORD_AUTH_ERROR_CODES.missing },
+                    { status: 401 }
+                );
             }
             if (!verifyPasswordHash(clientPasswordHash, appPassword)) {
                 appLogger.error('密码哈希无效。', requestLogContext);
-                return NextResponse.json({ error: '未授权：密码无效。' }, { status: 401 });
+                return NextResponse.json(
+                    { error: '未授权：密码无效。', code: PAGE_PASSWORD_AUTH_ERROR_CODES.invalid },
+                    { status: 401 }
+                );
             }
+            accessCookie = buildAccessCookie(appPassword, request.headers);
         }
 
         const mode = readMode(formData);
@@ -453,7 +487,7 @@ export async function POST(request: NextRequest) {
                     }
                 });
 
-                return new Response(readableStream, {
+                const response = new Response(readableStream, {
                     headers: {
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
@@ -461,6 +495,7 @@ export async function POST(request: NextRequest) {
                         ...(clientRequestId ? { 'X-Client-Request-Id': clientRequestId } : {})
                     }
                 });
+                return appendAccessCookie(response, accessCookie);
             }
 
             const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...baseParams, stream: false };
@@ -613,7 +648,7 @@ export async function POST(request: NextRequest) {
                     }
                 });
 
-                return new Response(readableStream, {
+                const response = new Response(readableStream, {
                     headers: {
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
@@ -621,6 +656,7 @@ export async function POST(request: NextRequest) {
                         ...(clientRequestId ? { 'X-Client-Request-Id': clientRequestId } : {})
                     }
                 });
+                return appendAccessCookie(response, accessCookie);
             }
 
             const params: OpenAI.Images.ImageEditParams = {
@@ -667,7 +703,10 @@ export async function POST(request: NextRequest) {
                 filenames: savedImagesData.map((image) => image.filename)
             });
 
-            return NextResponse.json({ images: savedImagesData, usage: result.usage, actualCost, clientRequestId });
+            return attachAccessCookie(
+                NextResponse.json({ images: savedImagesData, usage: result.usage, actualCost, clientRequestId }),
+                accessCookie
+            );
         } catch (persistError) {
             if (persistError instanceof MissingOpenAiImageDataError) {
                 appLogger.error(`第 ${persistError.index} 个图片数据缺少 b64_json。`, requestLogContext);

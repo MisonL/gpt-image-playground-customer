@@ -80,6 +80,25 @@ export function buildAccessCookieOptions(headers?: Headers) {
     };
 }
 
+export function buildAccessCookie(serverPassword: string, headers?: Headers) {
+    return {
+        name: 'gptImageAccess',
+        value: createAccessToken(serverPassword),
+        options: buildAccessCookieOptions(headers)
+    };
+}
+
+export function serializeAccessCookie(cookie: ReturnType<typeof buildAccessCookie>): string {
+    return [
+        `${cookie.name}=${cookie.value}`,
+        `Path=${cookie.options.path}`,
+        `Max-Age=${cookie.options.maxAge}`,
+        'HttpOnly',
+        'SameSite=Lax',
+        ...(cookie.options.secure ? ['Secure'] : [])
+    ].join('; ');
+}
+
 export function createBatchId(): string {
     return crypto.randomBytes(8).toString('hex');
 }

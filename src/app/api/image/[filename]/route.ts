@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import { RequestValidationError, isValidImageFilename } from '@/lib/image-request-utils';
+import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { outputDir, verifyAccessToken } from '@/lib/server-runtime';
 import { lookup } from 'mime-types';
 import { NextRequest, NextResponse } from 'next/server';
@@ -8,8 +9,15 @@ import path from 'path';
 export async function GET(request: NextRequest, { params }: { params: Promise<{ filename: string }> }) {
     const { filename } = await params;
     const appPassword = process.env.APP_PASSWORD;
-    if (!verifyAccessToken(request.cookies.get('gptImageAccess')?.value, appPassword)) {
-        return NextResponse.json({ error: 'Unauthorized: Invalid access token.' }, { status: 401 });
+    const accessToken = request.cookies.get('gptImageAccess')?.value;
+    if (!verifyAccessToken(accessToken, appPassword)) {
+        return NextResponse.json(
+            {
+                error: 'Unauthorized: Invalid access token.',
+                code: accessToken ? PAGE_PASSWORD_AUTH_ERROR_CODES.invalid : PAGE_PASSWORD_AUTH_ERROR_CODES.missing
+            },
+            { status: 401 }
+        );
     }
 
     if (!filename) {

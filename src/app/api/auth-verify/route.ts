@@ -1,4 +1,5 @@
-import { buildAccessCookieOptions, createAccessToken, verifyPasswordHash } from '@/lib/server-runtime';
+import { buildAccessCookie, verifyPasswordHash } from '@/lib/server-runtime';
+import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { NextRequest, NextResponse } from 'next/server';
 
 type AuthVerifyRequestBody = {
@@ -20,10 +21,18 @@ export async function POST(request: NextRequest) {
 
     const clientPasswordHash = requestBody.passwordHash;
     if (!clientPasswordHash || !verifyPasswordHash(clientPasswordHash, appPassword)) {
-        return NextResponse.json({ authenticated: false, error: 'Unauthorized: Invalid password.' }, { status: 401 });
+        return NextResponse.json(
+            {
+                authenticated: false,
+                error: 'Unauthorized: Invalid password.',
+                code: PAGE_PASSWORD_AUTH_ERROR_CODES.invalid
+            },
+            { status: 401 }
+        );
     }
 
     const response = NextResponse.json({ authenticated: true, passwordRequired: true });
-    response.cookies.set('gptImageAccess', createAccessToken(appPassword), buildAccessCookieOptions(request.headers));
+    const accessCookie = buildAccessCookie(appPassword, request.headers);
+    response.cookies.set(accessCookie.name, accessCookie.value, accessCookie.options);
     return response;
 }
