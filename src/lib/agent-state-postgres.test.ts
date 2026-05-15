@@ -2,6 +2,8 @@ import { POSTGRES_SCHEMA, PostgresAgentStateStore } from './agent-state-postgres
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 import { Pool } from 'pg';
 
@@ -116,7 +118,147 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
             await pool.end();
         }
     });
+
+    it('purges expired terminal requests and their artifact files', async () => {
+        assert.ok(livePostgresUrl);
+        const { store, admin, pool, cleanup } = await createLivePostgresStore();
+        const artifactPath = path.join(process.cwd(), 'generated-images', '.pg-purge-test', `${crypto.randomUUID()}.png`);
+
+        try {
+            await mkdir(path.dirname(artifactPath), { recursive: true });
+            await writeFile(artifactPath, 'stale image');
+            const begin = await store.beginRequest({
+                idempotencyKey: 'pg-purge-file',
+                requestHash: 'pg-purge-file-hash',
+                mode: 'generate',
+                requestJson: { prompt: 'pg purge file' },
+                leaseMs: 1000,
+                ttlSeconds: 1,
+                now: new Date('2026-05-12T00:00:00.000Z')
+            });
+            assert.equal(begin.type, 'acquired');
+            if (begin.type !== 'acquired') throw new Error('expected acquired');
+
+            await store.completeRequest({
+                requestId: begin.record.requestId,
+                response: {
+                    request_id: begin.record.requestId,
+                    idempotency_key: 'pg-purge-file',
+                    cached: false,
+                    images: [],
+                    created_at: '2026-05-12T00:00:00.500Z'
+                },
+                artifacts: [
+                    buildArtifact({
+                        id: 'pg-artifact-purge-file',
+                        requestId: begin.record.requestId,
+                        filepath: artifactPath
+                    })
+                ],
+                now: new Date('2026-05-12T00:00:00.500Z')
+            });
+
+            const purged = await store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z'));
+
+            assert.equal(purged, 1);
+            assert.equal(await store.getArtifact('pg-artifact-purge-file'), undefined);
+            await assert.rejects(() => access(artifactPath));
+        } finally {
+            await rm(path.dirname(artifactPath), { recursive: true, force: true });
+            await cleanup();
+            admin.release();
+            await pool.end();
+        }
+    });
+
+    it('keeps metadata when artifact file deletion fails during purge', async () => {
+        assert.ok(livePostgresUrl);
+        const { store, admin, pool, cleanup } = await createLivePostgresStore();
+        const artifactPath = path.join(process.cwd(), 'generated-images', '.pg-purge-test', `${crypto.randomUUID()}-dir`);
+
+        try {
+            await mkdir(artifactPath, { recursive: true });
+            const begin = await store.beginRequest({
+                idempotencyKey: 'pg-purge-blocked-file',
+                requestHash: 'pg-purge-blocked-file-hash',
+                mode: 'generate',
+                requestJson: { prompt: 'pg purge blocked file' },
+                leaseMs: 1000,
+                ttlSeconds: 1,
+                now: new Date('2026-05-12T00:00:00.000Z')
+            });
+            assert.equal(begin.type, 'acquired');
+            if (begin.type !== 'acquired') throw new Error('expected acquired');
+
+            await store.completeRequest({
+                requestId: begin.record.requestId,
+                response: {
+                    request_id: begin.record.requestId,
+                    idempotency_key: 'pg-purge-blocked-file',
+                    cached: false,
+                    images: [],
+                    created_at: '2026-05-12T00:00:00.500Z'
+                },
+                artifacts: [
+                    buildArtifact({
+                        id: 'pg-artifact-purge-blocked-file',
+                        requestId: begin.record.requestId,
+                        filepath: artifactPath
+                    })
+                ],
+                now: new Date('2026-05-12T00:00:00.500Z')
+            });
+
+            await assert.rejects(() => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')));
+            assert.ok(await store.getArtifact('pg-artifact-purge-blocked-file'));
+        } finally {
+            await rm(artifactPath, { recursive: true, force: true });
+            await cleanup();
+            admin.release();
+            await pool.end();
+        }
+    });
 });
+
+async function createLivePostgresStore() {
+    assert.ok(livePostgresUrl);
+    const schemaName = `agent_pg_${crypto.randomUUID().replaceAll('-', '')}`;
+    const schema = quoteIdent(schemaName);
+    const pool = new Pool({ connectionString: livePostgresUrl });
+    const admin = await pool.connect();
+    const connectionString = `${livePostgresUrl}${livePostgresUrl.includes('?') ? '&' : '?'}options=-c%20search_path%3D${schemaName}`;
+    const store = new PostgresAgentStateStore(connectionString);
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    await store.init();
+    return {
+        store,
+        admin,
+        pool,
+        async cleanup() {
+            await store.close();
+            await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+        }
+    };
+}
+
+function buildArtifact(input: { id: string; requestId: string; filepath: string }) {
+    return {
+        id: input.id,
+        requestId: input.requestId,
+        filename: `${input.id}.png`,
+        filepath: input.filepath,
+        contentUrl: `/api/agent/artifacts/${input.id}/content`,
+        metadataUrl: `/api/agent/artifacts/${input.id}`,
+        outputFormat: 'png',
+        mimeType: 'image/png',
+        sizeBytes: 10,
+        width: 1,
+        height: 1,
+        model: 'gpt-image-2',
+        promptHash: 'hash',
+        createdAt: '2026-05-12T00:00:00.500Z'
+    };
+}
 
 function quoteIdent(value: string): string {
     if (!/^[a-z_][a-z0-9_]*$/.test(value)) {
