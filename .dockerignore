@@ -3,7 +3,7 @@ node_modules
 out
 build
 coverage
-artifacts
+/artifacts
 dist
 .git
 .gitignore

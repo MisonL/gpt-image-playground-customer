@@ -40,10 +40,10 @@ function isOneOf<T extends readonly string[]>(value: string, allowed: T): value 
 export function readRequiredText(formData: FormData, field: string, maxLength = MAX_PROMPT_LENGTH): string {
     const value = formData.get(field);
     if (typeof value !== 'string' || value.trim().length === 0) {
-        throw new RequestValidationError(`Missing required parameter: ${field}`);
+        throw new RequestValidationError(`缺少必填参数：${field}`);
     }
     if (value.length > maxLength) {
-        throw new RequestValidationError(`${field} exceeds the maximum length of ${maxLength} characters.`);
+        throw new RequestValidationError(`${field} 超过 ${maxLength} 个字符的最大长度。`);
     }
     return value;
 }
@@ -51,7 +51,7 @@ export function readRequiredText(formData: FormData, field: string, maxLength = 
 export function readMode(formData: FormData): ImageMode {
     const value = formData.get('mode');
     if (typeof value !== 'string' || !isOneOf(value, VALID_MODE_VALUES)) {
-        throw new RequestValidationError('Invalid mode. Expected generate or edit.');
+        throw new RequestValidationError('mode 无效，必须是 generate 或 edit。');
     }
     return value;
 }
@@ -60,7 +60,7 @@ export function readModel(formData: FormData): GptImageModel {
     const value = formData.get('model');
     if (value === null) return 'gpt-image-2';
     if (typeof value !== 'string' || !isOneOf(value, VALID_MODEL_VALUES)) {
-        throw new RequestValidationError('Invalid model.');
+        throw new RequestValidationError('model 无效。');
     }
     return value;
 }
@@ -69,11 +69,11 @@ export function readCount(formData: FormData, field: string, fallback: number, m
     const rawValue = formData.get(field);
     if (rawValue === null) return fallback;
     if (typeof rawValue !== 'string' || !/^\d+$/.test(rawValue)) {
-        throw new RequestValidationError(`${field} must be an integer.`);
+        throw new RequestValidationError(`${field} 必须是整数。`);
     }
     const value = Number(rawValue);
     if (!Number.isInteger(value) || value < min || value > max) {
-        throw new RequestValidationError(`${field} must be between ${min} and ${max}.`);
+        throw new RequestValidationError(`${field} 必须在 ${min} 到 ${max} 之间。`);
     }
     return value;
 }
@@ -82,21 +82,21 @@ export function readOutputFormat(formData: FormData): ValidOutputFormat {
     const rawValue = formData.get('output_format');
     if (rawValue === null) return 'png';
     if (typeof rawValue !== 'string') {
-        throw new RequestValidationError('output_format must be a string.');
+        throw new RequestValidationError('output_format 必须是字符串。');
     }
     const normalized = rawValue.toLowerCase();
     const mapped = normalized === 'jpg' ? 'jpeg' : normalized;
     if (!isOneOf(mapped, VALID_OUTPUT_FORMAT_VALUES)) {
-        throw new RequestValidationError('Invalid output_format. Expected png, jpeg, or webp.');
+        throw new RequestValidationError('output_format 无效，必须是 png、jpeg 或 webp。');
     }
     return mapped;
 }
 
 export function readGenerateQuality(formData: FormData): GenerateQuality {
     const value = formData.get('quality');
-    if (value === null) return 'auto';
+    if (value === null) return 'high';
     if (typeof value !== 'string' || !isOneOf(value, VALID_GENERATE_QUALITY_VALUES)) {
-        throw new RequestValidationError('Invalid quality.');
+        throw new RequestValidationError('quality 无效。');
     }
     return value;
 }
@@ -105,7 +105,7 @@ export function readEditQuality(formData: FormData): EditQuality {
     const value = formData.get('quality');
     if (value === null) return 'auto';
     if (typeof value !== 'string' || !isOneOf(value, VALID_EDIT_QUALITY_VALUES)) {
-        throw new RequestValidationError('Invalid quality.');
+        throw new RequestValidationError('quality 无效。');
     }
     return value;
 }
@@ -114,10 +114,10 @@ export function readBackground(formData: FormData, model: GptImageModel): Backgr
     const value = formData.get('background');
     if (value === null) return 'auto';
     if (typeof value !== 'string' || !isOneOf(value, VALID_BACKGROUND_VALUES)) {
-        throw new RequestValidationError('Invalid background.');
+        throw new RequestValidationError('background 无效。');
     }
     if (model === 'gpt-image-2' && value === 'transparent') {
-        throw new RequestValidationError('transparent background is not supported for gpt-image-2.');
+        throw new RequestValidationError('gpt-image-2 不支持 transparent 背景。');
     }
     return value;
 }
@@ -126,7 +126,7 @@ export function readModeration(formData: FormData): Moderation {
     const value = formData.get('moderation');
     if (value === null) return 'auto';
     if (typeof value !== 'string' || !isOneOf(value, VALID_MODERATION_VALUES)) {
-        throw new RequestValidationError('Invalid moderation.');
+        throw new RequestValidationError('moderation 无效。');
     }
     return value;
 }
@@ -135,13 +135,13 @@ export function readSize(formData: FormData, field: string, fallback: string, mo
     const value = formData.get(field);
     if (value === null) return fallback;
     if (typeof value !== 'string' || value.trim().length === 0) {
-        throw new RequestValidationError(`${field} must be a string.`);
+        throw new RequestValidationError(`${field} 必须是字符串。`);
     }
     if (model !== 'gpt-image-2' && !isOneOf(value, VALID_LEGACY_SIZE_VALUES)) {
-        throw new RequestValidationError(`${field} is not valid for ${model}.`);
+        throw new RequestValidationError(`${field} 对 ${model} 无效。`);
     }
     if (model === 'gpt-image-2' && value !== 'auto' && !/^\d+x\d+$/.test(value)) {
-        throw new RequestValidationError(`${field} must be auto or a WxH value.`);
+        throw new RequestValidationError(`${field} 必须是 auto 或 WxH 格式的尺寸值。`);
     }
     return value;
 }
@@ -150,14 +150,14 @@ export function readOutputCompression(formData: FormData, outputFormat: ValidOut
     const value = formData.get('output_compression');
     if (value === null) return undefined;
     if (outputFormat === 'png') {
-        throw new RequestValidationError('output_compression is only valid for jpeg or webp output.');
+        throw new RequestValidationError('output_compression 仅适用于 jpeg 或 webp 输出。');
     }
     if (typeof value !== 'string' || !/^\d+$/.test(value)) {
-        throw new RequestValidationError('output_compression must be an integer.');
+        throw new RequestValidationError('output_compression 必须是整数。');
     }
     const compression = Number(value);
     if (!Number.isInteger(compression) || compression < 0 || compression > 100) {
-        throw new RequestValidationError('output_compression must be between 0 and 100.');
+        throw new RequestValidationError('output_compression 必须在 0 到 100 之间。');
     }
     return compression;
 }
@@ -166,7 +166,7 @@ export function readStorageMode(env: NodeJS.ProcessEnv): StorageMode {
     const explicitMode = env.NEXT_PUBLIC_IMAGE_STORAGE_MODE;
     if (explicitMode === 'fs' || explicitMode === 'indexeddb') return explicitMode;
     if (explicitMode) {
-        throw new RequestValidationError('NEXT_PUBLIC_IMAGE_STORAGE_MODE must be fs or indexeddb.', 500);
+        throw new RequestValidationError('NEXT_PUBLIC_IMAGE_STORAGE_MODE 必须是 fs 或 indexeddb。', 500);
     }
     return env.VERCEL === '1' ? 'indexeddb' : 'fs';
 }
@@ -196,7 +196,7 @@ export function isValidImageFilename(filename: string): boolean {
 
 export function safeImagePath(baseDir: string, filename: string): string {
     if (!isValidImageFilename(filename)) {
-        throw new RequestValidationError('Invalid filename');
+        throw new RequestValidationError('文件名无效');
     }
     return `${baseDir}/${filename}`;
 }
@@ -209,10 +209,10 @@ export function readImageFiles(formData: FormData): File[] {
         }
     }
     if (imageFiles.length === 0) {
-        throw new RequestValidationError('No image file provided for editing.');
+        throw new RequestValidationError('编辑时必须提供图片文件。');
     }
     if (imageFiles.length > MAX_IMAGE_COUNT) {
-        throw new RequestValidationError(`No more than ${MAX_IMAGE_COUNT} images can be edited at once.`);
+        throw new RequestValidationError(`一次最多只能编辑 ${MAX_IMAGE_COUNT} 张图片。`);
     }
     imageFiles.forEach((file) => validateUploadFile(file));
     return imageFiles;
@@ -222,7 +222,7 @@ export function readMaskFile(formData: FormData): File | undefined {
     const value = formData.get('mask');
     if (value === null) return undefined;
     if (!(value instanceof File)) {
-        throw new RequestValidationError('mask must be a PNG file.');
+        throw new RequestValidationError('mask 必须是 PNG 文件。');
     }
     validateUploadFile(value, { requirePng: true, fieldName: 'mask' });
     return value;
@@ -231,16 +231,16 @@ export function readMaskFile(formData: FormData): File | undefined {
 function validateUploadFile(file: File, options: { requirePng?: boolean; fieldName?: string } = {}): void {
     const fieldName = options.fieldName || file.name || 'image';
     if (file.size <= 0) {
-        throw new RequestValidationError(`${fieldName} is empty.`);
+        throw new RequestValidationError(`${fieldName} 为空。`);
     }
     if (file.size > MAX_UPLOAD_BYTES) {
-        throw new RequestValidationError(`${fieldName} exceeds the ${MAX_UPLOAD_BYTES / 1024 / 1024} MB limit.`);
+        throw new RequestValidationError(`${fieldName} 超过 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB 限制。`);
     }
     if (!file.type.startsWith('image/')) {
-        throw new RequestValidationError(`${fieldName} must be an image file.`);
+        throw new RequestValidationError(`${fieldName} 必须是图片文件。`);
     }
     if (options.requirePng && file.type !== 'image/png') {
-        throw new RequestValidationError(`${fieldName} must be a PNG file.`);
+        throw new RequestValidationError(`${fieldName} 必须是 PNG 文件。`);
     }
 }
 

@@ -230,6 +230,151 @@ describe('applyStreamingClientEvent', () => {
         ]);
         assert.deepEqual(withDone.usage, { output_tokens: 1 });
     });
+
+    it('attaches request ids from streaming events to completed images', () => {
+        const withCompleted = applyStreamingClientEvent(
+            { completedImages: [] },
+            {
+                type: 'completed',
+                filename: 'image-1.png',
+                b64_json: 'base64',
+                output_format: 'png',
+                path: '/api/image/image-1.png',
+                client_request_id: 'web-request-1'
+            }
+        );
+
+        assert.deepEqual(withCompleted.completedImages, [
+            {
+                filename: 'image-1.png',
+                b64_json: 'base64',
+                output_format: 'png',
+                path: '/api/image/image-1.png',
+                clientRequestId: 'web-request-1'
+            }
+        ]);
+    });
+
+    it('accepts camelCase aliases from streaming events', () => {
+        const withCompleted = applyStreamingClientEvent(
+            { completedImages: [] },
+            {
+                type: 'completed',
+                filename: 'image-1.png',
+                b64_json: 'base64',
+                outputFormat: 'png',
+                path: '/api/image/image-1.png',
+                clientRequestId: 'web-request-camel'
+            }
+        );
+
+        const withDone = applyStreamingClientEvent(withCompleted, {
+            type: 'done',
+            clientRequestId: 'web-request-camel',
+            actualCost: {
+                currency: 'usd-equivalent',
+                confidence: 'high',
+                source: 'new-api-log-token',
+                actualAmount: 0.0075,
+                upstreamProvider: 'new-api'
+            }
+        });
+
+        assert.deepEqual(withDone.completedImages, [
+            {
+                filename: 'image-1.png',
+                b64_json: 'base64',
+                output_format: 'png',
+                path: '/api/image/image-1.png',
+                clientRequestId: 'web-request-camel'
+            }
+        ]);
+        assert.equal(withDone.actualCost?.actualAmount, 0.0075);
+    });
+
+    it('fills missing image request ids from the final done event', () => {
+        const withDone = applyStreamingClientEvent(
+            {
+                completedImages: [
+                    {
+                        filename: 'image-1.png',
+                        b64_json: 'base64',
+                        output_format: 'png',
+                        path: '/api/image/image-1.png'
+                    }
+                ]
+            },
+            {
+                type: 'done',
+                usage: { output_tokens: 1 },
+                client_request_id: 'web-request-2'
+            }
+        );
+
+        assert.deepEqual(withDone.completedImages, [
+            {
+                filename: 'image-1.png',
+                b64_json: 'base64',
+                output_format: 'png',
+                path: '/api/image/image-1.png',
+                clientRequestId: 'web-request-2'
+            }
+        ]);
+    });
+
+    it('keeps actual cost details from the final done event', () => {
+        const withDone = applyStreamingClientEvent(
+            { completedImages: [] },
+            {
+                type: 'done',
+                images: [],
+                actual_cost: {
+                    currency: 'usd-equivalent',
+                    confidence: 'high',
+                    source: 'new-api-log-token',
+                    actualAmount: 0.0075,
+                    upstreamProvider: 'new-api'
+                }
+            }
+        );
+
+        assert.deepEqual(withDone.actualCost, {
+            currency: 'usd-equivalent',
+            confidence: 'high',
+            source: 'new-api-log-token',
+            actualAmount: 0.0075,
+            upstreamProvider: 'new-api'
+        });
+    });
+
+    it('rejects completed events that omit output format', () => {
+        const initial = {
+            completedImages: []
+        };
+
+        assert.throws(
+            () =>
+                applyStreamingClientEvent(initial, {
+                    type: 'completed',
+                    filename: 'image-1.png'
+                }),
+            /output_format/
+        );
+    });
+
+    it('rejects malformed actual cost details from the final done event', () => {
+        assert.throws(
+            () =>
+                applyStreamingClientEvent(
+                    { completedImages: [] },
+                    {
+                        type: 'done',
+                        actual_cost: { source: 'new-api-log-token' } as never
+                    }
+                ),
+            /actual_cost/
+        );
+    });
 });
 
 describe('buildStreamingBatchJobs', () => {

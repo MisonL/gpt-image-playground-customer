@@ -15,7 +15,7 @@ GPT Image Playground 是一个用于本地部署的 `gpt-image-2` 图片服务�
 - 使用 OpenAI 兼容接口时，快速确认 API URL、模型、尺寸、质量、输出格式和错误响应是否正确。
 
 <p align="center">
-  <img src="./readme-images/interface.jpg" alt="GPT Image Playground interface" width="900"/>
+  <img src="./readme-images/interface.jpg" alt="GPT Image Playground 界面" width="900"/>
 </p>
 
 > **4K 出图提示**：如果遇到 4K 分辨率出图失败问题（状态码 `524`），请使用 [superapi 站](https://superapi.buzz/register?aff=W0rz) 提供的 `gpt-image-2` 渠道。该渠道已适配支持 4K 流式出图，价格便宜（`0.0075` 元/张）。
@@ -56,7 +56,7 @@ OPENAI_MAX_STREAMS_PER_CREDENTIAL=1
 2. 启动服务：
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --remove-orphans
 ```
 
 3. 打开：
@@ -120,21 +120,28 @@ http://localhost:4783
 
 - `gpt-image-2` 图片生成：根据文本提示词生成一张或多张图片。
 - `gpt-image-2` 图片编辑：上传源图后用提示词修改图片，可选遮罩。
+- Agent API：为 Codex、Claude Code、Gemini 等 Agent 提供强契约接口、幂等重试、结构化错误和产物追踪。
 - 内置遮罩工具：直接在图片上绘制遮罩，也可以上传 PNG 遮罩。
 - 完整参数控制：模型、尺寸、质量、输出格式、压缩、背景、审核级别、生成数量。
 - 4K 与自定义尺寸：支持 2K/4K 预设和手动输入宽高，并在前端校验尺寸约束。
-- 流式输出：支持生成和编辑过程中的 partial image 预览。
-- 历史记录：保留提示词、参数、图片、耗时、token usage 和估算费用。
+- 流式输出：默认开启，支持生成和编辑过程中的局部图片预览。
+- 历史记录：保留提示词、参数、图片、耗时、token 使用量和估算费用。
 - 发送到编辑：从生成结果或历史记录直接进入编辑模式。
 - 双语和主题：支持中文、英文、亮色、暗色。
 - 两种图片存储模式：服务端文件系统或浏览器 IndexedDB。
+
+## 默认行为
+
+- 图片生成默认使用 `quality=high`。如需降低成本或让上游自行选择质量，可在页面或 Agent 请求中显式改为 `auto`、`medium` 或 `low`。
+- 页面默认开启流式预览；并发流式批处理仍默认关闭，只有设置 `ENABLE_STREAMING_BATCH=true` 后才会把 `n>1` 拆成多个流式任务。
+- 流式请求失败时会显示原始错误状态和排查建议，不会自动改用非流式请求，以避免隐藏网关、限流或上游故障。
 
 ## 编辑与遮罩
 
 编辑模式支持最多 10 张源图。遮罩必须与源图尺寸一致，绘制或上传后会随编辑请求一起提交。
 
 <p align="center">
-  <img src="./readme-images/mask-creation.jpg" alt="Mask creation" width="460"/>
+  <img src="./readme-images/mask-creation.jpg" alt="遮罩创建" width="460"/>
 </p>
 
 ## 历史与费用
@@ -142,11 +149,11 @@ http://localhost:4783
 历史面板会记录每次生成或编辑的参数和结果。返回 usage 的接口会显示 token 明细和估算费用，方便对比不同模型和参数的成本。
 
 <p align="center">
-  <img src="./readme-images/history.jpg" alt="History panel" width="900"/>
+  <img src="./readme-images/history.jpg" alt="历史面板" width="900"/>
 </p>
 
 <p align="center">
-  <img src="./readme-images/cost-breakdown.jpg" alt="Cost breakdown" width="460"/>
+  <img src="./readme-images/cost-breakdown.jpg" alt="费用明细" width="460"/>
 </p>
 
 ## API 设置
@@ -167,6 +174,95 @@ https://your-compatible-api.example.com/v1
 
 不要填写管理后台首页或网页地址。如果接口返回 HTML，应用会提示 API URL 不是 OpenAI Images JSON 响应。
 
+## Agent API
+
+Agent API 面向自动化调用，不要求 Agent 模拟网页表单。接口统一使用结构化错误、`Idempotency-Key` 和产物 ID。
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/agent/capabilities` | 查询模型、限制、认证方式、状态后端和端点列表，不公开服务端本地 SQLite 路径。 |
+| `GET /api/agent/openapi.json` | 获取机器可读 OpenAPI 描述。 |
+| `POST /api/agent/images/generate` | JSON 文生图，默认只返回文件路径和元数据。 |
+| `POST /api/agent/images/edit` | multipart 图片编辑，支持源图和 PNG mask。 |
+| `GET /api/agent/artifacts/{id}` | 查询产物元数据。 |
+| `GET /api/agent/artifacts/{id}/content` | 下载产物图片内容。 |
+| `DELETE /api/agent/artifacts/{id}` | 删除产物和元数据。 |
+
+Agent 请求必须带 `Idempotency-Key`，避免超时重试造成重复出图和重复扣费。若设置 `AGENT_API_TOKEN`，请求需携带：
+
+```text
+Authorization: Bearer your-agent-token
+```
+
+生成示例：
+
+```bash
+curl -s http://localhost:4783/api/agent/images/generate \
+  -H "Authorization: Bearer your-agent-token" \
+  -H "Idempotency-Key: demo-$(date +%s)" \
+  -H "Content-Type: application/json" \
+  --data '{"prompt":"a product photo of a ceramic mug","model":"gpt-image-2","response_mode":"path"}'
+```
+
+成功响应会包含：
+
+```json
+{
+  "request_id": "uuid",
+  "idempotency_key": "demo-key",
+  "cached": false,
+  "images": [
+    {
+      "id": "artifact-uuid",
+      "filename": "1715400000000-abcdef1234567890-0.png",
+      "content_url": "/api/agent/artifacts/artifact-uuid/content",
+      "metadata_url": "/api/agent/artifacts/artifact-uuid",
+      "output_format": "png",
+      "mime_type": "image/png",
+      "size_bytes": 12345,
+      "width": 2048,
+      "height": 2048
+    }
+  ],
+  "created_at": "2026-05-12T00:00:00.000Z"
+}
+```
+
+未显式传 `quality` 时，Agent 生成接口默认使用 `high`。需要使用其他质量时，在 JSON 请求中传入 `"quality":"auto"`、`"medium"` 或 `"low"`。
+
+Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case 字段，例如 `outputFormat`/`output_format`、`clientRequestId`/`client_request_id`、`actualCost`/`actual_cost`。新客户端优先读取 camelCase，旧字段继续保留用于兼容。最终事件中的实际扣费字段含义如下：
+
+| 字段 | 说明 |
+| --- | --- |
+| `estimatedUsd` | 本地按 token 价格估算的美元成本。 |
+| `actualAmount` | 上游返回的实际扣费金额，单位由 `currency` 定义。 |
+| `actualQuota` | 上游以 quota 计费时的原始扣减值。 |
+| `currency` | `usd-equivalent` 或 `quota-unit`。 |
+| `source` | 成本来源，如估算、New API 日志匹配、结算中或不可用。 |
+| `confidence` | 成本可信度，取值为 `exact`、`high`、`low` 或 `none`。 |
+| `upstreamProvider` | 提供扣费或日志数据的上游。 |
+| `matchedLogId` | 匹配到的上游日志 ID。 |
+| `matchedRequestId` | 用于匹配或关联的上游请求 ID。 |
+| `reason` | 结算中、不可用或低可信度时的说明。 |
+
+错误响应固定为：
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "请求校验失败。",
+    "retryable": false,
+    "details": {
+      "fields": {
+        "n": "必须是 1 到 10 之间的整数"
+      }
+    },
+    "request_id": "uuid"
+  }
+}
+```
+
 ## 环境变量
 
 | 变量 | 是否必填 | 默认值 | 说明 |
@@ -182,6 +278,17 @@ https://your-compatible-api.example.com/v1
 | `OPENAI_MAX_STREAMS_PER_CREDENTIAL` | 否 | `1` | 每个服务端 credential 允许同时执行的流式任务数。 |
 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 否 | `60000` | 服务端 credential 或 channel 失败后的默认冷却时间。 |
 | `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问密码。 |
+| `AGENT_API_TOKEN` | 否 | 无 | 设置后，`/api/agent/*` 需要 Bearer token。 |
+| `AGENT_STATE_BACKEND` | 否 | `sqlite` | Agent 状态后端，可选 `sqlite` 或 `postgres`。 |
+| `AGENT_SQLITE_PATH` | 否 | `generated-images/.agent-state/agent.sqlite` | SQLite 状态库路径。 |
+| `AGENT_DATABASE_URL` | PostgreSQL 模式可选 | 无 | PostgreSQL 连接串；也可改用下面的拆分字段。 |
+| `AGENT_DB_HOST` / `AGENT_DB_PORT` / `AGENT_DB_NAME` / `AGENT_DB_USER` | PostgreSQL 模式可选 | `localhost` / `5432` / `gpt_image_playground` / `gpt_image` | 未设置 `AGENT_DATABASE_URL` 时用于组装 PostgreSQL 连接串。 |
+| `AGENT_DB_PASSWORD` / `AGENT_DB_PASSWORD_FILE` | PostgreSQL 模式必填其一 | 无 | PostgreSQL 密码或 Docker secret file 路径。 |
+| `GPT_IMAGE_POSTGRES_PASSWORD` | Docker PostgreSQL 模式必填 | 无 | `docker-compose.postgres.yml` 中 PostgreSQL 容器密码，通过 Docker secret file 注入，不提供默认值。 |
+| `AGENT_REQUEST_LEASE_MS` | 否 | `600000` | Agent 请求运行锁租约时间。 |
+| `AGENT_REQUEST_TTL_SECONDS` | 否 | `86400` | 幂等请求记录保留秒数。 |
+| `AGENT_RECOVERY_INTERVAL_MS` | 否 | `30000` | Agent 请求触发轻量 recovery 的最小间隔。 |
+| `AGENT_PUBLIC_BASE_URL` | 否 | `/` | OpenAPI `servers[0].url`，供外部 Agent 生成客户端时使用。 |
 | `APP_LOG_LEVEL` | 否 | 生产环境 `warn`，其他环境 `info` | 服务端日志等级，可选 `debug`、`info`、`warn`、`error`。 |
 | `NEXT_PUBLIC_IMAGE_STORAGE_MODE` | 否 | `fs` | 可选 `fs` 或 `indexeddb`。 |
 
@@ -263,12 +370,41 @@ Docker 正式服务中，容器内路径是：
 /api/image/{filename}
 ```
 
+Agent API 读取图片时走鉴权接口：
+
+```text
+/api/agent/artifacts/{id}/content
+```
+
+Agent 状态库只保存请求、幂等和产物元数据，不保存图片二进制。备份时需要同时备份状态库和 `generated-images/`。
+
 如果部署到只读或临时文件系统，可以把 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 设置为 `indexeddb`。这时图片会保存在浏览器 IndexedDB 中，服务端不落盘。
 
 ## Docker 运行
 
+SQLite 单实例默认部署：
+
 ```bash
-docker compose up -d --build
+docker compose up -d --build --remove-orphans
+```
+
+PostgreSQL 高并发部署：
+
+```bash
+GPT_IMAGE_POSTGRES_PASSWORD='<database-password>' \
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+```
+
+SQLite 与 PostgreSQL 模式共享同一个 Compose project、应用容器名和图片目录。切回 SQLite 模式时使用 `--remove-orphans` 会清理 PostgreSQL service，避免保留不再属于当前配置的容器。
+
+`GPT_IMAGE_POSTGRES_PASSWORD` 只在 PostgreSQL volume 首次初始化时生效。已有 `postgres-data` volume 的部署如果要更换密码，需要先在数据库内修改用户密码，或备份后重建 volume；仅修改环境变量不会自动轮换现有数据库密码。
+
+SQLite 适合单实例本地服务。多实例或长期高并发 Agent 服务应使用 PostgreSQL，不要让多个容器共享同一个 SQLite 文件作为主状态库。
+
+PostgreSQL live 并发测试可用以下命令单独执行。未提供 `AGENT_POSTGRES_TEST_DATABASE_URL` 时，脚本会自动启动临时 PostgreSQL 容器并在结束后清理。
+
+```bash
+npm run test:postgres
 ```
 
 Docker 容器内外端口统一使用 `4783`。
@@ -339,6 +475,6 @@ docker logs -f gpt-image-playground-customer
 
 版本变更和未发布改动记录在 [CHANGELOG.md](./CHANGELOG.md)。
 
-## License
+## 许可证
 
 MIT

@@ -13,22 +13,22 @@ export type CostDetails = {
     image_output_tokens: number;
 };
 
-// Pricing for gpt-image-1
+// gpt-image-1 价格。
 const GPT_IMAGE_1_TEXT_INPUT_COST_PER_TOKEN = 0.000005; // $5.00/1M
 const GPT_IMAGE_1_IMAGE_INPUT_COST_PER_TOKEN = 0.00001; // $10.00/1M
 const GPT_IMAGE_1_IMAGE_OUTPUT_COST_PER_TOKEN = 0.00004; // $40.00/1M
 
-// Pricing for gpt-image-1-mini
+// gpt-image-1-mini 价格。
 const GPT_IMAGE_1_MINI_TEXT_INPUT_COST_PER_TOKEN = 0.000002; // $2.00/1M
 const GPT_IMAGE_1_MINI_IMAGE_INPUT_COST_PER_TOKEN = 0.0000025; // $2.50/1M
 const GPT_IMAGE_1_MINI_IMAGE_OUTPUT_COST_PER_TOKEN = 0.000008; // $8.00/1M
 
-// Pricing for gpt-image-1.5
+// gpt-image-1.5 价格。
 const GPT_IMAGE_1_5_TEXT_INPUT_COST_PER_TOKEN = 0.000005; // $5.00/1M
 const GPT_IMAGE_1_5_IMAGE_INPUT_COST_PER_TOKEN = 0.000008; // $8.00/1M
 const GPT_IMAGE_1_5_IMAGE_OUTPUT_COST_PER_TOKEN = 0.000032; // $32.00/1M
 
-// Pricing for gpt-image-2
+// gpt-image-2 价格。
 const GPT_IMAGE_2_TEXT_INPUT_COST_PER_TOKEN = 0.000005; // $5.00/1M
 const GPT_IMAGE_2_IMAGE_INPUT_COST_PER_TOKEN = 0.000008; // $8.00/1M
 const GPT_IMAGE_2_IMAGE_OUTPUT_COST_PER_TOKEN = 0.00003; // $30.00/1M
@@ -86,17 +86,17 @@ export function getModelRates(model: GptImageModel): ModelRates {
 }
 
 /**
- * Estimates the cost of a GPT image model API call based on token usage.
- * @param usage - The usage object from the OpenAI API response.
- * @param model - The model used.
- * @returns CostDetails object or null if usage data is invalid.
+ * 根据 token 用量估算 GPT 图片模型 API 调用成本。
+ * @param usage OpenAI API 响应中的 usage 对象。
+ * @param model 使用的模型。
+ * @returns CostDetails 对象；usage 数据无效时返回 null。
  */
 export function calculateApiCost(
     usage: ApiUsage | undefined | null,
     model: GptImageModel = 'gpt-image-2'
 ): CostDetails | null {
     if (!usage || !usage.input_tokens_details || usage.output_tokens === undefined || usage.output_tokens === null) {
-        console.warn('Invalid or missing usage data for cost calculation:', usage);
+        console.warn('费用计算缺少有效 usage 数据：', usage);
         return null;
     }
 
@@ -104,13 +104,13 @@ export function calculateApiCost(
     const imgInT = usage.input_tokens_details.image_tokens ?? 0;
     const imgOutT = usage.output_tokens ?? 0;
 
-    // Basic validation for token types
+    // 校验 token 类型。
     if (typeof textInT !== 'number' || typeof imgInT !== 'number' || typeof imgOutT !== 'number') {
-        console.error('Invalid token types in usage data:', usage);
+        console.error('usage 数据中的 token 类型无效：', usage);
         return null;
     }
 
-    // Select pricing based on model
+    // 按模型选择价格。
     let textInputCost: number;
     let imageInputCost: number;
     let imageOutputCost: number;
@@ -128,7 +128,7 @@ export function calculateApiCost(
         imageInputCost = GPT_IMAGE_2_IMAGE_INPUT_COST_PER_TOKEN;
         imageOutputCost = GPT_IMAGE_2_IMAGE_OUTPUT_COST_PER_TOKEN;
     } else {
-        // Default to gpt-image-1
+        // 默认按 gpt-image-1 计价。
         textInputCost = GPT_IMAGE_1_TEXT_INPUT_COST_PER_TOKEN;
         imageInputCost = GPT_IMAGE_1_IMAGE_INPUT_COST_PER_TOKEN;
         imageOutputCost = GPT_IMAGE_1_IMAGE_OUTPUT_COST_PER_TOKEN;
@@ -136,7 +136,7 @@ export function calculateApiCost(
 
     const costUSD = textInT * textInputCost + imgInT * imageInputCost + imgOutT * imageOutputCost;
 
-    // Round to 4 decimal places
+    // 保留 4 位小数。
     const costRounded = Math.round(costUSD * 10000) / 10000;
 
     return {
