@@ -388,6 +388,12 @@ SQLite 单实例默认部署：
 docker compose up -d --build --remove-orphans
 ```
 
+内存临时演示部署：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.memory.yml up -d --build --remove-orphans
+```
+
 PostgreSQL 高并发部署：
 
 ```bash
@@ -395,7 +401,15 @@ GPT_IMAGE_POSTGRES_PASSWORD='<database-password>' \
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
 ```
 
-SQLite 与 PostgreSQL 模式共享同一个 Compose project、应用容器名和图片目录。切回 SQLite 模式时使用 `--remove-orphans` 会清理 PostgreSQL service，避免保留不再属于当前配置的容器。
+三种 Docker 模板的状态后端如下：
+
+| 文件 | 状态后端 | 适用场景 |
+| --- | --- | --- |
+| `docker-compose.yml` | `sqlite` | 本地单实例、需要保留 Agent 幂等和分享元数据。 |
+| `docker-compose.yml` + `docker-compose.memory.yml` | `memory` | Hugging Face Space 免费层、公开演示、重启可丢状态的临时服务。 |
+| `docker-compose.yml` + `docker-compose.postgres.yml` | `postgres` | 高并发、多实例或需要集中状态库的部署。 |
+
+三种模式共享同一个 Compose project、应用容器名和图片目录。切换模式时建议使用 `--remove-orphans`，避免保留不再属于当前配置的容器。
 
 `GPT_IMAGE_POSTGRES_PASSWORD` 只在 PostgreSQL volume 首次初始化时生效。已有 `postgres-data` volume 的部署如果要更换密码，需要先在数据库内修改用户密码，或备份后重建 volume；仅修改环境变量不会自动轮换现有数据库密码。
 
@@ -407,6 +421,8 @@ Hugging Face Space 免费层或其他临时容器演示可以使用纯内存状�
 AGENT_STATE_BACKEND=memory
 NEXT_PUBLIC_IMAGE_STORAGE_MODE=fs
 ```
+
+本仓库也提供 `docker-compose.memory.yml` 作为本地模拟模板；Hugging Face Docker Space 通常直接通过 Space 环境变量设置 `AGENT_STATE_BACKEND=memory`，不需要提交 `.env.local`。
 
 `memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。图片二进制仍按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存，默认 `fs` 会写入当前容器文件系统。
 
@@ -523,6 +539,7 @@ docker run -d \
   -e OPENAI_API_KEY \
   -e OPENAI_API_BASE_URL \
   -e APP_PASSWORD \
+  -e AGENT_STATE_BACKEND="sqlite" \
   -e NEXT_PUBLIC_IMAGE_STORAGE_MODE="fs" \
   -v "$(pwd)/generated-images:/app/generated-images" \
   kwokyde/gpt-image-playground:latest
@@ -538,6 +555,7 @@ docker run -d `
   -e OPENAI_API_KEY `
   -e OPENAI_API_BASE_URL `
   -e APP_PASSWORD `
+  -e AGENT_STATE_BACKEND="sqlite" `
   -e NEXT_PUBLIC_IMAGE_STORAGE_MODE="fs" `
   -v "${PWD}\generated-images:/app/generated-images" `
   kwokyde/gpt-image-playground:latest
