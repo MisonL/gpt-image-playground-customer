@@ -28,7 +28,6 @@ function isAccessBlocked(token: string, now: number): boolean {
 
 function recordAccessFailure(token: string, now: number) {
     pruneExpiredAccessFailures(now);
-    trimAccessFailures();
     const current = accessFailures.get(token);
     const state =
         current && now - current.firstFailedAt <= ACCESS_FAILURE_WINDOW_MS ? current : { count: 0, firstFailedAt: now };
@@ -36,7 +35,9 @@ function recordAccessFailure(token: string, now: number) {
     if (state.count >= MAX_ACCESS_FAILURES) {
         state.blockedUntil = now + ACCESS_FAILURE_WINDOW_MS;
     }
+    accessFailures.delete(token);
     accessFailures.set(token, state);
+    trimAccessFailures();
 }
 
 function clearAccessFailure(token: string) {
@@ -75,7 +76,7 @@ function pruneExpiredAccessFailures(now: number) {
 }
 
 function trimAccessFailures() {
-    while (accessFailures.size >= MAX_TRACKED_ACCESS_FAILURE_TOKENS) {
+    while (accessFailures.size > MAX_TRACKED_ACCESS_FAILURE_TOKENS) {
         const oldestToken = accessFailures.keys().next().value;
         if (!oldestToken) return;
         accessFailures.delete(oldestToken);

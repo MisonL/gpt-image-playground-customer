@@ -31,11 +31,21 @@ describe('verifyPasswordHash', () => {
 });
 
 describe('verifyAccessToken', () => {
-    it('accepts only the access token derived from the configured password', () => {
-        const accessToken = createAccessToken('test-fixture-access-code');
+    it('accepts only a fresh access token signed with the configured password', () => {
+        const issuedAtMs = 1_715_400_000_000;
+        const accessToken = createAccessToken('test-fixture-access-code', issuedAtMs);
 
-        assert.equal(verifyAccessToken(accessToken, 'test-fixture-access-code'), true);
-        assert.equal(verifyAccessToken(accessToken, 'different-test-fixture-access-code'), false);
+        assert.equal(verifyAccessToken(accessToken, 'test-fixture-access-code', issuedAtMs), true);
+        assert.equal(verifyAccessToken(accessToken, 'different-test-fixture-access-code', issuedAtMs), false);
+    });
+
+    it('rejects expired or future-dated access tokens', () => {
+        const issuedAtMs = 1_715_400_000_000;
+        const accessToken = createAccessToken('test-fixture-access-code', issuedAtMs);
+
+        assert.equal(verifyAccessToken(accessToken, 'test-fixture-access-code', issuedAtMs + 24 * 60 * 60 * 1000), true);
+        assert.equal(verifyAccessToken(accessToken, 'test-fixture-access-code', issuedAtMs + 24 * 60 * 60 * 1000 + 1), false);
+        assert.equal(verifyAccessToken(accessToken, 'test-fixture-access-code', issuedAtMs - 60_001), false);
     });
 
     it('allows access when no server password is configured', () => {
@@ -45,6 +55,7 @@ describe('verifyAccessToken', () => {
     it('rejects missing or malformed tokens when a server password is configured', () => {
         assert.equal(verifyAccessToken(undefined, 'test-fixture-access-code'), false);
         assert.equal(verifyAccessToken('not-a-hex-digest', 'test-fixture-access-code'), false);
+        assert.equal(verifyAccessToken('0'.repeat(64), 'test-fixture-access-code'), false);
     });
 });
 
@@ -63,7 +74,7 @@ describe('buildAccessCookie', () => {
         const cookie = buildAccessCookie('customer-password', new Headers({ 'x-forwarded-proto': 'https' }));
 
         assert.equal(cookie.name, 'gptImageAccess');
-        assert.equal(cookie.value, createAccessToken('customer-password'));
+        assert.equal(verifyAccessToken(cookie.value, 'customer-password'), true);
         assert.equal(cookie.options.path, '/');
         assert.equal(cookie.options.httpOnly, true);
         assert.equal(cookie.options.secure, true);
@@ -76,7 +87,7 @@ describe('serializeAccessCookie', () => {
 
         assert.equal(
             serializeAccessCookie(cookie),
-            `gptImageAccess=${createAccessToken('customer-password')}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure`
+            `gptImageAccess=${cookie.value}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure`
         );
     });
 });

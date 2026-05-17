@@ -5,9 +5,12 @@ import type { ValidOutputFormat } from './image-request-utils';
 export type FilenameClock = () => number;
 
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/i;
+const ACCESS_TOKEN_PATTERN = /^v1\.(\d{13})\.([a-f0-9]{64})$/i;
 const DEFAULT_OUTPUT_DIR = ['generated', 'images'].join('-');
 const SAFE_OUTPUT_DIR_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const ONE_DAY_SECONDS = 24 * 60 * 60;
+const ONE_DAY_MS = ONE_DAY_SECONDS * 1000;
+const ACCESS_TOKEN_CLOCK_SKEW_MS = 60 * 1000;
 
 export function readOutputDirEnv(env: Record<string, string | undefined>, fieldName = 'IMAGE_OUTPUT_DIR'): string {
     const value = env[fieldName]?.trim();
@@ -44,21 +47,36 @@ export function verifyPasswordHash(clientPasswordHash: string, serverPassword: s
     return clientBuffer.length === serverBuffer.length && crypto.timingSafeEqual(clientBuffer, serverBuffer);
 }
 
-export function createAccessToken(serverPassword: string): string {
-    return sha256(`gpt-image-access:${serverPassword}`);
+function signAccessToken(serverPassword: string, issuedAtMs: number): string {
+    return crypto.createHmac('sha256', serverPassword).update(`gpt-image-access:${issuedAtMs}`).digest('hex');
 }
 
-export function verifyAccessToken(clientAccessToken: string | undefined, serverPassword: string | undefined): boolean {
+export function createAccessToken(serverPassword: string, issuedAtMs = Date.now()): string {
+    return `v1.${issuedAtMs}.${signAccessToken(serverPassword, issuedAtMs)}`;
+}
+
+export function verifyAccessToken(
+    clientAccessToken: string | undefined,
+    serverPassword: string | undefined,
+    nowMs = Date.now()
+): boolean {
     if (!serverPassword) {
         return true;
     }
-    if (!clientAccessToken || !SHA256_HEX_PATTERN.test(clientAccessToken)) {
+    if (!clientAccessToken) {
         return false;
     }
 
-    const expectedAccessToken = createAccessToken(serverPassword);
-    const clientBuffer = Buffer.from(clientAccessToken, 'hex');
-    const expectedBuffer = Buffer.from(expectedAccessToken, 'hex');
+    const match = ACCESS_TOKEN_PATTERN.exec(clientAccessToken);
+    if (!match) return false;
+    const issuedAtMs = Number(match[1]);
+    if (!Number.isSafeInteger(issuedAtMs)) return false;
+    if (issuedAtMs > nowMs + ACCESS_TOKEN_CLOCK_SKEW_MS) return false;
+    if (nowMs - issuedAtMs > ONE_DAY_MS) return false;
+
+    const expectedSignature = signAccessToken(serverPassword, issuedAtMs);
+    const clientBuffer = Buffer.from(match[2], 'hex');
+    const expectedBuffer = Buffer.from(expectedSignature, 'hex');
     return clientBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(clientBuffer, expectedBuffer);
 }
 

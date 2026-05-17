@@ -405,7 +405,7 @@ export async function POST(request: NextRequest) {
                                         partialImageIndex: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
-                                    sse.send(partialEvent);
+                                    if (!sse.send(partialEvent)) return;
                                 } else if (event.type === 'image_generation.completed') {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
@@ -440,7 +440,7 @@ export async function POST(request: NextRequest) {
                                         client_request_id: clientRequestId,
                                         clientRequestId
                                     };
-                                    sse.send(completedEvent);
+                                    if (!sse.send(completedEvent)) return;
 
                                     imageIndex++;
 
@@ -470,7 +470,7 @@ export async function POST(request: NextRequest) {
                                 client_request_id: clientRequestId,
                                 clientRequestId
                             };
-                            sse.send(doneEvent);
+                            if (!sse.send(doneEvent)) return;
                             sse.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
@@ -481,7 +481,7 @@ export async function POST(request: NextRequest) {
                                 error: error instanceof Error ? error.message : '流式处理失败',
                                 ...(status ? { status } : {})
                             };
-                            sse.send(errorEvent);
+                            if (!sse.send(errorEvent)) return;
                             sse.close();
                         }
                     }
@@ -566,7 +566,7 @@ export async function POST(request: NextRequest) {
                                         partialImageIndex: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
-                                    sse.send(partialEvent);
+                                    if (!sse.send(partialEvent)) return;
                                 } else if (event.type === 'image_edit.completed') {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
@@ -601,7 +601,7 @@ export async function POST(request: NextRequest) {
                                         client_request_id: clientRequestId,
                                         clientRequestId
                                     };
-                                    sse.send(completedEvent);
+                                    if (!sse.send(completedEvent)) return;
 
                                     imageIndex++;
 
@@ -631,7 +631,7 @@ export async function POST(request: NextRequest) {
                                 client_request_id: clientRequestId,
                                 clientRequestId
                             };
-                            sse.send(doneEvent);
+                            if (!sse.send(doneEvent)) return;
                             sse.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
@@ -642,7 +642,7 @@ export async function POST(request: NextRequest) {
                                 error: error instanceof Error ? error.message : '流式处理失败',
                                 ...(status ? { status } : {})
                             };
-                            sse.send(errorEvent);
+                            if (!sse.send(errorEvent)) return;
                             sse.close();
                         }
                     }
