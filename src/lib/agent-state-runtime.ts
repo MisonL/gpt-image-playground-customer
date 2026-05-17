@@ -10,6 +10,7 @@ import { MemoryAgentStateStore } from './agent-state-memory';
 import { PostgresAgentStateStore } from './agent-state-postgres';
 import { SqliteAgentStateStore } from './agent-state-sqlite';
 import type { AgentStateStore } from './agent-state-store';
+import { purgeExpiredImageSharesForStore } from './share-store';
 
 type CachedStore = {
     backend: AgentStateBackend;
@@ -113,6 +114,7 @@ export async function recoverAgentStateOnStartup(env: Record<string, string | un
     await cachedStore?.initPromise;
     const recovered = await store.recoverExpiredRequests();
     await store.purgeExpiredRequests();
+    await purgeExpiredImageSharesForStore(store, new Date(), { purgeOrphanFiles: false });
     if (cachedStore) {
         cachedStore.lastRecoveryAtMs = Date.now();
     }
@@ -134,6 +136,7 @@ async function recoverAgentStateIfDue(store: AgentStateStore, env: Record<string
         try {
             await store.recoverExpiredRequests(now);
             await store.purgeExpiredRequests(now);
+            await purgeExpiredImageSharesForStore(store, now, { purgeOrphanFiles: false });
             if (cachedStore) {
                 cachedStore.lastRecoveryAtMs = nowMs;
             }

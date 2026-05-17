@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS state_schema_migrations (
     id TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
     applied_at TEXT NOT NULL
 );
 
@@ -56,6 +57,10 @@ CREATE TABLE IF NOT EXISTS image_shares (
     access_code_required INTEGER NOT NULL CHECK (access_code_required IN (0, 1)),
     expires_at TEXT,
     access_code_salt TEXT,
-    access_code_hash TEXT
+    access_code_hash TEXT,
+    CHECK (
+        (access_code_required = 0 AND access_code_salt IS NULL AND access_code_hash IS NULL)
+        OR (access_code_required = 1 AND access_code_salt IS NOT NULL AND access_code_hash IS NOT NULL)
+    )
 );
 CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);

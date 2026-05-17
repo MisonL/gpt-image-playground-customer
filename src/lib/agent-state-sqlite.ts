@@ -75,6 +75,11 @@ type SqliteShareRow = {
     access_code_hash: string | null;
 };
 
+type SqliteMigrationRow = {
+    id: string;
+    checksum?: string | null;
+};
+
 export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateStore {
     private db: Database.Database | undefined;
 
@@ -174,28 +179,67 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         const nowIso = isoDate(now);
         const lockedUntil = isoDate(addMilliseconds(now, input.leaseMs));
         const expiresAt = isoDate(addSeconds(now, input.ttlSeconds));
-        const existing = this.getRequestRow(input.idempotencyKey);
+        db.exec('BEGIN IMMEDIATE');
+        try {
+            const result = this.beginRequestInTransaction(input, now, nowIso, lockedUntil, expiresAt);
+            db.exec('COMMIT');
+            return result;
+        } catch (error) {
+            db.exec('ROLLBACK');
+            throw error;
+        }
+    }
 
+    private beginRequestInTransaction(
+        input: BeginAgentRequestInput,
+        now: Date,
+        nowIso: string,
+        lockedUntil: string,
+        expiresAt: string
+    ): BeginAgentRequestResult {
+        const existing = this.getRequestRow(input.idempotencyKey);
         if (!existing) {
             const requestId = createRequestId();
-            db.prepare(
-                `INSERT INTO agent_requests
-                    (request_id, idempotency_key, request_hash, mode, status, request_json, locked_until, created_at, updated_at, expires_at)
-                 VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`
-            ).run(
-                requestId,
-                input.idempotencyKey,
-                input.requestHash,
-                input.mode,
-                serializeJson(input.requestJson),
-                lockedUntil,
-                nowIso,
-                nowIso,
-                expiresAt
-            );
-            return { type: 'acquired', record: this.mapRequestRow(this.getRequestRow(input.idempotencyKey)!) };
+            const insertResult = this.requireDb()
+                .prepare(
+                    `INSERT OR IGNORE INTO agent_requests
+                        (request_id, idempotency_key, request_hash, mode, status, request_json, locked_until, created_at, updated_at, expires_at)
+                     VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`
+                )
+                .run(
+                    requestId,
+                    input.idempotencyKey,
+                    input.requestHash,
+                    input.mode,
+                    serializeJson(input.requestJson),
+                    lockedUntil,
+                    nowIso,
+                    nowIso,
+                    expiresAt
+                );
+            if (insertResult.changes > 0) {
+                const inserted = this.getRequestRow(input.idempotencyKey);
+                if (!inserted) {
+                    throw new Error('idempotency row disappeared during acquisition');
+                }
+                return { type: 'acquired', record: this.mapRequestRow(inserted) };
+            }
         }
+        const current = this.getRequestRow(input.idempotencyKey);
+        if (!current) {
+            throw new Error('idempotency row disappeared during acquisition');
+        }
+        return this.beginFromExistingRow(current, input, now, nowIso, lockedUntil, expiresAt);
+    }
 
+    private beginFromExistingRow(
+        existing: SqliteRequestRow,
+        input: BeginAgentRequestInput,
+        now: Date,
+        nowIso: string,
+        lockedUntil: string,
+        expiresAt: string
+    ): BeginAgentRequestResult {
         const record = this.mapRequestRow(existing);
         if (existing.request_hash !== input.requestHash) {
             return { type: 'conflict', record };
@@ -210,9 +254,11 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
             return { type: 'in_progress', record, retryAfterSeconds: computeRetryAfterSeconds(existing.locked_until, now) };
         }
 
-        db.prepare(
+        this.requireDb()
+            .prepare(
             "UPDATE agent_requests SET status = 'running', locked_until = ?, updated_at = ?, expires_at = ? WHERE idempotency_key = ?"
-        ).run(lockedUntil, nowIso, expiresAt, input.idempotencyKey);
+        )
+            .run(lockedUntil, nowIso, expiresAt, input.idempotencyKey);
         return { type: 'acquired', record: this.mapRequestRow(this.getRequestRow(input.idempotencyKey)!) };
     }
 
@@ -281,6 +327,25 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         return row ? this.mapShareRow(row) : undefined;
     }
 
+    async deleteExpiredImageShareRecords(nowIso: string): Promise<ImageShareRecord[]> {
+        const db = this.requireDb();
+        const rows = db
+            .prepare('SELECT * FROM image_shares WHERE expires_at IS NOT NULL AND expires_at < ? ORDER BY expires_at ASC, token ASC')
+            .all(nowIso) as SqliteShareRow[];
+        const transaction = db.transaction(() => {
+            for (const row of rows) {
+                db.prepare('DELETE FROM image_shares WHERE token = ?').run(row.token);
+            }
+        });
+        transaction();
+        return rows.map((row) => this.mapShareRow(row));
+    }
+
+    async listImageShareRecords(): Promise<ImageShareRecord[]> {
+        const rows = this.requireDb().prepare('SELECT * FROM image_shares ORDER BY created_at ASC, token ASC').all() as SqliteShareRow[];
+        return rows.map((row) => this.mapShareRow(row));
+    }
+
     private requireDb(): Database.Database {
         if (!this.db) {
             throw new Error('SQLite Agent 状态库尚未初始化。');
@@ -296,25 +361,13 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
 
     private insertArtifacts(artifacts: AgentArtifactRecord[]): void {
         artifacts.forEach((artifact) => {
+            this.assertArtifactCanBeInserted(artifact);
                 this.requireDb()
                     .prepare(
                         `INSERT INTO agent_artifacts
                         (id, request_id, filename, filepath, content_url, metadata_url, output_format, mime_type, size_bytes, width, height, model, prompt_hash, created_at)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                     ON CONFLICT(id) DO UPDATE SET
-                        request_id = excluded.request_id,
-                        filename = excluded.filename,
-                        filepath = excluded.filepath,
-                        content_url = excluded.content_url,
-                        metadata_url = excluded.metadata_url,
-                        output_format = excluded.output_format,
-                        mime_type = excluded.mime_type,
-                        size_bytes = excluded.size_bytes,
-                        width = excluded.width,
-                        height = excluded.height,
-                        model = excluded.model,
-                        prompt_hash = excluded.prompt_hash,
-                        created_at = excluded.created_at`
+                     ON CONFLICT(id) DO NOTHING`
                 )
                 .run(
                     artifact.id,
@@ -333,6 +386,15 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
                     artifact.createdAt
                 );
         });
+    }
+
+    private assertArtifactCanBeInserted(artifact: AgentArtifactRecord): void {
+        const existing = this.requireDb().prepare('SELECT * FROM agent_artifacts WHERE id = ?').get(artifact.id) as
+            | SqliteArtifactRow
+            | undefined;
+        if (existing && !sameArtifactRecord(this.mapArtifactRow(existing), artifact)) {
+            throw new Error('artifact metadata conflict');
+        }
     }
 
     private listArtifactsForRequestSync(requestId: string): AgentArtifactRecord[] {
@@ -430,6 +492,7 @@ type SqliteMigration = {
 const SQLITE_MIGRATION_TABLE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS state_schema_migrations (
     id TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
     applied_at TEXT NOT NULL
 );`;
 
@@ -494,7 +557,11 @@ CREATE TABLE IF NOT EXISTS image_shares (
     access_code_required INTEGER NOT NULL CHECK (access_code_required IN (0, 1)),
     expires_at TEXT,
     access_code_salt TEXT,
-    access_code_hash TEXT
+    access_code_hash TEXT,
+    CHECK (
+        (access_code_required = 0 AND access_code_salt IS NULL AND access_code_hash IS NULL)
+        OR (access_code_required = 1 AND access_code_salt IS NOT NULL AND access_code_hash IS NOT NULL)
+    )
 );
 CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
 `
@@ -502,27 +569,55 @@ CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_a
 ];
 
 function runSqliteMigrations(db: Database.Database): void {
-    db.exec(SQLITE_MIGRATION_TABLE_SCHEMA);
-    const applied = new Set(
-        (
-            db.prepare('SELECT id FROM state_schema_migrations').all() as Array<{
-                id: string;
-            }>
-        ).map((row) => row.id)
-    );
-    const applyPending = db.transaction(() => {
+    db.exec('BEGIN EXCLUSIVE');
+    try {
+        db.exec(SQLITE_MIGRATION_TABLE_SCHEMA);
+        ensureSqliteMigrationChecksumColumn(db);
+        const appliedRows = db.prepare('SELECT id, checksum FROM state_schema_migrations').all() as SqliteMigrationRow[];
+        const applied = new Map(appliedRows.map((row) => [row.id, row.checksum ?? null]));
         for (const migration of SQLITE_MIGRATIONS) {
-            if (applied.has(migration.id)) continue;
+            const checksum = migrationChecksum(migration.sql);
+            if (applied.has(migration.id)) {
+                if (applied.get(migration.id) !== checksum) {
+                    throw new Error(`SQLite migration checksum mismatch: ${migration.id}`);
+                }
+                continue;
+            }
             db.exec(migration.sql);
-            db.prepare('INSERT INTO state_schema_migrations (id, applied_at) VALUES (?, ?)').run(
+            db.prepare('INSERT INTO state_schema_migrations (id, checksum, applied_at) VALUES (?, ?, ?)').run(
                 migration.id,
+                checksum,
                 isoDate(new Date())
             );
         }
-    });
-    applyPending();
+        db.exec('COMMIT');
+    } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+    }
 }
 
 export const SQLITE_SCHEMA = [SQLITE_MIGRATION_TABLE_SCHEMA, ...SQLITE_MIGRATIONS.map((migration) => migration.sql)]
     .map((sql) => sql.trim())
     .join('\n\n');
+
+function ensureSqliteMigrationChecksumColumn(db: Database.Database): void {
+    const columns = db.prepare('PRAGMA table_info(state_schema_migrations)').all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === 'checksum')) {
+        db.exec('ALTER TABLE state_schema_migrations ADD COLUMN checksum TEXT');
+    }
+    for (const migration of SQLITE_MIGRATIONS) {
+        db.prepare('UPDATE state_schema_migrations SET checksum = ? WHERE id = ? AND checksum IS NULL').run(
+            migrationChecksum(migration.sql),
+            migration.id
+        );
+    }
+}
+
+function migrationChecksum(sql: string): string {
+    return crypto.createHash('sha256').update(sql.trim()).digest('hex');
+}
+
+function sameArtifactRecord(left: AgentArtifactRecord, right: AgentArtifactRecord): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+}

@@ -376,7 +376,7 @@ Agent API 读取图片时走鉴权接口：
 /api/agent/artifacts/{id}/content
 ```
 
-状态库保存 Agent 请求、幂等、产物元数据和分享元数据，不保存图片二进制。备份时需要同时备份状态库和 `generated-images/`。
+状态库保存 Agent 请求、幂等、产物元数据和分享元数据，不保存图片二进制。备份时需要同时备份状态库和 `generated-images/`。PostgreSQL 只集中保存元数据；如果运行多个应用副本，所有副本还必须共享同一个 `generated-images/` 卷，或改造为外部对象存储，否则某个副本可能读不到另一个副本写入的图片文件。
 
 如果部署到只读或临时文件系统，可以把 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 设置为 `indexeddb`。这时图片会保存在浏览器 IndexedDB 中，服务端不落盘。
 
@@ -399,7 +399,7 @@ SQLite 与 PostgreSQL 模式共享同一个 Compose project、应用容器名和
 
 `GPT_IMAGE_POSTGRES_PASSWORD` 只在 PostgreSQL volume 首次初始化时生效。已有 `postgres-data` volume 的部署如果要更换密码，需要先在数据库内修改用户密码，或备份后重建 volume；仅修改环境变量不会自动轮换现有数据库密码。
 
-SQLite 适合单实例本地服务。多实例或长期高并发 Agent 服务应使用 PostgreSQL，不要让多个容器共享同一个 SQLite 文件作为主状态库。
+SQLite 适合单实例本地服务。多实例或长期高并发 Agent 服务应使用 PostgreSQL，不要让多个容器共享同一个 SQLite 文件作为主状态库。即使使用 PostgreSQL，多实例部署仍需要共享图片文件存储；仅共享数据库不足以保证 artifact 和分享内容可读。
 
 Hugging Face Space 免费层或其他临时容器演示可以使用纯内存状态后端：
 

@@ -36,6 +36,8 @@ export type ImageShareContent = {
 export type ImageShareStateStore = {
     createImageShareRecord(record: ImageShareRecord): Promise<void>;
     readImageShareRecord(token: string): Promise<ImageShareRecord | undefined>;
+    deleteExpiredImageShareRecords(nowIso: string): Promise<ImageShareRecord[]>;
+    listImageShareRecords(): Promise<ImageShareRecord[]>;
 };
 
 function shareDir(): string {
@@ -135,6 +137,25 @@ export async function readImageShareContent(record: ImageShareRecord): Promise<I
     return { buffer, mimeType: record.mimeType };
 }
 
+export async function purgeExpiredImageShares(now = new Date()): Promise<number> {
+    return purgeExpiredImageSharesForStore(await getImageShareStore(), now);
+}
+
+export async function purgeExpiredImageSharesForStore(
+    store: unknown,
+    now = new Date(),
+    options: { purgeOrphanFiles?: boolean } = {}
+): Promise<number> {
+    if (!isImageShareCleanupStore(store)) return 0;
+    await fs.mkdir(shareDir(), { recursive: true });
+    const expiredRecords = await store.deleteExpiredImageShareRecords(now.toISOString());
+    await Promise.allSettled(expiredRecords.map((record) => deleteFileIfExists(assertShareContentPathAllowed(record.contentFilename))));
+    if (options.purgeOrphanFiles ?? true) {
+        await purgeOrphanedShareFiles(await store.listImageShareRecords());
+    }
+    return expiredRecords.length;
+}
+
 export function verifyImageShareAccess(record: ImageShareRecord, accessCode?: string): boolean {
     const normalizedAccessCode = normalizeAccessCode(accessCode);
     if (!record.accessCodeHash || !record.accessCodeSalt) {
@@ -165,7 +186,37 @@ function isImageShareStateStore(value: unknown): value is ImageShareStateStore {
         value !== null &&
         'createImageShareRecord' in value &&
         'readImageShareRecord' in value &&
+        'deleteExpiredImageShareRecords' in value &&
+        'listImageShareRecords' in value &&
         typeof value.createImageShareRecord === 'function' &&
-        typeof value.readImageShareRecord === 'function'
+        typeof value.readImageShareRecord === 'function' &&
+        typeof value.deleteExpiredImageShareRecords === 'function' &&
+        typeof value.listImageShareRecords === 'function'
+    );
+}
+
+function isImageShareCleanupStore(
+    value: unknown
+): value is Pick<ImageShareStateStore, 'deleteExpiredImageShareRecords' | 'listImageShareRecords'> {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        'deleteExpiredImageShareRecords' in value &&
+        'listImageShareRecords' in value &&
+        typeof value.deleteExpiredImageShareRecords === 'function' &&
+        typeof value.listImageShareRecords === 'function'
+    );
+}
+
+async function purgeOrphanedShareFiles(records: ImageShareRecord[]): Promise<void> {
+    const activeFilenames = new Set(records.map((record) => record.contentFilename));
+    const entries = await fs.readdir(shareDir(), { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return [];
+        throw error;
+    });
+    await Promise.allSettled(
+        entries
+            .filter((entry) => entry.isFile() && !activeFilenames.has(entry.name))
+            .map((entry) => deleteFileIfExists(assertShareContentPathAllowed(entry.name)))
     );
 }

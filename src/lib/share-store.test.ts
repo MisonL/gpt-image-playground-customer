@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -149,5 +149,53 @@ describe('image share store', { concurrency: false }, () => {
         });
 
         await assert.rejects(() => readImageShareContent({ ...created, contentFilename: '../outside.png' }), /分享目录之外/);
+    });
+
+    it('purges expired share metadata and share files', async () => {
+        const { createImageShare, purgeExpiredImageShares, readImageShare } = await import('./share-store');
+        const expired = await createImageShare({
+            imageBuffer: Buffer.from('expired-image'),
+            sourceFilename: 'expired.png',
+            mimeType: 'image/png',
+            expiresInMinutes: 1,
+            now: new Date('2026-05-14T08:00:00.000Z')
+        });
+        const active = await createImageShare({
+            imageBuffer: Buffer.from('active-image'),
+            sourceFilename: 'active.png',
+            mimeType: 'image/png',
+            expiresInMinutes: 60,
+            now: new Date('2026-05-14T08:00:00.000Z')
+        });
+        const expiredPath = path.join(tempDir, 'generated-images', '.shares', expired.contentFilename);
+        const activePath = path.join(tempDir, 'generated-images', '.shares', active.contentFilename);
+
+        const purged = await purgeExpiredImageShares(new Date('2026-05-14T08:02:00.000Z'));
+
+        assert.equal(purged, 1);
+        assert.equal(await readImageShare(expired.token), undefined);
+        assert.ok(await readImageShare(active.token));
+        await assert.rejects(() => access(expiredPath));
+        await assert.doesNotReject(() => access(activePath));
+    });
+
+    it('purges orphaned share files without deleting active files', async () => {
+        const { createImageShare, purgeExpiredImageShares } = await import('./share-store');
+        const active = await createImageShare({
+            imageBuffer: Buffer.from('active-image'),
+            sourceFilename: 'active.png',
+            mimeType: 'image/png',
+            expiresInMinutes: null
+        });
+        const shareDir = path.join(tempDir, 'generated-images', '.shares');
+        const orphanPath = path.join(shareDir, `${'a'.repeat(24)}.png`);
+        const activePath = path.join(shareDir, active.contentFilename);
+        await writeFile(orphanPath, 'orphan-image');
+
+        const purged = await purgeExpiredImageShares(new Date('2026-05-14T08:02:00.000Z'));
+
+        assert.equal(purged, 0);
+        await assert.rejects(() => access(orphanPath));
+        await assert.doesNotReject(() => access(activePath));
     });
 });

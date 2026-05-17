@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Pool, type PoolClient } from 'pg';
 import {
     discardMovedFile,
@@ -68,6 +69,11 @@ type PostgresShareRow = {
     expires_at: Date | string | null;
     access_code_salt: string | null;
     access_code_hash: string | null;
+};
+
+type PostgresMigrationRow = {
+    id: string;
+    checksum: string | null;
 };
 
 export class PostgresAgentStateStore implements AgentStateStore, ImageShareStateStore {
@@ -278,6 +284,29 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
         return row ? this.mapShareRow(row) : undefined;
     }
 
+    async deleteExpiredImageShareRecords(nowIso: string): Promise<ImageShareRecord[]> {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const result = await client.query(
+                'DELETE FROM image_shares WHERE expires_at IS NOT NULL AND expires_at < $1 RETURNING *',
+                [nowIso]
+            );
+            await client.query('COMMIT');
+            return (result.rows as PostgresShareRow[]).map((row) => this.mapShareRow(row));
+        } catch (error) {
+            await client.query('ROLLBACK').catch(() => {});
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    async listImageShareRecords(): Promise<ImageShareRecord[]> {
+        const result = await this.pool.query('SELECT * FROM image_shares ORDER BY created_at ASC, token ASC');
+        return (result.rows as PostgresShareRow[]).map((row) => this.mapShareRow(row));
+    }
+
     private async beginRequestInTransaction(
         client: PoolClient,
         input: BeginAgentRequestInput
@@ -317,6 +346,9 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
             const conflicted = await client.query('SELECT * FROM agent_requests WHERE idempotency_key = $1 FOR UPDATE', [
                 input.idempotencyKey
             ]);
+            if (!conflicted.rows[0]) {
+                throw new Error('idempotency conflict row disappeared during acquisition');
+            }
             return this.beginFromExistingRow(conflicted.rows[0] as PostgresRequestRow, input, now, nowIso, lockedUntil, expiresAt, client);
         }
 
@@ -408,18 +440,12 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
 
     private async insertArtifacts(client: PoolClient, artifacts: AgentArtifactRecord[]): Promise<void> {
         for (const artifact of artifacts) {
+            await this.assertArtifactCanBeInserted(client, artifact);
             await client.query(
                 `INSERT INTO agent_artifacts
                     (id, request_id, filename, filepath, content_url, metadata_url, output_format, mime_type, size_bytes, width, height, model, prompt_hash, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                 ON CONFLICT (id) DO UPDATE SET
-                    filename = EXCLUDED.filename,
-                    filepath = EXCLUDED.filepath,
-                    content_url = EXCLUDED.content_url,
-                    metadata_url = EXCLUDED.metadata_url,
-                    size_bytes = EXCLUDED.size_bytes,
-                    width = EXCLUDED.width,
-                    height = EXCLUDED.height`,
+                 ON CONFLICT (id) DO NOTHING`,
                 [
                     artifact.id,
                     artifact.requestId,
@@ -437,6 +463,14 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
                     artifact.createdAt
                 ]
             );
+        }
+    }
+
+    private async assertArtifactCanBeInserted(client: PoolClient, artifact: AgentArtifactRecord): Promise<void> {
+        const result = await client.query('SELECT * FROM agent_artifacts WHERE id = $1', [artifact.id]);
+        const existing = result.rows[0] as PostgresArtifactRow | undefined;
+        if (existing && !sameArtifactRecord(this.mapArtifactRow(existing), artifact)) {
+            throw new Error('artifact metadata conflict');
         }
     }
 
@@ -485,6 +519,7 @@ type PostgresMigration = {
 const POSTGRES_MIGRATION_TABLE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS state_schema_migrations (
     id TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
     applied_at TIMESTAMPTZ NOT NULL
 );`;
 
@@ -548,7 +583,11 @@ CREATE TABLE IF NOT EXISTS image_shares (
     access_code_required BOOLEAN NOT NULL,
     expires_at TIMESTAMPTZ,
     access_code_salt TEXT,
-    access_code_hash TEXT
+    access_code_hash TEXT,
+    CHECK (
+        (access_code_required = FALSE AND access_code_salt IS NULL AND access_code_hash IS NULL)
+        OR (access_code_required = TRUE AND access_code_salt IS NOT NULL AND access_code_hash IS NOT NULL)
+    )
 );
 CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
 `
@@ -560,14 +599,24 @@ async function runPostgresMigrations(pool: Pool): Promise<void> {
     try {
         await client.query('BEGIN');
         await client.query(POSTGRES_MIGRATION_TABLE_SCHEMA);
+        await ensurePostgresMigrationChecksumColumn(client);
         await client.query('LOCK TABLE state_schema_migrations IN EXCLUSIVE MODE');
-        const appliedResult = await client.query('SELECT id FROM state_schema_migrations');
-        const applied = new Set(appliedResult.rows.map((row: { id: string }) => row.id));
+        const appliedResult = await client.query('SELECT id, checksum FROM state_schema_migrations');
+        const applied = new Map((appliedResult.rows as PostgresMigrationRow[]).map((row) => [row.id, row.checksum]));
         for (const migration of POSTGRES_MIGRATIONS) {
-            if (applied.has(migration.id)) continue;
-            await client.query(migration.sql);
-            await client.query('INSERT INTO state_schema_migrations (id, applied_at) VALUES ($1, $2)', [
+            const checksum = migrationChecksum(migration.sql);
+            if (applied.has(migration.id)) {
+                if (applied.get(migration.id) !== checksum) {
+                    throw new Error(`PostgreSQL migration checksum mismatch: ${migration.id}`);
+                }
+                continue;
+            }
+            for (const statement of splitSqlStatements(migration.sql)) {
+                await client.query(statement);
+            }
+            await client.query('INSERT INTO state_schema_migrations (id, checksum, applied_at) VALUES ($1, $2, $3)', [
                 migration.id,
+                checksum,
                 isoDate(new Date())
             ]);
         }
@@ -586,3 +635,29 @@ export const POSTGRES_SCHEMA = [
 ]
     .map((sql) => sql.trim())
     .join('\n\n');
+
+async function ensurePostgresMigrationChecksumColumn(client: PoolClient): Promise<void> {
+    await client.query('ALTER TABLE state_schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
+    for (const migration of POSTGRES_MIGRATIONS) {
+        await client.query('UPDATE state_schema_migrations SET checksum = $1 WHERE id = $2 AND checksum IS NULL', [
+            migrationChecksum(migration.sql),
+            migration.id
+        ]);
+    }
+    await client.query('ALTER TABLE state_schema_migrations ALTER COLUMN checksum SET NOT NULL');
+}
+
+function splitSqlStatements(sql: string): string[] {
+    return sql
+        .split(';')
+        .map((statement) => statement.trim())
+        .filter(Boolean);
+}
+
+function migrationChecksum(sql: string): string {
+    return crypto.createHash('sha256').update(sql.trim()).digest('hex');
+}
+
+function sameArtifactRecord(left: AgentArtifactRecord, right: AgentArtifactRecord): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+}

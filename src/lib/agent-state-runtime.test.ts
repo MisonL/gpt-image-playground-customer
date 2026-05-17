@@ -40,6 +40,22 @@ describe('agent-state-runtime recovery scheduling', () => {
         assert.equal(store.recoveryCalls, 2);
     });
 
+    it('runs share cleanup with the request-time recovery cycle', async () => {
+        const store = createFakeStore();
+        setAgentStateStoreFactoryForTests(() => store);
+        const env = {
+            AGENT_STATE_BACKEND: 'sqlite',
+            AGENT_SQLITE_PATH: 'agent.sqlite',
+            AGENT_RECOVERY_INTERVAL_MS: '1000'
+        };
+
+        await ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.000Z'));
+        await ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.500Z'));
+        await ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:01.001Z'));
+
+        assert.equal(store.shareCleanupCalls, 2);
+    });
+
     it('always runs explicit startup recovery', async () => {
         const store = createFakeStore();
         setAgentStateStoreFactoryForTests(() => store);
@@ -48,6 +64,7 @@ describe('agent-state-runtime recovery scheduling', () => {
         await recoverAgentStateOnStartup({ AGENT_STATE_BACKEND: 'sqlite', AGENT_SQLITE_PATH: 'agent.sqlite' });
 
         assert.equal(store.recoveryCalls, 2);
+        assert.equal(store.shareCleanupCalls, 2);
     });
 
     it('allows the next request to retry recovery after a failed recovery attempt', async () => {
@@ -161,12 +178,15 @@ describe('readAgentDatabaseUrl', () => {
     });
 });
 
-function createFakeStore(
-    options: { failFirstRecovery?: boolean; failInit?: () => boolean } = {}
-): AgentStateStore & { recoveryCalls: number; initCalls: number } {
+function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () => boolean } = {}): AgentStateStore & {
+    recoveryCalls: number;
+    initCalls: number;
+    shareCleanupCalls: number;
+} {
     return {
         initCalls: 0,
         recoveryCalls: 0,
+        shareCleanupCalls: 0,
         async init() {
             this.initCalls += 1;
             if (options.failInit?.()) {
@@ -197,6 +217,13 @@ function createFakeStore(
         },
         async deleteArtifact() {
             return false;
+        },
+        async deleteExpiredImageShareRecords() {
+            this.shareCleanupCalls += 1;
+            return [];
+        },
+        async listImageShareRecords() {
+            return [];
         }
     };
 }

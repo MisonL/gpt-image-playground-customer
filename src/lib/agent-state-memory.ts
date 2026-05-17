@@ -217,10 +217,28 @@ export class MemoryAgentStateStore implements AgentStateStore, ImageShareStateSt
         return this.sharesByToken.get(token);
     }
 
+    async deleteExpiredImageShareRecords(nowIso: string): Promise<ImageShareRecord[]> {
+        const expired = [...this.sharesByToken.values()].filter(
+            (record) => record.expiresAt !== undefined && record.expiresAt < nowIso
+        );
+        for (const record of expired) {
+            this.sharesByToken.delete(record.token);
+        }
+        return expired;
+    }
+
+    async listImageShareRecords(): Promise<ImageShareRecord[]> {
+        return [...this.sharesByToken.values()];
+    }
+
     private insertArtifacts(artifacts: AgentArtifactRecord[]): void {
         for (const artifact of artifacts) {
             if (!this.hasRequestId(artifact.requestId)) {
                 throw new Error('FOREIGN KEY constraint failed: agent_artifacts.request_id');
+            }
+            const existing = this.artifactsById.get(artifact.id);
+            if (existing && !sameArtifactRecord(existing, artifact)) {
+                throw new Error('artifact metadata conflict');
             }
             const filenameOwner = [...this.artifactsById.values()].find(
                 (existing) => existing.filename === artifact.filename && existing.id !== artifact.id
@@ -284,4 +302,8 @@ async function discardArtifactFiles(files: MovedFileForDeletion[]): Promise<void
 
 function withoutUndefined<T extends object>(record: T): T {
     return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
+}
+
+function sameArtifactRecord(left: AgentArtifactRecord, right: AgentArtifactRecord): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
 }

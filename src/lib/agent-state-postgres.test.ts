@@ -19,6 +19,8 @@ describe('PostgresAgentStateStore schema contract', () => {
         assert.match(POSTGRES_SCHEMA, /idempotency_key TEXT NOT NULL UNIQUE/);
         assert.match(POSTGRES_SCHEMA, /filename TEXT NOT NULL UNIQUE/);
         assert.match(POSTGRES_SCHEMA, /content_filename TEXT NOT NULL UNIQUE/);
+        assert.match(POSTGRES_SCHEMA, /checksum TEXT NOT NULL/);
+        assert.match(POSTGRES_SCHEMA, /access_code_required = FALSE/);
         assert.match(POSTGRES_SCHEMA, /idx_agent_requests_status_locked_until/);
         assert.match(POSTGRES_SCHEMA, /idx_agent_artifacts_request_id/);
         assert.match(POSTGRES_SCHEMA, /idx_image_shares_expires_at/);
@@ -311,6 +313,148 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
             assert.equal(record.sourceFilename, 'source.png');
             assert.equal(record.accessCodeRequired, true);
             assert.equal(record.expiresAt, '2026-05-14T09:00:00.000Z');
+        } finally {
+            await cleanup();
+            admin.release();
+            await pool.end();
+        }
+    });
+
+    it('rejects invalid protected image share metadata at the schema boundary', async () => {
+        assert.ok(livePostgresUrl);
+        const { admin, pool, cleanup, schema } = await createLivePostgresStore();
+
+        try {
+            await assert.rejects(
+                () =>
+                    admin.query(
+                        `INSERT INTO ${schema}.image_shares
+                            (token, source_filename, content_filename, mime_type, size_bytes, created_at, access_code_required)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                        ['f'.repeat(24), 'source.png', `${'f'.repeat(24)}.png`, 'image/png', 12, '2026-05-14T08:00:00.000Z', true]
+                    ),
+                /check/i
+            );
+        } finally {
+            await cleanup();
+            admin.release();
+            await pool.end();
+        }
+    });
+
+    it('rejects applied migration checksum drift', async () => {
+        assert.ok(livePostgresUrl);
+        const schemaName = `agent_pg_${crypto.randomUUID().replaceAll('-', '')}`;
+        const schema = quoteIdent(schemaName);
+        const pool = new Pool({ connectionString: livePostgresUrl });
+        const admin = await pool.connect();
+        const connectionString = `${livePostgresUrl}${livePostgresUrl.includes('?') ? '&' : '?'}options=-c%20search_path%3D${schemaName}`;
+        const store = new PostgresAgentStateStore(connectionString);
+
+        try {
+            await admin.query(`CREATE SCHEMA ${schema}`);
+            await admin.query(`CREATE TABLE ${schema}.state_schema_migrations (
+                id TEXT PRIMARY KEY,
+                checksum TEXT NOT NULL,
+                applied_at TIMESTAMPTZ NOT NULL
+            )`);
+            await admin.query(
+                `INSERT INTO ${schema}.state_schema_migrations (id, checksum, applied_at) VALUES ($1, $2, $3)`,
+                ['001_agent_state_core', 'bad-checksum', '2026-05-14T08:00:00.000Z']
+            );
+
+            await assert.rejects(() => store.init(), /checksum/);
+        } finally {
+            await store.close().catch(() => {});
+            await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+            admin.release();
+            await pool.end();
+        }
+    });
+
+    it('rejects attempts to rewrite an existing artifact id with different metadata', async () => {
+        assert.ok(livePostgresUrl);
+        const { store, admin, pool, cleanup } = await createLivePostgresStore();
+
+        try {
+            const beginA = await store.beginRequest({
+                idempotencyKey: 'pg-stable-artifact-a',
+                requestHash: 'pg-stable-artifact-a-hash',
+                mode: 'generate',
+                requestJson: { prompt: 'pg stable artifact a' },
+                leaseMs: 1000,
+                ttlSeconds: 60
+            });
+            const beginB = await store.beginRequest({
+                idempotencyKey: 'pg-stable-artifact-b',
+                requestHash: 'pg-stable-artifact-b-hash',
+                mode: 'generate',
+                requestJson: { prompt: 'pg stable artifact b' },
+                leaseMs: 1000,
+                ttlSeconds: 60
+            });
+            assert.equal(beginA.type, 'acquired');
+            assert.equal(beginB.type, 'acquired');
+            if (beginA.type !== 'acquired' || beginB.type !== 'acquired') throw new Error('expected acquired');
+            const first = buildArtifact({
+                id: 'pg-artifact-stable',
+                requestId: beginA.record.requestId,
+                filepath: path.join(process.cwd(), 'generated-images', 'pg-artifact-stable-a.png')
+            });
+            const rewritten = {
+                ...buildArtifact({
+                    id: 'pg-artifact-stable',
+                    requestId: beginB.record.requestId,
+                    filepath: path.join(process.cwd(), 'generated-images', 'pg-artifact-stable-b.png')
+                }),
+                filename: 'pg-artifact-stable-b.png'
+            };
+
+            await store.saveArtifacts([first]);
+            await assert.rejects(() => store.saveArtifacts([rewritten]), /artifact metadata conflict/);
+
+            assert.deepEqual(await store.getArtifact('pg-artifact-stable'), first);
+        } finally {
+            await cleanup();
+            admin.release();
+            await pool.end();
+        }
+    });
+
+    it('deletes expired image share records and lists active share records', async () => {
+        assert.ok(livePostgresUrl);
+        const { store, admin, pool, cleanup } = await createLivePostgresStore();
+
+        try {
+            await store.createImageShareRecord({
+                token: 'd'.repeat(24),
+                sourceFilename: 'expired.png',
+                contentFilename: `${'d'.repeat(24)}.png`,
+                mimeType: 'image/png',
+                sizeBytes: 12,
+                createdAt: '2026-05-14T08:00:00.000Z',
+                accessCodeRequired: false,
+                expiresAt: '2026-05-14T09:00:00.000Z'
+            });
+            await store.createImageShareRecord({
+                token: 'e'.repeat(24),
+                sourceFilename: 'active.png',
+                contentFilename: `${'e'.repeat(24)}.png`,
+                mimeType: 'image/png',
+                sizeBytes: 12,
+                createdAt: '2026-05-14T08:00:00.000Z',
+                accessCodeRequired: false,
+                expiresAt: '2026-05-14T10:00:00.000Z'
+            });
+
+            const expired = await store.deleteExpiredImageShareRecords('2026-05-14T09:00:01.000Z');
+            const active = await store.listImageShareRecords();
+
+            assert.deepEqual(
+                expired.map((record) => record.token),
+                ['d'.repeat(24)]
+            );
+            assert.equal(active.some((record) => record.token === 'e'.repeat(24)), true);
         } finally {
             await cleanup();
             admin.release();

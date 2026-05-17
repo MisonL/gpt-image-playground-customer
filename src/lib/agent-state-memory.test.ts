@@ -179,6 +179,41 @@ describe('MemoryAgentStateStore', () => {
         assert.equal(await store.getArtifact('artifact-memory-b'), undefined);
     });
 
+    it('rejects attempts to rewrite an existing artifact id with different metadata', async () => {
+        const store = new MemoryAgentStateStore();
+        await store.init();
+        const beginA = await store.beginRequest({
+            idempotencyKey: 'idem-memory-artifact-a',
+            requestHash: hashAgentPayload({ prompt: 'artifact a' }),
+            mode: 'generate',
+            requestJson: { prompt: 'artifact a' },
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        const beginB = await store.beginRequest({
+            idempotencyKey: 'idem-memory-artifact-b',
+            requestHash: hashAgentPayload({ prompt: 'artifact b' }),
+            mode: 'generate',
+            requestJson: { prompt: 'artifact b' },
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        assert.equal(beginA.type, 'acquired');
+        assert.equal(beginB.type, 'acquired');
+        if (beginA.type !== 'acquired' || beginB.type !== 'acquired') throw new Error('expected acquired');
+        const first = buildArtifact({ id: 'artifact-memory-stable', requestId: beginA.record.requestId, filename: 'stable-a.png' });
+        const rewritten = buildArtifact({
+            id: 'artifact-memory-stable',
+            requestId: beginB.record.requestId,
+            filename: 'stable-b.png'
+        });
+
+        await store.saveArtifacts([first]);
+        await assert.rejects(() => store.saveArtifacts([rewritten]), /artifact metadata conflict/);
+
+        assert.deepEqual(await store.getArtifact('artifact-memory-stable'), first);
+    });
+
     it('stores and reads image share metadata', async () => {
         const store = new MemoryAgentStateStore();
         await store.init();
@@ -201,6 +236,43 @@ describe('MemoryAgentStateStore', () => {
         assert.equal(record.sourceFilename, 'source.png');
         assert.equal(record.accessCodeRequired, true);
         assert.equal(record.expiresAt, '2026-05-14T09:00:00.000Z');
+    });
+
+    it('deletes expired image share records and lists active share records', async () => {
+        const store = new MemoryAgentStateStore();
+        await store.init();
+        await store.createImageShareRecord({
+            token: 'd'.repeat(24),
+            sourceFilename: 'expired.png',
+            contentFilename: `${'d'.repeat(24)}.png`,
+            mimeType: 'image/png',
+            sizeBytes: 12,
+            createdAt: '2026-05-14T08:00:00.000Z',
+            accessCodeRequired: false,
+            expiresAt: '2026-05-14T09:00:00.000Z'
+        });
+        await store.createImageShareRecord({
+            token: 'e'.repeat(24),
+            sourceFilename: 'active.png',
+            contentFilename: `${'e'.repeat(24)}.png`,
+            mimeType: 'image/png',
+            sizeBytes: 12,
+            createdAt: '2026-05-14T08:00:00.000Z',
+            accessCodeRequired: false,
+            expiresAt: '2026-05-14T10:00:00.000Z'
+        });
+
+        const expired = await store.deleteExpiredImageShareRecords('2026-05-14T09:00:01.000Z');
+        const active = await store.listImageShareRecords();
+
+        assert.deepEqual(
+            expired.map((record) => record.token),
+            ['d'.repeat(24)]
+        );
+        assert.deepEqual(
+            active.map((record) => record.token),
+            ['e'.repeat(24)]
+        );
     });
 });
 

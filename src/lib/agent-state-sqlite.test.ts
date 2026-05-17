@@ -1,4 +1,4 @@
-import { SqliteAgentStateStore } from './agent-state-sqlite';
+import { SQLITE_SCHEMA, SqliteAgentStateStore } from './agent-state-sqlite';
 import { hashAgentPayload, type AgentArtifactRecord, type AgentImageResponse } from './agent-state-store';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
@@ -544,6 +544,111 @@ describe('SqliteAgentStateStore', () => {
         assert.equal(record.sourceFilename, 'source.png');
         assert.equal(record.accessCodeRequired, true);
         assert.equal(record.expiresAt, '2026-05-14T09:00:00.000Z');
+    });
+
+    it('rejects invalid protected image share metadata at the schema boundary', async () => {
+        const db = new Database(path.join(tempDir, 'invalid-share-schema.sqlite'));
+        db.exec(SQLITE_SCHEMA);
+
+        try {
+            assert.throws(
+                () =>
+                    db.prepare(
+                        `INSERT INTO image_shares
+                            (token, source_filename, content_filename, mime_type, size_bytes, created_at, access_code_required)
+                         VALUES (?, ?, ?, ?, ?, ?, ?)`
+                    ).run('f'.repeat(24), 'source.png', `${'f'.repeat(24)}.png`, 'image/png', 12, '2026-05-14T08:00:00.000Z', 1),
+                /CHECK/
+            );
+        } finally {
+            db.close();
+        }
+    });
+
+    it('rejects applied migration checksum drift', async () => {
+        const dbPath = path.join(tempDir, 'migration-checksum-drift.sqlite');
+        const db = new Database(dbPath);
+        db.exec(`
+            CREATE TABLE state_schema_migrations (
+                id TEXT PRIMARY KEY,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+            INSERT INTO state_schema_migrations (id, checksum, applied_at)
+            VALUES ('001_agent_state_core', 'bad-checksum', '2026-05-14T08:00:00.000Z');
+        `);
+        db.close();
+        const drifted = new SqliteAgentStateStore(dbPath);
+
+        await assert.rejects(() => drifted.init(), /checksum/);
+    });
+
+    it('rejects attempts to rewrite an existing artifact id with different metadata', async () => {
+        const requestJsonA = { prompt: 'stable artifact A' };
+        const requestJsonB = { prompt: 'stable artifact B' };
+        const beginA = await store.beginRequest({
+            idempotencyKey: 'idem-stable-artifact-a',
+            requestHash: hashAgentPayload(requestJsonA),
+            mode: 'generate',
+            requestJson: requestJsonA,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        const beginB = await store.beginRequest({
+            idempotencyKey: 'idem-stable-artifact-b',
+            requestHash: hashAgentPayload(requestJsonB),
+            mode: 'generate',
+            requestJson: requestJsonB,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        assert.equal(beginA.type, 'acquired');
+        assert.equal(beginB.type, 'acquired');
+        if (beginA.type !== 'acquired' || beginB.type !== 'acquired') throw new Error('expected acquired');
+        const first = buildArtifact({
+            id: 'artifact-stable-sqlite',
+            requestId: beginA.record.requestId,
+            filename: 'stable-sqlite-a.png'
+        });
+        const rewritten = buildArtifact({
+            id: 'artifact-stable-sqlite',
+            requestId: beginB.record.requestId,
+            filename: 'stable-sqlite-b.png'
+        });
+
+        await store.saveArtifacts([first]);
+        await assert.rejects(() => store.saveArtifacts([rewritten]), /artifact metadata conflict/);
+
+        assert.deepEqual(await store.getArtifact('artifact-stable-sqlite'), first);
+    });
+
+    it('deletes expired image share records and lists active share records', async () => {
+        await store.createImageShareRecord({
+            token: 'd'.repeat(24),
+            sourceFilename: 'expired.png',
+            contentFilename: `${'d'.repeat(24)}.png`,
+            mimeType: 'image/png',
+            sizeBytes: 12,
+            createdAt: '2026-05-14T08:00:00.000Z',
+            accessCodeRequired: false,
+            expiresAt: '2026-05-14T09:00:00.000Z'
+        });
+        await store.createImageShareRecord({
+            token: 'e'.repeat(24),
+            sourceFilename: 'active.png',
+            contentFilename: `${'e'.repeat(24)}.png`,
+            mimeType: 'image/png',
+            sizeBytes: 12,
+            createdAt: '2026-05-14T08:00:00.000Z',
+            accessCodeRequired: false,
+            expiresAt: '2026-05-14T10:00:00.000Z'
+        });
+
+        const expired = await store.deleteExpiredImageShareRecords('2026-05-14T09:00:01.000Z');
+        const active = await store.listImageShareRecords();
+
+        assert.equal(expired.some((record) => record.token === 'd'.repeat(24)), true);
+        assert.equal(active.some((record) => record.token === 'e'.repeat(24)), true);
     });
 
     it('records schema migrations and keeps repeated init idempotent', async () => {

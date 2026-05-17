@@ -1,4 +1,4 @@
-import { buildEditRequestHash, hydrateAgentReplayResponse } from './agent-image-service';
+import { buildEditRequestHash, completeAgentExecutionState, hydrateAgentReplayResponse } from './agent-image-service';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { AgentArtifactRecord, AgentStateStore } from './agent-state-store';
@@ -67,6 +67,54 @@ describe('hydrateAgentReplayResponse', () => {
                 ),
             /目录之外/
         );
+    });
+});
+
+describe('completeAgentExecutionState', () => {
+    it('does not ask the state store to upsert artifacts a second time', async () => {
+        let completedArtifacts: AgentArtifactRecord[] | undefined;
+        const artifact: AgentArtifactRecord = {
+            id: 'artifact-complete-no-upsert',
+            requestId: 'request-complete-no-upsert',
+            filename: 'artifact-complete-no-upsert.png',
+            filepath: '/tmp/artifact-complete-no-upsert.png',
+            contentUrl: '/api/agent/artifacts/artifact-complete-no-upsert/content',
+            metadataUrl: '/api/agent/artifacts/artifact-complete-no-upsert',
+            outputFormat: 'png',
+            mimeType: 'image/png',
+            sizeBytes: 1,
+            width: 1,
+            height: 1,
+            model: 'gpt-image-2',
+            promptHash: 'hash',
+            createdAt: '2026-05-12T00:00:00.000Z'
+        };
+        const store: AgentStateStore = {
+            ...createReplayStore([]),
+            async completeRequest(input) {
+                completedArtifacts = input.artifacts;
+            }
+        };
+
+        await completeAgentExecutionState(store, {
+            response: {
+                request_id: 'request-complete-no-upsert',
+                idempotency_key: 'idem-complete-no-upsert',
+                cached: false,
+                images: [],
+                created_at: '2026-05-12T00:00:00.000Z'
+            },
+            stateResponse: {
+                request_id: 'request-complete-no-upsert',
+                idempotency_key: 'idem-complete-no-upsert',
+                cached: false,
+                images: [],
+                created_at: '2026-05-12T00:00:00.000Z'
+            },
+            artifacts: [artifact]
+        });
+
+        assert.deepEqual(completedArtifacts, []);
     });
 });
 
