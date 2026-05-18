@@ -8,7 +8,8 @@ services:
     container_name: gpt-image-playground-customer
     restart: unless-stopped
     env_file:
-      - .env.local
+      - path: .env.local
+        required: false
     environment:
       NODE_ENV: production
       NEXT_TELEMETRY_DISABLED: "1"

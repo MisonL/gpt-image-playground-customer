@@ -647,11 +647,181 @@ async function ensurePostgresMigrationChecksumColumn(client: PoolClient): Promis
     await client.query('ALTER TABLE state_schema_migrations ALTER COLUMN checksum SET NOT NULL');
 }
 
-function splitSqlStatements(sql: string): string[] {
-    return sql
-        .split(';')
-        .map((statement) => statement.trim())
-        .filter(Boolean);
+type SqlStatementSplitState = {
+    statements: string[];
+    current: string;
+    inSingleQuote: boolean;
+    inDoubleQuote: boolean;
+    inLineComment: boolean;
+    inBlockComment: boolean;
+    singleQuoteBackslashEscapes: boolean;
+    dollarQuoteTag: string | undefined;
+};
+
+export function splitSqlStatements(sql: string): string[] {
+    const state: SqlStatementSplitState = {
+        statements: [],
+        current: '',
+        inSingleQuote: false,
+        inDoubleQuote: false,
+        inLineComment: false,
+        inBlockComment: false,
+        singleQuoteBackslashEscapes: false,
+        dollarQuoteTag: undefined
+    };
+
+    for (let index = 0; index < sql.length; index += 1) {
+        const consumedIndex = consumeSqlCharacter(sql, index, state);
+        if (consumedIndex !== undefined) {
+            index = consumedIndex;
+        }
+    }
+
+    pushSqlStatement(state);
+    return state.statements;
+}
+
+function consumeSqlCharacter(sql: string, index: number, state: SqlStatementSplitState): number | undefined {
+    const activeSpanIndex = consumeActiveSqlSpan(sql, index, state);
+    if (activeSpanIndex !== undefined) return activeSpanIndex;
+
+    const startedSpanIndex = startSqlSpan(sql, index, state);
+    if (startedSpanIndex !== undefined) return startedSpanIndex;
+
+    if (sql[index] === ';') {
+        pushSqlStatement(state);
+        return index;
+    }
+
+    state.current += sql[index];
+    return index;
+}
+
+function consumeActiveSqlSpan(sql: string, index: number, state: SqlStatementSplitState): number | undefined {
+    if (state.dollarQuoteTag) return consumeDollarQuote(sql, index, state);
+    if (state.inLineComment) return consumeLineComment(sql, index, state);
+    if (state.inBlockComment) return consumeBlockComment(sql, index, state);
+    if (state.inSingleQuote) return consumeSingleQuote(sql, index, state);
+    if (state.inDoubleQuote) return consumeDoubleQuote(sql, index, state);
+    return undefined;
+}
+
+function startSqlSpan(sql: string, index: number, state: SqlStatementSplitState): number | undefined {
+    const char = sql[index];
+    const next = sql[index + 1];
+
+    if (char === '-' && next === '-') return startTwoCharSpan(state, index, 'inLineComment', char + next);
+    if (char === '/' && next === '*') return startTwoCharSpan(state, index, 'inBlockComment', char + next);
+    if (char === "'") return startSingleQuote(sql, index, state);
+    if (char === '"') return startOneCharSpan(state, index, 'inDoubleQuote', char);
+    return startDollarQuote(sql, index, state);
+}
+
+function consumeDollarQuote(sql: string, index: number, state: SqlStatementSplitState): number {
+    const tag = state.dollarQuoteTag;
+    if (tag && sql.startsWith(tag, index)) {
+        state.current += tag;
+        state.dollarQuoteTag = undefined;
+        return index + tag.length - 1;
+    }
+    state.current += sql[index];
+    return index;
+}
+
+function consumeLineComment(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    if (sql[index] === '\n') state.inLineComment = false;
+    return index;
+}
+
+function consumeBlockComment(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    if (sql[index] === '*' && sql[index + 1] === '/') {
+        state.current += sql[index + 1];
+        state.inBlockComment = false;
+        return index + 1;
+    }
+    return index;
+}
+
+function consumeSingleQuote(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    if (state.singleQuoteBackslashEscapes && sql[index] === '\\' && index + 1 < sql.length) {
+        state.current += sql[index + 1];
+        return index + 1;
+    }
+    if (sql[index] === "'" && sql[index + 1] === "'") {
+        state.current += sql[index + 1];
+        return index + 1;
+    }
+    if (sql[index] === "'") {
+        state.inSingleQuote = false;
+        state.singleQuoteBackslashEscapes = false;
+    }
+    return index;
+}
+
+function consumeDoubleQuote(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    if (sql[index] === '"' && sql[index + 1] === '"') {
+        state.current += sql[index + 1];
+        return index + 1;
+    }
+    if (sql[index] === '"') state.inDoubleQuote = false;
+    return index;
+}
+
+function startTwoCharSpan(
+    state: SqlStatementSplitState,
+    index: number,
+    key: 'inLineComment' | 'inBlockComment',
+    text: string
+): number {
+    state.current += text;
+    state[key] = true;
+    return index + 1;
+}
+
+function startOneCharSpan(
+    state: SqlStatementSplitState,
+    index: number,
+    key: 'inSingleQuote' | 'inDoubleQuote',
+    text: string
+): number {
+    state.current += text;
+    state[key] = true;
+    return index;
+}
+
+function startSingleQuote(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    state.inSingleQuote = true;
+    state.singleQuoteBackslashEscapes = startsPostgresEscapeString(sql, index);
+    return index;
+}
+
+function startsPostgresEscapeString(sql: string, quoteIndex: number): boolean {
+    const prefix = sql[quoteIndex - 1];
+    const beforePrefix = sql[quoteIndex - 2];
+    return (prefix === 'E' || prefix === 'e') && !isSqlIdentifierPart(beforePrefix);
+}
+
+function isSqlIdentifierPart(char: string | undefined): boolean {
+    return Boolean(char && /[A-Za-z0-9_$]/.test(char));
+}
+
+function startDollarQuote(sql: string, index: number, state: SqlStatementSplitState): number | undefined {
+    const tag = sql[index] === '$' ? sql.slice(index).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0] : undefined;
+    if (!tag) return undefined;
+    state.current += tag;
+    state.dollarQuoteTag = tag;
+    return index + tag.length - 1;
+}
+
+function pushSqlStatement(state: SqlStatementSplitState): void {
+    const statement = state.current.trim();
+    if (statement) state.statements.push(statement);
+    state.current = '';
 }
 
 function migrationChecksum(sql: string): string {

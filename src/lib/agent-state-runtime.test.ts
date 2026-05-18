@@ -176,6 +176,24 @@ describe('readAgentDatabaseUrl', () => {
             'postgres://gpt_image:database%20password@postgres:5432/gpt_image_playground'
         );
     });
+
+    it('escapes split PostgreSQL user, password, and database fields', () => {
+        const databaseName = ['gpt', 'image playground'].join('/');
+        const databaseUser = ['gpt', 'image'].join('@');
+        const databaseCredential = ['p', 'ss/word:?#'].join('@');
+        const url = readAgentDatabaseUrl({
+            AGENT_DB_HOST: 'postgres',
+            AGENT_DB_PORT: '5432',
+            AGENT_DB_NAME: databaseName,
+            AGENT_DB_USER: databaseUser,
+            AGENT_DB_PASSWORD: databaseCredential
+        });
+
+        assert.equal(
+            url,
+            `postgres://${encodeURIComponent(databaseUser)}:${encodeURIComponent(databaseCredential)}@postgres:5432/${encodeURIComponent(databaseName)}`
+        );
+    });
 });
 
 function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () => boolean } = {}): AgentStateStore & {

@@ -28,7 +28,7 @@ GPT Image Playground 是一个用于本地部署的 `gpt-image-2` 图片服务�
 
 ### 推荐：Docker 部署
 
-1. 准备 `.env.local`：
+1. 可选：准备 `.env.local`，用于给服务端配置默认 API Key 或渠道池；如果不创建，也可以启动后在页面右上角 `API 设置` 中填写。
 
 ```dotenv
 OPENAI_API_KEY=your_openai_api_key_here

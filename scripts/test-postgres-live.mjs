@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const testFiles = ['src/lib/agent-state-postgres.test.ts', 'src/app/api/agent/agent-routes.test.ts'];
+const POSTGRES_READY_ATTEMPTS = 30;
+const POSTGRES_READY_INTERVAL_MS = 1000;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -28,13 +31,13 @@ function runTests(databaseUrl) {
   });
 }
 
-function waitForPostgres(containerName) {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+async function waitForPostgres(containerName) {
+  for (let attempt = 0; attempt < POSTGRES_READY_ATTEMPTS; attempt += 1) {
     const result = spawnSync('docker', ['exec', containerName, 'pg_isready', '-U', 'agent_test', '-d', 'agent_test'], {
       stdio: 'ignore'
     });
     if (result.status === 0) return;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    await delay(POSTGRES_READY_INTERVAL_MS);
   }
   throw new Error('临时 PostgreSQL 容器未就绪');
 }
@@ -75,7 +78,7 @@ try {
     '127.0.0.1::5432',
     'postgres:16-alpine'
   ], { silent: true });
-  waitForPostgres(containerName);
+  await waitForPostgres(containerName);
   const port = readMappedPort(containerName);
   runTests(`postgres://agent_test:agent_test@127.0.0.1:${port}/agent_test`);
 } finally {

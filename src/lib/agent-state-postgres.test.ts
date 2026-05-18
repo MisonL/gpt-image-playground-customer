@@ -1,4 +1,4 @@
-import { POSTGRES_SCHEMA, PostgresAgentStateStore } from './agent-state-postgres';
+import { POSTGRES_SCHEMA, PostgresAgentStateStore, splitSqlStatements } from './agent-state-postgres';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -36,6 +36,37 @@ describe('PostgresAgentStateStore schema contract', () => {
         const source = readFileSync(new URL('./agent-state-postgres.ts', import.meta.url), 'utf8');
 
         assert.match(source, /ON CONFLICT \(idempotency_key\) DO NOTHING/);
+    });
+
+    it('splits migration SQL without breaking semicolons inside quoted SQL text', () => {
+        const statements = splitSqlStatements(`
+CREATE TABLE demo (
+    value TEXT DEFAULT 'a;b',
+    body TEXT DEFAULT $$x;y$$
+);
+-- comment with a semicolon;
+CREATE INDEX "idx;demo" ON demo(value);
+`);
+
+        assert.equal(statements.length, 2);
+        assert.match(statements[0], /DEFAULT 'a;b'/);
+        assert.match(statements[0], /DEFAULT \$\$x;y\$\$/);
+        assert.match(statements[1], /CREATE INDEX "idx;demo"/);
+    });
+
+    it('splits migration SQL without breaking semicolons inside Postgres E-strings', () => {
+        const statements = splitSqlStatements(String.raw`
+CREATE TABLE demo (
+    value TEXT DEFAULT E'a\';b',
+    path TEXT DEFAULT E'C:\\tmp;file'
+);
+CREATE INDEX demo_value_idx ON demo(value);
+`);
+
+        assert.equal(statements.length, 2);
+        assert.match(statements[0], /DEFAULT E'a\\';b'/);
+        assert.match(statements[0], /DEFAULT E'C:\\\\tmp;file'/);
+        assert.match(statements[1], /CREATE INDEX demo_value_idx/);
     });
 });
 
