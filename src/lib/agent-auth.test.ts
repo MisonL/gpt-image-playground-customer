@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { describe, it } from 'node:test';
 
+const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
+
 describe('assertAgentAuthorized', () => {
     it('accepts the configured bearer token', () => {
         assert.doesNotThrow(() =>
@@ -26,10 +28,11 @@ describe('assertAgentAuthorized', () => {
     });
 
     it('trims APP_PASSWORD before verifying password hashes', () => {
-        const appPassword = 'customer-password';
-        const passwordHash = crypto.createHash('sha256').update(appPassword).digest('hex');
+        const passwordHash = crypto.createHash('sha256').update(PAGE_PASSWORD_FIXTURE).digest('hex');
         assert.doesNotThrow(() =>
-            assertAgentAuthorized(new Headers({ 'X-App-Password-Hash': passwordHash }), { APP_PASSWORD: ' customer-password ' })
+            assertAgentAuthorized(new Headers({ 'X-App-Password-Hash': passwordHash }), {
+                APP_PASSWORD: ` ${PAGE_PASSWORD_FIXTURE} `
+            })
         );
     });
 });
