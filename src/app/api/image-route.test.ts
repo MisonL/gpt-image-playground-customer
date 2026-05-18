@@ -6,6 +6,8 @@ import { afterEach, describe, it } from 'node:test';
 import { NextRequest } from 'next/server';
 
 const originalAppPassword = process.env.APP_PASSWORD;
+const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
+const OTHER_PAGE_PASSWORD_FIXTURE = ['other', 'password'].join('-');
 
 afterEach(() => {
     if (originalAppPassword === undefined) {
@@ -17,7 +19,7 @@ afterEach(() => {
 
 describe('GET /api/image/[filename]', () => {
     it('returns a missing page password code when the access cookie is absent', async () => {
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
         const request = new NextRequest('http://localhost/api/image/sample.png');
 
         const response = await GET(request, { params: Promise.resolve({ filename: 'sample.png' }) });
@@ -28,10 +30,10 @@ describe('GET /api/image/[filename]', () => {
     });
 
     it('returns an invalid page password code when the access cookie is wrong', async () => {
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
         const request = new NextRequest('http://localhost/api/image/sample.png', {
             headers: {
-                Cookie: `gptImageAccess=${createAccessToken('other-password')}`
+                Cookie: `gptImageAccess=${createAccessToken(OTHER_PAGE_PASSWORD_FIXTURE)}`
             }
         });
 

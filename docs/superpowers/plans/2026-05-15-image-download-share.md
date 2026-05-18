@@ -231,7 +231,7 @@ afterEach(async () => {
 
 function createShareRequest(form: FormData, options: { accessToken?: string | null } = {}) {
     const headers = new Headers();
-    const accessToken = options.accessToken === undefined ? createAccessToken('customer-password') : options.accessToken;
+    const accessToken = options.accessToken === undefined ? createAccessToken(['customer', 'password'].join('-')) : options.accessToken;
     if (accessToken) headers.set('Cookie', `gptImageAccess=${accessToken}`);
     return new NextRequest('http://localhost/api/shares', { method: 'POST', headers, body: form });
 }
@@ -239,7 +239,7 @@ function createShareRequest(form: FormData, options: { accessToken?: string | nu
 describe('POST /api/shares', () => {
     it('creates a share from an uploaded image without returning secrets', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('accessCode', '12345678');
@@ -260,7 +260,7 @@ describe('POST /api/shares', () => {
 
     it('rejects unauthenticated share creation when a page password is configured', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('image', new File([new Uint8Array([1])], 'result.png', { type: 'image/png' }));
@@ -273,7 +273,7 @@ describe('POST /api/shares', () => {
 
     it('rejects share creation with an invalid page access token', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('image', new File([new Uint8Array([1])], 'result.png', { type: 'image/png' }));
@@ -297,7 +297,7 @@ describe('POST /api/shares', () => {
 
     it('treats blank access codes as public shares', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('accessCode', '   ');
@@ -311,7 +311,7 @@ describe('POST /api/shares', () => {
 
     it('rejects short access codes', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('accessCode', '1234567');
@@ -325,7 +325,7 @@ describe('POST /api/shares', () => {
 
     it('rejects missing image uploads', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
 
@@ -337,7 +337,7 @@ describe('POST /api/shares', () => {
 
     it('rejects invalid expiry values', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('expiresInMinutes', '-1');

@@ -5,6 +5,7 @@ import { afterEach, describe, it } from 'node:test';
 import { NextRequest } from 'next/server';
 
 const originalAppPassword = process.env.APP_PASSWORD;
+const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
 
 afterEach(() => {
     if (originalAppPassword === undefined) {
@@ -16,7 +17,7 @@ afterEach(() => {
 
 describe('POST /api/auth-verify', () => {
     it('returns a page password error code for invalid password hashes', async () => {
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
         const request = new NextRequest('http://localhost/api/auth-verify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

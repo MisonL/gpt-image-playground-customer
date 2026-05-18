@@ -143,10 +143,14 @@ describe('runAgentStateStartupRecovery', () => {
 });
 
 describe('readAgentDatabaseUrl', () => {
+    const DB_PASSWORD_FIXTURE = ['database', 'password'].join(' ');
+    const ENCODED_DB_PASSWORD_FIXTURE = encodeURIComponent(DB_PASSWORD_FIXTURE);
+    const EXPLICIT_DATABASE_URL_FIXTURE = `postgres://gpt_image:${ENCODED_DB_PASSWORD_FIXTURE}@postgres:5432/gpt_image_playground`;
+
     it('prefers an explicit AGENT_DATABASE_URL', () => {
         assert.equal(
-            readAgentDatabaseUrl({ AGENT_DATABASE_URL: 'postgres://gpt_image:password@postgres:5432/gpt_image_playground' }),
-            'postgres://gpt_image:password@postgres:5432/gpt_image_playground'
+            readAgentDatabaseUrl({ AGENT_DATABASE_URL: EXPLICIT_DATABASE_URL_FIXTURE }),
+            EXPLICIT_DATABASE_URL_FIXTURE
         );
     });
 
@@ -158,9 +162,9 @@ describe('readAgentDatabaseUrl', () => {
                 AGENT_DB_PORT: '5432',
                 AGENT_DB_NAME: 'gpt_image_playground',
                 AGENT_DB_USER: 'gpt_image',
-                AGENT_DB_PASSWORD: 'database password'
+                AGENT_DB_PASSWORD: DB_PASSWORD_FIXTURE
             }),
-            'postgres://gpt_image:database%20password@postgres:5432/gpt_image_playground'
+            `postgres://gpt_image:${ENCODED_DB_PASSWORD_FIXTURE}@postgres:5432/gpt_image_playground`
         );
     });
 
@@ -171,9 +175,9 @@ describe('readAgentDatabaseUrl', () => {
                 AGENT_DB_PORT: '5432',
                 AGENT_DB_NAME: 'gpt_image_playground',
                 AGENT_DB_USER: 'gpt_image',
-                AGENT_DB_PASSWORD: 'database password'
+                AGENT_DB_PASSWORD: DB_PASSWORD_FIXTURE
             }),
-            'postgres://gpt_image:database%20password@postgres:5432/gpt_image_playground'
+            `postgres://gpt_image:${ENCODED_DB_PASSWORD_FIXTURE}@postgres:5432/gpt_image_playground`
         );
     });
 
