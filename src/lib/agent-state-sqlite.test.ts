@@ -1,7 +1,8 @@
-import { SqliteAgentStateStore } from './agent-state-sqlite';
+import { SQLITE_SCHEMA, SqliteAgentStateStore } from './agent-state-sqlite';
 import { hashAgentPayload, type AgentArtifactRecord, type AgentImageResponse } from './agent-state-store';
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import Database from 'better-sqlite3';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -336,13 +337,15 @@ describe('SqliteAgentStateStore', () => {
         await assert.rejects(() => access(artifactPath));
     });
 
-    it('keeps metadata when artifact file deletion fails during purge', async () => {
-        const requestJson = { prompt: 'purge blocked file' };
+    it('purges directory artifact paths through the same relocation flow', async () => {
+        const requestJson = { prompt: 'purge directory artifact' };
         const requestHash = hashAgentPayload(requestJson);
-        const artifactPath = path.join(process.cwd(), 'generated-images', 'purge-blocked-dir');
+        const artifactBaseName = `purge-directory-artifact-${crypto.randomUUID()}`;
+        const artifactParentPath = path.join(process.cwd(), 'generated-images', '.sqlite-purge-dir-test');
+        const artifactPath = path.join(artifactParentPath, artifactBaseName);
         await mkdir(artifactPath, { recursive: true });
         const begin = await store.beginRequest({
-            idempotencyKey: 'idem-purge-blocked-file',
+            idempotencyKey: 'idem-purge-directory-artifact',
             requestHash,
             mode: 'generate',
             requestJson,
@@ -357,19 +360,19 @@ describe('SqliteAgentStateStore', () => {
             requestId: begin.record.requestId,
             response: {
                 request_id: begin.record.requestId,
-                idempotency_key: 'idem-purge-blocked-file',
+                idempotency_key: 'idem-purge-directory-artifact',
                 cached: false,
                 images: [],
                 created_at: '2026-05-12T00:00:00.500Z'
             },
             artifacts: [
                 {
-                    id: 'artifact-purge-blocked-file',
+                    id: 'artifact-purge-directory-artifact',
                     requestId: begin.record.requestId,
-                    filename: 'purge-blocked-dir',
+                    filename: 'purge-directory-artifact',
                     filepath: artifactPath,
-                    contentUrl: '/api/agent/artifacts/artifact-purge-blocked-file/content',
-                    metadataUrl: '/api/agent/artifacts/artifact-purge-blocked-file',
+                    contentUrl: '/api/agent/artifacts/artifact-purge-directory-artifact/content',
+                    metadataUrl: '/api/agent/artifacts/artifact-purge-directory-artifact',
                     outputFormat: 'png',
                     mimeType: 'image/png',
                     sizeBytes: 10,
@@ -384,10 +387,343 @@ describe('SqliteAgentStateStore', () => {
         });
 
         try {
-            await assert.rejects(() => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')));
-            assert.ok(await store.getArtifact('artifact-purge-blocked-file'));
+            const purged = await store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z'));
+            assert.equal(purged, 1);
+            await assert.rejects(() => access(artifactPath));
+            assert.equal(await store.getArtifact('artifact-purge-directory-artifact'), undefined);
+            const entries = await readdir(artifactParentPath);
+            assert.deepEqual(entries.filter((entry) => entry.startsWith(`${artifactBaseName}.purge-`)), []);
         } finally {
-            await rm(artifactPath, { recursive: true, force: true });
+            await rm(artifactParentPath, { recursive: true, force: true });
+        }
+    });
+
+    it('does not replace a different artifact row when filename collides', async () => {
+        const requestJsonA = { prompt: 'file collision A' };
+        const requestJsonB = { prompt: 'file collision B' };
+        const beginA = await store.beginRequest({
+            idempotencyKey: 'idem-collision-a',
+            requestHash: hashAgentPayload(requestJsonA),
+            mode: 'generate',
+            requestJson: requestJsonA,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        const beginB = await store.beginRequest({
+            idempotencyKey: 'idem-collision-b',
+            requestHash: hashAgentPayload(requestJsonB),
+            mode: 'generate',
+            requestJson: requestJsonB,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        assert.equal(beginA.type, 'acquired');
+        assert.equal(beginB.type, 'acquired');
+        if (beginA.type !== 'acquired' || beginB.type !== 'acquired') throw new Error('expected acquired');
+
+        const sharedFilename = 'shared-name.png';
+        await store.completeRequest({
+            requestId: beginA.record.requestId,
+            response: {
+                request_id: beginA.record.requestId,
+                idempotency_key: 'idem-collision-a',
+                cached: false,
+                images: [],
+                created_at: '2026-05-12T00:00:00.500Z'
+            },
+            artifacts: [
+                buildArtifact({
+                    id: 'artifact-collision-a',
+                    requestId: beginA.record.requestId,
+                    filename: sharedFilename
+                })
+            ]
+        });
+
+        await assert.rejects(
+            () =>
+                store.completeRequest({
+                    requestId: beginB.record.requestId,
+                    response: {
+                        request_id: beginB.record.requestId,
+                        idempotency_key: 'idem-collision-b',
+                        cached: false,
+                        images: [],
+                        created_at: '2026-05-12T00:00:00.600Z'
+                    },
+                    artifacts: [
+                        buildArtifact({
+                            id: 'artifact-collision-b',
+                            requestId: beginB.record.requestId,
+                            filename: sharedFilename
+                        })
+                    ]
+                }),
+            /UNIQUE/
+        );
+        assert.ok(await store.getArtifact('artifact-collision-a'));
+        assert.equal(await store.getArtifact('artifact-collision-b'), undefined);
+    });
+
+    it('restores moved artifact files when purge fails after file relocation', async () => {
+        const requestJson = { prompt: 'purge restore on failure' };
+        const requestHash = hashAgentPayload(requestJson);
+        const artifactPath = path.join(process.cwd(), 'generated-images', '.sqlite-purge-test', `${crypto.randomUUID()}.png`);
+        await mkdir(path.dirname(artifactPath), { recursive: true });
+        await writeFile(artifactPath, 'stale image');
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-purge-restore-file',
+            requestHash,
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 1,
+            now: new Date('2026-05-12T00:00:00.000Z')
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+
+        await store.completeRequest({
+            requestId: begin.record.requestId,
+            response: {
+                request_id: begin.record.requestId,
+                idempotency_key: 'idem-purge-restore-file',
+                cached: false,
+                images: [],
+                created_at: '2026-05-12T00:00:00.500Z'
+            },
+            artifacts: [
+                {
+                    id: 'artifact-purge-restore-file',
+                    requestId: begin.record.requestId,
+                    filename: 'sqlite-purge-restore.png',
+                    filepath: artifactPath,
+                    contentUrl: '/api/agent/artifacts/artifact-purge-restore-file/content',
+                    metadataUrl: '/api/agent/artifacts/artifact-purge-restore-file',
+                    outputFormat: 'png',
+                    mimeType: 'image/png',
+                    sizeBytes: 1,
+                    width: 1,
+                    height: 1,
+                    model: 'gpt-image-2',
+                    promptHash: 'hash',
+                    createdAt: '2026-05-12T00:00:00.500Z'
+                }
+            ],
+            now: new Date('2026-05-12T00:00:00.500Z')
+        });
+        try {
+            const db = (store as unknown as { db: { exec(sql: string): void; prepare(sql: string): { run(...args: unknown[]): void } } }).db;
+            db.exec(
+                "CREATE TRIGGER purge_fail_guard BEFORE DELETE ON agent_requests BEGIN SELECT RAISE(ABORT, 'purge failed'); END;"
+            );
+            await assert.rejects(() => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')), /purge failed/);
+            await assert.doesNotReject(() => access(artifactPath));
+            assert.ok(await store.getArtifact('artifact-purge-restore-file'));
+        } finally {
+            const db = (store as unknown as { db: { exec(sql: string): void } }).db;
+            db.exec('DROP TRIGGER IF EXISTS purge_fail_guard');
+            await rm(path.dirname(artifactPath), { recursive: true, force: true });
+        }
+    });
+
+    it('continues purging expired requests after a guarded purge failure', async () => {
+        const requestJson = { prompt: 'purge after guarded failure' };
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-purge-after-guarded-failure',
+            requestHash: hashAgentPayload(requestJson),
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 1,
+            now: new Date('2026-05-12T00:00:00.000Z')
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+
+        await store.completeRequest({
+            requestId: begin.record.requestId,
+            response: {
+                request_id: begin.record.requestId,
+                idempotency_key: 'idem-purge-after-guarded-failure',
+                cached: false,
+                images: [],
+                created_at: '2026-05-12T00:00:00.500Z'
+            },
+            artifacts: [],
+            now: new Date('2026-05-12T00:00:00.500Z')
+        });
+
+        await assert.doesNotReject(() => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')));
+    });
+
+    it('stores and reads image share metadata', async () => {
+        await store.createImageShareRecord({
+            token: 'b'.repeat(24),
+            sourceFilename: 'source.png',
+            contentFilename: `${'b'.repeat(24)}.png`,
+            mimeType: 'image/png',
+            sizeBytes: 12,
+            createdAt: '2026-05-14T08:00:00.000Z',
+            accessCodeRequired: true,
+            expiresAt: '2026-05-14T09:00:00.000Z',
+            accessCodeSalt: 'salt',
+            accessCodeHash: 'hash'
+        });
+
+        const record = await store.readImageShareRecord('b'.repeat(24));
+        assert.ok(record);
+        assert.equal(record.sourceFilename, 'source.png');
+        assert.equal(record.accessCodeRequired, true);
+        assert.equal(record.expiresAt, '2026-05-14T09:00:00.000Z');
+    });
+
+    it('rejects invalid protected image share metadata at the schema boundary', async () => {
+        const db = new Database(path.join(tempDir, 'invalid-share-schema.sqlite'));
+        db.exec(SQLITE_SCHEMA);
+
+        try {
+            assert.throws(
+                () =>
+                    db.prepare(
+                        `INSERT INTO image_shares
+                            (token, source_filename, content_filename, mime_type, size_bytes, created_at, access_code_required)
+                         VALUES (?, ?, ?, ?, ?, ?, ?)`
+                    ).run('f'.repeat(24), 'source.png', `${'f'.repeat(24)}.png`, 'image/png', 12, '2026-05-14T08:00:00.000Z', 1),
+                /CHECK/
+            );
+        } finally {
+            db.close();
+        }
+    });
+
+    it('rejects applied migration checksum drift', async () => {
+        const dbPath = path.join(tempDir, 'migration-checksum-drift.sqlite');
+        const db = new Database(dbPath);
+        db.exec(`
+            CREATE TABLE state_schema_migrations (
+                id TEXT PRIMARY KEY,
+                checksum TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+            INSERT INTO state_schema_migrations (id, checksum, applied_at)
+            VALUES ('001_agent_state_core', 'bad-checksum', '2026-05-14T08:00:00.000Z');
+        `);
+        db.close();
+        const drifted = new SqliteAgentStateStore(dbPath);
+
+        await assert.rejects(() => drifted.init(), /checksum/);
+    });
+
+    it('rejects attempts to rewrite an existing artifact id with different metadata', async () => {
+        const requestJsonA = { prompt: 'stable artifact A' };
+        const requestJsonB = { prompt: 'stable artifact B' };
+        const beginA = await store.beginRequest({
+            idempotencyKey: 'idem-stable-artifact-a',
+            requestHash: hashAgentPayload(requestJsonA),
+            mode: 'generate',
+            requestJson: requestJsonA,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        const beginB = await store.beginRequest({
+            idempotencyKey: 'idem-stable-artifact-b',
+            requestHash: hashAgentPayload(requestJsonB),
+            mode: 'generate',
+            requestJson: requestJsonB,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        assert.equal(beginA.type, 'acquired');
+        assert.equal(beginB.type, 'acquired');
+        if (beginA.type !== 'acquired' || beginB.type !== 'acquired') throw new Error('expected acquired');
+        const first = buildArtifact({
+            id: 'artifact-stable-sqlite',
+            requestId: beginA.record.requestId,
+            filename: 'stable-sqlite-a.png'
+        });
+        const rewritten = buildArtifact({
+            id: 'artifact-stable-sqlite',
+            requestId: beginB.record.requestId,
+            filename: 'stable-sqlite-b.png'
+        });
+
+        await store.saveArtifacts([first]);
+        await assert.rejects(() => store.saveArtifacts([rewritten]), /artifact metadata conflict/);
+
+        assert.deepEqual(await store.getArtifact('artifact-stable-sqlite'), first);
+    });
+
+    it('deletes expired image share records and lists active share records', async () => {
+        await store.createImageShareRecord({
+            token: 'd'.repeat(24),
+            sourceFilename: 'expired.png',
+            contentFilename: `${'d'.repeat(24)}.png`,
+            mimeType: 'image/png',
+            sizeBytes: 12,
+            createdAt: '2026-05-14T08:00:00.000Z',
+            accessCodeRequired: false,
+            expiresAt: '2026-05-14T09:00:00.000Z'
+        });
+        await store.createImageShareRecord({
+            token: 'e'.repeat(24),
+            sourceFilename: 'active.png',
+            contentFilename: `${'e'.repeat(24)}.png`,
+            mimeType: 'image/png',
+            sizeBytes: 12,
+            createdAt: '2026-05-14T08:00:00.000Z',
+            accessCodeRequired: false,
+            expiresAt: '2026-05-14T10:00:00.000Z'
+        });
+
+        const expired = await store.deleteExpiredImageShareRecords('2026-05-14T09:00:01.000Z');
+        const active = await store.listImageShareRecords();
+
+        assert.equal(expired.some((record) => record.token === 'd'.repeat(24)), true);
+        assert.equal(active.some((record) => record.token === 'e'.repeat(24)), true);
+    });
+
+    it('records schema migrations and keeps repeated init idempotent', async () => {
+        const dbPath = path.join(tempDir, 'migration-idempotent.sqlite');
+        const first = new SqliteAgentStateStore(dbPath);
+        await first.init();
+        const second = new SqliteAgentStateStore(dbPath);
+        await second.init();
+        const db = new Database(dbPath, { readonly: true });
+
+        try {
+            const rows = db
+                .prepare('SELECT id FROM state_schema_migrations ORDER BY id ASC')
+                .all() as Array<{ id: string }>;
+            assert.deepEqual(
+                rows.map((row) => row.id),
+                ['001_agent_state_core', '002_image_shares']
+            );
+        } finally {
+            db.close();
         }
     });
 });
+
+function buildArtifact(input: {
+    id: string;
+    requestId: string;
+    filename: string;
+}): AgentArtifactRecord {
+    return {
+        id: input.id,
+        requestId: input.requestId,
+        filename: input.filename,
+        filepath: path.join(process.cwd(), 'generated-images', `${input.id}.png`),
+        contentUrl: `/api/agent/artifacts/${input.id}/content`,
+        metadataUrl: `/api/agent/artifacts/${input.id}`,
+        outputFormat: 'png',
+        mimeType: 'image/png',
+        sizeBytes: 1,
+        width: 1,
+        height: 1,
+        model: 'gpt-image-2',
+        promptHash: 'hash',
+        createdAt: '2026-05-12T00:00:00.500Z'
+    };
+}

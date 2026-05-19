@@ -1,14 +1,24 @@
 import fs from 'fs/promises';
 import { RequestValidationError, isValidImageFilename } from '@/lib/image-request-utils';
+import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
+import { outputDir, verifyAccessToken } from '@/lib/server-runtime';
 import { lookup } from 'mime-types';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 
-// 图片存储根目录，位于 Next.js 应用目录外。
-const imageBaseDir = path.resolve(process.cwd(), 'generated-images');
-
 export async function GET(request: NextRequest, { params }: { params: Promise<{ filename: string }> }) {
     const { filename } = await params;
+    const appPassword = process.env.APP_PASSWORD;
+    const accessToken = request.cookies.get('gptImageAccess')?.value;
+    if (!verifyAccessToken(accessToken, appPassword)) {
+        return NextResponse.json(
+            {
+                error: 'Unauthorized: Invalid access token.',
+                code: accessToken ? PAGE_PASSWORD_AUTH_ERROR_CODES.invalid : PAGE_PASSWORD_AUTH_ERROR_CODES.missing
+            },
+            { status: 401 }
+        );
+    }
 
     if (!filename) {
         return NextResponse.json({ error: '文件名必填' }, { status: 400 });
@@ -18,7 +28,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         return NextResponse.json({ error: '文件名无效' }, { status: 400 });
     }
 
-    const filepath = path.join(imageBaseDir, filename);
+    const filepath = path.join(outputDir, filename);
 
     try {
         await fs.access(filepath);

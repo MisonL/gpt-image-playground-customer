@@ -28,7 +28,7 @@ GPT Image Playground 是一个用于本地部署的 `gpt-image-2` 图片服务�
 
 ### 推荐：Docker 部署
 
-1. 准备 `.env.local`：
+1. 可选：准备 `.env.local`，用于给服务端配置默认 API Key 或渠道池；如果不创建，也可以启动后在页面右上角 `API 设置` 中填写。
 
 ```dotenv
 OPENAI_API_KEY=your_openai_api_key_here
@@ -127,6 +127,9 @@ http://localhost:4783
 - 流式输出：默认开启，支持生成和编辑过程中的局部图片预览。
 - 历史记录：保留提示词、参数、图片、耗时、token 使用量和估算费用。
 - 发送到编辑：从生成结果或历史记录直接进入编辑模式。
+- 下载与分享：单图结果可直接下载，分享链接支持访问码和有效期。
+- 页面访问保护：可通过 `APP_PASSWORD` 给网页和受保护图片访问加入口密码。
+- Agent 状态后端：支持 `memory`、`sqlite`、`postgres`，覆盖临时演示、单实例和集中状态库场景。
 - 双语和主题：支持中文、英文、亮色、暗色。
 - 两种图片存储模式：服务端文件系统或浏览器 IndexedDB。
 
@@ -279,7 +282,7 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 否 | `60000` | 服务端 credential 或 channel 失败后的默认冷却时间。 |
 | `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问密码。 |
 | `AGENT_API_TOKEN` | 否 | 无 | 设置后，`/api/agent/*` 需要 Bearer token。 |
-| `AGENT_STATE_BACKEND` | 否 | `sqlite` | Agent 状态后端，可选 `sqlite` 或 `postgres`。 |
+| `AGENT_STATE_BACKEND` | 否 | `sqlite` | Agent 状态后端，可选 `memory`、`sqlite` 或 `postgres`。 |
 | `AGENT_SQLITE_PATH` | 否 | `generated-images/.agent-state/agent.sqlite` | SQLite 状态库路径。 |
 | `AGENT_DATABASE_URL` | PostgreSQL 模式可选 | 无 | PostgreSQL 连接串；也可改用下面的拆分字段。 |
 | `AGENT_DB_HOST` / `AGENT_DB_PORT` / `AGENT_DB_NAME` / `AGENT_DB_USER` | PostgreSQL 模式可选 | `localhost` / `5432` / `gpt_image_playground` / `gpt_image` | 未设置 `AGENT_DATABASE_URL` 时用于组装 PostgreSQL 连接串。 |
@@ -376,7 +379,7 @@ Agent API 读取图片时走鉴权接口：
 /api/agent/artifacts/{id}/content
 ```
 
-Agent 状态库只保存请求、幂等和产物元数据，不保存图片二进制。备份时需要同时备份状态库和 `generated-images/`。
+状态库保存 Agent 请求、幂等、产物元数据和分享元数据，不保存图片二进制。备份时需要同时备份状态库和 `generated-images/`。PostgreSQL 只集中保存元数据；如果运行多个应用副本，所有副本还必须共享同一个 `generated-images/` 卷，或改造为外部对象存储，否则某个副本可能读不到另一个副本写入的图片文件。
 
 如果部署到只读或临时文件系统，可以把 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 设置为 `indexeddb`。这时图片会保存在浏览器 IndexedDB 中，服务端不落盘。
 
@@ -388,6 +391,12 @@ SQLite 单实例默认部署：
 docker compose up -d --build --remove-orphans
 ```
 
+内存临时演示部署：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.memory.yml up -d --build --remove-orphans
+```
+
 PostgreSQL 高并发部署：
 
 ```bash
@@ -395,11 +404,41 @@ GPT_IMAGE_POSTGRES_PASSWORD='<database-password>' \
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
 ```
 
-SQLite 与 PostgreSQL 模式共享同一个 Compose project、应用容器名和图片目录。切回 SQLite 模式时使用 `--remove-orphans` 会清理 PostgreSQL service，避免保留不再属于当前配置的容器。
+三种 Docker 模板的状态后端如下：
+
+| 文件 | 状态后端 | 适用场景 |
+| --- | --- | --- |
+| `docker-compose.yml` | `sqlite` | 本地单实例、需要保留 Agent 幂等和分享元数据。 |
+| `docker-compose.yml` + `docker-compose.memory.yml` | `memory` | Hugging Face Space 免费层、公开演示、重启可丢状态的临时服务。 |
+| `docker-compose.yml` + `docker-compose.postgres.yml` | `postgres` | 高并发、多实例或需要集中状态库的部署。 |
+
+三种模式共享同一个 Compose project、应用容器名和图片目录。切换模式时建议使用 `--remove-orphans`，避免保留不再属于当前配置的容器。
 
 `GPT_IMAGE_POSTGRES_PASSWORD` 只在 PostgreSQL volume 首次初始化时生效。已有 `postgres-data` volume 的部署如果要更换密码，需要先在数据库内修改用户密码，或备份后重建 volume；仅修改环境变量不会自动轮换现有数据库密码。
 
-SQLite 适合单实例本地服务。多实例或长期高并发 Agent 服务应使用 PostgreSQL，不要让多个容器共享同一个 SQLite 文件作为主状态库。
+SQLite 适合单实例本地服务。多实例或长期高并发 Agent 服务应使用 PostgreSQL，不要让多个容器共享同一个 SQLite 文件作为主状态库。即使使用 PostgreSQL，多实例部署仍需要共享图片文件存储；仅共享数据库不足以保证 artifact 和分享内容可读。
+
+Hugging Face Space 免费层或其他临时容器演示可以使用纯内存状态后端：
+
+```dotenv
+AGENT_STATE_BACKEND=memory
+NEXT_PUBLIC_IMAGE_STORAGE_MODE=fs
+```
+
+本仓库也提供 `docker-compose.memory.yml` 作为本地模拟模板；Hugging Face Docker Space 通常直接通过 Space 环境变量设置 `AGENT_STATE_BACKEND=memory`，不需要提交 `.env.local`。
+
+`memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。图片二进制仍按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存，默认 `fs` 会写入当前容器文件系统。
+
+如果把当前 Dockerfile 直接部署到 Hugging Face Docker Space，Space README 顶部 YAML 需要使用 Docker SDK，并把应用端口指向本项目默认端口：
+
+```yaml
+---
+sdk: docker
+app_port: 4783
+---
+```
+
+免费层文件系统不是长期持久化介质，因此 `memory` 模式只用于公开演示或临时体验。需要长期保留图片、分享和 Agent replay 状态时，应改用 PostgreSQL 加持久卷或外部对象存储。
 
 PostgreSQL live 并发测试可用以下命令单独执行。未提供 `AGENT_POSTGRES_TEST_DATABASE_URL` 时，脚本会自动启动临时 PostgreSQL 容器并在结束后清理。
 
@@ -478,3 +517,51 @@ docker logs -f gpt-image-playground-customer
 ## 许可证
 
 MIT
+
+## Docker 镜像运行
+
+默认 `docker-compose.yml` 使用本地构建镜像，适合直接部署当前仓库代码：
+
+```bash
+docker compose up -d --build
+```
+
+构建出的本地镜像名为 `gpt-image-playground-customer:local`。
+
+如果需要使用已发布的 Docker Hub 镜像，可以用 `docker run` 手动指定镜像。镜像不会内置 `OPENAI_API_KEY`、`OPENAI_API_BASE_URL` 或 `APP_PASSWORD`，运行容器时通过环境变量传入。
+
+### docker run
+
+Linux/macOS：
+
+```bash
+docker run -d \
+  --name gpt-image-playground-customer \
+  --restart unless-stopped \
+  -p 4783:4783 \
+  -e OPENAI_API_KEY \
+  -e OPENAI_API_BASE_URL \
+  -e APP_PASSWORD \
+  -e AGENT_STATE_BACKEND="sqlite" \
+  -e NEXT_PUBLIC_IMAGE_STORAGE_MODE="fs" \
+  -v "$(pwd)/generated-images:/app/generated-images" \
+  kwokyde/gpt-image-playground:latest
+```
+
+Windows PowerShell：
+
+```powershell
+docker run -d `
+  --name gpt-image-playground-customer `
+  --restart unless-stopped `
+  -p 4783:4783 `
+  -e OPENAI_API_KEY `
+  -e OPENAI_API_BASE_URL `
+  -e APP_PASSWORD `
+  -e AGENT_STATE_BACKEND="sqlite" `
+  -e NEXT_PUBLIC_IMAGE_STORAGE_MODE="fs" `
+  -v "${PWD}\generated-images:/app/generated-images" `
+  kwokyde/gpt-image-playground:latest
+```
+
+当前 Dockerfile 使用 Next.js standalone 输出，运行镜像只包含独立服务文件、静态资源和必要依赖，不再复制完整 `node_modules`。

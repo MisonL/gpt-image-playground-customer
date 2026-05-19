@@ -12,7 +12,7 @@ import {
 import { useI18n } from '@/lib/i18n';
 import { filterLogsByScope, resolveLogClientRequestIds } from '@/lib/log-filter';
 import { cn } from '@/lib/utils';
-import { Grid, Loader2, Send, Terminal, Trash2 } from 'lucide-react';
+import { Download, Grid, Loader2, Send, Share2, Terminal, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
 
@@ -29,6 +29,8 @@ type ImageOutputProps = {
     altText?: string;
     isLoading: boolean;
     onSendToEdit: (filename: string) => void;
+    onDownloadImage: (filename: string) => void;
+    onShareImage: (filename: string) => void;
     currentMode: 'generate' | 'edit';
     baseImagePreviewUrl: string | null;
     streamingPreviewImages?: Map<number, string>;
@@ -69,6 +71,8 @@ export function ImageOutput({
     altText = 'Generated image output',
     isLoading,
     onSendToEdit,
+    onDownloadImage,
+    onShareImage,
     currentMode,
     baseImagePreviewUrl,
     streamingPreviewImages,
@@ -103,6 +107,18 @@ export function ImageOutput({
         // 只有选中单张图片时才允许发送到编辑。
         if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
             onSendToEdit(imageBatch[viewMode].filename);
+        }
+    };
+
+    const handleDownloadClick = () => {
+        if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
+            onDownloadImage(imageBatch[viewMode].filename);
+        }
+    };
+
+    const handleShareClick = () => {
+        if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
+            onShareImage(imageBatch[viewMode].filename);
         }
     };
 
@@ -198,6 +214,7 @@ export function ImageOutput({
     const showCarousel = imageBatch && imageBatch.length > 1;
     const isSingleImageView = typeof viewMode === 'number';
     const canSendToEdit = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
+    const canUseImageActions = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
 
     return (
         <div className='bg-card text-card-foreground flex h-full min-h-[300px] w-full flex-col items-center justify-between gap-4 overflow-hidden rounded-lg border border-border p-4'>
@@ -427,6 +444,30 @@ export function ImageOutput({
                     )}>
                     <Send className='mr-2 h-4 w-4' />
                     {t('output.sendToEdit')}
+                </Button>
+                <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={handleDownloadClick}
+                    disabled={!canUseImageActions}
+                    className={cn(
+                        'shrink-0 disabled:opacity-50',
+                        showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
+                    )}>
+                    <Download className='mr-2 h-4 w-4' />
+                    {t('output.download')}
+                </Button>
+                <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={handleShareClick}
+                    disabled={!canUseImageActions}
+                    className={cn(
+                        'shrink-0 disabled:opacity-50',
+                        showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
+                    )}>
+                    <Share2 className='mr-2 h-4 w-4' />
+                    {t('output.share')}
                 </Button>
             </div>
         </div>

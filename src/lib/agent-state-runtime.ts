@@ -6,9 +6,11 @@ import {
     readAgentSqlitePath,
     type AgentStateBackend
 } from './agent-api-contracts';
+import { MemoryAgentStateStore } from './agent-state-memory';
 import { PostgresAgentStateStore } from './agent-state-postgres';
 import { SqliteAgentStateStore } from './agent-state-sqlite';
 import type { AgentStateStore } from './agent-state-store';
+import { purgeExpiredImageSharesForStore } from './share-store';
 
 type CachedStore = {
     backend: AgentStateBackend;
@@ -21,6 +23,17 @@ type CachedStore = {
 
 let cachedStore: CachedStore | undefined;
 let storeFactoryForTests: ((backend: AgentStateBackend, key: string, env: Record<string, string | undefined>) => AgentStateStore) | undefined;
+
+function cacheAgentStateStore(backend: AgentStateBackend, key: string, store: AgentStateStore): AgentStateStore {
+    const initPromise = store.init().catch((error) => {
+        if (cachedStore?.store === store && cachedStore.initPromise === initPromise) {
+            cachedStore = undefined;
+        }
+        throw error;
+    });
+    cachedStore = { backend, key, store, initPromise };
+    return store;
+}
 
 function readEnvValue(env: Record<string, string | undefined>, fieldName: string): string | undefined {
     const value = env[fieldName]?.trim();
@@ -65,26 +78,25 @@ export function getAgentStateStore(env: Record<string, string | undefined> = pro
     const key =
         backend === 'postgres'
             ? databaseUrl || ''
-            : path.resolve(/* turbopackIgnore: true */ process.cwd(), readAgentSqlitePath(env));
+            : backend === 'memory'
+              ? 'memory'
+              : path.resolve(/* turbopackIgnore: true */ process.cwd(), readAgentSqlitePath(env));
     if (cachedStore && cachedStore.backend === backend && cachedStore.key === key) {
         return cachedStore.store;
     }
     if (storeFactoryForTests) {
-        const store = storeFactoryForTests(backend, key, env);
-        cachedStore = { backend, key, store, initPromise: store.init() };
-        return store;
+        return cacheAgentStateStore(backend, key, storeFactoryForTests(backend, key, env));
     }
     if (backend === 'postgres') {
         if (!databaseUrl) {
             throw new Error('AGENT_STATE_BACKEND=postgres 时必须设置 AGENT_DATABASE_URL 或 AGENT_DB_PASSWORD。');
         }
-        const store = new PostgresAgentStateStore(databaseUrl);
-        cachedStore = { backend, key, store, initPromise: store.init() };
-        return store;
+        return cacheAgentStateStore(backend, key, new PostgresAgentStateStore(databaseUrl));
     }
-    const store = new SqliteAgentStateStore(key);
-    cachedStore = { backend, key, store, initPromise: store.init() };
-    return store;
+    if (backend === 'memory') {
+        return cacheAgentStateStore(backend, key, new MemoryAgentStateStore());
+    }
+    return cacheAgentStateStore(backend, key, new SqliteAgentStateStore(key));
 }
 
 export async function ensureAgentStateStoreReady(
@@ -102,6 +114,7 @@ export async function recoverAgentStateOnStartup(env: Record<string, string | un
     await cachedStore?.initPromise;
     const recovered = await store.recoverExpiredRequests();
     await store.purgeExpiredRequests();
+    await purgeExpiredImageSharesForStore(store, new Date(), { purgeOrphanFiles: false });
     if (cachedStore) {
         cachedStore.lastRecoveryAtMs = Date.now();
     }
@@ -123,6 +136,7 @@ async function recoverAgentStateIfDue(store: AgentStateStore, env: Record<string
         try {
             await store.recoverExpiredRequests(now);
             await store.purgeExpiredRequests(now);
+            await purgeExpiredImageSharesForStore(store, now, { purgeOrphanFiles: false });
             if (cachedStore) {
                 cachedStore.lastRecoveryAtMs = nowMs;
             }
