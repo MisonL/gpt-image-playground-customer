@@ -521,8 +521,40 @@ describe('SqliteAgentStateStore', () => {
             await assert.doesNotReject(() => access(artifactPath));
             assert.ok(await store.getArtifact('artifact-purge-restore-file'));
         } finally {
+            const db = (store as unknown as { db: { exec(sql: string): void } }).db;
+            db.exec('DROP TRIGGER IF EXISTS purge_fail_guard');
             await rm(path.dirname(artifactPath), { recursive: true, force: true });
         }
+    });
+
+    it('continues purging expired requests after a guarded purge failure', async () => {
+        const requestJson = { prompt: 'purge after guarded failure' };
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-purge-after-guarded-failure',
+            requestHash: hashAgentPayload(requestJson),
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 1,
+            now: new Date('2026-05-12T00:00:00.000Z')
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+
+        await store.completeRequest({
+            requestId: begin.record.requestId,
+            response: {
+                request_id: begin.record.requestId,
+                idempotency_key: 'idem-purge-after-guarded-failure',
+                cached: false,
+                images: [],
+                created_at: '2026-05-12T00:00:00.500Z'
+            },
+            artifacts: [],
+            now: new Date('2026-05-12T00:00:00.500Z')
+        });
+
+        await assert.doesNotReject(() => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')));
     });
 
     it('stores and reads image share metadata', async () => {

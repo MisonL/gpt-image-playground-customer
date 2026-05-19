@@ -20,6 +20,7 @@ import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/co
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
+import { createImageShareFromBlob } from '@/lib/share-client';
 import { sha256Hex } from '@/lib/sha256';
 import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
 import {
@@ -1336,30 +1337,22 @@ export default function HomePage() {
             setShareError(null);
             try {
                 const blob = await resolveImageBlob(shareTargetFilename);
-                const form = new FormData();
-                form.set('sourceFilename', shareTargetFilename);
-                form.set('image', new File([blob], shareTargetFilename, { type: blob.type || 'image/png' }));
-                const accessCode = values.accessCode.trim();
-                if (accessCode) {
-                    form.set('accessCode', accessCode);
-                }
-                if (typeof values.expiresInMinutes === 'number') {
-                    form.set('expiresInMinutes', String(values.expiresInMinutes));
-                }
-
-                const response = await fetch('/api/shares', { method: 'POST', body: form });
-                const body = await response.json();
-                if (!response.ok) {
-                    throw new Error(body.error || t('share.createFailed'));
-                }
-                setShareUrl(body.url);
+                const result = await createImageShareFromBlob({
+                    filename: shareTargetFilename,
+                    blob,
+                    values,
+                    accessRefreshErrorMessage: t('error.imageAccessRefreshFailed'),
+                    createFailedMessage: t('share.createFailed'),
+                    refreshImageAccessCookie
+                });
+                setShareUrl(result.url);
             } catch (error) {
                 setShareError(error instanceof Error ? error.message : t('share.createFailed'));
             } finally {
                 setIsCreatingShare(false);
             }
         },
-        [resolveImageBlob, shareTargetFilename, t]
+        [refreshImageAccessCookie, resolveImageBlob, shareTargetFilename, t]
     );
 
     const handleSendToEdit = async (filename: string) => {

@@ -49,7 +49,7 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
     const { t } = useI18n();
     const [accessCode, setAccessCode] = React.useState('');
     const [expiry, setExpiry] = React.useState('none');
-    const [copied, setCopied] = React.useState(false);
+    const [copyStatus, setCopyStatus] = React.useState<{ url: string; result: 'copied' | 'error' } | null>(null);
 
     const selectedExpiry = expiryOptions.find((option) => option.value === expiry) ?? expiryOptions[0];
     const trimmedAccessCode = accessCode.trim();
@@ -58,7 +58,7 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
 
     const handleOpenChange = (nextOpen: boolean) => {
         if (!nextOpen) {
-            setCopied(false);
+            setCopyStatus(null);
         }
         onOpenChange(nextOpen);
     };
@@ -106,14 +106,27 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                                     variant='outline'
                                     size='icon'
                                     onClick={async () => {
-                                        await navigator.clipboard.writeText(shareUrl);
-                                        setCopied(true);
+                                        setCopyStatus(null);
+                                        try {
+                                            if (!navigator.clipboard?.writeText) {
+                                                throw new Error(t('share.copyFailed'));
+                                            }
+                                            await navigator.clipboard.writeText(shareUrl);
+                                            setCopyStatus({ url: shareUrl, result: 'copied' });
+                                        } catch {
+                                            setCopyStatus({ url: shareUrl, result: 'error' });
+                                        }
                                     }}
                                     aria-label={t('share.copyLink')}>
                                     <Copy className='h-4 w-4' />
                                 </Button>
                             </div>
-                            {copied ? <p className='text-sm text-emerald-600'>{t('common.copied')}</p> : null}
+                            {copyStatus?.url === shareUrl && copyStatus.result === 'copied' ? (
+                                <p className='text-sm text-emerald-600'>{t('common.copied')}</p>
+                            ) : null}
+                            {copyStatus?.url === shareUrl && copyStatus.result === 'error' ? (
+                                <p className='text-destructive text-sm'>{t('share.copyFailed')}</p>
+                            ) : null}
                         </div>
                     ) : null}
                 </div>
