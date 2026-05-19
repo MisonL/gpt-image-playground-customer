@@ -18,8 +18,6 @@ GPT Image Playground 是一个用于本地部署的 `gpt-image-2` 图片服务�
   <img src="./readme-images/interface.jpg" alt="GPT Image Playground 界面" width="900"/>
 </p>
 
-> **4K 出图提示**：如果遇到 4K 分辨率出图失败问题（状态码 `524`），请使用 [superapi 站](https://superapi.buzz/register?aff=W0rz) 提供的 `gpt-image-2` 渠道。该渠道已适配支持 4K 流式出图，价格便宜（`0.0075` 元/张）。
-
 ## 快速开始
 
 系统推荐采用 Docker 部署。Docker 运行环境更稳定，依赖隔离更清晰，也更适合长期本地服务或内网服务。
@@ -137,7 +135,16 @@ http://localhost:4783
 
 - 图片生成默认使用 `quality=high`。如需降低成本或让上游自行选择质量，可在页面或 Agent 请求中显式改为 `auto`、`medium` 或 `low`。
 - 页面默认开启流式预览；并发流式批处理仍默认关闭，只有设置 `ENABLE_STREAMING_BATCH=true` 后才会把 `n>1` 拆成多个流式任务。
+- 服务端会把官方 OpenAI Images 流式事件和 OtokAPI `image.generation.*` 事件统一映射为前端稳定的 `partial_image`、`completed`、`done`、`error` 事件。
 - 流式请求失败时会显示原始错误状态和排查建议，不会自动改用非流式请求，以避免隐藏网关、限流或上游故障。
+
+## 图片后端路径
+
+- 默认路径是服务端中继 OpenAI Images API：`/api/images` 调用上游 `/images/generations` 或 `/images/edits`，再返回本项目稳定的 JSON 或 SSE 协议。
+- OtokAPI 兼容仅发生在流式事件适配层：`image.generation.chunk` 和 `image.generation.result` 会被归一化，不改变页面表单、Agent API 或批量逻辑。
+- Responses API image generation 是实验路径，默认关闭。只有同时设置 `ENABLE_RESPONSES_IMAGE_BACKEND=true`、配置 `OPENAI_RESPONSES_API_MODEL`，并在请求中显式传入 `imageBackend=responses` 时，服务端才会调用 `/responses` 并读取 `image_generation_call.result`。
+- Responses API 的顶层模型由 `OPENAI_RESPONSES_API_MODEL` 或请求字段 `responsesModel` 指定；页面表单里的图片模型只传给 `image_generation` 工具。
+- Responses API 实验路径当前只支持非流式单张 `generate`，不替换默认 Images API，不接入现有 Agent API、流式批处理或编辑表单。
 
 ## 编辑与遮罩
 
@@ -278,6 +285,8 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | `OPENAI_CHANNEL_N_API_KEYS` | 否 | 无 | 第 N 个渠道的一个或多个 API Key，多个 key 用英文逗号分隔。 |
 | `OPENAI_CHANNEL_N_FAILURE_COOLDOWN_MS` | 否 | 继承全局值 | 第 N 个渠道的失败冷却时间。 |
 | `ENABLE_STREAMING_BATCH` | 否 | `false` | 显式设为 `true` 后，流式模式下 `n>1` 会拆成多个 `n=1` 任务并发执行。 |
+| `ENABLE_RESPONSES_IMAGE_BACKEND` | 否 | `false` | 实验开关。显式设为 `true` 后，`imageBackend=responses` 请求才可调用 Responses API image generation。 |
+| `OPENAI_RESPONSES_API_MODEL` | 否 | 无 | Responses API 实验后端的 `/responses` 顶层模型。启用 `imageBackend=responses` 时必须设置，或在请求中传 `responsesModel`。 |
 | `OPENAI_MAX_STREAMS_PER_CREDENTIAL` | 否 | `1` | 每个服务端 credential 允许同时执行的流式任务数。 |
 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 否 | `60000` | 服务端 credential 或 channel 失败后的默认冷却时间。 |
 | `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问密码。 |

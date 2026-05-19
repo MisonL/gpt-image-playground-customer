@@ -11,6 +11,7 @@ export async function GET() {
         const healthSummary = serverChannelState.router?.getHealthSummary();
         const maxStreamsPerCredential = readPositiveIntegerEnv(process.env, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1);
         const streamingBatchEnabled = readBooleanEnv(process.env, 'ENABLE_STREAMING_BATCH');
+        const responsesImageBackendEnabled = readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND');
         const recommendedStreamingConcurrency = computeStreamingBatchRecommendation({
             credentialCount: healthSummary?.healthyCredentialCount ?? summary.credentialCount,
             maxStreamsPerCredential,
@@ -28,6 +29,10 @@ export async function GET() {
                 healthyChannelCount: healthSummary?.healthyChannelCount ?? summary.channelCount,
                 unhealthyChannelCount: healthSummary?.unhealthyChannelCount ?? 0,
                 lastFailure: toPublicChannelFailure(healthSummary?.lastFailure)
+            },
+            responsesImageBackend: {
+                enabled: responsesImageBackendEnabled,
+                mode: 'experimental'
             }
         });
     } catch (error) {
