@@ -34,8 +34,17 @@ import {
     persistedImageToLegacyResponse,
     persistOpenAiImages
 } from '@/lib/image-service';
+import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { getServerChannelState } from '@/lib/server-channel-router';
-import { createBatchId, createImageFilename, outputDir, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
+import {
+    buildAccessCookie,
+    createBatchId,
+    createImageFilename,
+    outputDir,
+    readAffinityKey,
+    serializeAccessCookie,
+    verifyPasswordHash
+} from '@/lib/server-runtime';
 import { resolveActualCost, type ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
@@ -84,6 +93,45 @@ function readErrorStatus(error: unknown): number | undefined {
     return undefined;
 }
 
+function isClosedStreamControllerError(error: unknown): boolean {
+    return error instanceof TypeError && /controller is already closed|invalid state/i.test(error.message);
+}
+
+function createSseWriter(controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder) {
+    let isClosed = false;
+
+    return {
+        send(event: StreamingEvent): boolean {
+            if (isClosed) {
+                return false;
+            }
+            try {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+                return true;
+            } catch (error) {
+                if (isClosedStreamControllerError(error)) {
+                    isClosed = true;
+                    return false;
+                }
+                throw error;
+            }
+        },
+        close() {
+            if (isClosed) {
+                return;
+            }
+            isClosed = true;
+            try {
+                controller.close();
+            } catch (error) {
+                if (!isClosedStreamControllerError(error)) {
+                    throw error;
+                }
+            }
+        }
+    };
+}
+
 function reportServerCredentialFailure(credential: ChannelCredential | undefined, error: unknown) {
     const serverChannelRouter = getServerChannelState().router;
     if (!credential || !serverChannelRouter) {
@@ -111,6 +159,23 @@ function describeInvalidImagesResponse(result: unknown): string {
     }
 
     return 'API 返回的数据不是 OpenAI Images 格式。请确认 API URL 是 OpenAI 兼容接口，并且该接口支持 Images generate/edit。';
+}
+
+function appendAccessCookie(response: Response, accessCookie: ReturnType<typeof buildAccessCookie> | undefined): Response {
+    if (accessCookie) {
+        response.headers.append('Set-Cookie', serializeAccessCookie(accessCookie));
+    }
+    return response;
+}
+
+function attachAccessCookie<T extends NextResponse>(
+    response: T,
+    accessCookie: ReturnType<typeof buildAccessCookie> | undefined
+): T {
+    if (accessCookie) {
+        response.cookies.set(accessCookie.name, accessCookie.value, accessCookie.options);
+    }
+    return response;
 }
 
 async function ensureOutputDirExists() {
@@ -189,6 +254,7 @@ export async function POST(request: NextRequest) {
     let selectedServerCredential: ChannelCredential | undefined;
     let clientRequestId: string | undefined;
     let requestLogContext: { clientRequestId: string } | undefined;
+    let accessCookie: ReturnType<typeof buildAccessCookie> | undefined;
     try {
         const serverChannelRouter = getServerChannelState().router;
         const contentType = request.headers.get('content-type') || '';
@@ -248,12 +314,19 @@ export async function POST(request: NextRequest) {
             const clientPasswordHash = formData.get('passwordHash');
             if (typeof clientPasswordHash !== 'string' || !clientPasswordHash) {
                 appLogger.error('缺少密码哈希。', requestLogContext);
-                return NextResponse.json({ error: '未授权：缺少密码哈希。' }, { status: 401 });
+                return NextResponse.json(
+                    { error: '未授权：缺少密码哈希。', code: PAGE_PASSWORD_AUTH_ERROR_CODES.missing },
+                    { status: 401 }
+                );
             }
             if (!verifyPasswordHash(clientPasswordHash, appPassword)) {
                 appLogger.error('密码哈希无效。', requestLogContext);
-                return NextResponse.json({ error: '未授权：密码无效。' }, { status: 401 });
+                return NextResponse.json(
+                    { error: '未授权：密码无效。', code: PAGE_PASSWORD_AUTH_ERROR_CODES.invalid },
+                    { status: 401 }
+                );
             }
+            accessCookie = buildAccessCookie(appPassword, request.headers);
         }
 
         const mode = readMode(formData);
@@ -312,6 +385,7 @@ export async function POST(request: NextRequest) {
 
                 const readableStream = new ReadableStream({
                     async start(controller) {
+                        const sse = createSseWriter(controller, encoder);
                         try {
                             const completedImages: Array<{
                                 filename: string;
@@ -331,7 +405,7 @@ export async function POST(request: NextRequest) {
                                         partialImageIndex: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
+                                    if (!sse.send(partialEvent)) return;
                                 } else if (event.type === 'image_generation.completed') {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
@@ -366,7 +440,7 @@ export async function POST(request: NextRequest) {
                                         client_request_id: clientRequestId,
                                         clientRequestId
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
+                                    if (!sse.send(completedEvent)) return;
 
                                     imageIndex++;
 
@@ -396,8 +470,8 @@ export async function POST(request: NextRequest) {
                                 client_request_id: clientRequestId,
                                 clientRequestId
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
-                            controller.close();
+                            if (!sse.send(doneEvent)) return;
+                            sse.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
                             appLogger.error('流式生成失败：', { ...requestLogContext, error: error instanceof Error ? error.message : String(error) });
@@ -407,13 +481,13 @@ export async function POST(request: NextRequest) {
                                 error: error instanceof Error ? error.message : '流式处理失败',
                                 ...(status ? { status } : {})
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
-                            controller.close();
+                            if (!sse.send(errorEvent)) return;
+                            sse.close();
                         }
                     }
                 });
 
-                return new Response(readableStream, {
+                const response = new Response(readableStream, {
                     headers: {
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
@@ -421,6 +495,7 @@ export async function POST(request: NextRequest) {
                         ...(clientRequestId ? { 'X-Client-Request-Id': clientRequestId } : {})
                     }
                 });
+                return appendAccessCookie(response, accessCookie);
             }
 
             const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...baseParams, stream: false };
@@ -471,6 +546,7 @@ export async function POST(request: NextRequest) {
 
                 const readableStream = new ReadableStream({
                     async start(controller) {
+                        const sse = createSseWriter(controller, encoder);
                         try {
                             const completedImages: Array<{
                                 filename: string;
@@ -490,7 +566,7 @@ export async function POST(request: NextRequest) {
                                         partialImageIndex: event.partial_image_index,
                                         b64_json: event.b64_json
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(partialEvent)}\n\n`));
+                                    if (!sse.send(partialEvent)) return;
                                 } else if (event.type === 'image_edit.completed') {
                                     const currentIndex = imageIndex;
                                     const filename = createImageFilename(batchId, currentIndex, fileExtension);
@@ -525,7 +601,7 @@ export async function POST(request: NextRequest) {
                                         client_request_id: clientRequestId,
                                         clientRequestId
                                     };
-                                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(completedEvent)}\n\n`));
+                                    if (!sse.send(completedEvent)) return;
 
                                     imageIndex++;
 
@@ -555,8 +631,8 @@ export async function POST(request: NextRequest) {
                                 client_request_id: clientRequestId,
                                 clientRequestId
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneEvent)}\n\n`));
-                            controller.close();
+                            if (!sse.send(doneEvent)) return;
+                            sse.close();
                         } catch (error) {
                             reportServerCredentialFailure(selectedCredential, error);
                             appLogger.error('流式编辑失败：', { ...requestLogContext, error: error instanceof Error ? error.message : String(error) });
@@ -566,13 +642,13 @@ export async function POST(request: NextRequest) {
                                 error: error instanceof Error ? error.message : '流式处理失败',
                                 ...(status ? { status } : {})
                             };
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
-                            controller.close();
+                            if (!sse.send(errorEvent)) return;
+                            sse.close();
                         }
                     }
                 });
 
-                return new Response(readableStream, {
+                const response = new Response(readableStream, {
                     headers: {
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
@@ -580,6 +656,7 @@ export async function POST(request: NextRequest) {
                         ...(clientRequestId ? { 'X-Client-Request-Id': clientRequestId } : {})
                     }
                 });
+                return appendAccessCookie(response, accessCookie);
             }
 
             const params: OpenAI.Images.ImageEditParams = {
@@ -626,7 +703,10 @@ export async function POST(request: NextRequest) {
                 filenames: savedImagesData.map((image) => image.filename)
             });
 
-            return NextResponse.json({ images: savedImagesData, usage: result.usage, actualCost, clientRequestId });
+            return attachAccessCookie(
+                NextResponse.json({ images: savedImagesData, usage: result.usage, actualCost, clientRequestId }),
+                accessCookie
+            );
         } catch (persistError) {
             if (persistError instanceof MissingOpenAiImageDataError) {
                 appLogger.error(`第 ${persistError.index} 个图片数据缺少 b64_json。`, requestLogContext);

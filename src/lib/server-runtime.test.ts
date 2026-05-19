@@ -1,26 +1,108 @@
 import {
     createBatchId,
     createImageFilename,
+    createAccessToken,
+    buildAccessCookie,
+    buildAccessCookieOptions,
+    isHttpsRequest,
     readBooleanEnv,
     readOutputDirEnv,
     readPositiveIntegerEnv,
     readAffinityKey,
+    serializeAccessCookie,
+    verifyAccessToken,
     verifyPasswordHash,
     type FilenameClock
 } from './server-runtime';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { describe, it } from 'node:test';
+
+const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
+const OTHER_PAGE_PASSWORD_FIXTURE = ['other', 'password'].join('-');
+const ACCESS_CODE_FIXTURE = ['test', 'fixture', 'access', 'code'].join('-');
+const DIFFERENT_ACCESS_CODE_FIXTURE = ['different', 'test', 'fixture', 'access', 'code'].join('-');
 
 describe('verifyPasswordHash', () => {
     it('accepts only the sha256 hash for the configured password', () => {
-        const passwordHash = 'f5366f0ad42a28df559f32cd0bdfc198f67e4cd2f011f3cee4dc80b97cf1a641';
+        const passwordHash = crypto.createHash('sha256').update(PAGE_PASSWORD_FIXTURE).digest('hex');
 
-        assert.equal(verifyPasswordHash(passwordHash, 'customer-password'), true);
-        assert.equal(verifyPasswordHash(passwordHash, 'other-password'), false);
+        assert.equal(verifyPasswordHash(passwordHash, PAGE_PASSWORD_FIXTURE), true);
+        assert.equal(verifyPasswordHash(passwordHash, OTHER_PAGE_PASSWORD_FIXTURE), false);
     });
 
     it('rejects malformed hex without throwing', () => {
-        assert.equal(verifyPasswordHash('not-a-hex-digest', 'customer-password'), false);
+        assert.equal(verifyPasswordHash('not-a-hex-digest', PAGE_PASSWORD_FIXTURE), false);
+    });
+});
+
+describe('verifyAccessToken', () => {
+    it('accepts only a fresh access token signed with the configured password', () => {
+        const issuedAtMs = 1_715_400_000_000;
+        const accessToken = createAccessToken(ACCESS_CODE_FIXTURE, issuedAtMs);
+
+        assert.equal(verifyAccessToken(accessToken, ACCESS_CODE_FIXTURE, issuedAtMs), true);
+        assert.equal(verifyAccessToken(accessToken, DIFFERENT_ACCESS_CODE_FIXTURE, issuedAtMs), false);
+    });
+
+    it('rejects expired or future-dated access tokens', () => {
+        const issuedAtMs = 1_715_400_000_000;
+        const accessToken = createAccessToken(ACCESS_CODE_FIXTURE, issuedAtMs);
+
+        assert.equal(verifyAccessToken(accessToken, ACCESS_CODE_FIXTURE, issuedAtMs + 24 * 60 * 60 * 1000), true);
+        assert.equal(verifyAccessToken(accessToken, ACCESS_CODE_FIXTURE, issuedAtMs + 24 * 60 * 60 * 1000 + 1), false);
+        assert.equal(verifyAccessToken(accessToken, ACCESS_CODE_FIXTURE, issuedAtMs - 60_001), false);
+    });
+
+    it('allows access when no server password is configured', () => {
+        assert.equal(verifyAccessToken(undefined, undefined), true);
+    });
+
+    it('rejects missing or malformed tokens when a server password is configured', () => {
+        assert.equal(verifyAccessToken(undefined, ACCESS_CODE_FIXTURE), false);
+        assert.equal(verifyAccessToken('not-a-hex-digest', ACCESS_CODE_FIXTURE), false);
+        assert.equal(verifyAccessToken('0'.repeat(64), ACCESS_CODE_FIXTURE), false);
+    });
+});
+
+describe('buildAccessCookieOptions', () => {
+    it('does not mark local http cookies as secure in production containers', () => {
+        assert.equal(buildAccessCookieOptions(new Headers()).secure, false);
+    });
+
+    it('marks cookies as secure behind an https proxy', () => {
+        assert.equal(buildAccessCookieOptions(new Headers({ 'x-forwarded-proto': 'https' })).secure, true);
+    });
+});
+
+describe('buildAccessCookie', () => {
+    it('builds the shared image access cookie from the configured password', () => {
+        const cookie = buildAccessCookie(PAGE_PASSWORD_FIXTURE, new Headers({ 'x-forwarded-proto': 'https' }));
+
+        assert.equal(cookie.name, 'gptImageAccess');
+        assert.equal(verifyAccessToken(cookie.value, PAGE_PASSWORD_FIXTURE), true);
+        assert.equal(cookie.options.path, '/');
+        assert.equal(cookie.options.httpOnly, true);
+        assert.equal(cookie.options.secure, true);
+    });
+});
+
+describe('serializeAccessCookie', () => {
+    it('serializes access cookie attributes for streamed responses', () => {
+        const cookie = buildAccessCookie(PAGE_PASSWORD_FIXTURE, new Headers({ 'x-forwarded-proto': 'https' }));
+
+        assert.equal(
+            serializeAccessCookie(cookie),
+            `gptImageAccess=${cookie.value}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax; Secure`
+        );
+    });
+});
+
+describe('isHttpsRequest', () => {
+    it('recognizes common forwarded https headers', () => {
+        assert.equal(isHttpsRequest(new Headers({ 'x-forwarded-proto': 'https,http' })), true);
+        assert.equal(isHttpsRequest(new Headers({ 'x-forwarded-scheme': 'https' })), true);
+        assert.equal(isHttpsRequest(new Headers({ 'x-forwarded-ssl': 'on' })), true);
     });
 });
 

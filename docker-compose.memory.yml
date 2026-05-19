@@ -1,0 +1,8 @@
+services:
+  gpt-image-playground:
+    environment:
+      AGENT_STATE_BACKEND: memory
+      AGENT_SQLITE_PATH: ""
+      AGENT_DATABASE_URL: ""
+      AGENT_DB_PASSWORD: ""
+      AGENT_DB_PASSWORD_FILE: ""

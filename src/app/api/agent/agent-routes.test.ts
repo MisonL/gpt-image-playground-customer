@@ -72,6 +72,37 @@ describe('Agent route integration', () => {
         await upstream.close();
     });
 
+    it('generates and replays through the memory state backend without creating SQLite state', async () => {
+        process.env.AGENT_STATE_BACKEND = 'memory';
+        delete process.env.AGENT_SQLITE_PATH;
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const first = await generateImage(agentJsonRequest('route-memory-cache-key', { prompt: 'agent memory route success' }));
+            assert.equal(first.status, 200);
+            const firstBody = await first.json();
+            assert.equal(firstBody.cached, false);
+
+            const second = await generateImage(agentJsonRequest('route-memory-cache-key', { prompt: 'agent memory route success' }));
+            assert.equal(second.status, 200);
+            const secondBody = await second.json();
+            assert.equal(secondBody.cached, true);
+            assert.equal(second.headers.get('x-idempotent-replay'), 'true');
+            assert.equal(secondBody.request_id, firstBody.request_id);
+            assert.equal(upstreamCalls, 1);
+            assert.deepEqual(await listAgentStateFiles(), []);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('returns explicit base64 without storing complete base64 in the request state', async () => {
         const { generateImage } = await loadAgentRoutes();
         let upstreamCalls = 0;
@@ -625,6 +656,14 @@ function readStoredArtifactFilepath(id: string): string {
 async function listGeneratedImageFiles(): Promise<string[]> {
     try {
         return (await readdir(path.join(tempDir, 'generated-images'))).filter((entry) => /\.(png|jpe?g|webp)$/i.test(entry));
+    } catch {
+        return [];
+    }
+}
+
+async function listAgentStateFiles(): Promise<string[]> {
+    try {
+        return await readdir(path.join(tempDir, 'generated-images', '.agent-state'));
     } catch {
         return [];
     }

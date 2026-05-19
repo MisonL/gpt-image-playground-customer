@@ -92,6 +92,16 @@ describe('buildAgentCapabilities', () => {
         assert.ok(capabilities.supported.models.includes('gpt-image-2'));
     });
 
+    it('exposes memory state backend for ephemeral deployments', () => {
+        const capabilities = buildAgentCapabilities({
+            AGENT_STATE_BACKEND: 'memory',
+            NEXT_PUBLIC_IMAGE_STORAGE_MODE: 'fs'
+        });
+
+        assert.equal(capabilities.defaults.state_backend, 'memory');
+        assert.equal(capabilities.storage.postgres_configured, false);
+    });
+
     it('generates an OpenAPI document with the Agent generate endpoint', () => {
         const document = buildAgentOpenApiDocument({ AGENT_PUBLIC_BASE_URL: 'https://images.example.test' });
         assert.equal(document.openapi, '3.1.0');

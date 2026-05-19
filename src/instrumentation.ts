@@ -1,20 +1,27 @@
+type StartupRecoveryDeps = {
+    recoverAgentStateOnStartup: () => Promise<number>;
+    appLogger: {
+        info(message: string, context?: unknown): void;
+        error(message: string, context?: unknown): void;
+    };
+};
+
 export async function register() {
     if (process.env.NEXT_RUNTIME !== 'nodejs') return;
-    const [{ recoverAgentStateOnStartup }, { appLogger }, { readBooleanEnv }] = await Promise.all([
+    const [{ recoverAgentStateOnStartup }, { appLogger }] = await Promise.all([
         import('./lib/agent-state-runtime'),
-        import('./lib/app-logger'),
-        import('./lib/server-runtime')
+        import('./lib/app-logger')
     ]);
+    await runAgentStateStartupRecovery({ recoverAgentStateOnStartup, appLogger });
+}
+
+export async function runAgentStateStartupRecovery(deps: StartupRecoveryDeps): Promise<void> {
     try {
-        appLogger.info('开始执行 Agent 状态启动恢复。');
-        const recovered = await recoverAgentStateOnStartup();
-        appLogger.info('Agent 状态启动恢复完成。', { recovered });
+        deps.appLogger.info('开始执行 Agent 状态启动恢复。');
+        const recovered = await deps.recoverAgentStateOnStartup();
+        deps.appLogger.info('Agent 状态启动恢复完成。', { recovered });
     } catch (error) {
-        appLogger.error('Agent 状态启动恢复失败。', error);
-        const critical = process.env.AGENT_STATE_RECOVERY_CRITICAL === undefined || readBooleanEnv(process.env, 'AGENT_STATE_RECOVERY_CRITICAL');
-        if (critical) {
-            throw error;
-        }
-        appLogger.warn('Agent 状态启动恢复失败，已按配置继续以降级状态运行。');
+        deps.appLogger.error('Agent 状态启动恢复失败。', error);
+        throw error;
     }
 }

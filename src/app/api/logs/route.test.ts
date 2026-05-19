@@ -6,6 +6,7 @@ import { NextRequest } from 'next/server';
 
 const originalAppPassword = process.env.APP_PASSWORD;
 const originalAppLogLevel = process.env.APP_LOG_LEVEL;
+const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
 
 afterEach(() => {
     if (originalAppPassword === undefined) {
@@ -35,8 +36,8 @@ describe('GET /api/logs', () => {
     });
 
     it('rejects password hashes sent in the query string', async () => {
-        process.env.APP_PASSWORD = 'customer-password';
-        const request = new NextRequest(`http://localhost/api/logs?passwordHash=${sha256('customer-password')}`);
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
+        const request = new NextRequest(`http://localhost/api/logs?passwordHash=${sha256(PAGE_PASSWORD_FIXTURE)}`);
 
         const response = await GET(request);
 
@@ -44,11 +45,11 @@ describe('GET /api/logs', () => {
     });
 
     it('accepts password hashes sent as a bearer token', async () => {
-        process.env.APP_PASSWORD = 'customer-password';
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
         process.env.APP_LOG_LEVEL = 'warn';
         const request = new NextRequest('http://localhost/api/logs', {
             headers: {
-                Authorization: `Bearer ${sha256('customer-password')}`
+                Authorization: `Bearer ${sha256(PAGE_PASSWORD_FIXTURE)}`
             }
         });
 

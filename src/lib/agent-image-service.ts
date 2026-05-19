@@ -275,7 +275,7 @@ export async function completeAgentExecutionState(
     await store.completeRequest({
         requestId: execution.response.request_id,
         response: execution.stateResponse,
-        artifacts: execution.artifacts
+        artifacts: []
     });
 }
 

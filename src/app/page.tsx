@@ -7,6 +7,7 @@ import { GenerationForm, type GenerationFormData } from '@/components/generation
 import { HistoryPanel } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import { PasswordDialog } from '@/components/password-dialog';
+import { ShareDialog, type ShareDialogValues } from '@/components/share-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,6 +19,9 @@ import {
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
+import { createImageShareFromBlob } from '@/lib/share-client';
+import { sha256Hex } from '@/lib/sha256';
 import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
@@ -33,7 +37,7 @@ import {
 } from '@/lib/streaming-batch';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowDown, Loader2, Terminal } from 'lucide-react';
+import { ArrowDown, Loader2, Lock, Terminal } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -71,6 +75,7 @@ const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
 type RequestMode = 'generate' | 'edit';
 type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, boolean, 1 | 2 | 3];
+type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
 
 function createClientRequestId(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -190,11 +195,13 @@ type RuntimeCapabilities = {
 
 class ApiRequestError extends Error {
     readonly status?: number;
+    readonly preserveDisplayedError: boolean;
 
-    constructor(message: string, status?: number) {
+    constructor(message: string, status?: number, options: { preserveDisplayedError?: boolean } = {}) {
         super(message);
         this.name = 'ApiRequestError';
         this.status = status;
+        this.preserveDisplayedError = options.preserveDisplayedError === true;
     }
 }
 
@@ -297,6 +304,7 @@ export default function HomePage() {
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
+    const [isEntryAuthenticated, setIsEntryAuthenticated] = React.useState(false);
     const [isLoading, setIsLoading] = React.useState(false);
     const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
     const [error, setError] = React.useState<ApiErrorNotice | null>(null);
@@ -315,6 +323,11 @@ export default function HomePage() {
     const [itemToDeleteConfirm, setItemToDeleteConfirm] = React.useState<HistoryMetadata | null>(null);
     const [dialogCheckboxStateSkipConfirm, setDialogCheckboxStateSkipConfirm] = React.useState<boolean>(false);
     const [openLogsSignal, setOpenLogsSignal] = React.useState(0);
+    const [shareDialogOpen, setShareDialogOpen] = React.useState(false);
+    const [shareTargetFilename, setShareTargetFilename] = React.useState<string | null>(null);
+    const [shareUrl, setShareUrl] = React.useState<string | null>(null);
+    const [shareError, setShareError] = React.useState<string | null>(null);
+    const [isCreatingShare, setIsCreatingShare] = React.useState(false);
     const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
 
     const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
@@ -353,7 +366,7 @@ export default function HomePage() {
 
     // 流式状态，由生成和编辑模式共用。
     const [enableStreaming, setEnableStreaming] = React.useState(true);
-    const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(2);
+    const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(1);
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
@@ -437,6 +450,71 @@ export default function HomePage() {
         };
     }, [editSourceImagePreviewUrls]);
 
+    const verifyEntryPasswordHash = React.useCallback(async (passwordHash: string): Promise<PasswordVerificationResult> => {
+        try {
+            const response = await fetch('/api/auth-verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ passwordHash })
+            });
+
+            if (response.ok) {
+                return 'valid';
+            }
+            if (response.status === 401) {
+                try {
+                    const result = (await response.json()) as { code?: string };
+                    return isPagePasswordAuthErrorCode(result.code) ? 'invalid' : 'unavailable';
+                } catch {
+                    return 'unavailable';
+                }
+            }
+            return 'unavailable';
+        } catch (error) {
+            console.error('验证入口密码失败：', error);
+            return 'unavailable';
+        }
+    }, []);
+
+    const promptForExpiredPassword = React.useCallback(() => {
+        localStorage.removeItem('clientPasswordHash');
+        setClientPasswordHash(null);
+        setIsEntryAuthenticated(false);
+        setPasswordDialogContext('retry');
+        setIsPasswordDialogOpen(true);
+        setError(createErrorNotice(t('error.passwordExpired')));
+    }, [createErrorNotice, t]);
+
+    const refreshImageAccessCookie = React.useCallback(async (passwordHash = clientPasswordHash): Promise<boolean> => {
+        if (!isPasswordRequiredByBackend) {
+            return true;
+        }
+        if (!passwordHash) {
+            promptForExpiredPassword();
+            return false;
+        }
+
+        const verificationResult = await verifyEntryPasswordHash(passwordHash);
+        if (verificationResult === 'valid') {
+            setIsEntryAuthenticated(true);
+            return true;
+        }
+        if (verificationResult === 'unavailable') {
+            setError(createErrorNotice(t('error.authVerifyUnavailable')));
+            return false;
+        }
+
+        promptForExpiredPassword();
+        return false;
+    }, [
+        clientPasswordHash,
+        createErrorNotice,
+        isPasswordRequiredByBackend,
+        promptForExpiredPassword,
+        t,
+        verifyEntryPasswordHash
+    ]);
+
     React.useEffect(() => {
         const fetchAuthStatus = async () => {
             try {
@@ -445,19 +523,48 @@ export default function HomePage() {
                     throw new Error('获取鉴权状态失败');
                 }
                 const data = await response.json();
-                setIsPasswordRequiredByBackend(data.passwordRequired);
+                const passwordRequired = Boolean(data.passwordRequired);
+                setIsPasswordRequiredByBackend(passwordRequired);
+
+                const storedPasswordHash = readLocalStorageValue('clientPasswordHash');
+                if (!passwordRequired) {
+                    setClientPasswordHash(storedPasswordHash);
+                    setIsEntryAuthenticated(true);
+                    return;
+                }
+
+                if (storedPasswordHash) {
+                    const storedVerificationResult = await verifyEntryPasswordHash(storedPasswordHash);
+                    if (storedVerificationResult === 'valid') {
+                        setClientPasswordHash(storedPasswordHash);
+                        setIsEntryAuthenticated(true);
+                        return;
+                    }
+                    if (storedVerificationResult === 'unavailable') {
+                        setClientPasswordHash(storedPasswordHash);
+                        setPasswordDialogContext('retry');
+                        setIsEntryAuthenticated(false);
+                        setError(createErrorNotice(t('error.authVerifyUnavailable')));
+                        return;
+                    }
+                }
+
+                localStorage.removeItem('clientPasswordHash');
+                setClientPasswordHash(null);
+                setPasswordDialogContext('initial');
+                setIsEntryAuthenticated(false);
             } catch (error) {
                 console.error('获取鉴权状态失败：', error);
                 setIsPasswordRequiredByBackend(false);
+                setIsEntryAuthenticated(true);
             }
         };
 
         fetchAuthStatus();
         queueMicrotask(() => {
-            setClientPasswordHash(readLocalStorageValue('clientPasswordHash'));
             setApiSettings(readStoredApiSettings());
         });
-    }, []);
+    }, [createErrorNotice, t, verifyEntryPasswordHash]);
 
     const refreshRuntimeCapabilities = React.useCallback(async (): Promise<RuntimeCapabilities | null> => {
         try {
@@ -542,30 +649,38 @@ export default function HomePage() {
         };
     }, [mode, editImageFiles.length, t]);
 
-    async function sha256Client(text: string): Promise<string> {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(text);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-        return hashHex;
-    }
-
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
             setError(createErrorNotice(t('password.empty')));
             return;
         }
         try {
-            const hash = await sha256Client(password);
+            const hash = await sha256Hex(password);
+            const passwordVerificationResult = isPasswordRequiredByBackend
+                ? await verifyEntryPasswordHash(hash)
+                : 'valid';
+            if (passwordVerificationResult === 'unavailable') {
+                setError(createErrorNotice(t('error.authVerifyUnavailable')));
+                return;
+            }
+            if (passwordVerificationResult === 'invalid') {
+                localStorage.removeItem('clientPasswordHash');
+                setClientPasswordHash(null);
+                setIsEntryAuthenticated(false);
+                setError(createErrorNotice(t('error.unauthorized')));
+                setIsPasswordDialogOpen(true);
+                return;
+            }
+
             localStorage.setItem('clientPasswordHash', hash);
             setClientPasswordHash(hash);
+            setIsEntryAuthenticated(true);
             setError(null);
             setIsPasswordDialogOpen(false);
             if (passwordDialogContext === 'retry' && lastApiCallArgs) {
                 const retryArgs = lastApiCallArgs;
                 setLastApiCallArgs(null);
-                await handleApiCall(...retryArgs);
+                await handleApiCall(...retryArgs, hash);
             }
         } catch (e) {
             console.error('计算密码哈希失败：', e);
@@ -725,12 +840,14 @@ export default function HomePage() {
                 forceSingleImage?: boolean;
                 streaming: boolean;
                 partialImages: 1 | 2 | 3;
+                passwordHash?: string | null;
             }
         ) => {
             const apiFormData = new FormData();
-            if (isPasswordRequiredByBackend && clientPasswordHash) {
-                apiFormData.append('passwordHash', clientPasswordHash);
-            } else if (isPasswordRequiredByBackend && !clientPasswordHash) {
+            const effectivePasswordHash = options.passwordHash ?? clientPasswordHash;
+            if (isPasswordRequiredByBackend && effectivePasswordHash) {
+                apiFormData.append('passwordHash', effectivePasswordHash);
+            } else if (isPasswordRequiredByBackend && !effectivePasswordHash) {
                 throw new Error(t('error.passwordRequired'));
             }
             apiFormData.append('mode', requestMode);
@@ -880,6 +997,7 @@ export default function HomePage() {
 
             let result: {
                 error?: string;
+                code?: string;
                 images?: ApiImageResponseItem[];
                 usage?: unknown;
                 actualCost?: ActualCostDetails;
@@ -895,9 +1013,7 @@ export default function HomePage() {
             }
 
             if (!response.ok) {
-                if (response.status === 401 && isPasswordRequiredByBackend) {
-                    setError(createErrorNotice(t('error.unauthorized')));
-                    setPasswordDialogContext('retry');
+                if (response.status === 401 && isPasswordRequiredByBackend && isPagePasswordAuthErrorCode(result.code)) {
                     if (
                         options.retryFormData &&
                         options.retryMode &&
@@ -911,8 +1027,8 @@ export default function HomePage() {
                             options.retryPartialImages
                         ]);
                     }
-                    setIsPasswordDialogOpen(true);
-                    throw new ApiRequestError(t('error.unauthorized'), 401);
+                    promptForExpiredPassword();
+                    throw new ApiRequestError(t('error.passwordExpired'), 401, { preserveDisplayedError: true });
                 }
                 throw new ApiRequestError(result.error || t('error.apiFailed', { status: response.status }), response.status);
             }
@@ -928,14 +1044,15 @@ export default function HomePage() {
                 actualCost: result.actualCost
             };
         },
-        [createErrorNotice, isPasswordRequiredByBackend, t]
+        [isPasswordRequiredByBackend, promptForExpiredPassword, t]
     );
 
     async function handleApiCall(
         formData: GenerationFormData | EditingFormData,
         requestMode: RequestMode = mode,
         requestStreaming: boolean = enableStreaming,
-        requestPartialImages: 1 | 2 | 3 = partialImages
+        requestPartialImages: 1 | 2 | 3 = partialImages,
+        requestPasswordHash: string | null = clientPasswordHash
     ) {
         const startTime = Date.now();
         let durationMs = 0;
@@ -959,10 +1076,13 @@ export default function HomePage() {
                 requestCredentialConcurrency: latestRuntimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
                 serverRecommendedConcurrency: latestRuntimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
             });
-            if (isPasswordRequiredByBackend && !clientPasswordHash) {
+            if (isPasswordRequiredByBackend && !requestPasswordHash) {
                 setError(createErrorNotice(t('error.passwordRequired')));
                 setPasswordDialogContext('initial');
                 setIsPasswordDialogOpen(true);
+                return;
+            }
+            if (!(await refreshImageAccessCookie(requestPasswordHash))) {
                 return;
             }
 
@@ -980,7 +1100,8 @@ export default function HomePage() {
                     buildApiFormData(formData, requestMode, {
                         forceSingleImage: options.forceSingleImage,
                         streaming: requestStreaming,
-                        partialImages: requestPartialImages
+                        partialImages: requestPartialImages,
+                        passwordHash: requestPasswordHash
                     }),
                     {
                         previewIndexOffset: options.previewIndexOffset,
@@ -1006,7 +1127,7 @@ export default function HomePage() {
                     (result): result is { images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails } =>
                         !(result instanceof Error)
                 );
-                if (errors.some((error) => error instanceof ApiRequestError && error.status === 401)) {
+                if (errors.some(hasPreservedDisplayedAuthError)) {
                     return;
                 }
                 if (successes.length === 0) {
@@ -1039,6 +1160,11 @@ export default function HomePage() {
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
             console.error(`API 调用在 ${durationMs}ms 后失败：`, err);
+            if (hasPreservedDisplayedAuthError(err)) {
+                setLatestImageBatch(null);
+                setStreamingPreviewImages(new Map());
+                return;
+            }
             const errorSummary = summarizeApiError(err, t('error.unexpected'));
             setError(createErrorNotice(buildUserFacingApiErrorMessage({ ...errorSummary, t })));
             setLatestImageBatch(null);
@@ -1083,8 +1209,11 @@ export default function HomePage() {
     }
 
     const handleHistorySelect = React.useCallback(
-        (item: HistoryMetadata) => {
+        async (item: HistoryMetadata) => {
             const originalStorageMode = item.storageModeUsed || 'fs';
+            if (originalStorageMode === 'fs' && !(await refreshImageAccessCookie())) {
+                return;
+            }
 
             const selectedBatchPromises = item.images.map(async (imgInfo, imageIndex) => {
                 let path: string | undefined;
@@ -1123,7 +1252,7 @@ export default function HomePage() {
                 setImageOutputView(validImages.length > 1 ? 'grid' : 0);
             });
         },
-        [createErrorNotice, getImageSrc, t]
+        [createErrorNotice, getImageSrc, refreshImageAccessCookie, t]
     );
 
     const handleClearHistory = React.useCallback(async () => {
@@ -1152,6 +1281,79 @@ export default function HomePage() {
             }
         }
     }, [createErrorNotice, t]);
+
+    const resolveImageBlob = React.useCallback(
+        async (filename: string): Promise<Blob> => {
+            if (effectiveStorageModeClient === 'indexeddb') {
+                const record = allDbImages?.find((img) => img.filename === filename);
+                if (!record?.blob) {
+                    throw new Error(t('error.imageNotFoundDb', { filename }));
+                }
+                return record.blob;
+            }
+
+            if (!(await refreshImageAccessCookie())) {
+                throw new Error(t('error.imageAccessRefreshFailed'));
+            }
+            const response = await fetch(`/api/image/${filename}`);
+            if (!response.ok) {
+                throw new Error(t('error.fetchImage', { statusText: response.statusText }));
+            }
+            return response.blob();
+        },
+        [allDbImages, refreshImageAccessCookie, t]
+    );
+
+    const handleDownloadImage = React.useCallback(
+        async (filename: string) => {
+            try {
+                const blob = await resolveImageBlob(filename);
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                window.setTimeout(() => URL.revokeObjectURL(url), 150);
+            } catch (error) {
+                setError(createErrorNotice(error instanceof Error ? error.message : t('error.retrieveImage', { filename })));
+            }
+        },
+        [createErrorNotice, resolveImageBlob, t]
+    );
+
+    const handleOpenShareImage = React.useCallback((filename: string) => {
+        setShareTargetFilename(filename);
+        setShareUrl(null);
+        setShareError(null);
+        setShareDialogOpen(true);
+    }, []);
+
+    const handleCreateShare = React.useCallback(
+        async (values: ShareDialogValues) => {
+            if (!shareTargetFilename) return;
+            setIsCreatingShare(true);
+            setShareError(null);
+            try {
+                const blob = await resolveImageBlob(shareTargetFilename);
+                const result = await createImageShareFromBlob({
+                    filename: shareTargetFilename,
+                    blob,
+                    values,
+                    accessRefreshErrorMessage: t('error.imageAccessRefreshFailed'),
+                    createFailedMessage: t('share.createFailed'),
+                    refreshImageAccessCookie
+                });
+                setShareUrl(result.url);
+            } catch (error) {
+                setShareError(error instanceof Error ? error.message : t('share.createFailed'));
+            } finally {
+                setIsCreatingShare(false);
+            }
+        },
+        [refreshImageAccessCookie, resolveImageBlob, shareTargetFilename, t]
+    );
 
     const handleSendToEdit = async (filename: string) => {
         if (isSendingToEdit) return;
@@ -1183,7 +1385,24 @@ export default function HomePage() {
                     throw new Error(t('error.imageNotFoundDb', { filename }));
                 }
             } else {
+                if (!(await refreshImageAccessCookie())) {
+                    return;
+                }
                 const response = await fetch(`/api/image/${filename}`);
+                if (response.status === 401 && isPasswordRequiredByBackend) {
+                    let result: { code?: string } = {};
+                    try {
+                        result = (await response.json()) as { code?: string };
+                    } catch {
+                        result = {};
+                    }
+                    if (isPagePasswordAuthErrorCode(result.code)) {
+                        promptForExpiredPassword();
+                    } else {
+                        setError(createErrorNotice(t('error.authVerifyUnavailable')));
+                    }
+                    return;
+                }
                 if (!response.ok) {
                     throw new Error(t('error.fetchImage', { statusText: response.statusText }));
                 }
@@ -1288,6 +1507,8 @@ export default function HomePage() {
         setItemToDeleteConfirm(null);
     }, []);
 
+    const showEntryLock = isPasswordRequiredByBackend === true && !isEntryAuthenticated;
+
     return (
         <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:p-8 md:pb-[calc(6rem+env(safe-area-inset-bottom))] lg:p-12'>
             <PasswordDialog
@@ -1309,179 +1530,222 @@ export default function HomePage() {
                     onSave={handleSaveApiSettings}
                 />
             ) : null}
-            <div className='w-full max-w-screen-2xl space-y-6'>
-                <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
-                <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
-                    <div className='relative flex flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
-                        <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
-                            <GenerationForm
-                                onSubmit={handleApiCall}
-                                isLoading={isLoading}
-                                currentMode={mode}
-                                onModeChange={setMode}
-                                isPasswordRequiredByBackend={isPasswordRequiredByBackend}
-                                clientPasswordHash={clientPasswordHash}
-                                onOpenPasswordDialog={handleOpenPasswordDialog}
-                                model={genModel}
-                                setModel={setGenModel}
-                                prompt={genPrompt}
-                                setPrompt={setGenPrompt}
-                                n={genN}
-                                setN={setGenN}
-                                size={genSize}
-                                setSize={setGenSize}
-                                customWidth={genCustomWidth}
-                                setCustomWidth={setGenCustomWidth}
-                                customHeight={genCustomHeight}
-                                setCustomHeight={setGenCustomHeight}
-                                quality={genQuality}
-                                setQuality={setGenQuality}
-                                outputFormat={genOutputFormat}
-                                setOutputFormat={setGenOutputFormat}
-                                compression={genCompression}
-                                setCompression={setGenCompression}
-                                background={genBackground}
-                                setBackground={setGenBackground}
-                                moderation={genModeration}
-                                setModeration={setGenModeration}
-                                enableStreaming={enableStreaming}
-                                setEnableStreaming={setEnableStreaming}
-                                allowStreamingBatch={streamingBatchEnabled}
-                                partialImages={partialImages}
-                                setPartialImages={setPartialImages}
-                            />
-                        </div>
-                        <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
-                            <EditingForm
-                                onSubmit={handleApiCall}
-                                isLoading={isLoading || isSendingToEdit}
-                                currentMode={mode}
-                                onModeChange={setMode}
-                                isPasswordRequiredByBackend={isPasswordRequiredByBackend}
-                                clientPasswordHash={clientPasswordHash}
-                                onOpenPasswordDialog={handleOpenPasswordDialog}
-                                editModel={editModel}
-                                setEditModel={setEditModel}
-                                imageFiles={editImageFiles}
-                                sourceImagePreviewUrls={editSourceImagePreviewUrls}
-                                setImageFiles={setEditImageFiles}
-                                setSourceImagePreviewUrls={setEditSourceImagePreviewUrls}
-                                maxImages={MAX_EDIT_IMAGES}
-                                editPrompt={editPrompt}
-                                setEditPrompt={setEditPrompt}
-                                editN={editN}
-                                setEditN={setEditN}
-                                editSize={editSize}
-                                setEditSize={setEditSize}
-                                editCustomWidth={editCustomWidth}
-                                setEditCustomWidth={setEditCustomWidth}
-                                editCustomHeight={editCustomHeight}
-                                setEditCustomHeight={setEditCustomHeight}
-                                editQuality={editQuality}
-                                setEditQuality={setEditQuality}
-                                editBrushSize={editBrushSize}
-                                setEditBrushSize={setEditBrushSize}
-                                editShowMaskEditor={editShowMaskEditor}
-                                setEditShowMaskEditor={setEditShowMaskEditor}
-                                editGeneratedMaskFile={editGeneratedMaskFile}
-                                setEditGeneratedMaskFile={setEditGeneratedMaskFile}
-                                editIsMaskSaved={editIsMaskSaved}
-                                setEditIsMaskSaved={setEditIsMaskSaved}
-                                editOriginalImageSize={editOriginalImageSize}
-                                setEditOriginalImageSize={setEditOriginalImageSize}
-                                editDrawnPoints={editDrawnPoints}
-                                setEditDrawnPoints={setEditDrawnPoints}
-                                editMaskPreviewUrl={editMaskPreviewUrl}
-                                setEditMaskPreviewUrl={setEditMaskPreviewUrl}
-                                enableStreaming={enableStreaming}
-                                setEnableStreaming={setEnableStreaming}
-                                allowStreamingBatch={streamingBatchEnabled}
-                                partialImages={partialImages}
-                                setPartialImages={setPartialImages}
-                            />
-                        </div>
+            <ShareDialog
+                open={shareDialogOpen}
+                onOpenChange={setShareDialogOpen}
+                isCreating={isCreatingShare}
+                shareUrl={shareUrl}
+                error={shareError}
+                onCreate={handleCreateShare}
+            />
+            {showEntryLock ? (
+                <div className='flex min-h-[70vh] w-full max-w-md flex-col items-center justify-center gap-6 text-center'>
+                    <div className='flex size-14 items-center justify-center rounded-full border border-white/15 bg-black text-white'>
+                        <Lock className='h-6 w-6' />
                     </div>
-                    <div
-                        ref={outputPanelRef}
-                        className='scroll-mt-4 flex min-h-[420px] flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
-                        {error && (
-                            <Alert variant='destructive' className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
-                                <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
-                                <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
-                            </Alert>
-                        )}
-                        <ImageOutput
-                            imageBatch={latestImageBatch}
-                            viewMode={imageOutputView}
-                            onViewChange={setImageOutputView}
-                            altText={t('output.alt')}
-                            isLoading={isLoading || isSendingToEdit}
-                            onSendToEdit={handleSendToEdit}
-                            currentMode={mode}
-                            baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
-                            streamingPreviewImages={streamingPreviewImages}
-                            clientPasswordHash={clientPasswordHash}
-                            canOpenLogs={canOpenLogs}
-                            openLogsSignal={openLogsSignal}
-                            logClientRequestIds={activeLogClientRequestIds}
-                            logFilenames={activeLogFilenames}
-                        />
+                    <div className='space-y-2'>
+                        <h1 className='text-2xl font-semibold text-white'>{t('password.required')}</h1>
+                        <p className='text-sm text-white/60'>{t('password.entryDescription')}</p>
                     </div>
-                </div>
-
-                <div className='min-h-[450px]'>
-                    <HistoryPanel
-                        history={history}
-                        onSelectImage={handleHistorySelect}
-                        onClearHistory={handleClearHistory}
-                        getImageSrc={getImageSrc}
-                        onDeleteItemRequest={handleRequestDeleteItem}
-                        itemPendingDeleteConfirmation={itemToDeleteConfirm}
-                        onConfirmDeletion={handleConfirmDeletion}
-                        onCancelDeletion={handleCancelDeletion}
-                        deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
-                        onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
-                    />
-                </div>
-            </div>
-            <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
-                <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
-                    <Button
-                        type='button'
-                        onClick={handleMobilePrimaryAction}
-                        disabled={mobilePrimaryDisabled}
-                        className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground'>
-                        {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-                        {mode === 'generate'
-                            ? isLoading
-                                ? t('generate.loading')
-                                : t('generate.submit')
-                            : isLoading || isSendingToEdit
-                              ? t('edit.loading')
-                              : t('edit.submit')}
-                    </Button>
-                    <Button
-                        type='button'
-                        variant='outline'
-                        size='icon'
-                        onClick={scrollToOutput}
-                        className='text-muted-foreground hover:text-foreground'
-                        aria-label={t('ux.jumpToResult')}>
-                        <ArrowDown className='h-4 w-4' />
-                    </Button>
-                    {canOpenLogs && (
-                        <Button
-                            type='button'
-                            variant='outline'
-                            size='icon'
-                            onClick={() => setOpenLogsSignal((value) => value + 1)}
-                            className='text-muted-foreground hover:text-foreground'
-                            aria-label={t('logs.open')}>
-                            <Terminal className='h-4 w-4' />
-                        </Button>
+                    {error && (
+                        <Alert variant='destructive' className='border-red-500/50 bg-red-900/20 text-left text-red-300'>
+                            <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
+                            <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
+                        </Alert>
                     )}
+                    <Button
+                        type='button'
+                        onClick={() => {
+                            setError(null);
+                            setPasswordDialogContext('initial');
+                            setIsPasswordDialogOpen(true);
+                        }}
+                        className='bg-white px-6 text-black hover:bg-white/90'>
+                        {t('password.unlock')}
+                    </Button>
                 </div>
-            </div>
+            ) : null}
+            {!showEntryLock && isPasswordRequiredByBackend !== null ? (
+                <>
+                    <div className='w-full max-w-screen-2xl space-y-6'>
+                        <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
+                        <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
+                            <div className='relative flex flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
+                                <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
+                                    <GenerationForm
+                                        onSubmit={handleApiCall}
+                                        isLoading={isLoading}
+                                        currentMode={mode}
+                                        onModeChange={setMode}
+                                        isPasswordRequiredByBackend={isPasswordRequiredByBackend}
+                                        clientPasswordHash={clientPasswordHash}
+                                        onOpenPasswordDialog={handleOpenPasswordDialog}
+                                        model={genModel}
+                                        setModel={setGenModel}
+                                        prompt={genPrompt}
+                                        setPrompt={setGenPrompt}
+                                        n={genN}
+                                        setN={setGenN}
+                                        size={genSize}
+                                        setSize={setGenSize}
+                                        customWidth={genCustomWidth}
+                                        setCustomWidth={setGenCustomWidth}
+                                        customHeight={genCustomHeight}
+                                        setCustomHeight={setGenCustomHeight}
+                                        quality={genQuality}
+                                        setQuality={setGenQuality}
+                                        outputFormat={genOutputFormat}
+                                        setOutputFormat={setGenOutputFormat}
+                                        compression={genCompression}
+                                        setCompression={setGenCompression}
+                                        background={genBackground}
+                                        setBackground={setGenBackground}
+                                        moderation={genModeration}
+                                        setModeration={setGenModeration}
+                                        enableStreaming={enableStreaming}
+                                        setEnableStreaming={setEnableStreaming}
+                                        allowStreamingBatch={streamingBatchEnabled}
+                                        partialImages={partialImages}
+                                        setPartialImages={setPartialImages}
+                                    />
+                                </div>
+                                <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
+                                    <EditingForm
+                                        onSubmit={handleApiCall}
+                                        isLoading={isLoading || isSendingToEdit}
+                                        currentMode={mode}
+                                        onModeChange={setMode}
+                                        isPasswordRequiredByBackend={isPasswordRequiredByBackend}
+                                        clientPasswordHash={clientPasswordHash}
+                                        onOpenPasswordDialog={handleOpenPasswordDialog}
+                                        editModel={editModel}
+                                        setEditModel={setEditModel}
+                                        imageFiles={editImageFiles}
+                                        sourceImagePreviewUrls={editSourceImagePreviewUrls}
+                                        setImageFiles={setEditImageFiles}
+                                        setSourceImagePreviewUrls={setEditSourceImagePreviewUrls}
+                                        maxImages={MAX_EDIT_IMAGES}
+                                        editPrompt={editPrompt}
+                                        setEditPrompt={setEditPrompt}
+                                        editN={editN}
+                                        setEditN={setEditN}
+                                        editSize={editSize}
+                                        setEditSize={setEditSize}
+                                        editCustomWidth={editCustomWidth}
+                                        setEditCustomWidth={setEditCustomWidth}
+                                        editCustomHeight={editCustomHeight}
+                                        setEditCustomHeight={setEditCustomHeight}
+                                        editQuality={editQuality}
+                                        setEditQuality={setEditQuality}
+                                        editBrushSize={editBrushSize}
+                                        setEditBrushSize={setEditBrushSize}
+                                        editShowMaskEditor={editShowMaskEditor}
+                                        setEditShowMaskEditor={setEditShowMaskEditor}
+                                        editGeneratedMaskFile={editGeneratedMaskFile}
+                                        setEditGeneratedMaskFile={setEditGeneratedMaskFile}
+                                        editIsMaskSaved={editIsMaskSaved}
+                                        setEditIsMaskSaved={setEditIsMaskSaved}
+                                        editOriginalImageSize={editOriginalImageSize}
+                                        setEditOriginalImageSize={setEditOriginalImageSize}
+                                        editDrawnPoints={editDrawnPoints}
+                                        setEditDrawnPoints={setEditDrawnPoints}
+                                        editMaskPreviewUrl={editMaskPreviewUrl}
+                                        setEditMaskPreviewUrl={setEditMaskPreviewUrl}
+                                        enableStreaming={enableStreaming}
+                                        setEnableStreaming={setEnableStreaming}
+                                        allowStreamingBatch={streamingBatchEnabled}
+                                        partialImages={partialImages}
+                                        setPartialImages={setPartialImages}
+                                    />
+                                </div>
+                            </div>
+                            <div
+                                ref={outputPanelRef}
+                                className='scroll-mt-4 flex min-h-[420px] flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
+                                {error && (
+                                    <Alert
+                                        variant='destructive'
+                                        className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
+                                        <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
+                                        <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
+                                    </Alert>
+                                )}
+                                <ImageOutput
+                                    imageBatch={latestImageBatch}
+                                    viewMode={imageOutputView}
+                                    onViewChange={setImageOutputView}
+                                    altText={t('output.alt')}
+                                    isLoading={isLoading || isSendingToEdit}
+                                    onSendToEdit={handleSendToEdit}
+                                    onDownloadImage={handleDownloadImage}
+                                    onShareImage={handleOpenShareImage}
+                                    currentMode={mode}
+                                    baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
+                                    streamingPreviewImages={streamingPreviewImages}
+                                    clientPasswordHash={clientPasswordHash}
+                                    canOpenLogs={canOpenLogs}
+                                    openLogsSignal={openLogsSignal}
+                                    logClientRequestIds={activeLogClientRequestIds}
+                                    logFilenames={activeLogFilenames}
+                                />
+                            </div>
+                        </div>
+
+                        <div className='min-h-[450px]'>
+                            <HistoryPanel
+                                history={history}
+                                onSelectImage={handleHistorySelect}
+                                onClearHistory={handleClearHistory}
+                                getImageSrc={getImageSrc}
+                                onDeleteItemRequest={handleRequestDeleteItem}
+                                itemPendingDeleteConfirmation={itemToDeleteConfirm}
+                                onConfirmDeletion={handleConfirmDeletion}
+                                onCancelDeletion={handleCancelDeletion}
+                                deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
+                                onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
+                            />
+                        </div>
+                    </div>
+                    <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
+                        <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
+                            <Button
+                                type='button'
+                                onClick={handleMobilePrimaryAction}
+                                disabled={mobilePrimaryDisabled}
+                                className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground'>
+                                {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+                                {mode === 'generate'
+                                    ? isLoading
+                                        ? t('generate.loading')
+                                        : t('generate.submit')
+                                    : isLoading || isSendingToEdit
+                                      ? t('edit.loading')
+                                      : t('edit.submit')}
+                            </Button>
+                            <Button
+                                type='button'
+                                variant='outline'
+                                size='icon'
+                                onClick={scrollToOutput}
+                                className='text-muted-foreground hover:text-foreground'
+                                aria-label={t('ux.jumpToResult')}>
+                                <ArrowDown className='h-4 w-4' />
+                            </Button>
+                            {canOpenLogs && (
+                                <Button
+                                    type='button'
+                                    variant='outline'
+                                    size='icon'
+                                    onClick={() => setOpenLogsSignal((value) => value + 1)}
+                                    className='text-muted-foreground hover:text-foreground'
+                                    aria-label={t('logs.open')}>
+                                    <Terminal className='h-4 w-4' />
+                                </Button>
+                            )}
+                        </div>
+                    </div>
+                </>
+            ) : null}
         </main>
     );
 }

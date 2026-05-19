@@ -1,5 +1,12 @@
+import crypto from 'crypto';
 import { Pool, type PoolClient } from 'pg';
-import { deleteFileIfExists, isArtifactFilepathAllowed } from './agent-file-utils';
+import {
+    discardArtifactFiles,
+    isArtifactFilepathAllowed,
+    moveArtifactFilesForDeletion,
+    restoreArtifactFiles,
+    type MovedFileForDeletion
+} from './agent-file-utils';
 import {
     addMilliseconds,
     addSeconds,
@@ -17,6 +24,7 @@ import {
 } from './agent-state-store';
 import type { AgentImageResponse } from './agent-api-contracts';
 import type { AgentErrorBody } from './api-error-response';
+import type { ImageShareRecord, ImageShareStateStore } from './share-store';
 
 type PostgresRequestRow = {
     request_id: string;
@@ -50,7 +58,25 @@ type PostgresArtifactRow = {
     created_at: Date | string;
 };
 
-export class PostgresAgentStateStore implements AgentStateStore {
+type PostgresShareRow = {
+    token: string;
+    source_filename: string;
+    content_filename: string;
+    mime_type: string;
+    size_bytes: number | string;
+    created_at: Date | string;
+    access_code_required: boolean;
+    expires_at: Date | string | null;
+    access_code_salt: string | null;
+    access_code_hash: string | null;
+};
+
+type PostgresMigrationRow = {
+    id: string;
+    checksum: string | null;
+};
+
+export class PostgresAgentStateStore implements AgentStateStore, ImageShareStateStore {
     private readonly pool: Pool;
 
     constructor(connectionString: string) {
@@ -58,7 +84,7 @@ export class PostgresAgentStateStore implements AgentStateStore {
     }
 
     async init(): Promise<void> {
-        await this.pool.query(POSTGRES_SCHEMA);
+        await runPostgresMigrations(this.pool);
     }
 
     async close(): Promise<void> {
@@ -118,8 +144,11 @@ export class PostgresAgentStateStore implements AgentStateStore {
     async purgeExpiredRequests(now = new Date()): Promise<number> {
         const client = await this.pool.connect();
         const nowIso = isoDate(now);
+        let transactionStarted = false;
+        let movedFiles: MovedFileForDeletion[] = [];
         try {
             await client.query('BEGIN');
+            transactionStarted = true;
             const expiredResult = await client.query(
                 "SELECT request_id FROM agent_requests WHERE expires_at < $1 AND status IN ('succeeded', 'failed', 'orphaned') FOR UPDATE SKIP LOCKED",
                 [nowIso]
@@ -129,30 +158,27 @@ export class PostgresAgentStateStore implements AgentStateStore {
                 requestIds.length > 0
                     ? (
                           await client.query('SELECT filepath FROM agent_artifacts WHERE request_id = ANY($1)', [requestIds])
-	                      ).rows
-	                          .map((row: { filepath: string | null }) => row.filepath)
-	                          .filter(
-	                              (filepath): filepath is string =>
-	                                  typeof filepath === 'string' && isArtifactFilepathAllowed(filepath)
-	                          )
-	                    : [];
+                      ).rows
+                          .map((row: { filepath: string | null }) => row.filepath)
+                          .filter(
+                              (filepath): filepath is string =>
+                                  typeof filepath === 'string' && isArtifactFilepathAllowed(filepath)
+                    )
+                    : [];
+            movedFiles = await moveArtifactFilesForDeletion([...new Set(artifactFilepaths)]);
             if (requestIds.length > 0) {
                 await client.query('DELETE FROM agent_artifacts WHERE request_id = ANY($1)', [requestIds]);
                 await client.query('DELETE FROM agent_requests WHERE request_id = ANY($1)', [requestIds]);
             }
             await client.query('COMMIT');
-            await Promise.all(
-                [...new Set(artifactFilepaths)].map(async (filepath) => {
-                    try {
-                        await deleteFileIfExists(filepath);
-                    } catch (error) {
-                        console.error('删除已过期 Agent 产物文件失败。', error);
-                    }
-                })
-            );
+            transactionStarted = false;
+            await discardArtifactFiles(movedFiles);
             return requestIds.length;
         } catch (error) {
-            await client.query('ROLLBACK');
+            if (transactionStarted) {
+                await client.query('ROLLBACK').catch(() => {});
+            }
+            await restoreArtifactFiles(movedFiles);
             throw error;
         } finally {
             client.release();
@@ -232,6 +258,55 @@ export class PostgresAgentStateStore implements AgentStateStore {
         return (result.rowCount ?? 0) > 0;
     }
 
+    async createImageShareRecord(record: ImageShareRecord): Promise<void> {
+        await this.pool.query(
+            `INSERT INTO image_shares
+                (token, source_filename, content_filename, mime_type, size_bytes, created_at, access_code_required, expires_at, access_code_salt, access_code_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+                record.token,
+                record.sourceFilename,
+                record.contentFilename,
+                record.mimeType,
+                record.sizeBytes,
+                record.createdAt,
+                record.accessCodeRequired,
+                record.expiresAt ?? null,
+                record.accessCodeSalt ?? null,
+                record.accessCodeHash ?? null
+            ]
+        );
+    }
+
+    async readImageShareRecord(token: string): Promise<ImageShareRecord | undefined> {
+        const result = await this.pool.query('SELECT * FROM image_shares WHERE token = $1', [token]);
+        const row = result.rows[0] as PostgresShareRow | undefined;
+        return row ? this.mapShareRow(row) : undefined;
+    }
+
+    async deleteExpiredImageShareRecords(nowIso: string): Promise<ImageShareRecord[]> {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const result = await client.query(
+                'DELETE FROM image_shares WHERE expires_at IS NOT NULL AND expires_at < $1 RETURNING *',
+                [nowIso]
+            );
+            await client.query('COMMIT');
+            return (result.rows as PostgresShareRow[]).map((row) => this.mapShareRow(row));
+        } catch (error) {
+            await client.query('ROLLBACK').catch(() => {});
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    async listImageShareRecords(): Promise<ImageShareRecord[]> {
+        const result = await this.pool.query('SELECT * FROM image_shares ORDER BY created_at ASC, token ASC');
+        return (result.rows as PostgresShareRow[]).map((row) => this.mapShareRow(row));
+    }
+
     private async beginRequestInTransaction(
         client: PoolClient,
         input: BeginAgentRequestInput
@@ -271,6 +346,9 @@ export class PostgresAgentStateStore implements AgentStateStore {
             const conflicted = await client.query('SELECT * FROM agent_requests WHERE idempotency_key = $1 FOR UPDATE', [
                 input.idempotencyKey
             ]);
+            if (!conflicted.rows[0]) {
+                throw new Error('idempotency conflict row disappeared during acquisition');
+            }
             return this.beginFromExistingRow(conflicted.rows[0] as PostgresRequestRow, input, now, nowIso, lockedUntil, expiresAt, client);
         }
 
@@ -345,20 +423,29 @@ export class PostgresAgentStateStore implements AgentStateStore {
         };
     }
 
+    private mapShareRow(row: PostgresShareRow): ImageShareRecord {
+        return {
+            token: row.token,
+            sourceFilename: row.source_filename,
+            contentFilename: row.content_filename,
+            mimeType: row.mime_type,
+            sizeBytes: Number(row.size_bytes),
+            createdAt: toIso(row.created_at),
+            accessCodeRequired: row.access_code_required,
+            ...(row.expires_at ? { expiresAt: toIso(row.expires_at) } : {}),
+            ...(row.access_code_salt ? { accessCodeSalt: row.access_code_salt } : {}),
+            ...(row.access_code_hash ? { accessCodeHash: row.access_code_hash } : {})
+        };
+    }
+
     private async insertArtifacts(client: PoolClient, artifacts: AgentArtifactRecord[]): Promise<void> {
         for (const artifact of artifacts) {
+            await this.assertArtifactCanBeInserted(client, artifact);
             await client.query(
                 `INSERT INTO agent_artifacts
                     (id, request_id, filename, filepath, content_url, metadata_url, output_format, mime_type, size_bytes, width, height, model, prompt_hash, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                 ON CONFLICT (id) DO UPDATE SET
-                    filename = EXCLUDED.filename,
-                    filepath = EXCLUDED.filepath,
-                    content_url = EXCLUDED.content_url,
-                    metadata_url = EXCLUDED.metadata_url,
-                    size_bytes = EXCLUDED.size_bytes,
-                    width = EXCLUDED.width,
-                    height = EXCLUDED.height`,
+                 ON CONFLICT (id) DO NOTHING`,
                 [
                     artifact.id,
                     artifact.requestId,
@@ -379,6 +466,14 @@ export class PostgresAgentStateStore implements AgentStateStore {
         }
     }
 
+    private async assertArtifactCanBeInserted(client: PoolClient, artifact: AgentArtifactRecord): Promise<void> {
+        const result = await client.query('SELECT * FROM agent_artifacts WHERE id = $1', [artifact.id]);
+        const existing = result.rows[0] as PostgresArtifactRow | undefined;
+        if (existing && !sameArtifactRecord(this.mapArtifactRow(existing), artifact)) {
+            throw new Error('artifact metadata conflict');
+        }
+    }
+
     private async listArtifactsForRequestInTransaction(client: PoolClient, requestId: string): Promise<AgentArtifactRecord[]> {
         const result = await client.query('SELECT * FROM agent_artifacts WHERE request_id = $1 ORDER BY created_at ASC', [
             requestId
@@ -392,7 +487,22 @@ function toIso(value: Date | string | null): string {
     return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-export const POSTGRES_SCHEMA = `
+type PostgresMigration = {
+    id: string;
+    sql: string;
+};
+
+const POSTGRES_MIGRATION_TABLE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS state_schema_migrations (
+    id TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL
+);`;
+
+const POSTGRES_MIGRATIONS: PostgresMigration[] = [
+    {
+        id: '001_agent_state_core',
+        sql: `
 CREATE TABLE IF NOT EXISTS agent_requests (
     request_id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -434,4 +544,266 @@ CREATE TABLE IF NOT EXISTS agent_recovery_events (
     details_json JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
 );
-`;
+`
+    },
+    {
+        id: '002_image_shares',
+        sql: `
+CREATE TABLE IF NOT EXISTS image_shares (
+    token TEXT PRIMARY KEY,
+    source_filename TEXT NOT NULL,
+    content_filename TEXT NOT NULL UNIQUE,
+    mime_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    access_code_required BOOLEAN NOT NULL,
+    expires_at TIMESTAMPTZ,
+    access_code_salt TEXT,
+    access_code_hash TEXT,
+    CHECK (
+        (access_code_required = FALSE AND access_code_salt IS NULL AND access_code_hash IS NULL)
+        OR (access_code_required = TRUE AND access_code_salt IS NOT NULL AND access_code_hash IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
+`
+    }
+];
+
+async function runPostgresMigrations(pool: Pool): Promise<void> {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(POSTGRES_MIGRATION_TABLE_SCHEMA);
+        await ensurePostgresMigrationChecksumColumn(client);
+        await client.query('LOCK TABLE state_schema_migrations IN EXCLUSIVE MODE');
+        const appliedResult = await client.query('SELECT id, checksum FROM state_schema_migrations');
+        const applied = new Map((appliedResult.rows as PostgresMigrationRow[]).map((row) => [row.id, row.checksum]));
+        for (const migration of POSTGRES_MIGRATIONS) {
+            const checksum = migrationChecksum(migration.sql);
+            if (applied.has(migration.id)) {
+                if (applied.get(migration.id) !== checksum) {
+                    throw new Error(`PostgreSQL migration checksum mismatch: ${migration.id}`);
+                }
+                continue;
+            }
+            for (const statement of splitSqlStatements(migration.sql)) {
+                await client.query(statement);
+            }
+            await client.query('INSERT INTO state_schema_migrations (id, checksum, applied_at) VALUES ($1, $2, $3)', [
+                migration.id,
+                checksum,
+                isoDate(new Date())
+            ]);
+        }
+        await client.query('COMMIT');
+    } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+export const POSTGRES_SCHEMA = [
+    POSTGRES_MIGRATION_TABLE_SCHEMA,
+    ...POSTGRES_MIGRATIONS.map((migration) => migration.sql)
+]
+    .map((sql) => sql.trim())
+    .join('\n\n');
+
+async function ensurePostgresMigrationChecksumColumn(client: PoolClient): Promise<void> {
+    await client.query('ALTER TABLE state_schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT');
+    for (const migration of POSTGRES_MIGRATIONS) {
+        await client.query('UPDATE state_schema_migrations SET checksum = $1 WHERE id = $2 AND checksum IS NULL', [
+            migrationChecksum(migration.sql),
+            migration.id
+        ]);
+    }
+    await client.query('ALTER TABLE state_schema_migrations ALTER COLUMN checksum SET NOT NULL');
+}
+
+type SqlStatementSplitState = {
+    statements: string[];
+    current: string;
+    inSingleQuote: boolean;
+    inDoubleQuote: boolean;
+    inLineComment: boolean;
+    inBlockComment: boolean;
+    singleQuoteBackslashEscapes: boolean;
+    dollarQuoteTag: string | undefined;
+};
+
+export function splitSqlStatements(sql: string): string[] {
+    const state: SqlStatementSplitState = {
+        statements: [],
+        current: '',
+        inSingleQuote: false,
+        inDoubleQuote: false,
+        inLineComment: false,
+        inBlockComment: false,
+        singleQuoteBackslashEscapes: false,
+        dollarQuoteTag: undefined
+    };
+
+    for (let index = 0; index < sql.length; index += 1) {
+        const consumedIndex = consumeSqlCharacter(sql, index, state);
+        if (consumedIndex !== undefined) {
+            index = consumedIndex;
+        }
+    }
+
+    pushSqlStatement(state);
+    return state.statements;
+}
+
+function consumeSqlCharacter(sql: string, index: number, state: SqlStatementSplitState): number | undefined {
+    const activeSpanIndex = consumeActiveSqlSpan(sql, index, state);
+    if (activeSpanIndex !== undefined) return activeSpanIndex;
+
+    const startedSpanIndex = startSqlSpan(sql, index, state);
+    if (startedSpanIndex !== undefined) return startedSpanIndex;
+
+    if (sql[index] === ';') {
+        pushSqlStatement(state);
+        return index;
+    }
+
+    state.current += sql[index];
+    return index;
+}
+
+function consumeActiveSqlSpan(sql: string, index: number, state: SqlStatementSplitState): number | undefined {
+    if (state.dollarQuoteTag) return consumeDollarQuote(sql, index, state);
+    if (state.inLineComment) return consumeLineComment(sql, index, state);
+    if (state.inBlockComment) return consumeBlockComment(sql, index, state);
+    if (state.inSingleQuote) return consumeSingleQuote(sql, index, state);
+    if (state.inDoubleQuote) return consumeDoubleQuote(sql, index, state);
+    return undefined;
+}
+
+function startSqlSpan(sql: string, index: number, state: SqlStatementSplitState): number | undefined {
+    const char = sql[index];
+    const next = sql[index + 1];
+
+    if (char === '-' && next === '-') return startTwoCharSpan(state, index, 'inLineComment', char + next);
+    if (char === '/' && next === '*') return startTwoCharSpan(state, index, 'inBlockComment', char + next);
+    if (char === "'") return startSingleQuote(sql, index, state);
+    if (char === '"') return startOneCharSpan(state, index, 'inDoubleQuote', char);
+    return startDollarQuote(sql, index, state);
+}
+
+function consumeDollarQuote(sql: string, index: number, state: SqlStatementSplitState): number {
+    const tag = state.dollarQuoteTag;
+    if (tag && sql.startsWith(tag, index)) {
+        state.current += tag;
+        state.dollarQuoteTag = undefined;
+        return index + tag.length - 1;
+    }
+    state.current += sql[index];
+    return index;
+}
+
+function consumeLineComment(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    if (sql[index] === '\n') state.inLineComment = false;
+    return index;
+}
+
+function consumeBlockComment(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    if (sql[index] === '*' && sql[index + 1] === '/') {
+        state.current += sql[index + 1];
+        state.inBlockComment = false;
+        return index + 1;
+    }
+    return index;
+}
+
+function consumeSingleQuote(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    if (state.singleQuoteBackslashEscapes && sql[index] === '\\' && index + 1 < sql.length) {
+        state.current += sql[index + 1];
+        return index + 1;
+    }
+    if (sql[index] === "'" && sql[index + 1] === "'") {
+        state.current += sql[index + 1];
+        return index + 1;
+    }
+    if (sql[index] === "'") {
+        state.inSingleQuote = false;
+        state.singleQuoteBackslashEscapes = false;
+    }
+    return index;
+}
+
+function consumeDoubleQuote(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    if (sql[index] === '"' && sql[index + 1] === '"') {
+        state.current += sql[index + 1];
+        return index + 1;
+    }
+    if (sql[index] === '"') state.inDoubleQuote = false;
+    return index;
+}
+
+function startTwoCharSpan(
+    state: SqlStatementSplitState,
+    index: number,
+    key: 'inLineComment' | 'inBlockComment',
+    text: string
+): number {
+    state.current += text;
+    state[key] = true;
+    return index + 1;
+}
+
+function startOneCharSpan(
+    state: SqlStatementSplitState,
+    index: number,
+    key: 'inSingleQuote' | 'inDoubleQuote',
+    text: string
+): number {
+    state.current += text;
+    state[key] = true;
+    return index;
+}
+
+function startSingleQuote(sql: string, index: number, state: SqlStatementSplitState): number {
+    state.current += sql[index];
+    state.inSingleQuote = true;
+    state.singleQuoteBackslashEscapes = startsPostgresEscapeString(sql, index);
+    return index;
+}
+
+function startsPostgresEscapeString(sql: string, quoteIndex: number): boolean {
+    const prefix = sql[quoteIndex - 1];
+    const beforePrefix = sql[quoteIndex - 2];
+    return (prefix === 'E' || prefix === 'e') && !isSqlIdentifierPart(beforePrefix);
+}
+
+function isSqlIdentifierPart(char: string | undefined): boolean {
+    return Boolean(char && /[A-Za-z0-9_$]/.test(char));
+}
+
+function startDollarQuote(sql: string, index: number, state: SqlStatementSplitState): number | undefined {
+    const tag = sql[index] === '$' ? sql.slice(index).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0] : undefined;
+    if (!tag) return undefined;
+    state.current += tag;
+    state.dollarQuoteTag = tag;
+    return index + tag.length - 1;
+}
+
+function pushSqlStatement(state: SqlStatementSplitState): void {
+    const statement = state.current.trim();
+    if (statement) state.statements.push(statement);
+    state.current = '';
+}
+
+function migrationChecksum(sql: string): string {
+    return crypto.createHash('sha256').update(sql.trim()).digest('hex');
+}
+
+function sameArtifactRecord(left: AgentArtifactRecord, right: AgentArtifactRecord): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+}

@@ -1,3 +1,9 @@
+CREATE TABLE IF NOT EXISTS state_schema_migrations (
+    id TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agent_requests (
     request_id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
@@ -40,3 +46,21 @@ CREATE TABLE IF NOT EXISTS agent_recovery_events (
     details_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS image_shares (
+    token TEXT PRIMARY KEY,
+    source_filename TEXT NOT NULL,
+    content_filename TEXT NOT NULL UNIQUE,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    access_code_required INTEGER NOT NULL CHECK (access_code_required IN (0, 1)),
+    expires_at TEXT,
+    access_code_salt TEXT,
+    access_code_hash TEXT,
+    CHECK (
+        (access_code_required = 0 AND access_code_salt IS NULL AND access_code_hash IS NULL)
+        OR (access_code_required = 1 AND access_code_salt IS NOT NULL AND access_code_hash IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);

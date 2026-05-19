@@ -24,7 +24,7 @@ export const AGENT_BACKGROUNDS = ['transparent', 'opaque', 'auto'] as const;
 export const AGENT_MODERATIONS = ['low', 'auto'] as const;
 export const AGENT_LEGACY_SIZES = ['auto', '1024x1024', '1536x1024', '1024x1536'] as const;
 
-export type AgentStateBackend = 'sqlite' | 'postgres';
+export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
 export type AgentResponseMode = (typeof AGENT_RESPONSE_MODES)[number];
 export type AgentQuality = (typeof AGENT_QUALITIES)[number];
 export type AgentBackground = (typeof AGENT_BACKGROUNDS)[number];
@@ -284,8 +284,8 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
 export function readAgentStateBackend(env: Record<string, string | undefined>): AgentStateBackend {
     const backend = env.AGENT_STATE_BACKEND?.trim().toLowerCase();
     if (!backend) return 'sqlite';
-    if (backend === 'sqlite' || backend === 'postgres') return backend;
-    throw new RequestValidationError('AGENT_STATE_BACKEND 必须是 sqlite 或 postgres。', 500);
+    if (backend === 'memory' || backend === 'sqlite' || backend === 'postgres') return backend;
+    throw new RequestValidationError('AGENT_STATE_BACKEND 必须是 memory、sqlite 或 postgres。', 500);
 }
 
 export function readAgentRequestTtlSeconds(env: Record<string, string | undefined>): number {
