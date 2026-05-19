@@ -1,0 +1,231 @@
+import type OpenAI from 'openai';
+
+type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
+
+type JsonRecord = Record<string, unknown>;
+
+export type ImageStreamProviderDialect =
+    | 'official_image_event'
+    | 'otokapi_image_event'
+    | 'sdk_parsed_fallback'
+    | 'unknown_ignored_event';
+
+export type NormalizedImageStreamEvent =
+    | {
+          type: 'partial_image';
+          b64Json: string;
+          partialImageIndex?: number;
+      }
+    | {
+          type: 'completed';
+          b64Json: string;
+          usage?: ImageUsage;
+      };
+
+export type ImageStreamEventNormalizationResult = {
+    events: NormalizedImageStreamEvent[];
+    providerDialect: ImageStreamProviderDialect;
+    upstreamEventType?: string;
+};
+
+const PARTIAL_EVENT_TYPES = new Set([
+    'image_generation.partial_image',
+    'image_edit.partial_image',
+    'image.generation.chunk'
+]);
+
+const COMPLETED_EVENT_TYPES = new Set([
+    'image_generation.completed',
+    'image_edit.completed',
+    'image.generation.result'
+]);
+
+const OFFICIAL_EVENT_TYPES = new Set([
+    'image_generation.partial_image',
+    'image_edit.partial_image',
+    'image_generation.completed',
+    'image_edit.completed'
+]);
+
+const OTOKAPI_EVENT_TYPES = new Set(['image.generation.chunk', 'image.generation.result']);
+
+function asRecord(value: unknown): JsonRecord | undefined {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        return undefined;
+    }
+    return value as JsonRecord;
+}
+
+function readString(record: JsonRecord, ...keys: string[]): string | undefined {
+    for (const key of keys) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+    }
+    return undefined;
+}
+
+function readNumber(record: JsonRecord, ...keys: string[]): number | undefined {
+    for (const key of keys) {
+        const value = record[key];
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return value;
+        }
+    }
+    return undefined;
+}
+
+function readUsage(record: JsonRecord): ImageUsage | undefined {
+    const usage = record.usage;
+    if (typeof usage === 'object' && usage !== null && !Array.isArray(usage)) {
+        return usage as ImageUsage;
+    }
+    return undefined;
+}
+
+function extractBase64FromDataUrl(value: string | undefined): string | undefined {
+    if (!value || !value.startsWith('data:')) {
+        return undefined;
+    }
+    const separator = value.indexOf(',');
+    if (separator < 0) {
+        return undefined;
+    }
+    const payload = value.slice(separator + 1).trim();
+    return payload || undefined;
+}
+
+function readImageBase64(record: JsonRecord): string | undefined {
+    return (
+        readString(record, 'b64_json', 'b64Json', 'partial_image_b64', 'partialImageB64') ||
+        extractBase64FromDataUrl(readString(record, 'url'))
+    );
+}
+
+function readDataItems(record: JsonRecord): JsonRecord[] {
+    const data = record.data;
+    if (Array.isArray(data)) {
+        return data.flatMap((item) => {
+            const itemRecord = asRecord(item);
+            return itemRecord ? [itemRecord] : [];
+        });
+    }
+
+    const dataRecord = asRecord(data);
+    if (!dataRecord) {
+        return [];
+    }
+
+    return [dataRecord];
+}
+
+function readFirstNestedUsage(record: JsonRecord): ImageUsage | undefined {
+    for (const item of readDataItems(record)) {
+        const usage = readUsage(item);
+        if (usage) {
+            return usage;
+        }
+    }
+    return undefined;
+}
+
+function readNestedCompletedItems(record: JsonRecord): JsonRecord[] {
+    const items: JsonRecord[] = [];
+    const visit = (current: JsonRecord) => {
+        for (const item of readDataItems(current)) {
+            items.push(item);
+            visit(item);
+        }
+    };
+    visit(record);
+    return items;
+}
+
+function hasCompletedImagePayload(record: JsonRecord): boolean {
+    return readNestedCompletedItems(record).some((item) => Boolean(readImageBase64(item)));
+}
+
+function normalizePartialEvent(record: JsonRecord): NormalizedImageStreamEvent[] {
+    const b64Json = readImageBase64(record);
+    if (!b64Json) {
+        return [];
+    }
+    const partialImageIndex = readNumber(record, 'partial_image_index', 'partialImageIndex', 'index');
+    return [
+        {
+            type: 'partial_image',
+            b64Json,
+            ...(partialImageIndex !== undefined ? { partialImageIndex } : {})
+        }
+    ];
+}
+
+function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefined): NormalizedImageStreamEvent[] {
+    const usage = readUsage(record) || readFirstNestedUsage(record);
+    const rootB64 = readImageBase64(record);
+    const dataItems = readNestedCompletedItems(record);
+    const completed = [
+        ...(rootB64 ? [rootB64] : []),
+        ...dataItems.flatMap((item) => {
+            const b64Json = readImageBase64(item);
+            return b64Json ? [b64Json] : [];
+        })
+    ];
+
+    if (completed.length === 0 && eventType && COMPLETED_EVENT_TYPES.has(eventType)) {
+        throw new Error(`流式图片完成事件缺少 b64_json。上游事件类型：${eventType}。`);
+    }
+
+    return completed.map((b64Json) => ({
+        type: 'completed' as const,
+        b64Json,
+        ...(usage ? { usage } : {})
+    }));
+}
+
+function classifyProviderDialect(
+    eventType: string | undefined,
+    events: NormalizedImageStreamEvent[]
+): ImageStreamProviderDialect {
+    if (eventType && OFFICIAL_EVENT_TYPES.has(eventType)) {
+        return 'official_image_event';
+    }
+    if (eventType && OTOKAPI_EVENT_TYPES.has(eventType)) {
+        return 'otokapi_image_event';
+    }
+    if (!eventType && events.length > 0) {
+        return 'sdk_parsed_fallback';
+    }
+    return 'unknown_ignored_event';
+}
+
+export function normalizeUpstreamImageStreamEventWithDiagnostics(event: unknown): ImageStreamEventNormalizationResult {
+    const record = asRecord(event);
+    if (!record) {
+        return { events: [], providerDialect: 'unknown_ignored_event' };
+    }
+
+    const eventType = readString(record, 'type');
+    let events: NormalizedImageStreamEvent[];
+    if (eventType && PARTIAL_EVENT_TYPES.has(eventType)) {
+        events = normalizePartialEvent(record);
+    } else if (!eventType && readImageBase64(record)) {
+        events = normalizePartialEvent(record);
+    } else if ((eventType && COMPLETED_EVENT_TYPES.has(eventType)) || (!eventType && hasCompletedImagePayload(record))) {
+        events = normalizeCompletedEvent(record, eventType);
+    } else {
+        events = [];
+    }
+
+    const providerDialect = classifyProviderDialect(eventType, events);
+    return {
+        events,
+        providerDialect,
+        ...(eventType ? { upstreamEventType: eventType } : {})
+    };
+}
+
+export function normalizeUpstreamImageStreamEvent(event: unknown): NormalizedImageStreamEvent[] {
+    return normalizeUpstreamImageStreamEventWithDiagnostics(event).events;
+}
