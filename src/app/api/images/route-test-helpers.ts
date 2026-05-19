@@ -1,3 +1,4 @@
+export { readSseEvents } from '@/lib/sse-test-utils';
 import type { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -41,17 +42,6 @@ export function imageFormRequest(input: {
         method: 'POST',
         body: formData
     }) as NextRequest;
-}
-
-export async function readSseEvents(response: Response): Promise<Array<Record<string, unknown>>> {
-    const text = await response.text();
-    return text
-        .split('\n\n')
-        .filter((part) => part.trim())
-        .map((part) => {
-            assert.ok(part.startsWith('data: '));
-            return JSON.parse(part.slice(6)) as Record<string, unknown>;
-        });
 }
 
 export async function startStreamingImageUpstream(

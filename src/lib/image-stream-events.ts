@@ -1,8 +1,7 @@
+import { asRecord, type JsonRecord } from './json-record';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
-
-type JsonRecord = Record<string, unknown>;
 
 export type ImageStreamProviderDialect =
     | 'official_image_event'
@@ -48,13 +47,6 @@ const OFFICIAL_EVENT_TYPES = new Set([
 ]);
 
 const OTOKAPI_EVENT_TYPES = new Set(['image.generation.chunk', 'image.generation.result']);
-
-function asRecord(value: unknown): JsonRecord | undefined {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        return undefined;
-    }
-    return value as JsonRecord;
-}
 
 function readString(record: JsonRecord, ...keys: string[]): string | undefined {
     for (const key of keys) {
