@@ -34,6 +34,9 @@ export function imageFormRequest(input: {
         formData.append('stream', 'true');
         formData.append('partial_images', '2');
     }
+    if (input.mode === 'edit') {
+        formData.append('image_0', new File([Buffer.from(PNG_BASE64, 'base64')], 'input.png', { type: 'image/png' }));
+    }
     return new Request('http://localhost/api/images', {
         method: 'POST',
         body: formData
@@ -52,10 +55,12 @@ export async function readSseEvents(response: Response): Promise<Array<Record<st
 }
 
 export async function startStreamingImageUpstream(
-    handler: (body: string) => Promise<Array<{ event?: string; data: unknown; abortAfter?: boolean }>>
+    handler: (body: string, url: string) => Promise<Array<{ event?: string; data: unknown; abortAfter?: boolean }>>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
-        if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
+        const isImageStreamPath =
+            request.url?.endsWith('/images/generations') || request.url?.endsWith('/images/edits');
+        if (request.method !== 'POST' || !isImageStreamPath) {
             response.writeHead(404, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({ error: { message: 'not found' } }));
             return;
@@ -63,7 +68,7 @@ export async function startStreamingImageUpstream(
         const chunks: Buffer[] = [];
         request.on('data', (chunk: Buffer) => chunks.push(chunk));
         await new Promise<void>((resolve) => request.on('end', resolve));
-        const events = await handler(Buffer.concat(chunks).toString('utf8'));
+        const events = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
         for (const event of events) {
             if (event.event) {
