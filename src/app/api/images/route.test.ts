@@ -12,6 +12,18 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 let originalEnv: NodeJS.ProcessEnv;
 const originalConsoleError = console.error;
 
+function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
+    for (const key of Object.keys(process.env)) {
+        if (!(key in snapshot)) {
+            delete process.env[key];
+        }
+    }
+
+    for (const [key, value] of Object.entries(snapshot)) {
+        process.env[key] = value;
+    }
+}
+
 beforeEach(() => {
     originalEnv = { ...process.env };
     console.error = () => {};
@@ -31,7 +43,7 @@ afterEach(async () => {
     const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
     resetServerChannelStateForTests();
     clearAppLogEntriesForTest();
-    process.env = originalEnv;
+    restoreProcessEnv(originalEnv);
     console.error = originalConsoleError;
 });
 

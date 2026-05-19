@@ -14,6 +14,18 @@ let originalEnv: NodeJS.ProcessEnv;
 let originalCwd = '';
 let tempDir = '';
 
+function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
+    for (const key of Object.keys(process.env)) {
+        if (!(key in snapshot)) {
+            delete process.env[key];
+        }
+    }
+
+    for (const [key, value] of Object.entries(snapshot)) {
+        process.env[key] = value;
+    }
+}
+
 beforeEach(async () => {
     originalEnv = { ...process.env };
     originalCwd = process.cwd();
@@ -31,7 +43,7 @@ beforeEach(async () => {
 afterEach(async () => {
     const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } = await import('@/lib/agent-state-runtime');
     const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
-    process.env = originalEnv;
+    restoreProcessEnv(originalEnv);
     process.chdir(originalCwd);
     setAgentStateStoreFactoryForTests(undefined);
     resetAgentStateStoreForTests();
