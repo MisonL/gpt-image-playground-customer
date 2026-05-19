@@ -180,6 +180,59 @@ describe('POST /api/images streaming', () => {
         }
     });
 
+    it('keeps the stable SSE contract for streaming edits', async () => {
+        const { POST } = await import('./route');
+        let upstreamUrl = '';
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream(async (body, url) => {
+            upstreamUrl = url;
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_edit.partial_image',
+                    data: { type: 'image_edit.partial_image', b64_json: 'edit-partial-base64' }
+                },
+                {
+                    event: 'image_edit.completed',
+                    data: {
+                        type: 'image_edit.completed',
+                        b64_json: PNG_BASE64,
+                        usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 }
+                    }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: true
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['partial_image', 'completed', 'done']
+            );
+            assert.equal(events[0].b64_json, 'edit-partial-base64');
+            assert.equal(events[1].b64_json, PNG_BASE64);
+            assert.equal(events[1].output_format, 'png');
+            assert.equal((events[2].images as Array<Record<string, unknown>>)[0].b64_json, PNG_BASE64);
+            assert.equal(upstreamUrl, '/v1/images/edits');
+            assert.match(upstreamBody, /name="image\[\]"/);
+            assert.match(upstreamBody, /name="stream"/);
+            assert.match(upstreamBody, /name="partial_images"/);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('rejects the experimental Responses API backend when the feature flag is disabled', async () => {
         const { POST } = await import('./route');
         const response = await POST(
