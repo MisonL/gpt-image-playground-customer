@@ -1,26 +1,10 @@
 import { createImageStreamResponse } from './image-stream-service';
 import { clearAppLogEntriesForTest, readAppLogEntries } from './app-logger';
+import { readSseEvents, upstreamEvents } from './sse-test-utils';
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
-
-async function* upstreamEvents(events: unknown[]) {
-    for (const event of events) {
-        yield event;
-    }
-}
-
-async function readSseEvents(response: Response): Promise<Array<Record<string, unknown>>> {
-    const text = await response.text();
-    return text
-        .split('\n\n')
-        .filter((part) => part.trim())
-        .map((part) => {
-            assert.ok(part.startsWith('data: '));
-            return JSON.parse(part.slice(6)) as Record<string, unknown>;
-        });
-}
 
 function resolveActualCost() {
     return Promise.resolve({

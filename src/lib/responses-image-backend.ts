@@ -1,7 +1,7 @@
+import { asRecord } from './json-record';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
-type JsonRecord = Record<string, unknown>;
 
 type ResponsesCreateClient = {
     create(params: OpenAI.Responses.ResponseCreateParamsNonStreaming): Promise<{
@@ -22,13 +22,6 @@ export type ResponsesImageGenerateInput = {
     moderation: 'auto' | 'low';
     outputCompression?: number;
 };
-
-function asRecord(value: unknown): JsonRecord | undefined {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        return undefined;
-    }
-    return value as JsonRecord;
-}
 
 function extractCompletedImageResults(output: unknown[] | undefined): string[] {
     if (!Array.isArray(output)) {
