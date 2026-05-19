@@ -1,9 +1,9 @@
 import { appLogger } from './app-logger';
+import { writeFileAtomic } from './agent-file-utils';
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
 import { createBatchId, createImageFilename, outputDir } from './server-runtime';
 import type { ActualCostDetails } from './upstream-cost/types';
-import fs from 'fs/promises';
 import type OpenAI from 'openai';
 import path from 'path';
 
@@ -151,7 +151,7 @@ async function persistStreamedImage(input: { options: ImageStreamResponseOptions
     if (input.options.storageMode !== 'fs') return;
     const buffer = Buffer.from(input.b64Json, 'base64');
     const filepath = path.join(outputDir, input.filename);
-    await fs.writeFile(filepath, buffer);
+    await writeFileAtomic(filepath, buffer);
     appLogger.info(`流式${input.options.modeLabel}：已保存图片 ${input.filename}`, {
         ...input.options.requestLogContext,
         filenames: [input.filename]
