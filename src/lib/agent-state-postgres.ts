@@ -1,10 +1,10 @@
 import crypto from 'crypto';
 import { Pool, type PoolClient } from 'pg';
 import {
-    discardMovedFile,
+    discardArtifactFiles,
     isArtifactFilepathAllowed,
-    moveFileIfExists,
-    restoreMovedFile,
+    moveArtifactFilesForDeletion,
+    restoreArtifactFiles,
     type MovedFileForDeletion
 } from './agent-file-utils';
 import {
@@ -480,30 +480,6 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
         ]);
         return (result.rows as PostgresArtifactRow[]).map((row) => this.mapArtifactRow(row));
     }
-}
-
-async function moveArtifactFilesForDeletion(filepaths: string[]): Promise<MovedFileForDeletion[]> {
-    const movedFiles: MovedFileForDeletion[] = [];
-    try {
-        for (const filepath of filepaths) {
-            const moved = await moveFileIfExists(filepath);
-            if (moved) {
-                movedFiles.push(moved);
-            }
-        }
-        return movedFiles;
-    } catch (error) {
-        await restoreArtifactFiles(movedFiles);
-        throw error;
-    }
-}
-
-async function restoreArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
-    await Promise.allSettled(files.map((file) => restoreMovedFile(file)));
-}
-
-async function discardArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
-    await Promise.allSettled(files.map((file) => discardMovedFile(file)));
 }
 
 function toIso(value: Date | string | null): string {

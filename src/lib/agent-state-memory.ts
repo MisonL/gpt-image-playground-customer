@@ -1,9 +1,8 @@
 import {
-    discardMovedFile,
+    discardArtifactFiles,
     isArtifactFilepathAllowed,
-    moveFileIfExists,
-    restoreMovedFile,
-    type MovedFileForDeletion
+    moveArtifactFilesForDeletion,
+    restoreArtifactFiles
 } from './agent-file-utils';
 import crypto from 'crypto';
 import {
@@ -274,30 +273,6 @@ export class MemoryAgentStateStore implements AgentStateStore, ImageShareStateSt
         if (!record) return;
         this.replaceRequest(record.idempotencyKey, update(record));
     }
-}
-
-async function moveArtifactFilesForDeletion(filepaths: string[]): Promise<MovedFileForDeletion[]> {
-    const movedFiles: MovedFileForDeletion[] = [];
-    try {
-        for (const filepath of filepaths) {
-            const moved = await moveFileIfExists(filepath);
-            if (moved) {
-                movedFiles.push(moved);
-            }
-        }
-        return movedFiles;
-    } catch (error) {
-        await restoreArtifactFiles(movedFiles);
-        throw error;
-    }
-}
-
-async function restoreArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
-    await Promise.allSettled(files.map((file) => restoreMovedFile(file)));
-}
-
-async function discardArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
-    await Promise.allSettled(files.map((file) => discardMovedFile(file)));
 }
 
 function withoutUndefined<T extends object>(record: T): T {

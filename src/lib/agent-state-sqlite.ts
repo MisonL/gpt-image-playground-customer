@@ -3,11 +3,10 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import {
-    discardMovedFile,
+    discardArtifactFiles,
     isArtifactFilepathAllowed,
-    moveFileIfExists,
-    restoreMovedFile,
-    type MovedFileForDeletion
+    moveArtifactFilesForDeletion,
+    restoreArtifactFiles
 } from './agent-file-utils';
 import {
     addMilliseconds,
@@ -454,30 +453,6 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
             ...(row.access_code_hash ? { accessCodeHash: row.access_code_hash } : {})
         };
     }
-}
-
-async function moveArtifactFilesForDeletion(filepaths: string[]): Promise<MovedFileForDeletion[]> {
-    const movedFiles: MovedFileForDeletion[] = [];
-    try {
-        for (const filepath of filepaths) {
-            const moved = await moveFileIfExists(filepath);
-            if (moved) {
-                movedFiles.push(moved);
-            }
-        }
-        return movedFiles;
-    } catch (error) {
-        await restoreArtifactFiles(movedFiles);
-        throw error;
-    }
-}
-
-async function restoreArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
-    await Promise.allSettled(files.map((file) => restoreMovedFile(file)));
-}
-
-async function discardArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
-    await Promise.allSettled(files.map((file) => discardMovedFile(file)));
 }
 
 function cryptoRandomId(): string {

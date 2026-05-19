@@ -69,6 +69,30 @@ export async function discardMovedFile(file: MovedFileForDeletion): Promise<void
     await fs.rm(file.tempPath, { force: true, recursive: true });
 }
 
+export async function moveArtifactFilesForDeletion(filepaths: string[]): Promise<MovedFileForDeletion[]> {
+    const movedFiles: MovedFileForDeletion[] = [];
+    try {
+        for (const filepath of filepaths) {
+            const moved = await moveFileIfExists(filepath);
+            if (moved) {
+                movedFiles.push(moved);
+            }
+        }
+        return movedFiles;
+    } catch (error) {
+        await restoreArtifactFiles(movedFiles);
+        throw error;
+    }
+}
+
+export async function restoreArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
+    await Promise.allSettled(files.map((file) => restoreMovedFile(file)));
+}
+
+export async function discardArtifactFiles(files: MovedFileForDeletion[]): Promise<void> {
+    await Promise.allSettled(files.map((file) => discardMovedFile(file)));
+}
+
 export function assertArtifactFilepathAllowed(filepath: string): void {
     if (isArtifactFilepathAllowed(filepath)) return;
     throw new AgentApiError({

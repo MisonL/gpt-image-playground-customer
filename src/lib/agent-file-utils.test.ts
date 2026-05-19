@@ -1,4 +1,13 @@
-import { discardMovedFile, moveFileIfExists, readImageDimensions, restoreMovedFile, writeFileAtomic } from './agent-file-utils';
+import {
+    discardArtifactFiles,
+    discardMovedFile,
+    moveArtifactFilesForDeletion,
+    moveFileIfExists,
+    readImageDimensions,
+    restoreArtifactFiles,
+    restoreMovedFile,
+    writeFileAtomic
+} from './agent-file-utils';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -75,6 +84,43 @@ describe('moveFileIfExists', () => {
             await discardMovedFile(moved);
             const entries = await readdir(tempDir);
             assert.deepEqual(entries, []);
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('moveArtifactFilesForDeletion', () => {
+    it('moves and restores multiple artifact files through shared helpers', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'agent-artifact-move-'));
+        const firstPath = path.join(tempDir, 'first.png');
+        const secondPath = path.join(tempDir, 'second.png');
+        await writeFile(firstPath, 'first');
+        await writeFile(secondPath, 'second');
+
+        try {
+            const moved = await moveArtifactFilesForDeletion([firstPath, secondPath]);
+            assert.equal(moved.length, 2);
+            await assert.rejects(() => readFile(firstPath));
+            await assert.rejects(() => readFile(secondPath));
+
+            await restoreArtifactFiles(moved);
+            assert.equal(await readFile(firstPath, 'utf8'), 'first');
+            assert.equal(await readFile(secondPath, 'utf8'), 'second');
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('discards moved artifact files through the shared helper', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'agent-artifact-discard-'));
+        const sourcePath = path.join(tempDir, 'artifact.png');
+        await writeFile(sourcePath, 'image-data');
+
+        try {
+            const moved = await moveArtifactFilesForDeletion([sourcePath]);
+            await discardArtifactFiles(moved);
+            assert.deepEqual(await readdir(tempDir), []);
         } finally {
             await rm(tempDir, { recursive: true, force: true });
         }
