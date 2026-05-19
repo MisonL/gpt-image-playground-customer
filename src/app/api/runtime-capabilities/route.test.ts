@@ -3,13 +3,25 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 let originalEnv: NodeJS.ProcessEnv;
 
+function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
+    for (const key of Object.keys(process.env)) {
+        if (!(key in snapshot)) {
+            delete process.env[key];
+        }
+    }
+
+    for (const [key, value] of Object.entries(snapshot)) {
+        process.env[key] = value;
+    }
+}
+
 beforeEach(() => {
     originalEnv = { ...process.env };
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
 });
 
 afterEach(() => {
-    process.env = originalEnv;
+    restoreProcessEnv(originalEnv);
 });
 
 describe('GET /api/runtime-capabilities', () => {
