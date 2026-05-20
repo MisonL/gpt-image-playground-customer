@@ -1,3 +1,8 @@
+---
+sdk: docker
+app_port: 4783
+---
+
 # GPT Image Playground
 
 ![Version](https://img.shields.io/badge/version-1.3.0-blue)
@@ -431,12 +436,12 @@ Hugging Face Space 免费层或其他临时容器演示可以使用纯内存状�
 
 ```dotenv
 AGENT_STATE_BACKEND=memory
-NEXT_PUBLIC_IMAGE_STORAGE_MODE=fs
+NEXT_PUBLIC_IMAGE_STORAGE_MODE=indexeddb
 ```
 
-本仓库也提供 `docker-compose.memory.yml` 作为本地模拟模板；Hugging Face Docker Space 通常直接通过 Space 环境变量设置 `AGENT_STATE_BACKEND=memory`，不需要提交 `.env.local`。
+本仓库也提供 `docker-compose.memory.yml` 作为本地模拟模板；Hugging Face Docker Space 通常直接通过 Space Variables 和 Secrets 设置环境变量，不需要提交 `.env.local`。完整部署步骤见 [Hugging Face Space 免费层部署](./docs/deployment/huggingface-space-free.md)。
 
-`memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。图片二进制仍按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存，默认 `fs` 会写入当前容器文件系统。
+`memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。Web 图片二进制按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存；HF 免费层推荐 `indexeddb`，让网页结果保存在浏览器侧。Agent API 产物仍写入容器临时文件系统，以便提供 `content_url` 下载。
 
 如果把当前 Dockerfile 直接部署到 Hugging Face Docker Space，Space README 顶部 YAML 需要使用 Docker SDK，并把应用端口指向本项目默认端口：
 
@@ -485,6 +490,7 @@ docker logs -f gpt-image-playground-customer
 | `npm run dev` | 启动本地开发服务。 |
 | `npm run build` | 执行生产构建。 |
 | `npm run start` | 启动生产模式服务。 |
+| `npm run smoke:hf-space` | 构建并启动 HF 免费层近似容器，验证 memory 状态后端和 Agent API 契约。 |
 | `npm run lint` | 检查 `src/` 代码。 |
 | `npm run format` | 格式化 `src/` 下的 TypeScript 和 React 文件。 |
 

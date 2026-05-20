@@ -52,6 +52,32 @@ afterEach(async () => {
 });
 
 describe('Agent route integration', () => {
+    it('reports configured Agent auth without exposing secret values', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.AGENT_STATE_BACKEND = 'memory';
+        process.env.AGENT_API_TOKEN = 'capability-token';
+        process.env.APP_PASSWORD = 'page-password';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.auth.required, true);
+        assert.equal(JSON.stringify(body).includes('capability-token'), false);
+        assert.equal(JSON.stringify(body).includes('page-password'), false);
+        assert.equal(body.defaults.state_backend, 'memory');
+    });
+
+    it('does not report auth as required for blank Agent auth settings', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = '   ';
+        process.env.APP_PASSWORD = '   ';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.auth.required, false);
+    });
+
     it('generates through a compatible upstream once and replays the cached response for the same idempotency key', async () => {
         const { generateImage } = await loadAgentRoutes();
         let upstreamCalls = 0;
@@ -569,7 +595,9 @@ async function loadAgentRoutes() {
     const editRoute = await import('./images/edit/route');
     const artifactRoute = await import('./artifacts/[id]/route');
     const artifactContentRoute = await import('./artifacts/[id]/content/route');
+    const capabilitiesRoute = await import('./capabilities/route');
     return {
+        getCapabilities: capabilitiesRoute.GET,
         generateImage: generateRoute.POST,
         editImage: editRoute.POST,
         getArtifact: artifactRoute.GET,

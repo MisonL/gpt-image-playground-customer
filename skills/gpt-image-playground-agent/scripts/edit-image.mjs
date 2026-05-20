@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const baseUrl = process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783';
+const baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const [imagePath, ...promptParts] = process.argv.slice(2);
@@ -23,6 +23,27 @@ function authHeaders() {
   if (token) return { Authorization: `Bearer ${token}` };
   if (passwordHash) return { 'X-App-Password-Hash': passwordHash };
   return {};
+}
+
+function normalizeBaseUrl(value) {
+  return value.replace(/\/+$/, '');
+}
+
+function absoluteUrl(value) {
+  if (typeof value !== 'string' || !value) return undefined;
+  return new URL(value, `${baseUrl}/`).toString();
+}
+
+function enrichImageUrls(result) {
+  if (!result || !Array.isArray(result.images)) return result;
+  return {
+    ...result,
+    images: result.images.map((image) => ({
+      ...image,
+      ...(image.content_url ? { absolute_content_url: absoluteUrl(image.content_url) } : {}),
+      ...(image.metadata_url ? { absolute_metadata_url: absoluteUrl(image.metadata_url) } : {})
+    }))
+  };
 }
 
 async function readCapabilities() {
@@ -138,7 +159,7 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     continue;
   }
   if (response.ok) {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(enrichImageUrls(result), null, 2));
     process.exit(0);
   }
 

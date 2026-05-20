@@ -17,7 +17,7 @@ description: 调用已部署的 GPT Image Playground Agent API，面向 Codex、
 6. 图片编辑使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段使用 `image_0..image_9`。
 7. 默认使用 `response_mode: "path"`，只在用户明确需要图片内联数据时使用 `base64` 或 `both`。
 8. 处理失败时读取结构化 `error.code`、`error.retryable` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。
-9. 返回结果时优先给出 `content_url`、`metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。
+9. 返回结果时优先给出 `content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。
 
 ## 鉴权
 
@@ -50,6 +50,8 @@ Authorization: Bearer <token>
 - `GPT_IMAGE_AGENT_IDEMPOTENCY_KEY`：跨脚本进程恢复同一操作时复用的幂等键。
 - `GPT_IMAGE_AGENT_MAX_ATTEMPTS`：最大尝试次数，默认 `3`。
 - `GPT_IMAGE_AGENT_CONTRACT_CHECK=1`：只检查 capabilities 和错误契约，不触发真实生图或编辑。
+
+脚本会把服务返回的相对产物路径补充为绝对 URL，适合调用 Hugging Face Space、云服务器或自定义域名上的公网实例。
 
 ## 参考
 

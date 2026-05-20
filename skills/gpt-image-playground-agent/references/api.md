@@ -7,6 +7,7 @@
 
 脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 做只读契约检查，不触发真实生图或编辑。
 鉴权支持 `GPT_IMAGE_AGENT_TOKEN` 或 `GPT_IMAGE_APP_PASSWORD_HASH`。
+当服务返回相对 `content_url` 或 `metadata_url` 时，辅助脚本会额外输出 `absolute_content_url` 和 `absolute_metadata_url`。
 
 ## 能力查询
 
