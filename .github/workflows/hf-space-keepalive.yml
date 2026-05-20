@@ -1,0 +1,30 @@
+name: Hugging Face Space Keepalive
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HF_SPACE_KEEPALIVE_URL: ${{ vars.HF_SPACE_KEEPALIVE_URL || 'https://misonl-gpt-image-playground-customer.hf.space' }}
+      HF_SPACE_KEEPALIVE_PATH: /api/auth-status
+      HF_SPACE_KEEPALIVE_TIMEOUT_MS: '30000'
+      HF_SPACE_KEEPALIVE_EXPECT_PASSWORD_REQUIRED: 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Ping Space keepalive endpoint
+        run: node scripts/keepalive-hf-space.mjs

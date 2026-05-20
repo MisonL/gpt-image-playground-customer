@@ -119,9 +119,35 @@ npm run smoke:hf-space
 ## 免费层限制
 
 - Hugging Face 免费 CPU Basic 适合公开演示和轻量使用，不适合长期高并发。
+- CPU Basic 免费层在长时间无访问后会休眠；需要真正永不休眠或自定义 sleep time 时，应升级到付费硬件。
 - Docker Space 重启后容器磁盘写入会丢失。`memory` 状态后端的 Agent 幂等记录、replay 状态和分享元数据也会丢失。
 - Agent API 仍会把产物图片写入容器临时文件系统，以便提供 `content_url` 下载。重启后这些链接不保证继续有效。
 - 需要长期保存图片、分享链接或 Agent replay 状态时，不应使用免费层纯内存模式。应切换到 PostgreSQL 加持久卷或外部对象存储。
+
+## 免费层 Keepalive
+
+本仓库提供 GitHub Actions 定时 keepalive，降低 CPU Basic 因长时间无访问进入休眠的概率：
+
+- 工作流文件：`.github/workflows/hf-space-keepalive.yml`
+- 默认频率：每 6 小时一次，可手动触发 `workflow_dispatch`
+- 默认目标：`https://misonl-gpt-image-playground-customer.hf.space/api/auth-status`
+- 行为边界：只访问只读鉴权状态端点，不携带 `APP_PASSWORD`、`AGENT_API_TOKEN` 或 OpenAI Key，不触发生图、不访问 Agent 生成接口。
+
+如果 Space 地址变化，在 GitHub 仓库 Variables 中设置：
+
+```text
+HF_SPACE_KEEPALIVE_URL=https://<user>-<space>.hf.space
+```
+
+本地手动验证：
+
+```bash
+HF_SPACE_KEEPALIVE_URL=https://<user>-<space>.hf.space \
+HF_SPACE_KEEPALIVE_EXPECT_PASSWORD_REQUIRED=true \
+npm run keepalive:hf-space
+```
+
+注意：keepalive 是免费层的 best-effort 机制，不能保证绕过 Hugging Face 平台维护、重启或政策限制。若需要平台级保证，应升级到付费硬件并设置永不休眠。
 
 ## 验证门禁
 
@@ -131,6 +157,7 @@ npm run smoke:hf-space
 npm test
 npm run lint
 npm run build
+npm run keepalive:hf-space
 npm run smoke:hf-space
 git diff --check
 ```

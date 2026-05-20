@@ -9,6 +9,7 @@
     "postbuild": "node scripts/patch-standalone-runtime.mjs",
     "test": "node --test --import tsx \"src/**/*.test.ts\"",
     "test:postgres": "node scripts/test-postgres-live.mjs",
+    "keepalive:hf-space": "node scripts/keepalive-hf-space.mjs",
     "smoke:hf-space": "node scripts/smoke-hf-space-memory.mjs",
     "start": "node scripts/start-standalone.mjs",
     "lint": "eslint src",
