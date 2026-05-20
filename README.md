@@ -443,6 +443,8 @@ NEXT_PUBLIC_IMAGE_STORAGE_MODE=indexeddb
 
 免费 CPU Basic 会在长时间无访问后休眠。本仓库提供 `.github/workflows/hf-space-keepalive.yml`，默认每 6 小时访问一次 `/api/auth-status`，只做只读 keepalive，不携带密码或 token，不触发生图。若 Space 地址变化，在 GitHub 仓库 Variables 中设置 `HF_SPACE_KEEPALIVE_URL`。
 
+如果修改了本机访问记录文件里的 `APP_PASSWORD`，可执行 `npm run sync-secret:hf-space` 同步到 Hugging Face Space Secret、重启并验证新密码。脚本默认读取 `~/.cache/gpt-image-playground-customer/hf-space-access.txt`，不会回显 Secret 值。
+
 `memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。Web 图片二进制按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存；HF 免费层推荐 `indexeddb`，让网页结果保存在浏览器侧。Agent API 产物仍写入容器临时文件系统，以便提供 `content_url` 下载。
 
 如果把当前 Dockerfile 直接部署到 Hugging Face Docker Space，Space README 顶部 YAML 需要使用 Docker SDK，并把应用端口指向本项目默认端口：
@@ -493,6 +495,7 @@ docker logs -f gpt-image-playground-customer
 | `npm run build` | 执行生产构建。 |
 | `npm run start` | 启动生产模式服务。 |
 | `npm run keepalive:hf-space` | 访问 HF Space 只读状态端点，用于 keepalive 验证。 |
+| `npm run sync-secret:hf-space` | 从本机访问记录文件同步 HF Space Secret，并验证页面密码。 |
 | `npm run smoke:hf-space` | 构建并启动 HF 免费层近似容器，验证 memory 状态后端和 Agent API 契约。 |
 | `npm run lint` | 检查 `src/` 代码。 |
 | `npm run format` | 格式化 `src/` 下的 TypeScript 和 React 文件。 |

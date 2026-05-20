@@ -149,6 +149,35 @@ npm run keepalive:hf-space
 
 注意：keepalive 是免费层的 best-effort 机制，不能保证绕过 Hugging Face 平台维护、重启或政策限制。若需要平台级保证，应升级到付费硬件并设置永不休眠。
 
+## 同步本机访问密码到 Space
+
+如果本机访问记录文件里的 `APP_PASSWORD` 已更新，可以用脚本同步到 HF Space Secret、重启服务并验证新密码：
+
+```bash
+npm run sync-secret:hf-space
+```
+
+默认读取：
+
+```text
+~/.cache/gpt-image-playground-customer/hf-space-access.txt
+```
+
+默认同步 `APP_PASSWORD`，不会在输出中回显密码值。可通过环境变量覆盖目标或同步多个 key：
+
+```bash
+HF_SPACE_ID=misonL/gpt-image-playground-customer \
+HF_SPACE_URL=https://misonl-gpt-image-playground-customer.hf.space \
+HF_SPACE_ACCESS_FILE=~/.cache/gpt-image-playground-customer/hf-space-access.txt \
+HF_SPACE_SECRET_KEYS=APP_PASSWORD,AGENT_API_TOKEN \
+npm run sync-secret:hf-space
+```
+
+可选参数：
+
+- `npm run sync-secret:hf-space -- --no-restart`：只写 Secret，不重启 Space。
+- `npm run sync-secret:hf-space -- --skip-verify`：跳过 `/api/auth-verify` 密码验证。
+
 ## 验证门禁
 
 最小验证：
