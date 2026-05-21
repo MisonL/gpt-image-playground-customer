@@ -161,6 +161,35 @@ describe('Command center scripts', () => {
         }
     });
 
+    it('redacts response snippets from production HTTP probe errors', async () => {
+        const originalNodeEnv = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        const server = createServer((request, response) => {
+            response.writeHead(502, { 'content-type': 'text/plain' });
+            response.end('secret upstream body');
+        });
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        try {
+            assert.equal(typeof address, 'object');
+            await assert.rejects(
+                fetchJsonWithTimeout(`http://127.0.0.1:${address.port}/api/agent/capabilities`, { timeoutMs: 1000 }),
+                (error) => {
+                    assert.match(error.message, /failed with HTTP 502/);
+                    assert.doesNotMatch(error.message, /secret upstream body/);
+                    return true;
+                }
+            );
+        } finally {
+            if (originalNodeEnv === undefined) {
+                delete process.env.NODE_ENV;
+            } else {
+                process.env.NODE_ENV = originalNodeEnv;
+            }
+            await new Promise((resolve) => server.close(resolve));
+        }
+    });
+
     it('supports command timeouts for long-running child processes', () => {
         const result = runCommand(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { timeoutMs: 20 });
 

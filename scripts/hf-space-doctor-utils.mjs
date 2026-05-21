@@ -134,8 +134,20 @@ export function buildNextActions(checks) {
 }
 
 export function validateSpaceId(spaceId) {
-    if (!spaceId?.trim()) return 'HF Space id is required.';
-    if (!/^[^/\s]+\/[^/\s]+$/.test(spaceId)) return 'HF Space id must use namespace/space format.';
+    const text = spaceId?.trim();
+    if (!text) return 'HF Space id is required.';
+    const parts = text.split('/');
+    if (parts.length < 1 || parts.length > 2 || parts.some((part) => part.length === 0)) {
+        return 'HF Space id must use space_name or namespace/space_name format with 1-96 characters per part.';
+    }
+    for (const part of parts) {
+        if (part.length > 96 || !/^[A-Za-z0-9._-]+$/.test(part)) {
+            return 'HF Space id must use space_name or namespace/space_name format with 1-96 characters per part.';
+        }
+        if (part.startsWith('.') || part.includes('..') || part.includes('--') || part.endsWith('.git')) {
+            return 'HF Space id parts cannot start with ".", contain ".." or "--", or end with ".git".';
+        }
+    }
     return undefined;
 }
 

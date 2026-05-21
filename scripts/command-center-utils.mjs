@@ -88,12 +88,12 @@ export async function fetchJsonWithTimeout(url, options = {}) {
     try {
         const response = await fetch(url, { signal: controller.signal });
         const text = await response.text();
-        const bodySnippet = text.slice(0, 300);
-        if (!response.ok) throw new Error(`${pathname} failed with HTTP ${response.status}: ${bodySnippet}`);
+        const bodySnippet = formatResponseBodySnippet(text);
+        if (!response.ok) throw new Error(`${pathname} failed with HTTP ${response.status}${bodySnippet}`);
         try {
             return JSON.parse(text);
         } catch (error) {
-            if (error instanceof SyntaxError) throw new Error(`${pathname} did not return JSON: ${bodySnippet}`);
+            if (error instanceof SyntaxError) throw new Error(`${pathname} did not return JSON${bodySnippet}`);
             throw error;
         }
     } catch (error) {
@@ -102,6 +102,11 @@ export async function fetchJsonWithTimeout(url, options = {}) {
     } finally {
         clearTimeout(timer);
     }
+}
+
+function formatResponseBodySnippet(text) {
+    if (!text || process.env.NODE_ENV === 'production') return '';
+    return `: ${text.slice(0, 100)}`;
 }
 
 function safeUrlPathname(url) {

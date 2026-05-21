@@ -13,7 +13,6 @@ const STATUS_POLL_ATTEMPTS = 40;
 const STATUS_POLL_INTERVAL_MS = 10_000;
 const PUBLIC_ENDPOINT_TIMEOUT_MS = 10_000;
 const HF_CLI_TIMEOUT_MS = 120_000;
-const DEFAULT_REPO_SLUG = 'MisonL/gpt-image-playground-customer';
 
 function parseArgs(argv) {
     assertKnownOptions(argv, ['--help', '-h']);
@@ -44,8 +43,10 @@ function readRepositorySlug() {
     if (envSlug) return envSlug;
     try {
         return parseRepositorySlug(runText('git', ['remote', 'get-url', 'origin']));
-    } catch {
-        return DEFAULT_REPO_SLUG;
+    } catch (error) {
+        throw new Error(
+            `Unable to detect repository slug from git origin. Set REPO_SLUG=owner/repo. ${error instanceof Error ? error.message : String(error)}`
+        );
     }
 }
 
@@ -55,7 +56,7 @@ export function parseRepositorySlug(remoteUrl) {
     if (httpsMatch) return `${httpsMatch[1]}/${httpsMatch[2]}`;
     const sshMatch = text.match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/);
     if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`;
-    return DEFAULT_REPO_SLUG;
+    throw new Error('Unable to detect repository slug from git origin URL. Set REPO_SLUG=owner/repo.');
 }
 
 function runBinary(command, args) {
@@ -97,7 +98,8 @@ export function extractUploadCommitSha(output) {
     return match[1];
 }
 
-export function buildUploadArgs({ sourceDir, localSha, repoSlug = DEFAULT_REPO_SLUG }) {
+export function buildUploadArgs({ sourceDir, localSha, repoSlug }) {
+    if (!repoSlug?.trim()) throw new Error('REPO_SLUG is required for deploy metadata.');
     return [
         'upload',
         HF_SPACE_ID,

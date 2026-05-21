@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { isMainModule, parseJsonPayload, pickFailureOutput, printJson, runCommand } from './command-center-utils.mjs';
 
 const GENERATE_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url));
-const AGENT_DOCTOR_TIMEOUT_MS = 65_000;
+const AGENT_DOCTOR_TIMEOUT_MS = 75_000;
 
 export function buildAgentDoctorArgs() {
     return [GENERATE_SCRIPT, '--contract-check', '--timeout-ms', '60000', 'contract check'];

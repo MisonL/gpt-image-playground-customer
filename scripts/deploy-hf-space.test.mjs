@@ -45,7 +45,8 @@ describe('HF Space deploy script', () => {
     it('builds upload args without embedding newline characters in commit metadata', () => {
         const args = buildUploadArgs({
             sourceDir: '/tmp/source',
-            localSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            localSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            repoSlug: 'MisonL/gpt-image-playground-customer'
         });
 
         assert.equal(args.includes('--json'), true);
@@ -70,6 +71,17 @@ describe('HF Space deploy script', () => {
     it('parses GitHub repository slugs from common origin URL formats', () => {
         assert.equal(parseRepositorySlug('https://github.com/MisonL/gpt-image-playground-customer.git'), 'MisonL/gpt-image-playground-customer');
         assert.equal(parseRepositorySlug('git@github.com:MisonL/gpt-image-playground-customer.git'), 'MisonL/gpt-image-playground-customer');
-        assert.equal(parseRepositorySlug('not-a-github-url'), 'MisonL/gpt-image-playground-customer');
+        assert.throws(() => parseRepositorySlug('not-a-github-url'), /Set REPO_SLUG=owner\/repo/);
+    });
+
+    it('requires an explicit repository slug for upload metadata', () => {
+        assert.throws(
+            () =>
+                buildUploadArgs({
+                    sourceDir: '/tmp/source',
+                    localSha: 'ffffffffffffffffffffffffffffffffffffffff'
+                }),
+            /REPO_SLUG is required/
+        );
     });
 });

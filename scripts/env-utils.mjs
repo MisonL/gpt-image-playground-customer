@@ -5,6 +5,9 @@ export function readPositiveIntegerEnv(name, defaultValue, minValue = 1) {
         throw new Error(`${name} must be a positive integer formatted as digits`);
     }
     const value = Number.parseInt(rawValue, 10);
+    if (!Number.isSafeInteger(value)) {
+        throw new Error(`${name} must be a safe integer <= ${Number.MAX_SAFE_INTEGER}`);
+    }
     if (value < minValue) {
         throw new Error(`${name} must be a positive integer greater than or equal to ${minValue}`);
     }

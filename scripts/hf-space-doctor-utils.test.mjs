@@ -92,8 +92,13 @@ describe('HF Space doctor utilities', () => {
 
     it('validates Hugging Face Space target config consistently', () => {
         assert.equal(validateSpaceId('example/demo'), undefined);
+        assert.equal(validateSpaceId('demo'), undefined);
         assert.equal(validateSpaceUrl('https://example-demo.hf.space'), undefined);
-        assert.match(validateSpaceId('bad'), /namespace\/space/);
+        assert.match(validateSpaceId('a/b/c'), /space_name or namespace\/space_name/);
+        assert.match(validateSpaceId('.bad/demo'), /cannot start/);
+        assert.match(validateSpaceId('bad--name/demo'), /cannot start/);
+        assert.match(validateSpaceId('bad.git/demo'), /cannot start/);
+        assert.match(validateSpaceId(`${'a'.repeat(97)}/demo`), /1-96 characters/);
         assert.match(validateSpaceUrl('https://example.com'), /\.hf\.space/);
         assert.match(validateSpaceUrl('https://user:pass@example-demo.hf.space'), /plain Space origin/);
         assert.match(validateSpaceUrl('https://example-demo.hf.space/share/abc'), /plain Space origin/);
