@@ -6,6 +6,16 @@ const containerName = process.env.HF_SPACE_SMOKE_CONTAINER || 'gpt-image-playgro
 const hostPort = process.env.HF_SPACE_SMOKE_PORT || '4785';
 const token = process.env.HF_SPACE_SMOKE_AGENT_TOKEN || 'hf-space-smoke-token';
 const baseUrl = `http://127.0.0.1:${hostPort}`;
+const readyTimeoutMs = readPositiveIntegerEnv('HF_SPACE_SMOKE_READY_TIMEOUT_MS', 45_000);
+
+function readPositiveIntegerEnv(name, defaultValue) {
+  const value = process.env[name]?.trim();
+  if (!value) return defaultValue;
+  if (!/^\d+$/.test(value)) throw new Error(`${name} must be a positive integer.`);
+  const parsed = Number.parseInt(value, 10);
+  if (parsed <= 0) throw new Error(`${name} must be a positive integer.`);
+  return parsed;
+}
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -36,7 +46,7 @@ async function fetchJson(path, options = {}) {
 }
 
 async function waitForReady() {
-  const deadline = Date.now() + 45_000;
+  const deadline = Date.now() + readyTimeoutMs;
   let lastError;
   while (Date.now() < deadline) {
     try {
