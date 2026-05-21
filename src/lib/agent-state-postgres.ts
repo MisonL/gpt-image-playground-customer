@@ -200,6 +200,15 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
         }
     }
 
+    async refreshRequestLease(input: { requestId: string; leaseMs: number; now?: Date }): Promise<boolean> {
+        const now = input.now ?? new Date();
+        const result = await this.pool.query(
+            "UPDATE agent_requests SET locked_until = $1, updated_at = $2 WHERE request_id = $3 AND status IN ('running', 'pending')",
+            [isoDate(addMilliseconds(now, input.leaseMs)), isoDate(now), input.requestId]
+        );
+        return (result.rowCount ?? 0) > 0;
+    }
+
     async completeRequest(input: CompleteAgentRequestInput): Promise<void> {
         const client = await this.pool.connect();
         const nowIso = isoDate(input.now ?? new Date());
@@ -238,6 +247,12 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
             "UPDATE agent_requests SET status = 'failed', response_json = NULL, error_json = $1, locked_until = NULL, updated_at = $2 WHERE request_id = $3",
             [input.error, isoDate(input.now ?? new Date()), input.requestId]
         );
+    }
+
+    async getRequest(requestId: string): Promise<AgentRequestRecord | undefined> {
+        const result = await this.pool.query('SELECT * FROM agent_requests WHERE request_id = $1', [requestId]);
+        const row = result.rows[0] as PostgresRequestRow | undefined;
+        return row ? this.mapRequestRow(row) : undefined;
     }
 
     async getArtifact(id: string): Promise<AgentArtifactRecord | undefined> {

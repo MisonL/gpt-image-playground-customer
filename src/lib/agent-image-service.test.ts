@@ -139,9 +139,15 @@ function createReplayStore(artifacts: AgentArtifactRecord[]): AgentStateStore {
         async beginRequest() {
             throw new Error('not implemented');
         },
+        async refreshRequestLease() {
+            return false;
+        },
         async saveArtifacts() {},
         async completeRequest() {},
         async failRequest() {},
+        async getRequest() {
+            return undefined;
+        },
         async getArtifact() {
             return undefined;
         },

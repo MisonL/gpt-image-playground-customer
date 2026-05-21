@@ -4,9 +4,52 @@
 
 - `skills/gpt-image-playground-agent/scripts/generate-image.mjs`：JSON 文生图调用。
 - `skills/gpt-image-playground-agent/scripts/edit-image.mjs`：multipart 编辑调用。
+- `skills/gpt-image-playground-agent/scripts/probe-upstream-image.mjs`：上游图片接口连通性探针。
 
-脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 做只读契约检查，不触发真实生图或编辑。
-鉴权支持 `GPT_IMAGE_AGENT_TOKEN` 或 `GPT_IMAGE_APP_PASSWORD_HASH`。
+生成和编辑脚本默认只做 dry-run，不触发真实生图或编辑。必须显式添加 `--allow-billable` 才会调用 `/api/agent/images/generate` 或 `/api/agent/images/edit`。
+上游探针默认只检查 DNS、TLS 和 `/models`，必须显式添加 `--allow-billable` 才会调用上游 `/images/generations`。
+脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 或 `--contract-check` 做只读契约检查，不触发真实生图或编辑。
+鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API_TOKEN` 时只接受 Bearer token；只有未配置 `AGENT_API_TOKEN` 且配置了 `APP_PASSWORD` 时，才接受访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。
+当服务返回相对 `content_url` 或 `metadata_url` 时，辅助脚本会额外输出 `absolute_content_url` 和 `absolute_metadata_url`。
+同一个 `Idempotency-Key` 如果已经进入终态 `failed`，再次调用 generate/edit 或 job result/status 只会回放该失败，且 `retryable=false`。需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
+
+生成脚本参数：
+
+- `--model`：默认 `gpt-image-2`。
+- `--size`：默认 `1024x1024`。
+- `--quality`：默认 `high`。
+- `--n`：默认 `1`。
+- `--format`：默认 `png`，`jpg` 会规范化为 `jpeg`。
+- `--response-mode`：默认 `path`。
+- `--timeout-ms`：默认 `420000`。
+- `--prompt-file`：从文本文件读取 prompt。
+- `--idempotency-key`：指定稳定幂等键。
+- `--dry-run`：只输出将要发送的 JSON。
+- `--allow-billable`：允许真实调用生图端点。
+
+编辑脚本参数：
+
+- `--model`
+- `--size`
+- `--quality`
+- `--response-mode`
+- `--timeout-ms`
+- `--idempotency-key`
+- `--dry-run`
+- `--allow-billable`
+
+上游探针脚本参数：
+
+- `--base-url`
+- `--model`
+- `--prompt`
+- `--size`
+- `--quality`
+- `--format`
+- `--timeout-ms`
+- `--allow-billable`
+
+上游探针读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL` 作为上游地址，读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY` 作为上游鉴权。输出不会包含 key，也不会输出完整 base64。
 
 ## 能力查询
 
@@ -14,7 +57,74 @@
 GET /api/agent/capabilities
 ```
 
-返回 API 版本、支持的模型、限制、鉴权方式、存储模式、状态后端、幂等设置和端点路径。响应不会公开服务端本地 SQLite 文件路径。
+返回 API 版本、支持的模型、通用限制、模型级限制、Agent 流式边界、鉴权方式、存储模式、状态后端、幂等设置和端点路径。响应不会公开服务端本地 SQLite 文件路径。
+
+关键字段：
+
+- `auth.required`：是否需要鉴权。
+- `auth.schemes`：当前部署实际接受的鉴权方案。`AGENT_API_TOKEN` 优先于 `APP_PASSWORD`，两者同时配置时只返回 `bearer`。
+- `model_limits.gpt-image-2.max_edge`：最大单边像素，当前为 `3840`。
+- `model_limits.gpt-image-2.max_pixels`：最大总像素，当前为 `8294400`。
+- `model_limits.gpt-image-2.edge_multiple`：宽高必须是该值的倍数，当前为 `16`。
+- `model_limits.gpt-image-2.max_aspect`：最大长短边比例，当前为 `3`。
+- `model_limits.gpt-image-2.min_pixels`：最小总像素，当前为 `655360`。
+- `model_limits.gpt-image-2.recommended_presets`：推荐尺寸预设。
+- `model_limits.gpt-image-2.high_4k_risk`：高质量 4K 级请求的长耗时风险说明。
+- `agent_streaming.generate.mode`：当前为 `non_streaming_only`。
+- `agent_streaming.edit.mode`：当前为 `non_streaming_only`。
+- `agent_streaming.page_sse`：页面端 `/api/images` 的 form-data SSE 能力，不代表 Agent generate/edit 支持流式。
+- `agent_jobs.supported`：当前为 `true`，表示可使用 job polling。
+- `agent_jobs.mode`：当前为 `job_polling`。
+- `agent_jobs.endpoints`：路径为 `POST /api/agent/jobs/images/generate`、`GET /api/agent/jobs/{id}`、`GET /api/agent/jobs/{id}/result`。
+- `agent_jobs.states`：状态机为 `queued`、`running`、`succeeded`、`failed`、`expired`。
+
+当 `agent_jobs.supported=true` 且 `mode=job_polling` 时，4K/high 长耗时请求优先创建 job 并轮询结果；同步 Agent generate 仍适用于普通非流式请求。当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。
+
+## Job Polling
+
+```http
+POST /api/agent/jobs/images/generate
+Authorization: Bearer <token>
+Idempotency-Key: <stable-key>
+Content-Type: application/json
+```
+
+请求体与 `POST /api/agent/images/generate` 相同。创建成功后返回：
+
+```json
+{
+  "job": {
+    "id": "job-request-uuid",
+    "request_id": "job-request-uuid",
+    "idempotency_key": "stable-key",
+    "mode": "generate",
+    "state": "running",
+    "created_at": "2026-05-20T00:00:00.000Z",
+    "updated_at": "2026-05-20T00:00:00.000Z",
+    "expires_at": "2026-05-21T00:00:00.000Z",
+    "result_url": "/api/agent/jobs/job-request-uuid/result",
+    "retry_after_seconds": 5
+  }
+}
+```
+
+轮询状态：
+
+```http
+GET /api/agent/jobs/{id}
+```
+
+读取结果：
+
+```http
+GET /api/agent/jobs/{id}/result
+```
+
+`/result` 在运行中返回 `request_in_progress` 和 `Retry-After`；成功后返回标准 `AgentImageResponse`；失败时返回结构化 `AgentError`。失败 job 是终态，`error.retryable` 固定为 `false`，但保留原始错误的 `code`、`message`、`upstream_status` 和 `diagnostics` 用于排查。不存在返回 `job_not_found`，过期返回 `job_expired`。
+
+`GET /api/agent/jobs/{id}` 在 `state=failed` 时，`job.error` 也会返回 `retryable=false`，并携带同样的 `code`、`message`、`upstream_status` 和 `diagnostics` 排障字段；`request_id` 已在 `job.request_id` 中提供。
+
+如果服务进程在 job 结束前重启，客户端应按 `GET /api/agent/jobs/{id}` 返回的状态继续处理；必要时使用相同 `Idempotency-Key` 重新创建同一 job，避免重复业务操作。同一个 key 命中终态 failed job 时只会返回该失败状态，不会触发新执行；需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
 
 ## 生成图片
 
@@ -40,6 +150,8 @@ Content-Type: application/json
   "response_mode": "path"
 }
 ```
+
+Agent 生成端点当前只支持非流式 JSON 响应。不要向该端点发送 `stream: true`；页面 SSE 使用独立的 `POST /api/images` form-data 路径。
 
 响应：
 
@@ -111,10 +223,25 @@ DELETE /api/agent/artifacts/{id}
         "n": "必须是 1 到 10 之间的整数"
       }
     },
+    "diagnostics": {
+      "elapsed_ms": 1234,
+      "selected_channel_id": "default",
+      "upstream_host": "api.example.test",
+      "upstream_status": 524,
+      "transport_error": false,
+      "retry_after_seconds": 15,
+      "channel_cooldown_scope": "channel",
+      "response_headers": {
+        "date": "Wed, 20 May 2026 00:00:00 GMT",
+        "cf-ray": "example"
+      }
+    },
     "request_id": "uuid"
   }
 }
 ```
+
+`diagnostics` 只包含脱敏诊断字段和白名单响应头，不包含 API key、token、完整上游响应体或图片 base64。SDK/网络层只有 `Connection error.` 时，`transport_error` 会是 `true`，但不会伪造 `upstream_status`。
 
 常见错误码：
 
@@ -125,6 +252,8 @@ DELETE /api/agent/artifacts/{id}
 - `idempotency_conflict`
 - `request_in_progress`
 - `artifact_not_found`
+- `job_not_found`
+- `job_expired`
 - `upstream_rate_limited`
 - `upstream_auth_failed`
 - `upstream_unavailable`

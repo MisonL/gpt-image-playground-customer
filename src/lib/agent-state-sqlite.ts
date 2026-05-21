@@ -189,6 +189,16 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         }
     }
 
+    async refreshRequestLease(input: { requestId: string; leaseMs: number; now?: Date }): Promise<boolean> {
+        const now = input.now ?? new Date();
+        const result = this.requireDb()
+            .prepare(
+                "UPDATE agent_requests SET locked_until = ?, updated_at = ? WHERE request_id = ? AND status IN ('running', 'pending')"
+            )
+            .run(isoDate(addMilliseconds(now, input.leaseMs)), isoDate(now), input.requestId);
+        return result.changes > 0;
+    }
+
     private beginRequestInTransaction(
         input: BeginAgentRequestInput,
         now: Date,
@@ -284,6 +294,13 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         db.prepare(
             "UPDATE agent_requests SET status = 'failed', response_json = NULL, error_json = ?, locked_until = NULL, updated_at = ? WHERE request_id = ?"
         ).run(serializeJson(input.error), nowIso, input.requestId);
+    }
+
+    async getRequest(requestId: string): Promise<AgentRequestRecord | undefined> {
+        const row = this.requireDb()
+            .prepare('SELECT * FROM agent_requests WHERE request_id = ?')
+            .get(requestId) as SqliteRequestRow | undefined;
+        return row ? this.mapRequestRow(row) : undefined;
     }
 
     async getArtifact(id: string): Promise<AgentArtifactRecord | undefined> {

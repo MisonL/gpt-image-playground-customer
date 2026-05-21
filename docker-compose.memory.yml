@@ -1,8 +1,12 @@
 services:
   gpt-image-playground:
+    build:
+      args:
+        NEXT_PUBLIC_IMAGE_STORAGE_MODE: indexeddb
     environment:
       AGENT_STATE_BACKEND: memory
       AGENT_SQLITE_PATH: ""
       AGENT_DATABASE_URL: ""
       AGENT_DB_PASSWORD: ""
       AGENT_DB_PASSWORD_FILE: ""
+      NEXT_PUBLIC_IMAGE_STORAGE_MODE: indexeddb

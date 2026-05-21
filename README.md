@@ -1,3 +1,8 @@
+---
+sdk: docker
+app_port: 4783
+---
+
 # GPT Image Playground
 
 ![Version](https://img.shields.io/badge/version-1.3.0-blue)
@@ -126,7 +131,7 @@ http://localhost:4783
 - 历史记录：保留提示词、参数、图片、耗时、token 使用量和估算费用。
 - 发送到编辑：从生成结果或历史记录直接进入编辑模式。
 - 下载与分享：单图结果可直接下载，分享链接支持访问码和有效期。
-- 页面访问保护：可通过 `APP_PASSWORD` 给网页和受保护图片访问加入口密码。
+- 页面访问保护：可通过 `APP_PASSWORD` 给网页和受保护图片访问加访问码。
 - Agent 状态后端：支持 `memory`、`sqlite`、`postgres`，覆盖临时演示、单实例和集中状态库场景。
 - 双语和主题：支持中文、英文、亮色、暗色。
 - 两种图片存储模式：服务端文件系统或浏览器 IndexedDB。
@@ -194,6 +199,9 @@ Agent API 面向自动化调用，不要求 Agent 模拟网页表单。接口统
 | `GET /api/agent/openapi.json` | 获取机器可读 OpenAPI 描述。 |
 | `POST /api/agent/images/generate` | JSON 文生图，默认只返回文件路径和元数据。 |
 | `POST /api/agent/images/edit` | multipart 图片编辑，支持源图和 PNG mask。 |
+| `POST /api/agent/jobs/images/generate` | 创建文生图 job，适合 4K/high 或长耗时请求。 |
+| `GET /api/agent/jobs/{id}` | 轮询 job 状态。 |
+| `GET /api/agent/jobs/{id}/result` | 读取完成后的标准图片响应，运行中返回可重试错误。 |
 | `GET /api/agent/artifacts/{id}` | 查询产物元数据。 |
 | `GET /api/agent/artifacts/{id}/content` | 下载产物图片内容。 |
 | `DELETE /api/agent/artifacts/{id}` | 删除产物和元数据。 |
@@ -203,6 +211,13 @@ Agent 请求必须带 `Idempotency-Key`，避免超时重试造成重复出图�
 ```text
 Authorization: Bearer your-agent-token
 ```
+
+`AGENT_API_TOKEN` 存在时 Agent API 只接受 Bearer token，不会回退到页面访问码哈希。只有未设置 `AGENT_API_TOKEN` 且设置了 `APP_PASSWORD` 时，Agent API 才接受 `X-App-Password-Hash`；实际可用方案以 `/api/agent/capabilities` 的 `auth.schemes` 为准。
+
+同一个 `Idempotency-Key` 如果已进入终态 `failed`，再次请求只会回放该失败，不会重新执行。终态失败回放会返回 `retryable=false`，并保留错误码、上游状态和脱敏诊断字段；需要重新尝试时，应创建新的业务操作和新的 `Idempotency-Key`。
+
+Job polling 当前是同一 Next.js 服务实例内的后台任务，结果和错误会写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在 job 结束前重启，客户端应继续按状态端点和结构化错误处理，必要时用相同 `Idempotency-Key` 重建同一业务操作。
+运行中的 job 会定时刷新请求 lease，避免高质量长耗时上游调用仍在执行时被 recovery 误判为孤儿请求。
 
 生成示例：
 
@@ -289,7 +304,7 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | `OPENAI_RESPONSES_API_MODEL` | 否 | 无 | Responses API 实验后端的 `/responses` 顶层模型。启用 `imageBackend=responses` 时必须设置，或在请求中传 `responsesModel`。 |
 | `OPENAI_MAX_STREAMS_PER_CREDENTIAL` | 否 | `1` | 每个服务端 credential 允许同时执行的流式任务数。 |
 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 否 | `60000` | 服务端 credential 或 channel 失败后的默认冷却时间。 |
-| `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问密码。 |
+| `APP_PASSWORD` | 否 | 无 | 设置后，页面会要求输入访问码。 |
 | `AGENT_API_TOKEN` | 否 | 无 | 设置后，`/api/agent/*` 需要 Bearer token。 |
 | `AGENT_STATE_BACKEND` | 否 | `sqlite` | Agent 状态后端，可选 `memory`、`sqlite` 或 `postgres`。 |
 | `AGENT_SQLITE_PATH` | 否 | `generated-images/.agent-state/agent.sqlite` | SQLite 状态库路径。 |
@@ -300,7 +315,7 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | `AGENT_REQUEST_LEASE_MS` | 否 | `600000` | Agent 请求运行锁租约时间。 |
 | `AGENT_REQUEST_TTL_SECONDS` | 否 | `86400` | 幂等请求记录保留秒数。 |
 | `AGENT_RECOVERY_INTERVAL_MS` | 否 | `30000` | Agent 请求触发轻量 recovery 的最小间隔。 |
-| `AGENT_PUBLIC_BASE_URL` | 否 | `/` | OpenAPI `servers[0].url`，供外部 Agent 生成客户端时使用。 |
+| `AGENT_PUBLIC_BASE_URL` | 否 | `/` | OpenAPI `servers[0].url`，供外部 Agent 生成客户端时使用；配置时必须是绝对 `http`/`https` URL，不能包含凭据、查询参数或片段。 |
 | `APP_LOG_LEVEL` | 否 | 生产环境 `warn`，其他环境 `info` | 服务端日志等级，可选 `debug`、`info`、`warn`、`error`。 |
 | `NEXT_PUBLIC_IMAGE_STORAGE_MODE` | 否 | `fs` | 可选 `fs` 或 `indexeddb`。 |
 
@@ -431,12 +446,65 @@ Hugging Face Space 免费层或其他临时容器演示可以使用纯内存状�
 
 ```dotenv
 AGENT_STATE_BACKEND=memory
-NEXT_PUBLIC_IMAGE_STORAGE_MODE=fs
+NEXT_PUBLIC_IMAGE_STORAGE_MODE=indexeddb
 ```
 
-本仓库也提供 `docker-compose.memory.yml` 作为本地模拟模板；Hugging Face Docker Space 通常直接通过 Space 环境变量设置 `AGENT_STATE_BACKEND=memory`，不需要提交 `.env.local`。
+本仓库也提供 `docker-compose.memory.yml` 作为本地模拟模板；Hugging Face Docker Space 通常直接通过 Space Variables 和 Secrets 设置环境变量，不需要提交 `.env.local`。完整部署步骤见 [Hugging Face Space 免费层部署](./docs/deployment/huggingface-space-free.md)。
 
-`memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。图片二进制仍按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存，默认 `fs` 会写入当前容器文件系统。
+免费 CPU Basic 会在长时间无访问后休眠。本仓库提供 `.github/workflows/hf-space-keepalive.yml`，默认每 6 小时访问一次 `/api/auth-status`，只做只读 keepalive，不携带访问码或 token，不触发生图。若 Space 地址变化，在 GitHub 仓库 Variables 中设置 `HF_SPACE_KEEPALIVE_URL`。
+
+全新电脑从 0 开始时，先完成系统级前置条件：
+
+```bash
+node --version
+npm --version
+hf --help
+hf auth login
+npm install
+```
+
+要求 Node.js 20 或更高版本。Hugging Face CLI 安装方式以官方文档为准；当前官方入口是 `hf` 命令，登录使用 Hugging Face Access Token。
+
+本仓库只保留一种推荐的管理员交互方式：先用顶层命令判断状态，再进入具体部署命令。Hugging Face Space 操作使用官方 `hf` CLI；不要再维护本机 access 文件，也不要把 Space Secret 写入仓库。
+
+常用入口：
+
+```bash
+npm run status
+npm run doctor
+npm run verify
+npm run deploy:local
+npm run deploy:space
+npm run agent:doctor
+```
+
+`status` 只读输出 git、Node、固定 Space 目标、Agent capabilities 路径和仓库 Skill 入口；`doctor` 汇总本机与 HF Space 诊断；`verify` 执行提交前基线，需要真实 PostgreSQL gate 时加 `--postgres`；`deploy:local` 重建本地 Docker 并探测真实端点；`deploy:space` 是 HF Space 发布的稳定别名；`agent:doctor` 对当前 Agent API 做只读契约检查。
+
+如果只想诊断 HF Space 前置条件，可运行：
+
+```bash
+npm run doctor:hf-space
+```
+
+该命令会检查 Node、npm、`hf` CLI、HF 登录状态、`node_modules`、git、Docker、固定 Space 目标、远端 Variables 和远端 Secrets；不会写远端 Secret、不会重启 Space、不会打印 Secret 值。
+
+部署当前干净的 git HEAD 到固定 Space：
+
+```bash
+npm run deploy:space
+```
+
+该脚本会使用 `git archive HEAD` 生成临时源码目录，通过 `hf upload` 上传到 `misonL/gpt-image-playground-customer`，等待新 Space commit 进入 `RUNNING`，并执行只读公网端点检查。若工作区有未提交改动，脚本会直接失败，避免把本地临时状态误当成可复现发布。
+
+配置或轮换 Space Secret 时，直接使用官方 `hf` CLI：
+
+```bash
+hf spaces variables add misonL/gpt-image-playground-customer -e AGENT_STATE_BACKEND=memory
+hf spaces secrets add misonL/gpt-image-playground-customer -s APP_PASSWORD=<page-access-code>
+hf spaces secrets add misonL/gpt-image-playground-customer -s AGENT_API_TOKEN=<long-random-agent-token>
+```
+
+`memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。Web 图片二进制按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存；HF 免费层推荐 `indexeddb`，让网页结果保存在浏览器侧。Agent API 产物仍写入容器临时文件系统，以便提供 `content_url` 下载。
 
 如果把当前 Dockerfile 直接部署到 Hugging Face Docker Space，Space README 顶部 YAML 需要使用 Docker SDK，并把应用端口指向本项目默认端口：
 
@@ -485,7 +553,18 @@ docker logs -f gpt-image-playground-customer
 | `npm run dev` | 启动本地开发服务。 |
 | `npm run build` | 执行生产构建。 |
 | `npm run start` | 启动生产模式服务。 |
+| `npm run status` | 只读输出 git、Node、Space 目标、Agent API 和 Skill 入口摘要。 |
+| `npm run doctor` | 运行统一诊断入口，默认包含 HF Space 只读远端检查。 |
+| `npm run verify` | 执行提交前基线：测试、lint、脚本语法、构建和 `git diff --check`；加 `-- --postgres` 会包含 live PostgreSQL gate。 |
+| `npm run deploy:local` | 重建本地 Docker 服务并探测 `/api/auth-status`、`/api/runtime-capabilities`、`/api/agent/capabilities`；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。 |
+| `npm run deploy:space` | 上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证。 |
+| `npm run agent:doctor` | 通过仓库 Skill 脚本执行只读 Agent API 契约检查，不触发真实生图。 |
+| `npm run deploy:hf-space` | 使用官方 `hf` CLI 上传当前干净 git HEAD 到固定 Space 并做只读公网验证。 |
+| `npm run doctor:hf-space` | 只读诊断 HF Space 部署前置条件、固定 Space 目标和远端配置。 |
+| `npm run keepalive:hf-space` | 访问 HF Space 只读状态端点，用于 keepalive 验证。 |
+| `npm run smoke:hf-space` | 构建并启动 HF 免费层近似容器，验证 memory 状态后端和 Agent API 契约；慢机器可设置 `HF_SPACE_SMOKE_READY_TIMEOUT_MS`。 |
 | `npm run lint` | 检查 `src/` 代码。 |
+| `npm run lint:scripts` | 跨平台检查仓库脚本和 skill 脚本语法。 |
 | `npm run format` | 格式化 `src/` 下的 TypeScript 和 React 文件。 |
 
 ## 常见问题

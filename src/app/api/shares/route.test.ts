@@ -13,7 +13,7 @@ import { GET as getShare } from './[token]/route';
 import { POST } from './route';
 
 const originalAppPassword = process.env.APP_PASSWORD;
-const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
+const PAGE_PASSWORD_FIXTURE = ['customer', 'access', 'code'].join('-');
 const VALID_PNG_BYTES = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mP8z8AABQMBgADeT7UAAAAASUVORK5CYII=',
     'base64'
@@ -73,7 +73,7 @@ describe('POST /api/shares', { concurrency: false }, () => {
         assert.equal('accessCodeSalt' in body, false);
     });
 
-    it('rejects unauthenticated share creation when a page password is configured', async () => {
+    it('rejects unauthenticated share creation when a page access code is configured', async () => {
         await withTempCwd();
         process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
         const form = new FormData();
@@ -99,7 +99,7 @@ describe('POST /api/shares', { concurrency: false }, () => {
         assert.equal(body.code, PAGE_PASSWORD_AUTH_ERROR_CODES.invalid);
     });
 
-    it('allows share creation when no page password is configured', async () => {
+    it('allows share creation when no page access code is configured', async () => {
         await withTempCwd();
         delete process.env.APP_PASSWORD;
         const form = new FormData();
@@ -193,6 +193,45 @@ describe('POST /api/shares', { concurrency: false }, () => {
         const body = await response.json();
         assert.equal(body.code, 'invalid_expiry');
     });
+
+    it('rejects unsafe source filenames before storing share metadata', async () => {
+        await withTempCwd();
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
+        const form = new FormData();
+        form.set('sourceFilename', '../secret.png');
+        form.set('image', new File([VALID_PNG_BYTES], 'result.png', { type: 'image/png' }));
+
+        const response = await POST(createShareRequest(form));
+        assert.equal(response.status, 400);
+        const body = await response.json();
+        assert.equal(body.code, 'invalid_source_filename');
+    });
+
+    it('rejects non-string source filenames before storing share metadata', async () => {
+        await withTempCwd();
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
+        const form = new FormData();
+        form.set('sourceFilename', new File([Buffer.from('not-a-name')], 'name.txt', { type: 'text/plain' }));
+        form.set('image', new File([VALID_PNG_BYTES], 'result.png', { type: 'image/png' }));
+
+        const response = await POST(createShareRequest(form));
+        assert.equal(response.status, 400);
+        const body = await response.json();
+        assert.equal(body.code, 'invalid_source_filename');
+    });
+
+    it('rejects overlong source filenames before storing share metadata', async () => {
+        await withTempCwd();
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
+        const form = new FormData();
+        form.set('sourceFilename', `${'a'.repeat(201)}.png`);
+        form.set('image', new File([VALID_PNG_BYTES], 'result.png', { type: 'image/png' }));
+
+        const response = await POST(createShareRequest(form));
+        assert.equal(response.status, 400);
+        const body = await response.json();
+        assert.equal(body.code, 'invalid_source_filename');
+    });
 });
 
 describe('share metadata and content routes', { concurrency: false }, () => {
@@ -272,8 +311,34 @@ describe('share metadata and content routes', { concurrency: false }, () => {
         assert.equal(ok.headers.get('content-type'), 'image/png');
         assert.match(ok.headers.get('cache-control') || '', /no-store/);
         assert.equal(ok.headers.get('surrogate-control'), 'no-store');
+        assert.equal(ok.headers.get('x-content-type-options'), 'nosniff');
         assert.equal(ok.headers.get('content-disposition'), 'inline; filename="shared-image.png"');
         assert.equal(await ok.text(), 'protected-image');
+    });
+
+    it('uses the detected image MIME type for public content filenames', async () => {
+        await withTempCwd();
+        const record = await createImageShare({
+            imageBuffer: Buffer.from('public-image'),
+            sourceFilename: 'invoice.html',
+            mimeType: 'image/png',
+            accessCode: undefined,
+            expiresInMinutes: null
+        });
+
+        const response = await getShareContent(
+            new Request(`http://localhost/api/shares/${record.token}/content`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({})
+            }),
+            params(record.token)
+        );
+
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('content-type'), 'image/png');
+        assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+        assert.equal(response.headers.get('content-disposition'), 'inline; filename="invoice.png"');
     });
 
     it('rate limits repeated wrong access codes', async () => {

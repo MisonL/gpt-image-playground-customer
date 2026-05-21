@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
             {
                 authenticated: false,
-                error: 'Unauthorized: Invalid password.',
+                error: 'Unauthorized: Invalid access code.',
                 code: PAGE_PASSWORD_AUTH_ERROR_CODES.invalid
             },
             { status: 401 }

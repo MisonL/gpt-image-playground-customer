@@ -26,7 +26,7 @@ export function PasswordDialog({
     isOpen,
     onOpenChange,
     onSave,
-    title = 'Configure Password',
+    title = 'Configure Access Code',
     description
 }: PasswordDialogProps) {
     const { t } = useI18n();

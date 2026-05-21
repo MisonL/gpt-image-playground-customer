@@ -87,6 +87,45 @@ describe('MemoryAgentStateStore', () => {
         assert.equal(replay.type, 'replay');
     });
 
+    it('keeps refreshed running requests out of recovery', async () => {
+        const store = new MemoryAgentStateStore();
+        await store.init();
+        const requestJson = { prompt: 'memory lease refresh' };
+        const requestHash = hashAgentPayload(requestJson);
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-memory-refresh',
+            requestHash,
+            mode: 'generate',
+            requestJson,
+            leaseMs: 100,
+            ttlSeconds: 60,
+            now: new Date('2026-05-12T00:00:00.000Z')
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+
+        assert.equal(
+            await store.refreshRequestLease({
+                requestId: begin.record.requestId,
+                leaseMs: 1000,
+                now: new Date('2026-05-12T00:00:00.050Z')
+            }),
+            true
+        );
+        assert.equal(await store.recoverExpiredRequests(new Date('2026-05-12T00:00:00.200Z')), 0);
+
+        const retry = await store.beginRequest({
+            idempotencyKey: 'idem-memory-refresh',
+            requestHash,
+            mode: 'generate',
+            requestJson,
+            leaseMs: 100,
+            ttlSeconds: 60,
+            now: new Date('2026-05-12T00:00:00.200Z')
+        });
+        assert.equal(retry.type, 'in_progress');
+    });
+
     it('rejects artifact metadata for unknown requests', async () => {
         const store = new MemoryAgentStateStore();
         await store.init();
@@ -236,6 +275,40 @@ describe('MemoryAgentStateStore', () => {
         assert.equal(record.sourceFilename, 'source.png');
         assert.equal(record.accessCodeRequired, true);
         assert.equal(record.expiresAt, '2026-05-14T09:00:00.000Z');
+    });
+
+    it('rejects inconsistent image share access code metadata', async () => {
+        const store = new MemoryAgentStateStore();
+        await store.init();
+
+        await assert.rejects(
+            () =>
+                store.createImageShareRecord({
+                    token: 'f'.repeat(24),
+                    sourceFilename: 'protected.png',
+                    contentFilename: `${'f'.repeat(24)}.png`,
+                    mimeType: 'image/png',
+                    sizeBytes: 12,
+                    createdAt: '2026-05-14T08:00:00.000Z',
+                    accessCodeRequired: true
+                }),
+            /CHECK/
+        );
+        await assert.rejects(
+            () =>
+                store.createImageShareRecord({
+                    token: '0'.repeat(24),
+                    sourceFilename: 'public.png',
+                    contentFilename: `${'0'.repeat(24)}.png`,
+                    mimeType: 'image/png',
+                    sizeBytes: 12,
+                    createdAt: '2026-05-14T08:00:00.000Z',
+                    accessCodeRequired: false,
+                    accessCodeSalt: 'salt',
+                    accessCodeHash: 'hash'
+                }),
+            /CHECK/
+        );
     });
 
     it('deletes expired image share records and lists active share records', async () => {

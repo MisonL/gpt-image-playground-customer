@@ -18,13 +18,13 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { describe, it } from 'node:test';
 
-const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
-const OTHER_PAGE_PASSWORD_FIXTURE = ['other', 'password'].join('-');
+const PAGE_PASSWORD_FIXTURE = ['customer', 'access', 'code'].join('-');
+const OTHER_PAGE_PASSWORD_FIXTURE = ['other', 'access', 'code'].join('-');
 const ACCESS_CODE_FIXTURE = ['test', 'fixture', 'access', 'code'].join('-');
 const DIFFERENT_ACCESS_CODE_FIXTURE = ['different', 'test', 'fixture', 'access', 'code'].join('-');
 
 describe('verifyPasswordHash', () => {
-    it('accepts only the sha256 hash for the configured password', () => {
+    it('accepts only the sha256 hash for the configured access code', () => {
         const passwordHash = crypto.createHash('sha256').update(PAGE_PASSWORD_FIXTURE).digest('hex');
 
         assert.equal(verifyPasswordHash(passwordHash, PAGE_PASSWORD_FIXTURE), true);
@@ -37,7 +37,7 @@ describe('verifyPasswordHash', () => {
 });
 
 describe('verifyAccessToken', () => {
-    it('accepts only a fresh access token signed with the configured password', () => {
+    it('accepts only a fresh access token signed with the configured access code', () => {
         const issuedAtMs = 1_715_400_000_000;
         const accessToken = createAccessToken(ACCESS_CODE_FIXTURE, issuedAtMs);
 
@@ -54,11 +54,11 @@ describe('verifyAccessToken', () => {
         assert.equal(verifyAccessToken(accessToken, ACCESS_CODE_FIXTURE, issuedAtMs - 60_001), false);
     });
 
-    it('allows access when no server password is configured', () => {
+    it('allows access when no server access code is configured', () => {
         assert.equal(verifyAccessToken(undefined, undefined), true);
     });
 
-    it('rejects missing or malformed tokens when a server password is configured', () => {
+    it('rejects missing or malformed tokens when a server access code is configured', () => {
         assert.equal(verifyAccessToken(undefined, ACCESS_CODE_FIXTURE), false);
         assert.equal(verifyAccessToken('not-a-hex-digest', ACCESS_CODE_FIXTURE), false);
         assert.equal(verifyAccessToken('0'.repeat(64), ACCESS_CODE_FIXTURE), false);
@@ -76,7 +76,7 @@ describe('buildAccessCookieOptions', () => {
 });
 
 describe('buildAccessCookie', () => {
-    it('builds the shared image access cookie from the configured password', () => {
+    it('builds the shared image access cookie from the configured access code', () => {
         const cookie = buildAccessCookie(PAGE_PASSWORD_FIXTURE, new Headers({ 'x-forwarded-proto': 'https' }));
 
         assert.equal(cookie.name, 'gptImageAccess');
@@ -171,10 +171,19 @@ describe('readOutputDirEnv', () => {
 });
 
 describe('readPositiveIntegerEnv', () => {
-    it('reads a positive integer or falls back to a safe default', () => {
+    it('reads a positive integer or falls back only when the value is absent', () => {
         assert.equal(readPositiveIntegerEnv({}, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 1);
         assert.equal(readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: '2' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 2);
-        assert.equal(readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: '0' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 1);
-        assert.equal(readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: 'bad' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 1);
+    });
+
+    it('fails explicitly when the configured value is invalid', () => {
+        assert.throws(
+            () => readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: '0' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1),
+            /OPENAI_MAX_STREAMS_PER_CREDENTIAL/
+        );
+        assert.throws(
+            () => readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: 'bad' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1),
+            /OPENAI_MAX_STREAMS_PER_CREDENTIAL/
+        );
     });
 });
