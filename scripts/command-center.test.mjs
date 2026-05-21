@@ -139,6 +139,10 @@ describe('Command center scripts', () => {
         }
     });
 
+    it('preserves invalid URL fetch errors while building timeout diagnostics', async () => {
+        await assert.rejects(() => fetchJsonWithTimeout('not a url', { timeoutMs: 20 }), /Failed to parse URL|Invalid URL/i);
+    });
+
     it('includes a response snippet when HTTP probes return non-JSON bodies', async () => {
         const server = createServer((request, response) => {
             response.writeHead(200, { 'content-type': 'text/html' });

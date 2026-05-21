@@ -82,12 +82,12 @@ export function parseJsonPayload(output, label = 'command') {
 
 export async function fetchJsonWithTimeout(url, options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_FETCH_TIMEOUT_MS;
+    const pathname = safeUrlPathname(url);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
         const response = await fetch(url, { signal: controller.signal });
         const text = await response.text();
-        const pathname = new URL(url).pathname;
         const bodySnippet = text.slice(0, 300);
         if (!response.ok) throw new Error(`${pathname} failed with HTTP ${response.status}: ${bodySnippet}`);
         try {
@@ -97,11 +97,18 @@ export async function fetchJsonWithTimeout(url, options = {}) {
             throw error;
         }
     } catch (error) {
-        const pathname = new URL(url).pathname;
         if (error?.name === 'AbortError') throw new Error(`${pathname} timed out after ${timeoutMs}ms.`);
         throw error;
     } finally {
         clearTimeout(timer);
+    }
+}
+
+function safeUrlPathname(url) {
+    try {
+        return new URL(url).pathname;
+    } catch {
+        return String(url);
     }
 }
 

@@ -2,6 +2,7 @@ import type { AgentGenerateRequest, AgentJobState, AgentJobStatusResponse } from
 import {
     completeAgentExecutionState,
     createArtifactPersistenceError,
+    createCompletionPersistenceError,
     deleteAgentExecutionFiles,
     errorToAgentErrorBody,
     executeAgentGenerate,
@@ -112,8 +113,9 @@ async function runAgentGenerateJob(options: {
     idempotencyKey: string;
     leaseMs: number;
 }): Promise<void> {
-    const heartbeat = startAgentJobLeaseHeartbeat(options.store, options.requestId, options.leaseMs);
+    let heartbeat: { stop: () => void } | undefined;
     try {
+        heartbeat = startAgentJobLeaseHeartbeat(options.store, options.requestId, options.leaseMs);
         const execution = await executeAgentGenerate({
             request: options.request,
             headers: options.headers,
@@ -125,11 +127,14 @@ async function runAgentGenerateJob(options: {
     } catch (error) {
         await failAgentJob(options.store, options.requestId, error);
     } finally {
-        heartbeat.stop();
+        heartbeat?.stop();
     }
 }
 
 function startAgentJobLeaseHeartbeat(store: AgentStateStore, requestId: string, leaseMs: number): { stop: () => void } {
+    if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
+        throw new Error('leaseMs must be a positive number.');
+    }
     const intervalMs = Math.max(100, Math.min(MAX_JOB_LEASE_REFRESH_INTERVAL_MS, Math.floor(leaseMs / 2)));
     const timer = setInterval(() => {
         void store.refreshRequestLease({ requestId, leaseMs }).catch((error) => {
@@ -158,6 +163,7 @@ async function persistAgentJobSuccess(
         await completeAgentExecutionState(store, execution);
     } catch (error) {
         appLogger.error('保存 Agent job 完成状态失败。', error);
+        await failAgentJob(store, requestId, createCompletionPersistenceError());
     }
 }
 

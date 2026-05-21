@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildUploadArgs, extractUploadCommitSha } from './deploy-hf-space.mjs';
+import { buildUploadArgs, extractUploadCommitSha, parseRepositorySlug } from './deploy-hf-space.mjs';
 
 describe('HF Space deploy script', () => {
     it('extracts the Space commit SHA from hf upload JSON output', () => {
@@ -55,5 +55,21 @@ describe('HF Space deploy script', () => {
             'Source: MisonL/gpt-image-playground-customer@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
         );
         assert.equal(args.some((arg) => arg.includes('\n')), false);
+    });
+
+    it('uses a provided repository slug in upload commit metadata', () => {
+        const args = buildUploadArgs({
+            sourceDir: '/tmp/source',
+            localSha: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            repoSlug: 'owner/repo'
+        });
+
+        assert.equal(args[args.indexOf('--commit-description') + 1], 'Source: owner/repo@eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee');
+    });
+
+    it('parses GitHub repository slugs from common origin URL formats', () => {
+        assert.equal(parseRepositorySlug('https://github.com/MisonL/gpt-image-playground-customer.git'), 'MisonL/gpt-image-playground-customer');
+        assert.equal(parseRepositorySlug('git@github.com:MisonL/gpt-image-playground-customer.git'), 'MisonL/gpt-image-playground-customer');
+        assert.equal(parseRepositorySlug('not-a-github-url'), 'MisonL/gpt-image-playground-customer');
     });
 });

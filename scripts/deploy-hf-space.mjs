@@ -38,6 +38,25 @@ function runText(command, args, options = {}) {
     }).trim();
 }
 
+function readRepositorySlug() {
+    const envSlug = process.env.REPO_SLUG?.trim();
+    if (envSlug) return envSlug;
+    try {
+        return parseRepositorySlug(runText('git', ['remote', 'get-url', 'origin']));
+    } catch {
+        return 'MisonL/gpt-image-playground-customer';
+    }
+}
+
+export function parseRepositorySlug(remoteUrl) {
+    const text = String(remoteUrl || '').trim();
+    const httpsMatch = text.match(/^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?$/);
+    if (httpsMatch) return `${httpsMatch[1]}/${httpsMatch[2]}`;
+    const sshMatch = text.match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/);
+    if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`;
+    return 'MisonL/gpt-image-playground-customer';
+}
+
 function runBinary(command, args) {
     const result = spawnSync(command, args, {
         encoding: 'buffer',
@@ -77,7 +96,7 @@ export function extractUploadCommitSha(output) {
     return match[1];
 }
 
-export function buildUploadArgs({ sourceDir, localSha }) {
+export function buildUploadArgs({ sourceDir, localSha, repoSlug = 'MisonL/gpt-image-playground-customer' }) {
     return [
         'upload',
         HF_SPACE_ID,
@@ -88,13 +107,13 @@ export function buildUploadArgs({ sourceDir, localSha }) {
         '--commit-message',
         `Deploy ${localSha.slice(0, 7)} to Docker Space`,
         '--commit-description',
-        `Source: MisonL/gpt-image-playground-customer@${localSha}`,
+        `Source: ${repoSlug}@${localSha}`,
         '--json'
     ];
 }
 
 function uploadSourceTree(sourceDir, localSha) {
-    const output = runText('hf', buildUploadArgs({ sourceDir, localSha }));
+    const output = runText('hf', buildUploadArgs({ sourceDir, localSha, repoSlug: readRepositorySlug() }));
     return extractUploadCommitSha(output);
 }
 

@@ -251,6 +251,7 @@ describe('Agent route integration', () => {
             const replay = await generateImage(agentJsonRequest(idempotencyKey, { prompt: 'diagnostics' }));
             assert.equal(replay.status, 502);
             assert.equal(replay.headers.get('x-idempotent-replay'), 'true');
+            assert.equal(replay.headers.get('x-request-id'), body.error.request_id);
             const replayBody = await replay.json();
             assert.equal(replayBody.error.code, 'upstream_unavailable');
             assert.equal(replayBody.error.retryable, false);
@@ -412,6 +413,107 @@ describe('Agent route integration', () => {
             assert.equal(statusBody.job.error.diagnostics.upstream_status, 500);
             assert.equal(upstreamCalls > 0, true);
         } finally {
+            await upstream.close();
+        }
+    });
+
+    it('marks generate jobs as failed when completion state persistence fails', async () => {
+        const { createGenerateJob, getJob } = await loadAgentRoutes();
+        const { setAgentStateStoreFactoryForTests } = await import('@/lib/agent-state-runtime');
+        const requestId = 'job-completion-failure-request';
+        let failErrorCode = '';
+        let saveCalls = 0;
+        const upstream = await startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] }));
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setAgentStateStoreFactoryForTests(() => ({
+            async init() {},
+            async recoverExpiredRequests() {
+                return 0;
+            },
+            async purgeExpiredRequests() {
+                return 0;
+            },
+            async beginRequest() {
+                return {
+                    type: 'acquired',
+                    record: {
+                        requestId,
+                        idempotencyKey: 'job-completion-failure-key',
+                        requestHash: 'hash',
+                        mode: 'generate',
+                        status: 'running',
+                        requestJson: { prompt: 'job completion persistence failure' },
+                        createdAt: '2026-05-12T00:00:00.000Z',
+                        updatedAt: '2026-05-12T00:00:00.000Z',
+                        expiresAt: '2099-05-13T00:00:00.000Z'
+                    }
+                };
+            },
+            async refreshRequestLease() {
+                return true;
+            },
+            async saveArtifacts() {
+                saveCalls += 1;
+            },
+            async completeRequest() {
+                throw new Error('job completion persistence failed');
+            },
+            async failRequest(input: { requestId: string; error: { error: { code: string } } }) {
+                assert.equal(input.requestId, requestId);
+                failErrorCode = input.error.error.code;
+            },
+            async getRequest(id: string) {
+                if (id !== requestId || !failErrorCode) return undefined;
+                return {
+                    requestId,
+                    idempotencyKey: 'job-completion-failure-key',
+                    requestHash: 'hash',
+                    mode: 'generate',
+                    status: 'failed',
+                    requestJson: { prompt: 'job completion persistence failure' },
+                    errorJson: {
+                        error: {
+                            code: failErrorCode,
+                            message: '保存请求完成状态失败。',
+                            retryable: true,
+                            request_id: requestId
+                        }
+                    },
+                    createdAt: '2026-05-12T00:00:00.000Z',
+                    updatedAt: '2026-05-12T00:00:01.000Z',
+                    expiresAt: '2099-05-13T00:00:00.000Z'
+                };
+            },
+            async getArtifact() {
+                return undefined;
+            },
+            async listArtifactsForRequest() {
+                return [];
+            },
+            async deleteArtifact() {
+                return false;
+            }
+        }));
+
+        const originalConsoleError = console.error;
+        console.error = () => {};
+        try {
+            const created = await createGenerateJob(agentJobJsonRequest('job-completion-failure-key', { prompt: 'job completion persistence failure' }));
+            assert.equal(created.status, 202);
+            await waitFor(() => failErrorCode === 'unexpected_error');
+            assert.equal(saveCalls, 1);
+
+            const status = await getJob(new Request(`http://localhost/api/agent/jobs/${requestId}`), {
+                params: Promise.resolve({ id: requestId })
+            });
+            assert.equal(status.status, 200);
+            const statusBody = await status.json();
+            assert.equal(statusBody.job.state, 'failed');
+            assert.equal(statusBody.job.error.code, 'unexpected_error');
+            assert.equal(statusBody.job.error.retryable, false);
+        } finally {
+            console.error = originalConsoleError;
             await upstream.close();
         }
     });
@@ -627,6 +729,7 @@ describe('Agent route integration', () => {
             const replay = await editImage(agentEditRequest(idempotencyKey, 'edit diagnostics'));
             assert.equal(replay.status, 502);
             assert.equal(replay.headers.get('x-idempotent-replay'), 'true');
+            assert.equal(replay.headers.get('x-request-id'), body.error.request_id);
             const replayBody = await replay.json();
             assert.equal(replayBody.error.code, 'upstream_unavailable');
             assert.equal(replayBody.error.retryable, false);

@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
         }
         if (beginResult.type === 'failed') {
             requestId = beginResult.record.requestId;
-            return storedAgentErrorResponse(beginResult.error, { 'X-Idempotent-Replay': 'true' });
+            return storedAgentErrorResponse(beginResult.error, { 'X-Idempotent-Replay': 'true', 'X-Request-Id': requestId });
         }
         if (beginResult.type === 'conflict') {
             throw new AgentApiError({
