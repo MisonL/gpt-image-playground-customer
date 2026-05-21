@@ -6,6 +6,8 @@ import { NextRequest, NextResponse } from 'next/server';
 const MAX_SHARE_IMAGE_BYTES = 30 * 1024 * 1024;
 const MIN_ACCESS_CODE_LENGTH = 8;
 const MAX_ACCESS_CODE_LENGTH = 128;
+const MAX_SOURCE_FILENAME_LENGTH = 200;
+const SOURCE_FILENAME_PATTERN = /^[^\x00-\x1f\x7f\\/]+$/u;
 
 function detectImageMimeType(buffer: Buffer): string | undefined {
     if (
@@ -60,6 +62,15 @@ function parseAccessCode(value: FormDataEntryValue | null): string | undefined |
     return trimmed;
 }
 
+function parseSourceFilename(value: FormDataEntryValue | null, fallback: string): string | null {
+    if (value !== null && typeof value !== 'string') return null;
+    const candidate = value?.trim() || fallback.trim();
+    if (!candidate || candidate.length > MAX_SOURCE_FILENAME_LENGTH || !SOURCE_FILENAME_PATTERN.test(candidate)) {
+        return null;
+    }
+    return candidate;
+}
+
 function verifyShareCreator(request: NextRequest) {
     if (!process.env.APP_PASSWORD) return undefined;
     const accessToken = request.cookies.get('gptImageAccess')?.value;
@@ -89,7 +100,10 @@ export async function POST(request: NextRequest) {
 
     const sourceFilenameValue = form.get('sourceFilename');
     const fallbackFilename = typeof image.name === 'string' && image.name.trim() ? image.name : 'shared-image.png';
-    const sourceFilename = typeof sourceFilenameValue === 'string' && sourceFilenameValue.trim() ? sourceFilenameValue.trim() : fallbackFilename;
+    const sourceFilename = parseSourceFilename(sourceFilenameValue, fallbackFilename);
+    if (sourceFilename === null) {
+        return jsonError('invalid_source_filename', '分享文件名无效。', 400);
+    }
     const expiresInMinutes = parseExpiry(form.get('expiresInMinutes'));
     if (expiresInMinutes === undefined) {
         return jsonError('invalid_expiry', '分享有效期无效。', 400);

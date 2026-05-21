@@ -25,10 +25,10 @@
 - 最终验证运行 `npm test`、`npm run lint`、`npm run build`、`git diff --check`；如果本分支完成实现，还要执行 Docker 冒烟验证。
 
 **护栏指标：**
-- 不得把受密码保护的 `/api/image/{filename}` 直接暴露为分享机制。
-- 不得把 API Key、密码、访问码或原始提示词写入分享 URL。
+- 不得把受访问码保护的 `/api/image/{filename}` 直接暴露为分享机制。
+- 不得把 API Key、访问码或原始提示词写入分享 URL。
 - 不得破坏 Agent 产物内容路由。
-- 不得破坏 `http://localhost:4783` 下无密码本地部署的既有行为。
+- 不得破坏 `http://localhost:4783` 下无访问码本地部署的既有行为。
 - 不得静默回退到 mock 图片或伪造分享成功。
 
 **采样计划：**
@@ -49,7 +49,7 @@
 
 **约束：**
 - 当前 `AGENTS.md` 要求中文沟通、基于事实下结论、禁止静默降级，并执行最小充分验证。
-- 当前脏工作区包含密码和 cookie 适配相关改动。不要回滚或覆盖无关的用户改动或前序代理改动。
+- 当前脏工作区包含访问码和 cookie 适配相关改动。不要回滚或覆盖无关的用户改动或前序代理改动。
 - 保持当前 `node:test` 布局；不要引入第二套测试框架。
 - 代码和文档尽量使用 ASCII；不使用 Emoji 或装饰性 Unicode。
 
@@ -61,7 +61,7 @@
 
 **耦合说明：**
 - 分享创建依赖发送到编辑所使用的同一图片字节读取路径：IndexedDB blob 或 `/api/image/{filename}`。
-- 分享内容必须独立于页面密码 cookie；否则外部接收者无法访问有效分享。
+- 分享内容必须独立于页面访问码 cookie；否则外部接收者无法访问有效分享。
 - 下载是纯浏览器行为，不应要求新增服务端状态。
 - 分享 token 必须由 `crypto.randomBytes` 生成，不得使用 `Math.random`、时间戳或可预测输入派生。
 - 访问码为空或纯空白时必须按“无访问码分享”处理；非空访问码必须满足最小长度，避免弱访问码被误认为受保护分享。
@@ -102,7 +102,7 @@
 | --- | --- |
 | 复杂性原位置 | 用户目前依赖受保护图片 URL 或本地浏览器 blob 做临时下载/分享。 |
 | 新位置 | 分享产物移动到 `generated-images/.shares`，包含元数据、复制字节、访问码哈希和有效期。 |
-| 收益 | 外部分享访问不再依赖页面密码 cookie 或浏览器本地 IndexedDB 状态。 |
+| 收益 | 外部分享访问不再依赖页面访问码 cookie 或浏览器本地 IndexedDB 状态。 |
 | 新成本 | 后续必须考虑分享清理和生命周期；分享元数据成为新的文件系统状态面。 |
 | 失效模式 | 在后续新增清理任务前，孤立分享文件或过期分享可能持续积累。 |
 
@@ -112,7 +112,7 @@
 - `src/lib/share-store.ts` 已实现分享元数据、复制内容、访问码哈希、有效期和路径限制。
 - `src/lib/share-store.test.ts` 已覆盖存储模块，包括受保护/公开分享、有效期、不安全 token、当前工作目录和内容路径限制。
 - `src/lib/server-runtime.ts` 已导出 `createAccessToken(serverPassword)` 和 `verifyAccessToken(clientAccessToken, serverPassword)`。
-- `src/lib/page-password-auth.ts` 已导出 `PAGE_PASSWORD_AUTH_ERROR_CODES.missing` 和 `.invalid`，对应页面密码错误码。
+- `src/lib/page-password-auth.ts` 已导出 `PAGE_PASSWORD_AUTH_ERROR_CODES.missing` 和 `.invalid`，对应页面访问码错误码。
 - `src/components/image-output.tsx` 当前导入 `Grid`、`Loader2`、`Send`、`Terminal` 和 `Trash2`；没有下载/分享图标或 props。
 - `src/components/image-output.tsx` 的动作行当前只渲染轮播控制、日志和发送到编辑。
 - `src/components/image-output.tsx` 当前已有 `isSingleImageView`，定义为 `typeof viewMode === 'number'`。
@@ -162,7 +162,7 @@
 | --- | --- | --- | --- |
 | 使用浏览器 blob URL 添加下载按钮 | 用户可以保存已选图片 | 提升本地导出可用性 | blob 来源错误可能下载到过期或缺失图片 |
 | 添加分享创建 API | 用户可以创建分享 URL | 提升外部分享能力 | 如果认证绕过不当，可能暴露受保护图片字节 |
-| 添加分享内容路由 | 接收者可以查看有效分享 | 启用公开读取路径 | 不得依赖页面密码 cookie |
+| 添加分享内容路由 | 接收者可以查看有效分享 | 启用公开读取路径 | 不得依赖页面访问码 cookie |
 | 添加访问码和有效期检查 | 无效接收者无法查看字节 | 降低未授权暴露 | 如果元数据和内容结果不一致，UI 可能变得困惑 |
 
 ## 状态模型
@@ -231,7 +231,7 @@ afterEach(async () => {
 
 function createShareRequest(form: FormData, options: { accessToken?: string | null } = {}) {
     const headers = new Headers();
-    const accessToken = options.accessToken === undefined ? createAccessToken(['customer', 'password'].join('-')) : options.accessToken;
+    const accessToken = options.accessToken === undefined ? createAccessToken(['customer', 'access', 'code'].join('-')) : options.accessToken;
     if (accessToken) headers.set('Cookie', `gptImageAccess=${accessToken}`);
     return new NextRequest('http://localhost/api/shares', { method: 'POST', headers, body: form });
 }
@@ -239,7 +239,7 @@ function createShareRequest(form: FormData, options: { accessToken?: string | nu
 describe('POST /api/shares', () => {
     it('creates a share from an uploaded image without returning secrets', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
+        process.env.APP_PASSWORD = ['customer', 'access', 'code'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('accessCode', '12345678');
@@ -258,9 +258,9 @@ describe('POST /api/shares', () => {
         assert.equal('accessCodeSalt' in body, false);
     });
 
-    it('rejects unauthenticated share creation when a page password is configured', async () => {
+    it('rejects unauthenticated share creation when a page access code is configured', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
+        process.env.APP_PASSWORD = ['customer', 'access', 'code'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('image', new File([new Uint8Array([1])], 'result.png', { type: 'image/png' }));
@@ -273,7 +273,7 @@ describe('POST /api/shares', () => {
 
     it('rejects share creation with an invalid page access token', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
+        process.env.APP_PASSWORD = ['customer', 'access', 'code'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('image', new File([new Uint8Array([1])], 'result.png', { type: 'image/png' }));
@@ -284,7 +284,7 @@ describe('POST /api/shares', () => {
         assert.equal(body.code, PAGE_PASSWORD_AUTH_ERROR_CODES.invalid);
     });
 
-    it('allows share creation when no page password is configured', async () => {
+    it('allows share creation when no page access code is configured', async () => {
         await withTempCwd();
         delete process.env.APP_PASSWORD;
         const form = new FormData();
@@ -297,7 +297,7 @@ describe('POST /api/shares', () => {
 
     it('treats blank access codes as public shares', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
+        process.env.APP_PASSWORD = ['customer', 'access', 'code'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('accessCode', '   ');
@@ -311,7 +311,7 @@ describe('POST /api/shares', () => {
 
     it('rejects short access codes', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
+        process.env.APP_PASSWORD = ['customer', 'access', 'code'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('accessCode', '1234567');
@@ -325,7 +325,7 @@ describe('POST /api/shares', () => {
 
     it('rejects missing image uploads', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
+        process.env.APP_PASSWORD = ['customer', 'access', 'code'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
 
@@ -337,7 +337,7 @@ describe('POST /api/shares', () => {
 
     it('rejects invalid expiry values', async () => {
         await withTempCwd();
-        process.env.APP_PASSWORD = ['customer', 'password'].join('-');
+        process.env.APP_PASSWORD = ['customer', 'access', 'code'].join('-');
         const form = new FormData();
         form.set('sourceFilename', 'result.png');
         form.set('expiresInMinutes', '-1');
@@ -1338,7 +1338,7 @@ onShareImage={handleOpenShareImage}
 'share.copyLink': '复制分享链接',
 'share.create': '创建分享',
 'share.createFailed': '创建分享失败。',
-'error.imageAccessRefreshFailed': '无法刷新图片访问权限，请重新输入密码后再试。',
+'error.imageAccessRefreshFailed': '无法刷新图片访问权限，请重新输入访问码后再试。',
 ```
 
 英文：
@@ -1359,7 +1359,7 @@ onShareImage={handleOpenShareImage}
 'share.copyLink': 'Copy share link',
 'share.create': 'Create Share',
 'share.createFailed': 'Failed to create share.',
-'error.imageAccessRefreshFailed': 'Unable to refresh image access. Enter the password again and retry.',
+'error.imageAccessRefreshFailed': 'Unable to refresh image access. Enter the access code again and retry.',
 ```
 
 - [x] **步骤 5：运行前端验证**

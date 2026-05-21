@@ -25,7 +25,7 @@ export function assertAgentAuthorized(headers: Headers, env: Record<string, stri
     if (!passwordHash || !verifyPasswordHash(passwordHash, appPassword)) {
         throw new AgentApiError({
             code: 'unauthorized',
-            message: '未授权：密码哈希无效或缺失。',
+            message: '未授权：访问码哈希无效或缺失。',
             status: 401,
             retryable: false
         });

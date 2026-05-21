@@ -62,7 +62,9 @@ function contentDispositionFilename(record: { accessCodeRequired: boolean; sourc
     if (record.accessCodeRequired) {
         return `shared-image${mimeExtension(record.mimeType)}`;
     }
-    return sanitizeHeaderFilename(record.sourceFilename);
+    const sanitized = sanitizeHeaderFilename(record.sourceFilename);
+    const stem = sanitized.replace(/\.[^.]+$/, '') || 'shared-image';
+    return `${stem}${mimeExtension(record.mimeType)}`;
 }
 
 function pruneExpiredAccessFailures(now: number) {
@@ -122,6 +124,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
             Pragma: 'no-cache',
             Expires: '0',
             'Surrogate-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
             'Content-Disposition': `inline; filename="${contentDispositionFilename(record)}"`
         }
     });

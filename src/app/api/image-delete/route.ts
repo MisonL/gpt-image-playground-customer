@@ -26,12 +26,12 @@ export async function POST(request: NextRequest) {
             const clientPasswordHash = requestBody.passwordHash;
 
             if (!clientPasswordHash) {
-                appLogger.error('删除操作缺少密码哈希。');
-                return NextResponse.json({ error: '未授权：缺少密码哈希。' }, { status: 401 });
+                appLogger.error('删除操作缺少访问码哈希。');
+                return NextResponse.json({ error: '未授权：缺少访问码哈希。' }, { status: 401 });
             }
             if (!verifyPasswordHash(clientPasswordHash, appPassword)) {
-                appLogger.error('删除操作的密码哈希无效。');
-                return NextResponse.json({ error: '未授权：密码无效。' }, { status: 401 });
+                appLogger.error('删除操作的访问码哈希无效。');
+                return NextResponse.json({ error: '未授权：访问码无效。' }, { status: 401 });
             }
         }
     } catch (e) {

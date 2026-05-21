@@ -101,16 +101,16 @@ export async function POST(request: NextRequest) {
         if (appPassword) {
             const clientPasswordHash = formData.get('passwordHash');
             if (typeof clientPasswordHash !== 'string' || !clientPasswordHash) {
-                appLogger.error('缺少密码哈希。', requestLogContext);
+                appLogger.error('缺少访问码哈希。', requestLogContext);
                 return NextResponse.json(
-                    { error: '未授权：缺少密码哈希。', code: PAGE_PASSWORD_AUTH_ERROR_CODES.missing },
+                    { error: '未授权：缺少访问码哈希。', code: PAGE_PASSWORD_AUTH_ERROR_CODES.missing },
                     { status: 401 }
                 );
             }
             if (!verifyPasswordHash(clientPasswordHash, appPassword)) {
-                appLogger.error('密码哈希无效。', requestLogContext);
+                appLogger.error('访问码哈希无效。', requestLogContext);
                 return NextResponse.json(
-                    { error: '未授权：密码无效。', code: PAGE_PASSWORD_AUTH_ERROR_CODES.invalid },
+                    { error: '未授权：访问码无效。', code: PAGE_PASSWORD_AUTH_ERROR_CODES.invalid },
                     { status: 401 }
                 );
             }

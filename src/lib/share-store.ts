@@ -52,11 +52,8 @@ function isShareToken(value: string): boolean {
     return /^[a-f0-9]{24}$/i.test(value);
 }
 
-function shareContentFilename(token: string, sourceFilename: string, mimeType: string): string {
-    const ext = path.extname(sourceFilename);
-    if (ext) return `${token}${ext}`;
-    const mimeExtension = mimeTypeToExtension(mimeType);
-    return `${token}${mimeExtension}`;
+function shareContentFilename(token: string, mimeType: string): string {
+    return `${token}${mimeTypeToExtension(mimeType)}`;
 }
 
 function mimeTypeToExtension(mimeType: string): string {
@@ -93,7 +90,7 @@ function assertShareContentPathAllowed(contentFilename: string): string {
 export async function createImageShare(input: CreateImageShareInput): Promise<ImageShareRecord> {
     await fs.mkdir(shareDir(), { recursive: true });
     const token = crypto.randomBytes(SHARE_TOKEN_BYTES).toString('hex');
-    const contentFilename = shareContentFilename(token, input.sourceFilename, input.mimeType);
+    const contentFilename = shareContentFilename(token, input.mimeType);
     const createdAt = (input.now || new Date()).toISOString();
     const expiresAt =
         typeof input.expiresInMinutes === 'number'
