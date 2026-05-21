@@ -1,6 +1,6 @@
 ---
 name: gpt-image-playground-agent
-description: 调用已部署的 GPT Image Playground Agent API，面向 Codex、Claude Code、Gemini 等自动化 Agent 的图片生成与图片编辑任务。适用于用户部署了本项目的任意实例，包括本机一键脚本、Docker、局域网服务器、云服务器、域名或自定义端口，并需要先定位服务地址，再通过 /api/agent/* 处理 Idempotency-Key、结构化 AgentError、可重试错误、产物 metadata/content URL、Bearer token 或访问码哈希鉴权，以及 response_mode path/base64/both 的场景。
+description: 当用户需要通过 API 调用已部署的 GPT Image Playground 批量请求图片生成时使用；支持文字生成图片、文字加图片生成图片，并返回可下载图片产物、metadata、base64 或 job 结果。
 ---
 
 # GPT Image Playground Agent
