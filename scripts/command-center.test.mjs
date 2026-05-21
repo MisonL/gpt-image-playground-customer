@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 import { buildAgentDoctorArgs } from './agent-doctor.mjs';
@@ -8,6 +11,7 @@ import {
     buildAdminCommands,
     buildImageUpstreamRealSmokeStatus,
     parseGitStatusEntries,
+    readStatusEnvFromFiles,
     readRemoteStatusFromResult
 } from './status.mjs';
 import { assertLocalProbeMatchesMode, buildDockerComposeArgs, buildDockerComposeEnv } from './deploy-local.mjs';
@@ -106,6 +110,58 @@ describe('Command center scripts', () => {
         assert.equal(configured.configured_count, 5);
         assert.equal(configured.missing_count, 0);
         assert.doesNotMatch(JSON.stringify(configured), /secret|example\/v1/);
+    });
+
+    it('loads independent image upstream smoke readiness from env files without overriding shell env', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'image-upstream-status-'));
+        const localEnvPath = path.join(tempDir, '.env.local');
+        const realSmokeEnvPath = path.join(tempDir, '.env.real-smoke.local');
+        await writeFile(
+            localEnvPath,
+            [
+                'IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL=https://local-original.example/v1',
+                'IMAGE_REAL_SMOKE_ORIGINAL_API_KEY=local-original-secret',
+                'IMAGE_REAL_SMOKE_GAOREN_BASE_URL=https://local-gaoren.example/v1',
+                'IMAGE_REAL_SMOKE_GAOREN_API_KEY=local-gaoren-secret'
+            ].join('\n')
+        );
+        await writeFile(
+            realSmokeEnvPath,
+            [
+                'IMAGE_REAL_SMOKE_GAOREN_BASE_URL=https://real-gaoren.example/v1',
+                'IMAGE_REAL_SMOKE_GAOREN_API_KEY=real-gaoren-secret',
+                'IMAGE_REAL_SMOKE_SUB2API_BASE_URL=https://real-sub2api.example/v1',
+                'IMAGE_REAL_SMOKE_SUB2API_API_KEY=real-sub2api-secret',
+                'IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL=https://real-gpt2image.example/v1',
+                'IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY=real-gpt2image-secret'
+            ].join('\n')
+        );
+
+        try {
+            const statusEnv = readStatusEnvFromFiles(
+                {
+                    IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'shell-original-secret'
+                },
+                [
+                    { path: localEnvPath, override: false },
+                    { path: realSmokeEnvPath, override: true }
+                ]
+            );
+            const status = buildImageUpstreamRealSmokeStatus(statusEnv);
+
+            assert.equal(statusEnv.IMAGE_REAL_SMOKE_ORIGINAL_API_KEY, 'shell-original-secret');
+            assert.equal(status.configuration_complete, true);
+            assert.deepEqual(status.configured_cases, [
+                'original-images-json',
+                'gaoren-images-sse',
+                'sub2api-images-sse',
+                'sub2api-responses-json',
+                'gpt2image-responses-sse'
+            ]);
+            assert.doesNotMatch(JSON.stringify(status), /secret|example\/v1/);
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
     });
 
     it('builds deterministic local deploy compose arguments', () => {

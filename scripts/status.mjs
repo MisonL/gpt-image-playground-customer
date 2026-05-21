@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { HF_SPACE_ID, HF_SPACE_URL } from './hf-space-doctor-utils.mjs';
 import { isMainModule, parseJsonPayload, printJson, runCommand, runCommandStrict } from './command-center-utils.mjs';
@@ -19,6 +19,10 @@ const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
 ];
 const IMAGE_UPSTREAM_FINAL_GATE_COMMAND =
     'npm run smoke:image-upstream-real -- --env-file .env.real-smoke.local --require-independent-targets --allow-billable';
+const STATUS_ENV_FILES = [
+    { path: '.env.local', override: false },
+    { path: '.env.real-smoke.local', override: true }
+];
 
 export function buildAdminCommands() {
     return {
@@ -48,6 +52,28 @@ export function parseGitStatusEntries(output) {
 function readEnv(env, key) {
     const value = env[key];
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function shouldSetStatusEnv(key, baseEnv, statusEnv, options) {
+    if (baseEnv[key] !== undefined) return false;
+    return options.override || statusEnv[key] === undefined;
+}
+
+function loadStatusEnvFile(statusEnv, baseEnv, options) {
+    if (!existsSync(options.path)) return;
+    for (const line of readFileSync(options.path, 'utf8').split(/\r?\n/)) {
+        const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+        if (!match || !shouldSetStatusEnv(match[1], baseEnv, statusEnv, options)) continue;
+        statusEnv[match[1]] = match[2].replace(/^['"]|['"]$/g, '').trim();
+    }
+}
+
+export function readStatusEnvFromFiles(baseEnv = process.env, envFiles = STATUS_ENV_FILES) {
+    const statusEnv = { ...baseEnv };
+    for (const envFile of envFiles) {
+        loadStatusEnvFile(statusEnv, baseEnv, envFile);
+    }
+    return statusEnv;
 }
 
 function readSmokeEnvAlternatives(testCase, suffix) {
@@ -141,7 +167,7 @@ function buildLocalStatus() {
             capabilities: '/api/agent/capabilities',
             skill: 'skills/gpt-image-playground-agent/SKILL.md'
         },
-        image_upstream_real_smoke: buildImageUpstreamRealSmokeStatus(process.env)
+        image_upstream_real_smoke: buildImageUpstreamRealSmokeStatus(readStatusEnvFromFiles(process.env))
     };
 }
 

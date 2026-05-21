@@ -102,6 +102,19 @@
 | `npx next dev --turbopack -p 4786` + 浏览器复验 | 0 | `/api/agent/capabilities` 显示 Agent generate/edit 仍是 `non_streaming_only`，`upstream_sse.final_response_contract=AgentImageResponse`；高级参数显示 Images API / Responses image_generation 和 6 个流式策略；4K/high + auto 显示流式建议；keepalive-only SSE 期间 `document.images.length=0` 且只显示“连接保持中...”，关闭后显式报“API 响应中没有有效图片数据或文件名。”。 |
 | `.env.real-smoke.local` / `.env.real-smoke.example` | 不适用 | `.env.real-smoke.local` 当前不存在；模板 `.env.real-smoke.example` 只包含空占位符和默认 `IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL=gpt-5.4`，不能满足最终真实门禁。 |
 
+## 2026-05-22 status readiness 补充
+
+当前 HEAD 为 `bc2eef9 Expose image upstream smoke readiness in status` 后继续补充 `npm run status` 的 env 文件读取。`status` 现在按 shell 环境变量、`.env.real-smoke.local`、`.env.local` 的优先级只读判断独立真实上游 smoke 配置是否齐全；输出只包含场景 ID、配置数量、缺失 env 键和最终门禁命令，不输出 URL 或 API Key。`scripts/command-center.test.mjs` 已覆盖 `.env.local` 与 `.env.real-smoke.local` 合并、shell env 优先、sub2api Responses 复用 sub2api 配置，以及输出不包含 URL/key。
+
+| 命令或检查 | 退出码 | 摘要 |
+| --- | --- | --- |
+| `node --test scripts/command-center.test.mjs` | 0 | 21 个脚本测试通过。 |
+| `npm run status` | 0 | `image_upstream_real_smoke.configuration_complete=false`、`configured_count=0`、`missing_count=5`，并列出 5 个独立真实上游目标缺失的 `BASE_URL` env。 |
+| `npm run verify -- --postgres` | 0 | `npm test`、lint、script lint、build、live PostgreSQL gate、diff checks 全部通过。 |
+| `npm run smoke:image-upstream-compat` | 0 | 7 个本地 mock 兼容场景通过。 |
+| `npx tsc --noEmit` | 0 | TypeScript 静态检查通过。 |
+| `npm run smoke:image-upstream-real -- --require-independent-targets` | 1 | 按最终门禁预期失败；仍缺 5 个独立真实上游目标，`final_gate_satisfied=false`。 |
+
 ## 完成度审计矩阵
 
 | 要求 | 当前证据 | 状态 |

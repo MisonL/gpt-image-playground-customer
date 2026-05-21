@@ -63,7 +63,7 @@ Authorization: Bearer <token>
 
 如果当前上下文位于仓库根目录，管理员侧优先使用顶层命令：
 
-- `npm run status`：只读查看 git、Space 目标、Agent API、Skill 入口和独立真实图片上游 smoke 配置摘要。
+- `npm run status`：只读查看 git、Space 目标、Agent API、Skill 入口和独立真实图片上游 smoke 配置摘要；会自动读取 `.env.real-smoke.local`，不输出 URL 或 API Key。
 - `npm run doctor`：统一诊断本机与 HF Space 配置，不写 Secret。
 - `npm run verify`：运行提交前基线；需要真实 PostgreSQL gate 时加 `-- --postgres`。
 - `npm run deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。
