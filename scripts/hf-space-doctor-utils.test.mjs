@@ -115,7 +115,7 @@ describe('HF Space doctor utilities', () => {
     });
 
     it('times out direct doctor commands instead of hanging', () => {
-        const result = runDoctorCommand(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { timeoutMs: 20 });
+        const result = runDoctorCommand(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { timeoutMs: 100 });
 
         assert.equal(result.ok, false);
         assert.match(result.error, /timed out|ETIMEDOUT|SIGTERM/i);

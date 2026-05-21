@@ -13,6 +13,7 @@ const STATUS_POLL_ATTEMPTS = 40;
 const STATUS_POLL_INTERVAL_MS = 10_000;
 const PUBLIC_ENDPOINT_TIMEOUT_MS = 10_000;
 const HF_CLI_TIMEOUT_MS = 120_000;
+const DEFAULT_REPO_SLUG = 'MisonL/gpt-image-playground-customer';
 
 function parseArgs(argv) {
     assertKnownOptions(argv, ['--help', '-h']);
@@ -44,7 +45,7 @@ function readRepositorySlug() {
     try {
         return parseRepositorySlug(runText('git', ['remote', 'get-url', 'origin']));
     } catch {
-        return 'MisonL/gpt-image-playground-customer';
+        return DEFAULT_REPO_SLUG;
     }
 }
 
@@ -54,7 +55,7 @@ export function parseRepositorySlug(remoteUrl) {
     if (httpsMatch) return `${httpsMatch[1]}/${httpsMatch[2]}`;
     const sshMatch = text.match(/^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/);
     if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`;
-    return 'MisonL/gpt-image-playground-customer';
+    return DEFAULT_REPO_SLUG;
 }
 
 function runBinary(command, args) {
@@ -96,7 +97,7 @@ export function extractUploadCommitSha(output) {
     return match[1];
 }
 
-export function buildUploadArgs({ sourceDir, localSha, repoSlug = 'MisonL/gpt-image-playground-customer' }) {
+export function buildUploadArgs({ sourceDir, localSha, repoSlug = DEFAULT_REPO_SLUG }) {
     return [
         'upload',
         HF_SPACE_ID,

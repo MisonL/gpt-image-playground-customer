@@ -1,25 +1,11 @@
 #!/usr/bin/env node
 
+import { readPositiveIntegerEnv } from './env-utils.mjs';
 import { validateSpaceUrl } from './hf-space-doctor-utils.mjs';
 
 const DEFAULT_SPACE_URL = 'https://misonl-gpt-image-playground-customer.hf.space';
 const DEFAULT_KEEPALIVE_PATH = '/api/auth-status';
 const DEFAULT_TIMEOUT_MS = 30_000;
-const MIN_TIMEOUT_MS = 1_000;
-
-function readPositiveIntegerEnv(name, fallback) {
-    const rawValue = process.env[name]?.trim();
-    if (!rawValue) return fallback;
-    if (!/^\d+$/.test(rawValue)) {
-        throw new Error(`${name} must be an integer greater than or equal to ${MIN_TIMEOUT_MS}`);
-    }
-    const value = Number(rawValue);
-    if (!Number.isSafeInteger(value) || value < MIN_TIMEOUT_MS) {
-        throw new Error(`${name} must be an integer greater than or equal to ${MIN_TIMEOUT_MS}`);
-    }
-    return value;
-}
-
 function normalizeUrl(rawUrl, path) {
     const urlError = validateSpaceUrl(rawUrl);
     if (urlError) {
@@ -51,7 +37,7 @@ async function readJsonResponse(response) {
 async function pingKeepaliveEndpoint() {
     const spaceUrl = process.env.HF_SPACE_KEEPALIVE_URL?.trim() || DEFAULT_SPACE_URL;
     const path = process.env.HF_SPACE_KEEPALIVE_PATH?.trim() || DEFAULT_KEEPALIVE_PATH;
-    const timeoutMs = readPositiveIntegerEnv('HF_SPACE_KEEPALIVE_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
+    const timeoutMs = readPositiveIntegerEnv('HF_SPACE_KEEPALIVE_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 1_000);
     const expectedPasswordRequired = readExpectedPasswordRequired();
     const url = normalizeUrl(spaceUrl, path);
     const controller = new AbortController();
