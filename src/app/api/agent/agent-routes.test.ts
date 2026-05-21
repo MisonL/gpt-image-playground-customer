@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
+import type { AgentErrorCode } from '@/lib/api-error-response';
 import type { NextRequest } from 'next/server';
 import { Pool } from 'pg';
 
@@ -981,7 +982,7 @@ describe('Agent route integration', () => {
         const { createGenerateJob, getJob } = await loadAgentRoutes();
         const { setAgentStateStoreFactoryForTests } = await import('@/lib/agent-state-runtime');
         const requestId = 'job-completion-failure-request';
-        let failErrorCode = '';
+        let failErrorCode: AgentErrorCode | undefined;
         let saveCalls = 0;
         const upstream = await startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] }));
         process.env.OPENAI_API_KEY = 'test-key';
@@ -1019,7 +1020,7 @@ describe('Agent route integration', () => {
             async completeRequest() {
                 throw new Error('job completion persistence failed');
             },
-            async failRequest(input: { requestId: string; error: { error: { code: string } } }) {
+            async failRequest(input: { requestId: string; error: { error: { code: AgentErrorCode } } }) {
                 assert.equal(input.requestId, requestId);
                 failErrorCode = input.error.error.code;
             },
