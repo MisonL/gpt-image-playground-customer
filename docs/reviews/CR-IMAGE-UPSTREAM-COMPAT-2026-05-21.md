@@ -86,6 +86,22 @@
 | `/api/agent/openapi.json` | 通过 | `GenerateRequest` 暴露 `image_backend`、`streaming_strategy`、`partial_images`；`image_backend.enum=images-api,responses-image-generation`；`streaming_strategy.enum=off,auto,openai-sse,newapi-keepalive-sse,responses-sse,force-sse`；`partial_images` 范围为 `1..3`；`AgentStreamingCapabilities.upstream_sse.final_response_contract` 只允许 `AgentImageResponse`。 |
 | `/api/runtime-capabilities` | 通过 | `responsesImageBackend.enabled=false`，`mode=experimental`；运行态流式批量能力未默认开启，当前服务端渠道健康容量为 `healthyCredentialCount=7`、`healthyChannelCount=7`。 |
 
+## 2026-05-22 推送后补充复验
+
+当前 HEAD 为 `6fa48f1 Fix agent route test error code typing`，已推送到 `origin/codex/image-upstream-compat`。PR #7 仍为 Draft/Open，`mergeStateStatus=CLEAN`。本轮只修改 `src/app/api/agent/agent-routes.test.ts` 的测试桩类型，把持久化失败用例中的错误码收敛为 `AgentErrorCode`，不改变业务运行代码。
+
+| 命令或检查 | 退出码 | 摘要 |
+| --- | --- | --- |
+| `npm run verify -- --postgres` | 0 | `npm test`、`npm run lint`、`npm run lint:scripts`、`npm run build`、`npm run test:postgres`、`git diff --check`、`git diff --cached --check` 全部通过。 |
+| `NODE_ENV=test node --test --import tsx src/app/api/agent/agent-routes.test.ts` | 0 | 37 个 Agent route 测试通过；PostgreSQL 子套件因该定向命令未配置 `AGENT_POSTGRES_TEST_DATABASE_URL` 跳过，完整 Postgres gate 已由 `npm run verify -- --postgres` 覆盖。 |
+| `npx tsc --noEmit` | 0 | 修复后源码和测试 TypeScript 静态检查通过。 |
+| `npm run smoke:image-upstream-compat` | 0 | 原版 new-api Images JSON、sub2api Images JSON、gaoren keepalive SSE、gaoren JSON-as-SSE、sub2api Images SSE、sub2api Responses bridge、GPT2Image Responses SSE 七个本地 mock 兼容场景通过。 |
+| `npm audit --audit-level=high` | 0 | `found 0 vulnerabilities`。 |
+| `npm run smoke:image-upstream-real -- --include-server-channel` | 0 | 非计费 dry-run 通过；5 个独立真实上游目标仍未配置，当前 `.env.local` 服务端渠道因缺少 `--allow-billable` 未触发生图。 |
+| `npm run smoke:image-upstream-real -- --require-independent-targets` | 1 | 按最终门禁预期失败；`final_gate_satisfied=false`、`missing_required_count=5`，缺少 `original-images-json`、`gaoren-images-sse`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。 |
+| `npx next dev --turbopack -p 4786` + 浏览器复验 | 0 | `/api/agent/capabilities` 显示 Agent generate/edit 仍是 `non_streaming_only`，`upstream_sse.final_response_contract=AgentImageResponse`；高级参数显示 Images API / Responses image_generation 和 6 个流式策略；4K/high + auto 显示流式建议；keepalive-only SSE 期间 `document.images.length=0` 且只显示“连接保持中...”，关闭后显式报“API 响应中没有有效图片数据或文件名。”。 |
+| `.env.real-smoke.local` / `.env.real-smoke.example` | 不适用 | `.env.real-smoke.local` 当前不存在；模板 `.env.real-smoke.example` 只包含空占位符和默认 `IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL=gpt-5.4`，不能满足最终真实门禁。 |
+
 ## 完成度审计矩阵
 
 | 要求 | 当前证据 | 状态 |
