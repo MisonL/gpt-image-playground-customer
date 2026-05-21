@@ -1,4 +1,4 @@
-import { buildAgentOpenApiDocument } from '@/lib/agent-api-contracts';
+import { buildAgentOpenApiDocument } from '@/lib/agent-openapi';
 import { NextResponse } from 'next/server';
 
 export async function GET() {

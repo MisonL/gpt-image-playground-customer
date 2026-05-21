@@ -49,6 +49,85 @@ describe('normalizeAgentError', () => {
         assert.equal(error.status, 502);
         assert.equal(error.retryable, true);
         assert.equal(error.retryAfterSeconds, 15);
+        assert.equal(error.upstreamStatus, undefined);
+        assert.equal(error.diagnostics?.transport_error, true);
+        assert.equal(error.diagnostics?.channel_cooldown_scope, 'channel');
+    });
+
+    it('adds sanitized upstream diagnostics without inventing an HTTP status', () => {
+        const error = normalizeAgentError(
+            Object.assign(new Error('Connection error.'), {
+                name: 'APIConnectionError',
+                headers: {
+                    'cf-ray': 'abc-SJC',
+                    authorization: 'Bearer secret'
+                }
+            }),
+            {
+                elapsed_ms: 1234,
+                selected_channel_id: 'channel-a',
+                upstream_host: 'api.example.test'
+            }
+        );
+        const body = createAgentErrorBody(error, 'request-2');
+
+        assert.equal(body.error.upstream_status, undefined);
+        assert.equal(body.error.diagnostics?.elapsed_ms, 1234);
+        assert.equal(body.error.diagnostics?.selected_channel_id, 'channel-a');
+        assert.equal(body.error.diagnostics?.upstream_host, 'api.example.test');
+        assert.equal(body.error.diagnostics?.transport_error, true);
+        assert.deepEqual(body.error.diagnostics?.response_headers, { 'cf-ray': 'abc-SJC' });
+        assert.equal(JSON.stringify(body).includes('secret'), false);
+    });
+
+    it('filters caller-provided diagnostic response headers through the allowlist', () => {
+        const error = normalizeAgentError(new Error('diagnostics'), {
+            response_headers: {
+                'cf-ray': 'abc-SJC',
+                authorization: 'Bearer secret',
+                'x-api-key': 'secret'
+            }
+        });
+        const body = createAgentErrorBody(error, 'request-3');
+
+        assert.deepEqual(body.error.diagnostics?.response_headers, { 'cf-ray': 'abc-SJC' });
+        assert.equal(JSON.stringify(body).includes('secret'), false);
+    });
+
+    it('copies upstream status and retry timing into diagnostics', () => {
+        const error = normalizeAgentError({
+            status: 524,
+            message: 'timeout',
+            headers: {
+                'retry-after': '7',
+                server: 'cloudflare'
+            }
+        });
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.upstreamStatus, 524);
+        assert.equal(error.retryAfterSeconds, 7);
+        assert.equal(error.diagnostics?.upstream_status, 524);
+        assert.equal(error.diagnostics?.retry_after_seconds, 7);
+        assert.equal(error.diagnostics?.channel_cooldown_scope, 'channel');
+        assert.deepEqual(error.diagnostics?.response_headers, {
+            'retry-after': '7',
+            server: 'cloudflare'
+        });
+    });
+
+    it('falls back when upstream retry-after headers are unsafe', () => {
+        const error = normalizeAgentError({
+            status: 429,
+            message: 'rate limit',
+            headers: {
+                'retry-after': '999999999999999999999'
+            }
+        });
+
+        assert.equal(error.code, 'upstream_rate_limited');
+        assert.equal(error.retryAfterSeconds, 30);
+        assert.equal(error.diagnostics?.retry_after_seconds, 30);
     });
 });
 

@@ -39,11 +39,13 @@ export async function POST(request: NextRequest) {
 
         if (beginResult.type === 'replay') {
             const response = await hydrateAgentReplayResponse(store, beginResult.record, beginResult.response);
-            return NextResponse.json(response, { headers: { 'X-Idempotent-Replay': 'true' } });
+            return NextResponse.json(response, {
+                headers: { 'X-Idempotent-Replay': 'true', 'X-Request-Id': beginResult.record.requestId }
+            });
         }
         if (beginResult.type === 'failed') {
             requestId = beginResult.record.requestId;
-            return storedAgentErrorResponse(beginResult.error);
+            return storedAgentErrorResponse(beginResult.error, { 'X-Idempotent-Replay': 'true' });
         }
         if (beginResult.type === 'conflict') {
             throw new AgentApiError({
@@ -93,9 +95,7 @@ export async function POST(request: NextRequest) {
             await completeAgentExecutionState(store, execution);
         } catch (error) {
             appLogger.error('保存 Agent 编辑完成状态失败。', error);
-            const persistenceError = createCompletionPersistenceError();
-            await store.failRequest({ requestId, error: errorToAgentErrorBody(persistenceError, requestId) });
-            throw persistenceError;
+            throw createCompletionPersistenceError();
         }
         return NextResponse.json(execution.response, { headers });
     } catch (error) {

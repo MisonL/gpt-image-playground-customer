@@ -7,10 +7,18 @@ import {
     type GptImageModel,
     type ValidOutputFormat
 } from './image-request-utils';
-import { validateGptImage2Size } from './size-utils';
+import {
+    GPT_IMAGE_2_EDGE_MULTIPLE,
+    GPT_IMAGE_2_MAX_ASPECT,
+    GPT_IMAGE_2_MAX_EDGE,
+    GPT_IMAGE_2_MAX_PIXELS,
+    GPT_IMAGE_2_MIN_PIXELS,
+    validateGptImage2Size
+} from './size-utils';
+import type { AgentErrorDiagnostics } from './api-error-response';
 
 export const AGENT_API_VERSION = '1.0.0';
-export const AGENT_SCHEMA_VERSION = '2026-05-12';
+export const AGENT_SCHEMA_VERSION = '2026-05-20';
 export const AGENT_DEFAULT_SQLITE_PATH = 'generated-images/.agent-state/agent.sqlite';
 export const AGENT_DEFAULT_LEASE_MS = 10 * 60 * 1000;
 export const AGENT_DEFAULT_REQUEST_TTL_SECONDS = 24 * 60 * 60;
@@ -23,12 +31,14 @@ export const AGENT_QUALITIES = ['low', 'medium', 'high', 'auto'] as const;
 export const AGENT_BACKGROUNDS = ['transparent', 'opaque', 'auto'] as const;
 export const AGENT_MODERATIONS = ['low', 'auto'] as const;
 export const AGENT_LEGACY_SIZES = ['auto', '1024x1024', '1536x1024', '1024x1536'] as const;
+export const AGENT_JOB_STATES = ['queued', 'running', 'succeeded', 'failed', 'expired'] as const;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
 export type AgentResponseMode = (typeof AGENT_RESPONSE_MODES)[number];
 export type AgentQuality = (typeof AGENT_QUALITIES)[number];
 export type AgentBackground = (typeof AGENT_BACKGROUNDS)[number];
 export type AgentModeration = (typeof AGENT_MODERATIONS)[number];
+export type AgentJobState = (typeof AGENT_JOB_STATES)[number];
 
 export type AgentGenerateRequest = {
     model: GptImageModel;
@@ -65,6 +75,29 @@ export type AgentImageResponse = {
     created_at: string;
 };
 
+export type AgentJobStatusResponse = {
+    job: {
+        id: string;
+        request_id: string;
+        idempotency_key: string;
+        mode: 'generate' | 'edit';
+        state: AgentJobState;
+        created_at: string;
+        updated_at: string;
+        expires_at: string;
+        result_url?: string;
+        retry_after_seconds?: number;
+        error?: {
+            code: string;
+            message: string;
+            retryable: boolean;
+            details?: Record<string, unknown>;
+            upstream_status?: number;
+            diagnostics?: AgentErrorDiagnostics;
+        };
+    };
+};
+
 export type AgentCapabilities = {
     api_version: string;
     schema_version: string;
@@ -83,6 +116,50 @@ export type AgentCapabilities = {
         max_images: number;
         max_upload_mb: number;
         partial_images: { min: number; max: number };
+    };
+    model_limits: {
+        'gpt-image-2': {
+            max_edge: number;
+            max_pixels: number;
+            edge_multiple: number;
+            max_aspect: number;
+            min_pixels: number;
+            recommended_presets: Array<{ name: string; size: string; purpose: string }>;
+            high_4k_risk: {
+                applies_to: string[];
+                guidance: string;
+            };
+        };
+    };
+    agent_streaming: {
+        generate: {
+            supported: false;
+            mode: 'non_streaming_only';
+            endpoint: string;
+        };
+        edit: {
+            supported: false;
+            mode: 'non_streaming_only';
+            endpoint: string;
+        };
+        page_sse: {
+            supported: true;
+            mode: 'form_data_sse';
+            endpoint: string;
+            contract: 'page_ui_only';
+        };
+    };
+    agent_jobs: {
+        supported: true;
+        mode: 'job_polling';
+        intended_for: string[];
+        endpoints: {
+            create_generate_job: string;
+            get_job: string;
+            get_job_result: string;
+        };
+        states: readonly string[];
+        current_guidance: string;
     };
     supported: {
         models: readonly string[];
@@ -289,24 +366,15 @@ export function readAgentStateBackend(env: Record<string, string | undefined>): 
 }
 
 export function readAgentRequestTtlSeconds(env: Record<string, string | undefined>): number {
-    const value = env.AGENT_REQUEST_TTL_SECONDS;
-    if (!value || !/^\d+$/.test(value)) return AGENT_DEFAULT_REQUEST_TTL_SECONDS;
-    const parsed = Number(value);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : AGENT_DEFAULT_REQUEST_TTL_SECONDS;
+    return readPositiveIntegerEnv(env, 'AGENT_REQUEST_TTL_SECONDS', AGENT_DEFAULT_REQUEST_TTL_SECONDS);
 }
 
 export function readAgentLeaseMs(env: Record<string, string | undefined>): number {
-    const value = env.AGENT_REQUEST_LEASE_MS;
-    if (!value || !/^\d+$/.test(value)) return AGENT_DEFAULT_LEASE_MS;
-    const parsed = Number(value);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : AGENT_DEFAULT_LEASE_MS;
+    return readPositiveIntegerEnv(env, 'AGENT_REQUEST_LEASE_MS', AGENT_DEFAULT_LEASE_MS);
 }
 
 export function readAgentRecoveryIntervalMs(env: Record<string, string | undefined>): number {
-    const value = env.AGENT_RECOVERY_INTERVAL_MS;
-    if (!value || !/^\d+$/.test(value)) return AGENT_DEFAULT_RECOVERY_INTERVAL_MS;
-    const parsed = Number(value);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : AGENT_DEFAULT_RECOVERY_INTERVAL_MS;
+    return readPositiveIntegerEnv(env, 'AGENT_RECOVERY_INTERVAL_MS', AGENT_DEFAULT_RECOVERY_INTERVAL_MS);
 }
 
 export function readAgentSqlitePath(env: Record<string, string | undefined>): string {
@@ -314,11 +382,38 @@ export function readAgentSqlitePath(env: Record<string, string | undefined>): st
 }
 
 export function readAgentPublicBaseUrl(env: Record<string, string | undefined>): string {
-    return env.AGENT_PUBLIC_BASE_URL?.trim() || '/';
+    const value = env.AGENT_PUBLIC_BASE_URL?.trim();
+    if (!value) return '/';
+    let parsed: URL;
+    try {
+        parsed = new URL(value);
+    } catch {
+        throw new RequestValidationError('AGENT_PUBLIC_BASE_URL 格式无效。', 500);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new RequestValidationError('AGENT_PUBLIC_BASE_URL 必须是 http 或 https URL。', 500);
+    }
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+        throw new RequestValidationError('AGENT_PUBLIC_BASE_URL 不能包含凭据、查询参数或片段。', 500);
+    }
+    return parsed.toString().replace(/\/$/, '');
 }
 
 export function validateOptionalAgentApiBaseUrl(baseUrl: string | undefined): void {
     if (baseUrl) validateApiBaseUrl(baseUrl);
+}
+
+function readPositiveIntegerEnv(env: Record<string, string | undefined>, fieldName: string, fallback: number): number {
+    const value = env[fieldName]?.trim();
+    if (!value) return fallback;
+    if (!/^\d+$/.test(value)) {
+        throw new RequestValidationError(`${fieldName} 必须是正整数。`, 500);
+    }
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) {
+        throw new RequestValidationError(`${fieldName} 必须是正整数。`, 500);
+    }
+    return parsed;
 }
 
 export function buildAgentCapabilities(env: Record<string, string | undefined>): AgentCapabilities {
@@ -334,6 +429,9 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             openapi: '/api/agent/openapi.json',
             generate: '/api/agent/images/generate',
             edit: '/api/agent/images/edit',
+            create_generate_job: '/api/agent/jobs/images/generate',
+            job: '/api/agent/jobs/{id}',
+            job_result: '/api/agent/jobs/{id}/result',
             artifact_metadata: '/api/agent/artifacts/{id}',
             artifact_content: '/api/agent/artifacts/{id}/content',
             artifact_delete: '/api/agent/artifacts/{id}'
@@ -348,6 +446,55 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             max_images: MAX_IMAGE_COUNT,
             max_upload_mb: MAX_UPLOAD_BYTES / 1024 / 1024,
             partial_images: { min: 1, max: 3 }
+        },
+        model_limits: {
+            'gpt-image-2': {
+                max_edge: GPT_IMAGE_2_MAX_EDGE,
+                max_pixels: GPT_IMAGE_2_MAX_PIXELS,
+                edge_multiple: GPT_IMAGE_2_EDGE_MULTIPLE,
+                max_aspect: GPT_IMAGE_2_MAX_ASPECT,
+                min_pixels: GPT_IMAGE_2_MIN_PIXELS,
+                recommended_presets: [
+                    { name: 'square', size: '2048x2048', purpose: '通用正方形构图' },
+                    { name: 'landscape', size: '3072x2048', purpose: '横向宽幅构图' },
+                    { name: 'portrait', size: '2048x3072', purpose: '纵向主体构图' }
+                ],
+                high_4k_risk: {
+                    applies_to: ['quality=high', 'max_edge>=3072', 'long_running_upstream'],
+                    guidance: '高质量 4K 级请求可能耗时数分钟；失败应归类为上游长耗时风险，不代表低负载路径不可用。'
+                }
+            }
+        },
+        agent_streaming: {
+            generate: {
+                supported: false,
+                mode: 'non_streaming_only',
+                endpoint: '/api/agent/images/generate'
+            },
+            edit: {
+                supported: false,
+                mode: 'non_streaming_only',
+                endpoint: '/api/agent/images/edit'
+            },
+            page_sse: {
+                supported: true,
+                mode: 'form_data_sse',
+                endpoint: '/api/images',
+                contract: 'page_ui_only'
+            }
+        },
+        agent_jobs: {
+            supported: true,
+            mode: 'job_polling',
+            intended_for: ['quality=high', 'max_edge>=3072', 'long_running_upstream', 'manual_billable_gate'],
+            endpoints: {
+                create_generate_job: '/api/agent/jobs/images/generate',
+                get_job: '/api/agent/jobs/{id}',
+                get_job_result: '/api/agent/jobs/{id}/result'
+            },
+            states: AGENT_JOB_STATES,
+            current_guidance:
+                '对 4K/high 或长耗时请求优先使用 job polling：先创建 generate job，再轮询状态，最后读取 result。运行中 job 会刷新 lease。当前执行模型为同实例后台任务，不是跨实例持久队列。'
         },
         supported: {
             models: AGENT_MODELS,
@@ -366,317 +513,6 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             required: true,
             header: 'Idempotency-Key',
             ttl_seconds: readAgentRequestTtlSeconds(env)
-        }
-    };
-}
-
-export function buildAgentOpenApiDocument(env: Record<string, string | undefined>) {
-    const capabilities = buildAgentCapabilities(env);
-    const jsonContent = (schemaRef: string) => ({
-        content: {
-            'application/json': {
-                schema: { $ref: schemaRef }
-            }
-        }
-    });
-    const agentSecurity = [{ BearerAuth: [] }, { AppPasswordHash: [] }];
-    const commonAgentErrors = {
-        '401': jsonContent('#/components/schemas/AgentError'),
-        '415': jsonContent('#/components/schemas/AgentError'),
-        '502': jsonContent('#/components/schemas/AgentError')
-    };
-    return {
-        openapi: '3.1.0',
-        info: {
-            title: 'GPT Image Playground Agent API',
-            version: capabilities.api_version
-        },
-        servers: [{ url: readAgentPublicBaseUrl(env) }],
-        paths: {
-            '/api/agent/capabilities': {
-                get: {
-                    summary: '获取机器可读的 Agent API 能力信息',
-                    responses: {
-                        '200': jsonContent('#/components/schemas/AgentCapabilities')
-                    }
-                }
-            },
-            '/api/agent/openapi.json': {
-                get: {
-                    summary: '获取 Agent API 的 OpenAPI 文档',
-                    responses: {
-                        '200': { description: 'OpenAPI 文档' }
-                    }
-                }
-            },
-            '/api/agent/images/generate': {
-                post: {
-                    summary: '为 Agent 生成图片',
-                    security: agentSecurity,
-                    parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }],
-                    requestBody: {
-                        required: true,
-                        ...jsonContent('#/components/schemas/GenerateRequest')
-                    },
-                    responses: {
-                        '200': jsonContent('#/components/schemas/AgentImageResponse'),
-                        '400': jsonContent('#/components/schemas/AgentError'),
-                        '409': {
-                            ...jsonContent('#/components/schemas/AgentError'),
-                            headers: {
-                                'Retry-After': { schema: { type: 'integer', minimum: 1 } }
-                            }
-                        },
-                        ...commonAgentErrors,
-                        '422': jsonContent('#/components/schemas/AgentError'),
-                        '500': jsonContent('#/components/schemas/AgentError')
-                    }
-                }
-            },
-            '/api/agent/images/edit': {
-                post: {
-                    summary: '为 Agent 编辑图片',
-                    security: agentSecurity,
-                    parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }],
-                    requestBody: {
-                        required: true,
-                        content: {
-                            'multipart/form-data': {
-                                schema: { $ref: '#/components/schemas/EditRequest' }
-                            }
-                        }
-                    },
-                    responses: {
-                        '200': jsonContent('#/components/schemas/AgentImageResponse'),
-                        '400': jsonContent('#/components/schemas/AgentError'),
-                        '409': jsonContent('#/components/schemas/AgentError'),
-                        ...commonAgentErrors,
-                        '422': jsonContent('#/components/schemas/AgentError'),
-                        '500': jsonContent('#/components/schemas/AgentError')
-                    }
-                }
-            },
-            '/api/agent/artifacts/{id}': {
-                get: {
-                    summary: '获取产物元数据',
-                    security: agentSecurity,
-                    parameters: [{ $ref: '#/components/parameters/ArtifactId' }],
-                    responses: {
-                        '200': jsonContent('#/components/schemas/ArtifactMetadataResponse'),
-                        '401': jsonContent('#/components/schemas/AgentError'),
-                        '404': jsonContent('#/components/schemas/AgentError')
-                    }
-                },
-                delete: {
-                    summary: '删除产物',
-                    security: agentSecurity,
-                    parameters: [{ $ref: '#/components/parameters/ArtifactId' }],
-                    responses: {
-                        '200': jsonContent('#/components/schemas/DeleteArtifactResponse'),
-                        '401': jsonContent('#/components/schemas/AgentError'),
-                        '404': jsonContent('#/components/schemas/AgentError')
-                    }
-                }
-            },
-            '/api/agent/artifacts/{id}/content': {
-                get: {
-                    summary: '下载产物内容',
-                    security: agentSecurity,
-                    parameters: [{ $ref: '#/components/parameters/ArtifactId' }],
-                    responses: {
-                        '200': {
-                            description: '图片二进制内容',
-                            content: {
-                                'image/png': { schema: { type: 'string', format: 'binary' } },
-                                'image/jpeg': { schema: { type: 'string', format: 'binary' } },
-                                'image/webp': { schema: { type: 'string', format: 'binary' } }
-                            }
-                        },
-                        '401': jsonContent('#/components/schemas/AgentError'),
-                        '404': jsonContent('#/components/schemas/AgentError')
-                    }
-                }
-            }
-        },
-        components: {
-            securitySchemes: {
-                BearerAuth: {
-                    type: 'http',
-                    scheme: 'bearer'
-                },
-                AppPasswordHash: {
-                    type: 'apiKey',
-                    in: 'header',
-                    name: 'X-App-Password-Hash'
-                }
-            },
-            parameters: {
-                IdempotencyKey: {
-                    name: 'Idempotency-Key',
-                    in: 'header',
-                    required: true,
-                    schema: { type: 'string', minLength: 1, maxLength: 200 }
-                },
-                ArtifactId: {
-                    name: 'id',
-                    in: 'path',
-                    required: true,
-                    schema: { type: 'string', minLength: 1 }
-                }
-            },
-            schemas: {
-                AgentCapabilities: {
-                    type: 'object',
-                    required: ['api_version', 'schema_version', 'auth', 'endpoints', 'defaults', 'limits', 'supported', 'storage', 'idempotency'],
-                    properties: {
-                        api_version: { type: 'string' },
-                        schema_version: { type: 'string' },
-                        auth: { type: 'object' },
-                        endpoints: { type: 'object', additionalProperties: { type: 'string' } },
-                        defaults: { type: 'object' },
-                        limits: { type: 'object' },
-                        supported: { type: 'object' },
-                        storage: {
-                            type: 'object',
-                            required: ['image_storage_mode', 'postgres_configured'],
-                            properties: {
-                                image_storage_mode: { type: 'string' },
-                                postgres_configured: { type: 'boolean' }
-                            }
-                        },
-                        idempotency: { type: 'object' }
-                    }
-                },
-                GenerateRequest: {
-                    type: 'object',
-                    required: ['prompt'],
-                    properties: {
-                        prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
-                        model: { type: 'string', enum: AGENT_MODELS },
-                        n: { type: 'integer', minimum: 1, maximum: MAX_IMAGE_COUNT },
-                        size: { type: 'string' },
-                        quality: { type: 'string', enum: AGENT_QUALITIES, default: 'high' },
-                        output_format: { type: 'string', enum: AGENT_OUTPUT_FORMATS },
-                        output_compression: { type: 'integer', minimum: 0, maximum: 100 },
-                        background: { type: 'string', enum: AGENT_BACKGROUNDS },
-                        moderation: { type: 'string', enum: AGENT_MODERATIONS },
-                        response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES, default: 'path' }
-                    }
-                },
-                EditRequest: {
-                    type: 'object',
-                    required: ['prompt', 'image_0'],
-                    properties: {
-                        prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
-                        model: { type: 'string', enum: AGENT_MODELS, default: 'gpt-image-2' },
-                        n: { type: 'integer', minimum: 1, maximum: MAX_IMAGE_COUNT },
-                        size: { type: 'string', default: 'auto' },
-                        quality: { type: 'string', enum: AGENT_QUALITIES, default: 'auto' },
-                        response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES, default: 'path' },
-                        image_0: { type: 'string', format: 'binary' },
-                        mask: { type: 'string', format: 'binary' }
-                    }
-                },
-                AgentArtifact: {
-                    type: 'object',
-                    required: ['id', 'filename', 'content_url', 'metadata_url', 'output_format', 'mime_type', 'size_bytes', 'width', 'height'],
-                    properties: {
-                        id: { type: 'string' },
-                        filename: { type: 'string' },
-                        content_url: { type: 'string' },
-                        metadata_url: { type: 'string' },
-                        output_format: { type: 'string', enum: AGENT_OUTPUT_FORMATS },
-                        mime_type: { type: 'string' },
-                        size_bytes: { type: 'integer', minimum: 0 },
-                        width: { type: ['integer', 'null'] },
-                        height: { type: ['integer', 'null'] },
-                        b64_json: { type: 'string' }
-                    }
-                },
-                AgentImageResponse: {
-                    type: 'object',
-                    required: ['request_id', 'idempotency_key', 'cached', 'images', 'created_at'],
-                    properties: {
-                        request_id: { type: 'string' },
-                        idempotency_key: { type: 'string' },
-                        cached: { type: 'boolean' },
-                        images: {
-                            type: 'array',
-                            items: { $ref: '#/components/schemas/AgentArtifact' }
-                        },
-                        usage: { type: 'object' },
-                        created_at: { type: 'string', format: 'date-time' }
-                    }
-                },
-                ArtifactMetadataResponse: {
-                    type: 'object',
-                    required: ['artifact'],
-                    properties: {
-                        artifact: { $ref: '#/components/schemas/AgentArtifact' }
-                    }
-                },
-                AgentArtifactRecord: {
-                    type: 'object',
-                    required: [
-                        'id',
-                        'requestId',
-                        'filename',
-                        'filepath',
-                        'contentUrl',
-                        'metadataUrl',
-                        'outputFormat',
-                        'mimeType',
-                        'sizeBytes',
-                        'width',
-                        'height',
-                        'model',
-                        'promptHash',
-                        'createdAt'
-                    ],
-                    properties: {
-                        id: { type: 'string' },
-                        requestId: { type: 'string' },
-                        filename: { type: 'string' },
-                        filepath: { type: 'string' },
-                        contentUrl: { type: 'string' },
-                        metadataUrl: { type: 'string' },
-                        outputFormat: { type: 'string', enum: AGENT_OUTPUT_FORMATS },
-                        mimeType: { type: 'string' },
-                        sizeBytes: { type: 'integer', minimum: 0 },
-                        width: { type: ['integer', 'null'] },
-                        height: { type: ['integer', 'null'] },
-                        model: { type: 'string' },
-                        promptHash: { type: 'string' },
-                        createdAt: { type: 'string', format: 'date-time' }
-                    }
-                },
-                DeleteArtifactResponse: {
-                    type: 'object',
-                    required: ['deleted', 'id'],
-                    properties: {
-                        deleted: { type: 'boolean' },
-                        id: { type: 'string' }
-                    }
-                },
-                AgentError: {
-                    type: 'object',
-                    required: ['error'],
-                    properties: {
-                        error: {
-                            type: 'object',
-                            required: ['code', 'message', 'retryable', 'request_id'],
-                            properties: {
-                                code: { type: 'string' },
-                                message: { type: 'string' },
-                                retryable: { type: 'boolean' },
-                                details: { type: 'object' },
-                                upstream_status: { type: 'integer' },
-                                request_id: { type: 'string' }
-                            }
-                        }
-                    }
-                }
-            }
         }
     };
 }

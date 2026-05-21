@@ -37,11 +37,13 @@ export async function POST(request: NextRequest) {
 
         if (beginResult.type === 'replay') {
             const response = await hydrateAgentReplayResponse(store, beginResult.record, beginResult.response);
-            return NextResponse.json(response, { headers: { 'X-Idempotent-Replay': 'true' } });
+            return NextResponse.json(response, {
+                headers: { 'X-Idempotent-Replay': 'true', 'X-Request-Id': beginResult.record.requestId }
+            });
         }
         if (beginResult.type === 'failed') {
             requestId = beginResult.record.requestId;
-            return storedAgentErrorResponse(beginResult.error);
+            return storedAgentErrorResponse(beginResult.error, { 'X-Idempotent-Replay': 'true' });
         }
         if (beginResult.type === 'conflict') {
             throw new AgentApiError({
