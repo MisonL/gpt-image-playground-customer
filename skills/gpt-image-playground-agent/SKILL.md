@@ -61,6 +61,15 @@ Authorization: Bearer <token>
 - `skills/gpt-image-playground-agent/scripts/edit-image.mjs`：multipart 编辑调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实编辑。
 - `skills/gpt-image-playground-agent/scripts/probe-upstream-image.mjs`：直接探测上游图片接口连通性。默认只检查 DNS、TLS 和 `/models`，必须添加 `--allow-billable` 才会真实调用 `/images/generations`。
 
+如果当前上下文位于仓库根目录，管理员侧优先使用顶层命令：
+
+- `npm run status`：只读查看 git、Space 目标、Agent API 和 Skill 入口。
+- `npm run doctor`：统一诊断本机与 HF Space 配置，不写 Secret。
+- `npm run verify`：运行提交前基线；需要真实 PostgreSQL gate 时加 `-- --postgres`。
+- `npm run deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。
+- `npm run deploy:space`：部署干净 git HEAD 到固定 Space，并做只读公网验证。
+- `npm run agent:doctor`：执行只读 Agent API 契约检查，不触发真实生图。
+
 生成脚本常用参数：
 
 ```bash

@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const DEFAULT_ACCESS_FILE = join(process.env.HOME || '', '.cache/gpt-image-playground-customer/hf-space-access.txt');
+export const HF_SPACE_ID = 'misonL/gpt-image-playground-customer';
+export const HF_SPACE_URL = 'https://misonl-gpt-image-playground-customer.hf.space';
+const DOCTOR_COMMAND_TIMEOUT_MS = 30_000;
 
 export function readEnvValue(name) {
     return process.env[name]?.trim() || undefined;
@@ -34,31 +35,21 @@ export function assertKnownOptions(argv, knownOptions) {
     }
 }
 
-export function runCommand(command, args = []) {
+export function runDoctorCommand(command, args = [], options = {}) {
     const result = spawnSync(command, args, {
         encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: options.timeoutMs || DOCTOR_COMMAND_TIMEOUT_MS
     });
-    if (result.error) return { ok: false, error: result.error.message };
+    if (result.error) {
+        const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+        return { ok: false, error: output ? `${result.error.message}\n${output}` : result.error.message };
+    }
     if (result.status !== 0) {
         const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
         return { ok: false, error: output || `${command} ${args.join(' ')} failed` };
     }
     return { ok: true, stdout: result.stdout.trim() };
-}
-
-export function parseAccessFile(accessFile) {
-    const values = new Map();
-    const text = readFileSync(accessFile, 'utf8');
-    for (const rawLine of text.split(/\r?\n/)) {
-        if (!rawLine || rawLine.startsWith('#')) continue;
-        const separatorIndex = rawLine.indexOf('=');
-        if (separatorIndex <= 0) continue;
-        const key = rawLine.slice(0, separatorIndex).trim();
-        const value = rawLine.slice(separatorIndex + 1);
-        if (key) values.set(key, value);
-    }
-    return values;
 }
 
 export function getJsonNames(text) {
@@ -76,6 +67,23 @@ export function getJsonNames(text) {
     };
     visit(parsed);
     return names;
+}
+
+export function getJsonKeyValues(text) {
+    const parsed = JSON.parse(extractJsonPayload(text));
+    const values = new Map();
+    const visit = (value) => {
+        if (Array.isArray(value)) {
+            for (const item of value) visit(item);
+            return;
+        }
+        if (!value || typeof value !== 'object') return;
+        if (typeof value.key === 'string' && typeof value.value === 'string') {
+            values.set(value.key, value.value);
+        }
+    };
+    visit(parsed);
+    return values;
 }
 
 function extractJsonPayload(text) {
@@ -108,16 +116,9 @@ const NEXT_ACTIONS = new Map([
     ['hf-cli', 'Install the Hugging Face CLI from the official documentation; avoid piping remote install scripts directly to a shell.'],
     ['hf-auth', 'Check network/proxy access to Hugging Face, then run hf auth login if the token is missing or expired.'],
     ['node-modules', 'Run npm install.'],
-    [
-        'access-file-keys',
-        'Regenerate or update the access file with npm run init-access:hf-space -- --space-id <namespace>/<space-name> --space-url https://<user>-<space>.hf.space'
-    ],
-    [
-        'generated-secrets',
-        'Regenerate weak or blank project secrets with npm run init-access:hf-space -- --space-id <namespace>/<space-name> --space-url https://<user>-<space>.hf.space --force'
-    ],
-    ['remote-variables', 'Configure the required and recommended Space Variables in Hugging Face Settings before syncing secrets.'],
-    ['remote-secrets', 'Run npm run sync-secret:hf-space after hf auth login succeeds.'],
+    ['remote-variables', 'Configure the required and recommended Space Variables with hf spaces variables add.'],
+    ['remote-variable-values', 'Set required Space Variable values with hf spaces variables add.'],
+    ['remote-secrets', 'Configure required Space Secrets with hf spaces secrets add.'],
     ['remote-generation-secret', 'Configure OPENAI_API_KEY or OPENAI_CHANNEL_1_API_KEYS in Space Secrets before real image generation.']
 ]);
 

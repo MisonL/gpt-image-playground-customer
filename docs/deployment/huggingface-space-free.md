@@ -45,7 +45,7 @@ hf auth whoami
 - npm 随 Node.js 一起可用。
 - Hugging Face CLI 使用当前官方 `hf` 命令。
 - `hf auth login` 使用 Hugging Face Access Token，不是账号密码。
-- Docker 只对 `npm run smoke:hf-space` 和本地容器验证必需；只创建 txt 文件和同步 Secret 不需要 Docker。
+- Docker 只对 `npm run smoke:hf-space` 和本地容器验证必需；部署到远端 Space 使用 `hf` CLI。
 
 安装 Hugging Face CLI 时，以官方文档为准。不要把远程安装脚本直接管道到 shell；如需使用官方脚本，先下载、核对来源和内容后再执行。
 
@@ -58,10 +58,58 @@ npm install
 如果不确定当前机器缺什么，运行只读诊断：
 
 ```bash
-npm run doctor:hf-space
+npm run doctor
 ```
 
-`doctor:hf-space` 会检查 Node、npm、`hf` CLI、HF 登录状态、`node_modules`、git、Docker、本机 access 文件和可选远端 Space 配置。该命令不会写远端 Secret、不会重启 Space、不会打印 Secret 值。
+`doctor` 会检查 Node、npm、`hf` CLI、HF 登录状态、`node_modules`、git、Docker、固定 Space 目标、远端 Variables 和远端 Secrets。该命令不会写远端 Secret、不会重启 Space、不会打印 Secret 值。
+
+## 管理员命令中心
+
+本仓库只保留一组稳定管理员入口：
+
+```bash
+npm run status
+npm run doctor
+npm run verify
+npm run deploy:local
+npm run deploy:space
+npm run agent:doctor
+```
+
+- `status`：只读输出 git、Node、固定 Space 目标、Agent capabilities 路径和 Skill 入口。
+- `doctor`：统一诊断入口，默认包含 HF Space 只读远端检查。
+- `verify`：提交前基线，执行测试、lint、脚本语法、构建和 `git diff --check`；需要真实 PostgreSQL gate 时加 `--postgres`。
+- `deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `--memory` 会断言 memory/indexeddb overlay 生效。
+- `deploy:space`：上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证。
+- `agent:doctor`：通过仓库 Skill 脚本执行只读 Agent API 契约检查，不触发真实生图。
+
+HF Space 交互使用官方 `hf` CLI。不要维护本机 access 文件，不要把 `APP_PASSWORD`、`AGENT_API_TOKEN`、OpenAI Key 或 Hugging Face token 写入仓库文件。
+
+部署当前干净的 git HEAD 到固定 Space：
+
+```bash
+npm run deploy:space
+```
+
+该脚本会：
+
+- 使用 `git status --porcelain` 拒绝脏工作区。
+- 使用 `git archive HEAD` 生成临时源码目录，只上传已跟踪源码。
+- 使用 `hf upload` 上传到 `misonL/gpt-image-playground-customer`。
+- 等待新 Space commit 进入 `RUNNING`。
+- 检查 `/api/auth-status`、`/api/agent/capabilities` 和 `/api/runtime-capabilities`，不触发真实生图。
+
+配置或轮换 Variables/Secrets 时，直接使用官方 `hf` CLI：
+
+```bash
+hf spaces variables add misonL/gpt-image-playground-customer -e AGENT_STATE_BACKEND=memory
+hf spaces variables add misonL/gpt-image-playground-customer -e NEXT_PUBLIC_IMAGE_STORAGE_MODE=indexeddb
+hf spaces variables add misonL/gpt-image-playground-customer -e APP_LOG_LEVEL=warn
+hf spaces secrets add misonL/gpt-image-playground-customer -s APP_PASSWORD=<page-access-code>
+hf spaces secrets add misonL/gpt-image-playground-customer -s AGENT_API_TOKEN=<long-random-agent-token>
+```
+
+源码部署、远端诊断、Variables 和 Secrets 都围绕 `hf` CLI 完成；仓库内不再提供第二套 access-file 同步流程。
 
 ## Space Variables
 
@@ -160,6 +208,7 @@ npm run smoke:hf-space
 - 以 `AGENT_STATE_BACKEND=memory` 启动临时容器。
 - 用手机 User-Agent 检查首页可访问。
 - 检查 `/api/agent/capabilities` 返回 `state_backend=memory` 和 `image_storage_mode=indexeddb`。
+- 默认等待容器 HTTP ready 最多 45 秒；慢机器可设置 `HF_SPACE_SMOKE_READY_TIMEOUT_MS=90000`。
 - 执行 Agent 生成和编辑脚本的契约检查，不触发真实上游生图。
 
 ## 免费层限制
@@ -195,110 +244,6 @@ npm run keepalive:hf-space
 
 注意：keepalive 是免费层的 best-effort 机制，不能保证绕过 Hugging Face 平台维护、重启或政策限制。若需要平台级保证，应升级到付费硬件并设置永不休眠。
 
-## 初始化本机访问记录
-
-不同用户首次接手自己的 Space 时，先在本机生成访问记录文件。该文件保存在用户 home 目录下，不应提交到仓库：
-
-```bash
-npm run init-access:hf-space -- \
-  --space-id <namespace>/<space-name> \
-  --space-url https://<user>-<space>.hf.space
-```
-
-默认写入：
-
-```text
-~/.cache/gpt-image-playground-customer/hf-space-access.txt
-```
-
-文件会包含：
-
-```dotenv
-HF_SPACE_ID=<namespace>/<space-name>
-HF_SPACE_URL=https://<user>-<space>.hf.space
-HF_SPACE_SECRET_KEYS=APP_PASSWORD,AGENT_API_TOKEN
-APP_PASSWORD=<generated-page-access-code>
-AGENT_API_TOKEN=<generated-agent-token>
-```
-
-`HF_SPACE_URL` 必须是 Hugging Face 的 `https://*.hf.space` 纯 origin 地址，不能包含凭据、路径、查询参数或片段，也不能填写反向代理、自定义域名或普通示例域名。
-
-脚本不会在输出中回显 `APP_PASSWORD` 或 `AGENT_API_TOKEN`。如果文件已存在，默认拒绝覆盖；确认要重置时使用：
-
-```bash
-npm run init-access:hf-space -- \
-  --space-id <namespace>/<space-name> \
-  --space-url https://<user>-<space>.hf.space \
-  --force
-```
-
-创建这个 txt 文件不需要 Hugging Face 账号密码。它只保存本项目的访问码、Agent token 和 Space 目标信息。
-
-同步 Secret 到远端 Space 时，需要本机 `hf` CLI 已登录有目标 Space 管理权限的 Hugging Face Access Token。先检查登录状态：
-
-```bash
-hf auth whoami
-```
-
-如果未登录，执行：
-
-```bash
-hf auth login
-```
-
-`hf auth login` 使用的是 Hugging Face Access Token，不是账号密码。不要把 HF 账号密码或 HF Access Token 写入 `hf-space-access.txt`。
-
-生成后可先做本机只读诊断，不写远端：
-
-```bash
-npm run doctor:hf-space -- --skip-remote
-```
-
-如果诊断提示 access 文件缺少 `HF_SPACE_ID`、`HF_SPACE_URL` 或 `HF_SPACE_SECRET_KEYS`，说明本机可能已有旧格式文件。可手工补齐这些字段，或确认重置后重新生成：
-
-```bash
-npm run init-access:hf-space -- \
-  --space-id <namespace>/<space-name> \
-  --space-url https://<user>-<space>.hf.space \
-  --force
-```
-
-## 同步本机访问码到 Space
-
-如果本机访问记录文件里的 `APP_PASSWORD` 已更新，可以用脚本同步到 HF Space Secret、重启服务并验证新访问码：
-
-```bash
-npm run sync-secret:hf-space
-```
-
-默认读取：
-
-```text
-~/.cache/gpt-image-playground-customer/hf-space-access.txt
-```
-
-由 `init-access:hf-space` 生成的文件会让同步脚本同时同步 `APP_PASSWORD` 和 `AGENT_API_TOKEN`。旧格式文件默认只同步 `APP_PASSWORD`，不会在输出中回显访问码值。可通过环境变量覆盖目标或同步多个 key：
-
-```bash
-HF_SPACE_ID=misonL/gpt-image-playground-customer \
-HF_SPACE_URL=https://misonl-gpt-image-playground-customer.hf.space \
-HF_SPACE_ACCESS_FILE=~/.cache/gpt-image-playground-customer/hf-space-access.txt \
-HF_SPACE_SECRET_KEYS=APP_PASSWORD,AGENT_API_TOKEN \
-npm run sync-secret:hf-space
-```
-
-同步脚本默认要求 `HF_SPACE_ID` 和 `HF_SPACE_URL` 来自 access 文件或环境变量，避免不同用户误写到仓库示例 Space。只有维护默认示例 Space 时才使用：
-
-```bash
-npm run sync-secret:hf-space -- --use-default-target
-```
-
-可选参数：
-
-- `npm run sync-secret:hf-space -- --no-restart`：只写 Secret，不重启 Space。
-- `npm run sync-secret:hf-space -- --skip-verify`：跳过 `/api/auth-verify` 访问码验证。
-- `npm run sync-secret:hf-space -- --use-default-target`：允许使用脚本内置默认 Space 目标。
-
 ## 验证门禁
 
 最小验证：
@@ -315,7 +260,7 @@ git diff --check
 
 真实 Hugging Face gate：
 
-1. 推送到 Space 仓库后等待构建完成。
+1. 提交代码后执行 `npm run deploy:space`，等待 Space 新 commit 进入 `RUNNING`。
 2. 手机打开 Space 页面，确认能进入页面并发起一次真实生成。
 3. 电脑执行 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 契约检查。
 4. 如有可用测试额度，再执行一次真实 Agent 生成。

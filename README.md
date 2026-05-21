@@ -465,33 +465,44 @@ npm install
 
 要求 Node.js 20 或更高版本。Hugging Face CLI 安装方式以官方文档为准；当前官方入口是 `hf` 命令，登录使用 Hugging Face Access Token。
 
-不同用户首次接手自己的 Space 时，先生成本机访问记录文件：
+本仓库只保留一种推荐的管理员交互方式：先用顶层命令判断状态，再进入具体部署命令。Hugging Face Space 操作使用官方 `hf` CLI；不要再维护本机 access 文件，也不要把 Space Secret 写入仓库。
+
+常用入口：
 
 ```bash
-npm run init-access:hf-space -- \
-  --space-id <namespace>/<space-name> \
-  --space-url https://<user>-<space>.hf.space
+npm run status
+npm run doctor
+npm run verify
+npm run deploy:local
+npm run deploy:space
+npm run agent:doctor
 ```
 
-脚本会写入 `~/.cache/gpt-image-playground-customer/hf-space-access.txt`，生成访问码 `APP_PASSWORD` 和 `AGENT_API_TOKEN`，并记录 `HF_SPACE_ID`、`HF_SPACE_URL` 和默认同步 key。脚本不会打印 Secret 值，且默认不覆盖已有文件。
-`HF_SPACE_URL` 必须是 Hugging Face 的 `https://*.hf.space` 纯 origin 地址，不能包含凭据、路径、查询参数或片段，也不能填写反向代理、自定义域名或普通示例域名。
+`status` 只读输出 git、Node、固定 Space 目标、Agent capabilities 路径和仓库 Skill 入口；`doctor` 汇总本机与 HF Space 诊断；`verify` 执行提交前基线，需要真实 PostgreSQL gate 时加 `--postgres`；`deploy:local` 重建本地 Docker 并探测真实端点；`deploy:space` 是 HF Space 发布的稳定别名；`agent:doctor` 对当前 Agent API 做只读契约检查。
 
-创建本机访问记录文件不需要 Hugging Face 账号密码。同步 Secret 到远端 Space 时，需要本机 `hf` CLI 已登录有目标 Space 管理权限的 Hugging Face Access Token：
-
-```bash
-hf auth whoami
-hf auth login
-```
-
-如果不确定当前机器缺什么，先运行只读诊断：
+如果只想诊断 HF Space 前置条件，可运行：
 
 ```bash
 npm run doctor:hf-space
 ```
 
-该命令会检查 Node、npm、`hf` CLI、HF 登录状态、`node_modules`、git、Docker、本机 access 文件和可选远端 Space 配置；不会写远端 Secret、不会重启 Space、不会打印 Secret 值。
+该命令会检查 Node、npm、`hf` CLI、HF 登录状态、`node_modules`、git、Docker、固定 Space 目标、远端 Variables 和远端 Secrets；不会写远端 Secret、不会重启 Space、不会打印 Secret 值。
 
-如果修改了本机访问记录文件里的 `APP_PASSWORD`，可执行 `npm run sync-secret:hf-space` 同步到 Hugging Face Space Secret、重启并验证新访问码。脚本默认读取 `~/.cache/gpt-image-playground-customer/hf-space-access.txt`，并要求目标 Space 写在 access 文件或环境变量里，避免不同用户误写到示例 Space；输出不会回显 Secret 值。
+部署当前干净的 git HEAD 到固定 Space：
+
+```bash
+npm run deploy:space
+```
+
+该脚本会使用 `git archive HEAD` 生成临时源码目录，通过 `hf upload` 上传到 `misonL/gpt-image-playground-customer`，等待新 Space commit 进入 `RUNNING`，并执行只读公网端点检查。若工作区有未提交改动，脚本会直接失败，避免把本地临时状态误当成可复现发布。
+
+配置或轮换 Space Secret 时，直接使用官方 `hf` CLI：
+
+```bash
+hf spaces variables add misonL/gpt-image-playground-customer -e AGENT_STATE_BACKEND=memory
+hf spaces secrets add misonL/gpt-image-playground-customer -s APP_PASSWORD=<page-access-code>
+hf spaces secrets add misonL/gpt-image-playground-customer -s AGENT_API_TOKEN=<long-random-agent-token>
+```
 
 `memory` 模式不创建 SQLite 文件，也不连接 PostgreSQL。它只适合无持久化演示、短会话调试或可接受重启丢失 Agent 幂等状态的环境；容器重启后请求记录、artifact 元数据和 replay 状态都会清空。Web 图片二进制按 `NEXT_PUBLIC_IMAGE_STORAGE_MODE` 保存；HF 免费层推荐 `indexeddb`，让网页结果保存在浏览器侧。Agent API 产物仍写入容器临时文件系统，以便提供 `content_url` 下载。
 
@@ -542,11 +553,16 @@ docker logs -f gpt-image-playground-customer
 | `npm run dev` | 启动本地开发服务。 |
 | `npm run build` | 执行生产构建。 |
 | `npm run start` | 启动生产模式服务。 |
-| `npm run doctor:hf-space` | 只读诊断 HF Space 部署前置条件、本机 access 文件和远端配置。 |
-| `npm run init-access:hf-space` | 为当前用户生成本机 HF Space 访问记录、随机访问码和 Agent token。 |
+| `npm run status` | 只读输出 git、Node、Space 目标、Agent API 和 Skill 入口摘要。 |
+| `npm run doctor` | 运行统一诊断入口，默认包含 HF Space 只读远端检查。 |
+| `npm run verify` | 执行提交前基线：测试、lint、脚本语法、构建和 `git diff --check`；加 `-- --postgres` 会包含 live PostgreSQL gate。 |
+| `npm run deploy:local` | 重建本地 Docker 服务并探测 `/api/auth-status`、`/api/runtime-capabilities`、`/api/agent/capabilities`；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。 |
+| `npm run deploy:space` | 上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证。 |
+| `npm run agent:doctor` | 通过仓库 Skill 脚本执行只读 Agent API 契约检查，不触发真实生图。 |
+| `npm run deploy:hf-space` | 使用官方 `hf` CLI 上传当前干净 git HEAD 到固定 Space 并做只读公网验证。 |
+| `npm run doctor:hf-space` | 只读诊断 HF Space 部署前置条件、固定 Space 目标和远端配置。 |
 | `npm run keepalive:hf-space` | 访问 HF Space 只读状态端点，用于 keepalive 验证。 |
-| `npm run sync-secret:hf-space` | 从本机访问记录文件同步 HF Space Secret，并验证页面访问码。 |
-| `npm run smoke:hf-space` | 构建并启动 HF 免费层近似容器，验证 memory 状态后端和 Agent API 契约。 |
+| `npm run smoke:hf-space` | 构建并启动 HF 免费层近似容器，验证 memory 状态后端和 Agent API 契约；慢机器可设置 `HF_SPACE_SMOKE_READY_TIMEOUT_MS`。 |
 | `npm run lint` | 检查 `src/` 代码。 |
 | `npm run lint:scripts` | 跨平台检查仓库脚本和 skill 脚本语法。 |
 | `npm run format` | 格式化 `src/` 下的 TypeScript 和 React 文件。 |

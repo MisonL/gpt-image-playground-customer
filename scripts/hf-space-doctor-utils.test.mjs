@@ -8,9 +8,11 @@ import {
     assertSpaceTargetConfig,
     buildNextActions,
     classifyRequiredAndRecommendedNames,
+    getJsonKeyValues,
     getJsonNames,
     isMainModule,
     readOptionValue,
+    runDoctorCommand,
     validateSpaceId,
     validateSpaceUrl
 } from './hf-space-doctor-utils.mjs';
@@ -36,6 +38,20 @@ describe('HF Space doctor utilities', () => {
         );
 
         assert.deepEqual([...names], ['OPENAI_API_KEY']);
+    });
+
+    it('parses hf CLI variable values after hint lines', () => {
+        const values = getJsonKeyValues(
+            [
+                'Hint: Use `hf spaces variables add user/space -e KEY=VALUE` to add variables.',
+                '[{"key":"AGENT_STATE_BACKEND","value":"memory"},{"key":"NEXT_PUBLIC_IMAGE_STORAGE_MODE","value":"indexeddb"}]'
+            ].join('\n')
+        );
+
+        assert.deepEqual([...values], [
+            ['AGENT_STATE_BACKEND', 'memory'],
+            ['NEXT_PUBLIC_IMAGE_STORAGE_MODE', 'indexeddb']
+        ]);
     });
 
     it('keeps auth remediation broad enough for network and token failures', () => {
@@ -93,9 +109,15 @@ describe('HF Space doctor utilities', () => {
     });
 
     it('rejects unknown CLI options and blank inline option values', () => {
-        assert.doesNotThrow(() => assertKnownOptions(['--access-file', 'tmp.txt'], ['--access-file']));
-        assert.doesNotThrow(() => assertKnownOptions(['--access-file=tmp.txt'], ['--access-file']));
-        assert.throws(() => assertKnownOptions(['--unknown'], ['--access-file']), /Unknown option/);
+        assert.doesNotThrow(() => assertKnownOptions(['--skip-remote'], ['--skip-remote']));
+        assert.throws(() => assertKnownOptions(['--unknown'], ['--skip-remote']), /Unknown option/);
         assert.throws(() => readOptionValue(['--space-id='], '--space-id'), /requires a value/);
+    });
+
+    it('times out direct doctor commands instead of hanging', () => {
+        const result = runDoctorCommand(process.execPath, ['-e', 'setTimeout(() => {}, 1000)'], { timeoutMs: 20 });
+
+        assert.equal(result.ok, false);
+        assert.match(result.error, /timed out|ETIMEDOUT|SIGTERM/i);
     });
 });
