@@ -2,31 +2,121 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  errorMessage,
+  normalizeBaseUrl,
+  parseRetryAfterValue,
+  readConfiguredPositiveInteger,
+  readOptionValue,
+  sleep
+} from './lib/script-utils.mjs';
 
-const baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
-const [imagePath, ...promptParts] = process.argv.slice(2);
-const prompt = promptParts.join(' ');
-const parsedMaxAttempts = parseInt(process.env.GPT_IMAGE_AGENT_MAX_ATTEMPTS || '3', 10);
-const maxAttempts = Number.isInteger(parsedMaxAttempts) && parsedMaxAttempts > 0 ? parsedMaxAttempts : 3;
-const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1';
-const idempotencyKey = process.env.GPT_IMAGE_AGENT_IDEMPOTENCY_KEY || `agent-edit-${crypto.randomUUID()}`;
+const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1' || process.argv.includes('--contract-check');
+let options;
+try {
+  options = parseArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(errorMessage(error));
+  printUsage();
+  process.exit(2);
+}
+const imagePath = options.imagePath;
+const prompt = options.promptParts.join(' ');
+if (options.help) {
+  printUsage();
+  process.exit(0);
+}
+
+let maxAttempts;
+let timeoutMs;
+try {
+  maxAttempts = readConfiguredPositiveInteger(process.env.GPT_IMAGE_AGENT_MAX_ATTEMPTS, 'GPT_IMAGE_AGENT_MAX_ATTEMPTS', 3);
+  timeoutMs = readConfiguredPositiveInteger(options.timeoutMs, '--timeout-ms', 420000);
+} catch (error) {
+  console.error(errorMessage(error));
+  printUsage();
+  process.exit(2);
+}
+const idempotencyKey = options.idempotencyKey || process.env.GPT_IMAGE_AGENT_IDEMPOTENCY_KEY || `agent-edit-${crypto.randomUUID()}`;
 
 if ((!imagePath || !prompt) && !contractCheck) {
-  console.error('用法：edit-image.mjs <image-path> <prompt>');
-  console.error('契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 edit-image.mjs');
+  printUsage();
   process.exit(2);
+}
+
+let baseUrl;
+try {
+  baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
+} catch (error) {
+  console.error(errorMessage(error));
+  process.exit(2);
+}
+
+if (options.dryRun || (!contractCheck && !options.allowBillable)) {
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        billable: false,
+        dry_run: true,
+        endpoint: `${baseUrl}/api/agent/images/edit`,
+        idempotency_key: idempotencyKey,
+        request: {
+          image_path: imagePath,
+          prompt,
+          model: options.model,
+          size: options.size,
+          quality: options.quality,
+          response_mode: options.responseMode
+        },
+        next_step: '重新执行并添加 --allow-billable 才会发起真实图片编辑请求。'
+      },
+      null,
+      2
+    )
+  );
+  process.exit(0);
+}
+
+function parseArgs(argv) {
+  const parsed = {
+    model: 'gpt-image-2',
+    size: 'auto',
+    quality: 'auto',
+    responseMode: 'path',
+    timeoutMs: undefined,
+    idempotencyKey: undefined,
+    imagePath: undefined,
+    dryRun: false,
+    allowBillable: false,
+    help: false,
+    promptParts: []
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--dry-run') parsed.dryRun = true;
+    else if (arg === '--allow-billable') parsed.allowBillable = true;
+    else if (arg === '--help' || arg === '-h') parsed.help = true;
+    else if (arg === '--contract-check') continue;
+    else if (arg === '--model') parsed.model = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--size') parsed.size = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--quality') parsed.quality = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--response-mode') parsed.responseMode = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(argv, (index += 1), arg);
+    else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
+    else if (!parsed.imagePath) parsed.imagePath = arg;
+    else parsed.promptParts.push(arg);
+  }
+  return parsed;
 }
 
 function authHeaders() {
   if (token) return { Authorization: `Bearer ${token}` };
   if (passwordHash) return { 'X-App-Password-Hash': passwordHash };
   return {};
-}
-
-function normalizeBaseUrl(value) {
-  return value.replace(/\/+$/, '');
 }
 
 function absoluteUrl(value) {
@@ -49,11 +139,11 @@ function enrichImageUrls(result) {
 async function readCapabilities() {
   let response;
   try {
-    response = await fetch(`${baseUrl}/api/agent/capabilities`, {
+    response = await fetchWithTimeout(`${baseUrl}/api/agent/capabilities`, {
       headers: authHeaders()
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     throw new Error(`无法连接 GPT Image Playground：${baseUrl}。${message}`);
   }
   if (!response.ok) {
@@ -63,28 +153,36 @@ async function readCapabilities() {
   return response.json();
 }
 
-function parseRetryAfterValue(value) {
-  if (!value || !/^\d+$/.test(value)) return 1;
-  return Math.max(1, Number(value));
-}
-
 function shouldRetry(result) {
   return Boolean(result?.error?.retryable);
 }
 
-function sleep(seconds) {
-  return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+async function fetchWithTimeout(url, init) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function printUsage() {
+  console.error('用法：edit-image.mjs [options] <image-path> <prompt>');
+  console.error('默认只输出 dry-run；添加 --allow-billable 才会真实编辑图片。');
+  console.error('常用参数：--model --size --quality --response-mode --timeout-ms --idempotency-key --dry-run --allow-billable');
+  console.error('契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 edit-image.mjs 或 edit-image.mjs --contract-check');
 }
 
 try {
   await readCapabilities();
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(errorMessage(error));
   process.exit(1);
 }
 
 if (contractCheck) {
-  const response = await fetch(`${baseUrl}/api/agent/images/edit`, {
+  const response = await fetchWithTimeout(`${baseUrl}/api/agent/images/edit`, {
     method: 'POST',
     headers: {
       'Idempotency-Key': idempotencyKey,
@@ -95,10 +193,10 @@ if (contractCheck) {
   });
   const result = await response.json();
   if (response.status === 415 && result?.error?.code === 'validation_error') {
-    console.log(JSON.stringify({ ok: true, status: response.status, error_code: result.error.code }, null, 2));
+    console.log(JSON.stringify({ ok: true, billable: false, status: response.status, error_code: result.error.code }, null, 2));
     process.exit(0);
   }
-  console.error(JSON.stringify({ ok: false, status: response.status, result }, null, 2));
+  console.error(JSON.stringify({ ok: false, billable: false, status: response.status, result }, null, 2));
   process.exit(1);
 }
 
@@ -109,7 +207,7 @@ try {
     process.exit(2);
   }
 } catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   console.error(`无法读取图片文件：${imagePath}。${message}`);
   process.exit(2);
 }
@@ -120,8 +218,10 @@ const imageType = mimeTypeForPath(imagePath);
 function buildFormData() {
   const formData = new FormData();
   formData.append('prompt', prompt);
-  formData.append('model', 'gpt-image-2');
-  formData.append('response_mode', 'path');
+  formData.append('model', options.model);
+  formData.append('size', options.size);
+  formData.append('quality', options.quality);
+  formData.append('response_mode', options.responseMode);
   formData.append('image_0', new Blob([imageBuffer], { type: imageType }), path.basename(imagePath));
   return formData;
 }
@@ -140,7 +240,7 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
   let response;
   let result;
   try {
-    response = await fetch(`${baseUrl}/api/agent/images/edit`, {
+    response = await fetchWithTimeout(`${baseUrl}/api/agent/images/edit`, {
       method: 'POST',
       headers: {
         'Idempotency-Key': idempotencyKey,
@@ -150,7 +250,7 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     });
     result = await response.json();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     result = { error: { code: 'network_error', message, retryable: true } };
     lastResult = result;
     lastRetryAfter = 1;
