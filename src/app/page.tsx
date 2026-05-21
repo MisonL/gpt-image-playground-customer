@@ -361,6 +361,10 @@ export default function HomePage() {
     const [genCompression, setGenCompression] = React.useState([100]);
     const [genBackground, setGenBackground] = React.useState<GenerationFormData['background']>('auto');
     const [genModeration, setGenModeration] = React.useState<GenerationFormData['moderation']>('auto');
+    const [genImageBackend, setGenImageBackend] = React.useState<GenerationFormData['image_backend']>('images-api');
+    const [genStreamingStrategy, setGenStreamingStrategy] =
+        React.useState<GenerationFormData['streaming_strategy']>('auto');
+    const [genResponsesModel, setGenResponsesModel] = React.useState('');
 
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
 
@@ -884,6 +888,11 @@ export default function HomePage() {
                 }
                 apiFormData.append('background', genData.background);
                 apiFormData.append('moderation', genData.moderation);
+                apiFormData.append('image_backend', genData.image_backend);
+                apiFormData.append('image_streaming_strategy', genData.streaming_strategy);
+                if (genData.image_backend === 'responses-image-generation' && genData.responsesModel.trim()) {
+                    apiFormData.append('responsesModel', genData.responsesModel.trim());
+                }
             } else {
                 const editData = formData as EditingFormData;
                 apiFormData.append('model', editData.model);
@@ -1191,7 +1200,10 @@ export default function HomePage() {
                     : {}),
                 background: genBackground,
                 moderation: genModeration,
-                model: genModel
+                model: genModel,
+                image_backend: genImageBackend,
+                streaming_strategy: genStreamingStrategy,
+                responsesModel: genResponsesModel
             });
             return;
         }
@@ -1607,6 +1619,12 @@ export default function HomePage() {
                                         allowStreamingBatch={streamingBatchEnabled}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}
+                                        imageBackend={genImageBackend}
+                                        setImageBackend={setGenImageBackend}
+                                        streamingStrategy={genStreamingStrategy}
+                                        setStreamingStrategy={setGenStreamingStrategy}
+                                        responsesModel={genResponsesModel}
+                                        setResponsesModel={setGenResponsesModel}
                                     />
                                 </div>
                                 <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>

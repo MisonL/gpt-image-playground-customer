@@ -3,6 +3,7 @@ import {
     imageFormRequest,
     readSseEvents,
     startResponsesImageUpstream,
+    startStreamingResponsesImageUpstream,
     startStreamingImageUpstream
 } from './route-test-helpers';
 import { clearAppLogEntriesForTest } from '@/lib/app-logger';
@@ -33,7 +34,9 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
+    delete process.env.IMAGE_GENERATION_BACKEND;
     delete process.env.OPENAI_RESPONSES_API_MODEL;
+    delete process.env.IMAGE_STREAMING_STRATEGY;
     process.env.APP_LOG_LEVEL = 'warn';
     process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE = 'indexeddb';
     clearAppLogEntriesForTest();
@@ -245,6 +248,72 @@ describe('POST /api/images streaming', () => {
         }
     });
 
+    it('rejects explicit image stream requests when the server strategy disables streaming', async () => {
+        process.env.IMAGE_STREAMING_STRATEGY = 'off';
+        const { POST } = await import('./route');
+        let upstreamCalls = 0;
+        const upstream = await startStreamingImageUpstream(async () => {
+            upstreamCalls += 1;
+            return [];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: true
+                })
+            );
+
+            assert.equal(response.status, 400);
+            const body = (await response.json()) as Record<string, unknown>;
+            assert.match(String(body.error), /流式兼容模式已关闭/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('lets request streaming strategy override a disabled server strategy', async () => {
+        process.env.IMAGE_STREAMING_STRATEGY = 'off';
+        const { POST } = await import('./route');
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream(async (body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: true,
+                    imageStreamingStrategy: 'newapi-keepalive-sse'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'done']
+            );
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(upstreamJson.partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('rejects the experimental Responses API backend when the feature flag is disabled', async () => {
         const { POST } = await import('./route');
         const response = await POST(
@@ -295,17 +364,6 @@ describe('POST /api/images streaming', () => {
         assert.equal(multiImage.status, 400);
         assert.match(String(((await multiImage.json()) as Record<string, unknown>).error), /单张生成/);
 
-        const streaming = await POST(
-            imageFormRequest({
-                apiBaseUrl: 'http://127.0.0.1:1/v1',
-                apiKey: 'test-key',
-                stream: true,
-                imageBackend: 'responses'
-            })
-        );
-        assert.equal(streaming.status, 400);
-        assert.match(String(((await streaming.json()) as Record<string, unknown>).error), /不接入.*流式/);
-
         const edit = await POST(
             imageFormRequest({
                 apiBaseUrl: 'http://127.0.0.1:1/v1',
@@ -344,7 +402,7 @@ describe('POST /api/images streaming', () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     stream: false,
-                    imageBackend: 'responses'
+                    imageBackend: 'responses-image-generation'
                 })
             );
 
@@ -361,6 +419,135 @@ describe('POST /api/images streaming', () => {
                 'image_generation'
             );
             assert.equal(Array.isArray(upstreamJson.tools), true);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('streams Responses API image_generation events through the stable page SSE contract', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        const { POST } = await import('./route');
+        let upstreamBody = '';
+        const upstream = await startStreamingResponsesImageUpstream(async (body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'response.image_generation_call.partial_image',
+                    data: {
+                        type: 'response.image_generation_call.partial_image',
+                        partial_image_b64: 'responses-partial-base64',
+                        partial_image_index: 0
+                    }
+                },
+                {
+                    event: 'response.output_item.done',
+                    data: {
+                        type: 'response.output_item.done',
+                        item: {
+                            type: 'image_generation_call',
+                            status: 'completed',
+                            result: PNG_BASE64
+                        }
+                    }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: true,
+                    imageBackend: 'responses',
+                    imageStreamingStrategy: 'responses-sse'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['partial_image', 'completed', 'done']
+            );
+            assert.equal(events[0].b64_json, 'responses-partial-base64');
+            assert.equal(events[1].b64_json, PNG_BASE64);
+            assert.equal((events[2].images as Array<Record<string, unknown>>)[0].b64_json, PNG_BASE64);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.model, 'gpt-4.1');
+            assert.equal(upstreamJson.stream, true);
+            const tools = upstreamJson.tools as Array<Record<string, unknown>>;
+            assert.equal(tools[0].type, 'image_generation');
+            assert.equal(tools[0].partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('uses IMAGE_GENERATION_BACKEND as the route default when the request omits imageBackend', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.IMAGE_GENERATION_BACKEND = 'responses';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        const { POST } = await import('./route');
+        let upstreamBody = '';
+        const upstream = await startResponsesImageUpstream(async (body) => {
+            upstreamBody = body;
+            return {
+                output: [
+                    {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: PNG_BASE64
+                    }
+                ]
+            };
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: false
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = (await response.json()) as { images?: Array<Record<string, unknown>> };
+            assert.equal(body.images?.[0]?.b64_json, PNG_BASE64);
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.model, 'gpt-4.1');
+            assert.equal(upstreamJson.stream, false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('reports invalid image upstream env configuration as a server error before contacting upstream', async () => {
+        process.env.IMAGE_STREAMING_STRATEGY = 'not-a-strategy';
+        const { POST } = await import('./route');
+        let upstreamCalls = 0;
+        const upstream = await startStreamingImageUpstream(async () => {
+            upstreamCalls += 1;
+            return [];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: false
+                })
+            );
+
+            assert.equal(response.status, 500);
+            const body = (await response.json()) as Record<string, unknown>;
+            assert.match(String(body.error), /IMAGE_STREAMING_STRATEGY/);
+            assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();
         }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { AGENT_ENDPOINTS, buildAgentJobResultPath } from '../../../src/lib/agent-api-paths.mjs';
 import {
   errorMessage,
   normalizeBaseUrl,
@@ -117,6 +118,9 @@ function parseArgs(argv) {
     n: '1',
     format: 'png',
     responseMode: 'path',
+    imageBackend: undefined,
+    streamingStrategy: undefined,
+    partialImages: undefined,
     timeoutMs: undefined,
     promptFile: undefined,
     idempotencyKey: undefined,
@@ -140,6 +144,9 @@ function parseArgs(argv) {
     else if (arg === '--n') parsed.n = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--format') parsed.format = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--response-mode') parsed.responseMode = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--image-backend') parsed.imageBackend = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--streaming-strategy') parsed.streamingStrategy = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--partial-images') parsed.partialImages = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--prompt-file') parsed.promptFile = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(argv, (index += 1), arg);
@@ -160,30 +167,47 @@ function readPrompt(parsed, { readPromptFile }) {
 }
 
 function buildRequestBody(promptValue, parsed) {
-  return {
-    prompt: promptValue || 'contract check',
-    model: parsed.model,
-    n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
-    size: parsed.size,
-    quality: parsed.quality,
-    output_format: normalizeOutputFormat(parsed.format),
-    response_mode: parsed.responseMode
-  };
+  return addUpstreamStrategyFields(
+    {
+      prompt: promptValue || 'contract check',
+      model: parsed.model,
+      n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
+      size: parsed.size,
+      quality: parsed.quality,
+      output_format: normalizeOutputFormat(parsed.format),
+      response_mode: parsed.responseMode
+    },
+    parsed
+  );
 }
 
 function buildDryRunRequestBody(parsed) {
-  const body = {
-    model: parsed.model,
-    n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
-    size: parsed.size,
-    quality: parsed.quality,
-    output_format: normalizeOutputFormat(parsed.format),
-    response_mode: parsed.responseMode
-  };
+  const body = addUpstreamStrategyFields(
+    {
+      model: parsed.model,
+      n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
+      size: parsed.size,
+      quality: parsed.quality,
+      output_format: normalizeOutputFormat(parsed.format),
+      response_mode: parsed.responseMode
+    },
+    parsed
+  );
   if (parsed.promptFile) {
     return { ...body, prompt_file: parsed.promptFile };
   }
   return { ...body, prompt: parsed.promptParts.join(' ') };
+}
+
+function addUpstreamStrategyFields(body, parsed) {
+  return {
+    ...body,
+    ...(parsed.imageBackend ? { image_backend: parsed.imageBackend } : {}),
+    ...(parsed.streamingStrategy ? { streaming_strategy: parsed.streamingStrategy } : {}),
+    ...(parsed.partialImages
+      ? { partial_images: readConfiguredPositiveInteger(parsed.partialImages, '--partial-images', 2) }
+      : {})
+  };
 }
 
 function hasPromptSource(parsed) {
@@ -218,13 +242,13 @@ function enrichImageUrls(result) {
 }
 
 function dryRunEndpoint(jobMode) {
-  if (jobMode === 'always') return `${baseUrl}/api/agent/jobs/images/generate`;
-  if (jobMode === 'never') return `${baseUrl}/api/agent/images/generate`;
-  return `${baseUrl}/api/agent/images/generate 或 ${baseUrl}/api/agent/jobs/images/generate`;
+  if (jobMode === 'always') return `${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`;
+  if (jobMode === 'never') return `${baseUrl}${AGENT_ENDPOINTS.generate}`;
+  return `${baseUrl}${AGENT_ENDPOINTS.generate} 或 ${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`;
 }
 
 async function readCapabilities() {
-  const { response, result, text } = await fetchJson(`${baseUrl}/api/agent/capabilities`, {
+  const { response, result, text } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.capabilities}`, {
     headers: authHeaders(),
     timeoutMs
   });
@@ -239,7 +263,7 @@ async function runGenerateRequest() {
   let lastRetryAfter = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const { response, result } = await fetchJson(`${baseUrl}/api/agent/images/generate`, {
+    const { response, result } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.generate}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -271,7 +295,7 @@ async function runGenerateJob() {
   let lastRetryAfter = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const { response, result } = await fetchJson(`${baseUrl}/api/agent/jobs/images/generate`, {
+    const { response, result } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -303,7 +327,7 @@ async function pollJobResult(job) {
   if (!job || typeof job.id !== 'string') {
     throw new Error('创建 job 的响应缺少 job.id。');
   }
-  const resultUrl = resolveSameOriginUrl(baseUrl, job.result_url || `/api/agent/jobs/${job.id}/result`, 'job.result_url');
+  const resultUrl = resolveSameOriginUrl(baseUrl, job.result_url || buildAgentJobResultPath(job.id), 'job.result_url');
   const deadlineMs = Date.now() + timeoutMs;
   let lastResult;
   let lastRetryAfter = job.retry_after_seconds || 1;
@@ -328,7 +352,7 @@ async function pollJobResult(job) {
 
 async function runContractCheck(capabilitiesValue) {
   const checks = [];
-  const { response, result } = await fetchJson(`${baseUrl}/api/agent/images/generate`, {
+  const { response, result } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.generate}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -338,14 +362,14 @@ async function runContractCheck(capabilitiesValue) {
     timeoutMs
   });
   if (response.status === 400 && result?.error?.code === 'idempotency_key_required') {
-    checks.push({ endpoint: '/api/agent/images/generate', status: response.status, error_code: result.error.code });
+    checks.push({ endpoint: AGENT_ENDPOINTS.generate, status: response.status, error_code: result.error.code });
   } else {
     console.error(JSON.stringify({ ok: false, billable: false, status: response.status, result }, null, 2));
     process.exit(1);
   }
 
   if (supportsJobPolling(capabilitiesValue)) {
-    const jobCheck = await fetchJson(`${baseUrl}/api/agent/jobs/images/generate`, {
+    const jobCheck = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -361,7 +385,7 @@ async function runContractCheck(capabilitiesValue) {
       process.exit(1);
     }
     checks.push({
-      endpoint: '/api/agent/jobs/images/generate',
+      endpoint: AGENT_ENDPOINTS.create_generate_job,
       status: jobCheck.response.status,
       error_code: jobCheck.result.error.code
     });
@@ -429,6 +453,8 @@ function readMaxImageEdge(size) {
 function printUsage() {
   console.error('用法：generate-image.mjs [options] <prompt>');
   console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
-  console.error('常用参数：--model --size --quality --n --format --response-mode --timeout-ms --prompt-file --idempotency-key --job --no-job');
+  console.error(
+    '常用参数：--model --size --quality --n --format --response-mode --image-backend --streaming-strategy --partial-images --timeout-ms --prompt-file --idempotency-key --job --no-job'
+  );
   console.error('契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check');
 }

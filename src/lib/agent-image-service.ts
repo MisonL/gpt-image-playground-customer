@@ -24,6 +24,7 @@ import {
     type AgentStateStore
 } from './agent-state-store';
 import { appLogger } from './app-logger';
+import { collectOpenAiImagesFromStream } from './image-stream-collector';
 import fs from 'fs/promises';
 import {
     InvalidOpenAiImagesResponseError,
@@ -44,7 +45,12 @@ import {
     type ValidOutputFormat
 } from './image-request-utils';
 import { getServerChannelState } from './server-channel-router';
-import { readAffinityKey } from './server-runtime';
+import { readAffinityKey, readBooleanEnv } from './server-runtime';
+import {
+    createResponsesImageStream,
+    generateImageWithResponsesBackend,
+    type ResponsesImageGenerateInput
+} from './responses-image-backend';
 import crypto from 'crypto';
 import OpenAI from 'openai';
 import type { AgentErrorDiagnostics } from './api-error-response';
@@ -133,20 +139,7 @@ export async function executeAgentGenerate(options: {
     const credentialContext = createOpenAiClient(options.headers);
     const startedAtMs = Date.now();
     try {
-        const result = await credentialContext.openai.images.generate({
-            model: options.request.model,
-            prompt: options.request.prompt,
-            n: options.request.n,
-            size: options.request.size as OpenAI.Images.ImageGenerateParams['size'],
-            quality: options.request.quality as OpenAI.Images.ImageGenerateParams['quality'],
-            output_format: options.request.output_format,
-            background: options.request.background as OpenAI.Images.ImageGenerateParams['background'],
-            moderation: options.request.moderation as OpenAI.Images.ImageGenerateParams['moderation'],
-            ...(options.request.output_compression !== undefined
-                ? { output_compression: options.request.output_compression }
-                : {}),
-            stream: false
-        });
+        const result = await executeAgentGenerateUpstream(options.request, credentialContext.openai);
         return await persistOpenAiImages({
             result,
             mode: 'generate',
@@ -162,6 +155,90 @@ export async function executeAgentGenerate(options: {
         reportServerCredentialFailure(credentialContext.selectedCredential, error);
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs));
     }
+}
+
+async function executeAgentGenerateUpstream(
+    request: AgentGenerateRequest,
+    openai: OpenAI
+): Promise<OpenAI.Images.ImagesResponse> {
+    if (request.image_backend === 'responses-image-generation') {
+        return executeAgentResponsesGenerate(request, openai);
+    }
+    const baseParams = {
+        model: request.model,
+        prompt: request.prompt,
+        n: request.n,
+        size: request.size as OpenAI.Images.ImageGenerateParams['size'],
+        quality: request.quality as OpenAI.Images.ImageGenerateParams['quality'],
+        output_format: request.output_format,
+        background: request.background as OpenAI.Images.ImageGenerateParams['background'],
+        moderation: request.moderation as OpenAI.Images.ImageGenerateParams['moderation'],
+        ...(request.output_compression !== undefined ? { output_compression: request.output_compression } : {})
+    };
+    if (!shouldUseAgentUpstreamStream(request)) {
+        return openai.images.generate({ ...baseParams, stream: false });
+    }
+    const stream = await openai.images.generate({
+        ...baseParams,
+        stream: true,
+        partial_images: request.partial_images
+    });
+    return collectOpenAiImagesFromStream(stream);
+}
+
+async function executeAgentResponsesGenerate(
+    request: AgentGenerateRequest,
+    openai: OpenAI
+): Promise<OpenAI.Images.ImagesResponse> {
+    if (!readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND')) {
+        throw new RequestValidationError(
+            'Responses API 图片后端仍是实验能力，必须设置 ENABLE_RESPONSES_IMAGE_BACKEND=true 后才能使用。',
+            400
+        );
+    }
+    if (request.n !== 1) {
+        throw new RequestValidationError('Responses API 图片后端当前只支持单张生成。', 400);
+    }
+    const input: ResponsesImageGenerateInput = {
+        responses: openai.responses,
+        prompt: request.prompt,
+        responsesModel: readAgentResponsesApiModel(),
+        imageModel: request.model,
+        size: readAgentResponsesImageSize(request.size),
+        quality: request.quality,
+        outputFormat: request.output_format,
+        background: request.background,
+        moderation: request.moderation,
+        ...(request.output_compression !== undefined ? { outputCompression: request.output_compression } : {})
+    };
+    if (!shouldUseAgentUpstreamStream(request)) {
+        return generateImageWithResponsesBackend(input);
+    }
+    return collectOpenAiImagesFromStream(
+        await createResponsesImageStream({ ...input, partialImagesCount: request.partial_images })
+    );
+}
+
+function shouldUseAgentUpstreamStream(request: AgentGenerateRequest): boolean {
+    return request.streaming_strategy !== 'off' && request.streaming_strategy !== 'auto';
+}
+
+function readAgentResponsesApiModel(): string {
+    const model = process.env.OPENAI_RESPONSES_API_MODEL?.trim();
+    if (!model) {
+        throw new RequestValidationError(
+            'Responses API 图片后端必须配置 OPENAI_RESPONSES_API_MODEL，作为 /responses 顶层模型。',
+            500
+        );
+    }
+    return model;
+}
+
+function readAgentResponsesImageSize(size: string): ResponsesImageGenerateInput['size'] {
+    if (size === 'auto' || size === '1024x1024' || size === '1024x1536' || size === '1536x1024') {
+        return size;
+    }
+    throw new RequestValidationError('Responses API 图片后端当前只支持 auto、1024x1024、1024x1536 或 1536x1024 尺寸。', 400);
 }
 
 export async function executeAgentEdit(options: {

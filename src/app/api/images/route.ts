@@ -11,6 +11,11 @@ import {
     validateApiBaseUrl
 } from '@/lib/image-request-utils';
 import {
+    readImageGenerationBackend,
+    readImageStreamingStrategy,
+    resolveImageStreamEnabled
+} from '@/lib/image-upstream-strategy';
+import {
     InvalidOpenAiImagesResponseError,
     MissingOpenAiImageDataError,
     persistedImageToLegacyResponse,
@@ -23,7 +28,6 @@ import {
     describeInvalidImagesResponse,
     ensureOutputDirExists,
     readClientRequestId,
-    readImageBackend,
     reportServerCredentialFailure,
     resolveRequestActualCostSafely,
     type AccessCookie,
@@ -128,10 +132,23 @@ export async function POST(request: NextRequest) {
             requestLogContext
         );
 
-        const streamEnabled = formData.get('stream') === 'true';
+        const requestedStream = formData.get('stream') === 'true';
         const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
-        const imageBackend = readImageBackend(formData);
-        assertResponsesImageBackendAllowed({ imageBackend, mode, streamEnabled });
+        const imageBackend = readImageGenerationBackend(formData, process.env);
+        const streamingStrategy = readImageStreamingStrategy(formData, process.env);
+        const streamEnabled = resolveImageStreamEnabled({
+            imageBackend,
+            requestedStream,
+            streamingStrategy
+        });
+        assertResponsesImageBackendAllowed({ imageBackend, mode });
+        appLogger.info('图片上游兼容策略。', {
+            ...requestLogContext,
+            imageBackend,
+            streamingStrategy,
+            requestedStream,
+            streamEnabled
+        });
 
         const modeResult =
             mode === 'generate'

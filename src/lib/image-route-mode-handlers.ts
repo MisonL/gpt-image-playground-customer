@@ -21,7 +21,11 @@ import {
     type ValidOutputFormat
 } from './image-request-utils';
 import { createImageStreamResponse } from './image-stream-service';
-import { generateImageWithResponsesBackend, type ResponsesImageGenerateInput } from './responses-image-backend';
+import {
+    createResponsesImageStream,
+    generateImageWithResponsesBackend,
+    type ResponsesImageGenerateInput
+} from './responses-image-backend';
 import {
     appendAccessCookie,
     reportServerCredentialFailure,
@@ -156,6 +160,43 @@ async function createResponsesImageResult(
     };
 }
 
+async function createResponsesImageStreamResponse(
+    input: CommonModeInput,
+    options: GenerateOptions
+): Promise<Response> {
+    if (options.n !== 1) {
+        throw new RequestValidationError('Responses API 图片后端当前只支持单张生成。', 400);
+    }
+    const stream = await createResponsesImageStream({
+        responses: input.openai.responses,
+        prompt: input.prompt,
+        responsesModel: readResponsesApiModel(input.formData),
+        imageModel: input.model,
+        size: readResponsesImageSize(options.size),
+        quality: options.quality,
+        outputFormat: options.outputFormat,
+        background: options.background,
+        moderation: options.moderation,
+        partialImagesCount: input.partialImagesCount,
+        ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {})
+    });
+    const response = createImageStreamResponse({
+        stream,
+        modeLabel: '生成',
+        outputFormat: options.outputFormat,
+        storageMode: input.storageMode,
+        apiBaseUrl: input.apiBaseUrl,
+        apiKey: input.apiKey,
+        model: input.model,
+        startedAtMs: input.startedAtMs,
+        clientRequestId: input.clientRequestId,
+        requestLogContext: input.requestLogContext,
+        resolveActualCost: resolveRequestActualCostSafely,
+        onError: (error) => reportServerCredentialFailure(input.selectedCredential, error)
+    });
+    return appendAccessCookie(response, input.accessCookie);
+}
+
 async function createGenerateStreamResponse(input: CommonModeInput, options: GenerateOptions): Promise<Response> {
     const streamParams = {
         ...options.baseParams,
@@ -184,7 +225,10 @@ export async function handleGenerateImageMode(
     input: CommonModeInput & { imageBackend: ImageBackend }
 ): Promise<ImageModeResult> {
     const options = readGenerateOptions(input);
-    if (input.imageBackend === 'responses') {
+    if (input.imageBackend === 'responses-image-generation') {
+        if (input.streamEnabled) {
+            return createResponsesImageStreamResponse(input, options);
+        }
         return createResponsesImageResult(input, options);
     }
     if (!input.streamEnabled) {

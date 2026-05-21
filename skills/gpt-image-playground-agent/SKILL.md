@@ -13,7 +13,7 @@ description: 当用户需要通过 API 调用已部署的 GPT Image Playground �
 2. 用候选基础地址请求 `GET /api/agent/capabilities`。如果默认地址不可达、404、不是 JSON 或不是 Agent capabilities 响应，向用户询问实际部署地址、端口、域名和是否需要鉴权。
 3. 读取 capabilities 中的认证方式、模型、模型级限制、Agent 流式边界、状态后端和端点路径；不要硬编码假设部署方式。
 4. 为每个业务操作生成稳定的 `Idempotency-Key`。同一操作重试时复用原 key；不同操作不要复用。
-5. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点是非流式端点，当前固定以 `stream: false` 调上游。
+5. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点对外始终返回最终 `AgentImageResponse` JSON；如 capabilities 声明 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`streaming_strategy`、`partial_images` 显式启用内部上游 SSE 消费。
 6. 图片编辑使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段使用 `image_0..image_9`。该 Agent 端点同样是非流式端点。
 7. 默认使用 `response_mode: "path"`，只在用户明确需要图片内联数据时使用 `base64` 或 `both`。
 8. 不要把页面端 `POST /api/images` 当成 Agent 默认路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明。
@@ -39,7 +39,7 @@ Authorization: Bearer <token>
 - 不要把 `error.message` 当成唯一判断依据；稳定分支以 `error.code` 和 HTTP 状态为准。
 - 不要在没有 `Idempotency-Key` 的情况下调用生成或编辑接口。
 - 不要对同一个已进入终态 `failed` 的 `Idempotency-Key` 继续重试。终态失败回放会返回 `retryable=false`；需要重新尝试时，先确认失败原因，再创建新的业务操作和新的 `Idempotency-Key`。
-- 不要把 `agent_streaming.page_sse.supported=true` 解读为 `/api/agent/images/generate` 支持流式；Agent generate/edit 当前以 `non_streaming_only` 声明。
+- 不要把 `agent_streaming.page_sse.supported=true` 解读为 `/api/agent/images/generate` 会对客户端返回 SSE；Agent generate/edit 对外仍是最终 JSON。`agent_streaming.upstream_sse` 仅表示服务端内部可消费上游 SSE 并保存最终 artifact。
 - 不要调用 job endpoints，除非 capabilities 明确返回 `agent_jobs.supported=true` 且 `mode=job_polling`。
 - 不要把一次高分辨率、高质量长耗时失败归纳为全局不可用。优先查看 `error.diagnostics.upstream_status`、`transport_error`、`selected_channel_id`、`channel_cooldown_scope` 和 `retry_after_seconds`。
 
@@ -81,6 +81,19 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   "a product photo of a ceramic mug"
 ```
 
+启用 Agent 内部上游 SSE 时，必须显式传策略字段；脚本仍只输出最终 JSON：
+
+```bash
+node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
+  --allow-billable \
+  --image-backend images-api \
+  --streaming-strategy newapi-keepalive-sse \
+  --partial-images 2 \
+  --size 4096x4096 \
+  --quality high \
+  "a product photo of a ceramic mug"
+```
+
 真实生图必须显式开启：
 
 ```bash
@@ -91,7 +104,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   "a product photo of a ceramic mug"
 ```
 
-生成脚本会在 capabilities 声明 `agent_jobs.supported=true` 后，对 `quality=high` 且最大边不小于 3072 的请求自动使用 job polling。也可以用 `--job` 强制 job polling，或用 `--no-job` 强制同步 Agent generate。
+生成脚本会在 capabilities 声明 `agent_jobs.supported=true` 后，对 `quality=high` 且最大边不小于 3072 的请求自动使用 job polling。也可以用 `--job` 强制 job polling，或用 `--no-job` 强制同步 Agent generate。上游流式字段支持 `--image-backend`、`--streaming-strategy`、`--partial-images`；默认不发送这些字段，保持服务端默认非流式基线。
 
 编辑脚本支持 `--model`、`--size`、`--quality`、`--response-mode`、`--timeout-ms`、`--idempotency-key`、`--dry-run` 和 `--allow-billable`。
 

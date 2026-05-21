@@ -1,4 +1,5 @@
 import { MAX_IMAGE_COUNT, MAX_PROMPT_LENGTH } from './image-request-utils';
+import { AGENT_ENDPOINTS } from './agent-api-paths.mjs';
 import {
     AGENT_BACKGROUNDS,
     AGENT_JOB_STATES,
@@ -62,7 +63,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
         },
         servers: [{ url: readAgentPublicBaseUrl(env) }],
         paths: {
-            '/api/agent/capabilities': {
+            [AGENT_ENDPOINTS.capabilities]: {
                 get: {
                     summary: '获取机器可读的 Agent API 能力信息',
                     responses: {
@@ -70,7 +71,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
-            '/api/agent/openapi.json': {
+            [AGENT_ENDPOINTS.openapi]: {
                 get: {
                     summary: '获取 Agent API 的 OpenAPI 文档',
                     responses: {
@@ -78,7 +79,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
-            '/api/agent/images/generate': {
+            [AGENT_ENDPOINTS.generate]: {
                 post: {
                     summary: '为 Agent 生成图片',
                     security: agentSecurity,
@@ -102,7 +103,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
-            '/api/agent/images/edit': {
+            [AGENT_ENDPOINTS.edit]: {
                 post: {
                     summary: '为 Agent 编辑图片',
                     security: agentSecurity,
@@ -130,7 +131,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
-            '/api/agent/jobs/images/generate': {
+            [AGENT_ENDPOINTS.create_generate_job]: {
                 post: {
                     summary: '创建 Agent 图片生成 job',
                     security: agentSecurity,
@@ -155,7 +156,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
-            '/api/agent/jobs/{id}': {
+            [AGENT_ENDPOINTS.job]: {
                 get: {
                     summary: '获取 Agent job 状态',
                     security: agentSecurity,
@@ -169,7 +170,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
-            '/api/agent/jobs/{id}/result': {
+            [AGENT_ENDPOINTS.job_result]: {
                 get: {
                     summary: '获取 Agent job 结果',
                     security: agentSecurity,
@@ -193,7 +194,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
-            '/api/agent/artifacts/{id}': {
+            [AGENT_ENDPOINTS.artifact_metadata]: {
                 get: {
                     summary: '获取产物元数据',
                     security: agentSecurity,
@@ -215,7 +216,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
-            '/api/agent/artifacts/{id}/content': {
+            [AGENT_ENDPOINTS.artifact_content]: {
                 get: {
                     summary: '下载产物内容',
                     security: agentSecurity,
@@ -354,10 +355,25 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 AgentStreamingCapabilities: {
                     type: 'object',
-                    required: ['generate', 'edit', 'page_sse'],
+                    required: ['generate', 'edit', 'upstream_sse', 'page_sse'],
                     properties: {
                         generate: { $ref: '#/components/schemas/AgentEndpointStreamingCapability' },
                         edit: { $ref: '#/components/schemas/AgentEndpointStreamingCapability' },
+                        upstream_sse: {
+                            type: 'object',
+                            required: ['supported', 'mode', 'endpoint', 'request_fields', 'final_response_contract'],
+                            properties: {
+                                supported: { type: 'boolean', const: true },
+                                mode: { type: 'string', enum: ['internal_upstream_sse'] },
+                                endpoint: { type: 'string' },
+                                request_fields: {
+                                    type: 'array',
+                                    items: { type: 'string' },
+                                    const: ['image_backend', 'streaming_strategy', 'partial_images']
+                                },
+                                final_response_contract: { type: 'string', enum: ['AgentImageResponse'] }
+                            }
+                        },
                         page_sse: {
                             type: 'object',
                             required: ['supported', 'mode', 'endpoint', 'contract'],
@@ -419,7 +435,25 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         output_compression: { type: 'integer', minimum: 0, maximum: 100 },
                         background: { type: 'string', enum: AGENT_BACKGROUNDS },
                         moderation: { type: 'string', enum: AGENT_MODERATIONS },
-                        response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES, default: 'path' }
+                        response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES, default: 'path' },
+                        image_backend: {
+                            type: 'string',
+                            enum: ['images-api', 'responses-image-generation', 'images', 'responses'],
+                            default: 'images-api'
+                        },
+                        streaming_strategy: {
+                            type: 'string',
+                            enum: [
+                                'off',
+                                'auto',
+                                'openai-sse',
+                                'newapi-keepalive-sse',
+                                'responses-sse',
+                                'force-sse'
+                            ],
+                            default: 'off'
+                        },
+                        partial_images: { type: 'integer', minimum: 1, maximum: 3, default: 2 }
                     }
                 },
                 EditRequest: {

@@ -113,6 +113,78 @@ describe('Agent route integration', () => {
         await upstream.close();
     });
 
+    it('consumes upstream image SSE internally while keeping the Agent generate response non-streaming', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream((body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_generation.partial_image',
+                    data: { type: 'image_generation.partial_image', b64_json: 'agent-partial-base64' }
+                },
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-upstream-sse-key', {
+                    prompt: 'agent upstream sse',
+                    response_mode: 'base64',
+                    streaming_strategy: 'newapi-keepalive-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            const body = await response.json();
+            assert.equal(body.cached, false);
+            assert.equal(body.images[0].b64_json, PNG_BASE64);
+
+            const upstreamJson = JSON.parse(upstreamBody);
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(upstreamJson.partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails Agent upstream SSE requests when partial images arrive without a final image', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        const upstream = await startStreamingImageUpstream(() => [
+            {
+                event: 'image_generation.partial_image',
+                data: { type: 'image_generation.partial_image', b64_json: 'agent-partial-only' }
+            }
+        ]);
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-upstream-sse-partial-only-key', {
+                    prompt: 'agent upstream sse partial only',
+                    streaming_strategy: 'newapi-keepalive-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 502);
+            const body = await response.json();
+            assert.equal(body.error.code, 'upstream_unavailable');
+            assert.match(body.error.message, /最终图片 b64_json/);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('generates and replays through the memory state backend without creating SQLite state', async () => {
         process.env.AGENT_STATE_BACKEND = 'memory';
         delete process.env.AGENT_SQLITE_PATH;
@@ -1220,6 +1292,38 @@ async function startImageUpstream(handler: () => unknown | Promise<unknown>): Pr
     const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     return {
         baseUrl,
+        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    };
+}
+
+async function startStreamingImageUpstream(
+    handler: (body: string) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const events = await handler(Buffer.concat(chunks).toString('utf8'));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        for (const event of events) {
+            if (event.event) {
+                response.write(`event: ${event.event}\n`);
+            }
+            response.write(`data: ${JSON.stringify(event.data)}\n\n`);
+        }
+        response.write('data: [DONE]\n\n');
+        response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
         close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
     };
 }

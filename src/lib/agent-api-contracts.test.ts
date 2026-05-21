@@ -7,6 +7,7 @@ import {
     readAgentRequestTtlSeconds,
     validateAgentGenerateRequest
 } from './agent-api-contracts';
+import { AGENT_ENDPOINTS, AGENT_JOB_ENDPOINTS } from './agent-api-paths.mjs';
 import { buildAgentOpenApiDocument } from './agent-openapi';
 import { RequestValidationError } from './image-request-utils';
 import assert from 'node:assert/strict';
@@ -23,8 +24,36 @@ describe('validateAgentGenerateRequest', () => {
             output_format: 'png',
             background: 'auto',
             moderation: 'auto',
-            response_mode: 'path'
+            response_mode: 'path',
+            image_backend: 'images-api',
+            streaming_strategy: 'off',
+            partial_images: 2
         });
+    });
+
+    it('accepts explicit Agent upstream streaming strategy fields', () => {
+        assert.deepEqual(
+            validateAgentGenerateRequest({
+                prompt: 'draw a stable streaming image',
+                image_backend: 'images',
+                streaming_strategy: 'newapi-keepalive-sse',
+                partial_images: 3
+            }),
+            {
+                model: 'gpt-image-2',
+                prompt: 'draw a stable streaming image',
+                n: 1,
+                size: '1024x1024',
+                quality: 'high',
+                output_format: 'png',
+                background: 'auto',
+                moderation: 'auto',
+                response_mode: 'path',
+                image_backend: 'images-api',
+                streaming_strategy: 'newapi-keepalive-sse',
+                partial_images: 3
+            }
+        );
     });
 
     it('returns field-level validation errors for agent-correctable inputs', () => {
@@ -44,6 +73,24 @@ describe('validateAgentGenerateRequest', () => {
                 assert.match(details.fields.n, /1 到 10/);
                 assert.match(details.fields.output_format, /png/);
                 assert.match(details.fields.response_mode, /path/);
+                return true;
+            }
+        );
+    });
+
+    it('rejects incompatible Agent image backend and streaming strategy combinations', () => {
+        assert.throws(
+            () =>
+                validateAgentGenerateRequest({
+                    prompt: 'bad strategy',
+                    image_backend: 'images-api',
+                    streaming_strategy: 'responses-sse'
+                }),
+            (error) => {
+                assert.ok(error instanceof RequestValidationError);
+                assert.equal(error.status, 422);
+                const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                assert.match(details.fields.streaming_strategy, /Images API/);
                 return true;
             }
         );
@@ -125,11 +172,19 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.model_limits['gpt-image-2'].max_pixels, 8294400);
         assert.equal(capabilities.agent_streaming.generate.supported, false);
         assert.equal(capabilities.agent_streaming.generate.mode, 'non_streaming_only');
+        assert.equal(capabilities.agent_streaming.upstream_sse.supported, true);
+        assert.equal(capabilities.agent_streaming.upstream_sse.mode, 'internal_upstream_sse');
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.request_fields, [
+            'image_backend',
+            'streaming_strategy',
+            'partial_images'
+        ]);
+        assert.equal(capabilities.agent_streaming.upstream_sse.final_response_contract, 'AgentImageResponse');
         assert.equal(capabilities.agent_streaming.page_sse.endpoint, '/api/images');
-        assert.equal(capabilities.endpoints.create_generate_job, '/api/agent/jobs/images/generate');
+        assert.equal(capabilities.endpoints.create_generate_job, AGENT_ENDPOINTS.create_generate_job);
         assert.equal(capabilities.agent_jobs.supported, true);
         assert.equal(capabilities.agent_jobs.mode, 'job_polling');
-        assert.equal(capabilities.agent_jobs.endpoints.create_generate_job, '/api/agent/jobs/images/generate');
+        assert.equal(capabilities.agent_jobs.endpoints.create_generate_job, AGENT_JOB_ENDPOINTS.create_generate_job);
         assert.deepEqual(capabilities.agent_jobs.states, ['queued', 'running', 'succeeded', 'failed', 'expired']);
         assert.match(capabilities.agent_jobs.current_guidance, /poll/i);
     });
@@ -175,11 +230,11 @@ describe('buildAgentCapabilities', () => {
         const document = buildAgentOpenApiDocument({ AGENT_PUBLIC_BASE_URL: 'https://images.example.test' });
         assert.equal(document.openapi, '3.1.0');
         assert.deepEqual(document.servers, [{ url: 'https://images.example.test' }]);
-        assert.ok('/api/agent/openapi.json' in document.paths);
-        assert.ok('/api/agent/images/generate' in document.paths);
-        assert.ok('/api/agent/jobs/images/generate' in document.paths);
-        assert.ok('/api/agent/jobs/{id}' in document.paths);
-        assert.ok('/api/agent/jobs/{id}/result' in document.paths);
+        assert.ok(AGENT_ENDPOINTS.openapi in document.paths);
+        assert.ok(AGENT_ENDPOINTS.generate in document.paths);
+        assert.ok(AGENT_ENDPOINTS.create_generate_job in document.paths);
+        assert.ok(AGENT_ENDPOINTS.job in document.paths);
+        assert.ok(AGENT_ENDPOINTS.job_result in document.paths);
         assert.ok('AgentCapabilities' in document.components.schemas);
         assert.ok('AgentImageResponse' in document.components.schemas);
         assert.ok('AgentJobStatusResponse' in document.components.schemas);
@@ -190,16 +245,20 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentStreamingCapabilities' in document.components.schemas);
         assert.ok('AgentJobCapabilities' in document.components.schemas);
         assert.ok('AgentErrorDiagnostics' in document.components.schemas);
-        assert.ok(document.paths['/api/agent/images/generate'].post.responses['200']);
-        assert.ok(document.paths['/api/agent/images/generate'].post.responses['403']);
-        assert.ok(document.paths['/api/agent/images/generate'].post.responses['429']);
-        assert.ok(document.paths['/api/agent/images/generate'].post.responses['422']);
-        assert.ok(document.paths['/api/agent/jobs/images/generate'].post.responses['202']);
-        assert.ok(document.paths['/api/agent/jobs/{id}/result'].get.responses['200']);
-        assert.ok(document.paths['/api/agent/jobs/{id}/result'].get.responses['409']);
-        assert.ok(document.paths['/api/agent/jobs/{id}/result'].get.responses['422']);
-        assert.ok(document.paths['/api/agent/jobs/{id}/result'].get.responses['429']);
-        assert.ok(document.paths['/api/agent/jobs/{id}/result'].get.responses['502']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['200']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['403']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['429']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['422']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.create_generate_job].post.responses['202']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['200']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['409']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['422']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['429']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['502']);
+        const generateProperties = document.components.schemas.GenerateRequest.properties;
+        assert.ok('image_backend' in generateProperties);
+        assert.ok('streaming_strategy' in generateProperties);
+        assert.ok('partial_images' in generateProperties);
     });
 
     it('describes public capabilities without server-local SQLite paths', () => {

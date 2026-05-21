@@ -1,5 +1,9 @@
 import crypto from 'crypto';
 import path from 'path';
+import {
+    CHINESE_POSITIVE_INTEGER_MESSAGES,
+    readPositiveIntegerFromEnv
+} from './positive-integer-config.mjs';
 import type { ValidOutputFormat } from './image-request-utils';
 
 export type FilenameClock = () => number;
@@ -149,14 +153,7 @@ export function readPositiveIntegerEnv(
     fieldName: string,
     fallback: number
 ): number {
-    const value = env[fieldName]?.trim();
-    if (!value) return fallback;
-    if (!/^\d+$/.test(value)) {
-        throw new Error(`${fieldName} 必须是正整数。`);
-    }
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < 1) {
-        throw new Error(`${fieldName} 必须是正整数。`);
-    }
-    return parsed;
+    return readPositiveIntegerFromEnv(env, fieldName, fallback, {
+        messages: CHINESE_POSITIVE_INTEGER_MESSAGES
+    });
 }

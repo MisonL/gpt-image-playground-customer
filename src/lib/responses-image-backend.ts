@@ -8,6 +8,7 @@ type ResponsesCreateClient = {
         output?: unknown[];
         usage?: unknown;
     }>;
+    create(params: OpenAI.Responses.ResponseCreateParamsStreaming): Promise<AsyncIterable<unknown>>;
 };
 
 export type ResponsesImageGenerateInput = {
@@ -21,6 +22,10 @@ export type ResponsesImageGenerateInput = {
     background: 'transparent' | 'opaque' | 'auto';
     moderation: 'auto' | 'low';
     outputCompression?: number;
+};
+
+export type ResponsesImageStreamInput = ResponsesImageGenerateInput & {
+    partialImagesCount: 1 | 2 | 3;
 };
 
 function extractCompletedImageResults(output: unknown[] | undefined): string[] {
@@ -40,10 +45,11 @@ function extractCompletedImageResults(output: unknown[] | undefined): string[] {
     });
 }
 
-export async function generateImageWithResponsesBackend(
-    input: ResponsesImageGenerateInput
-): Promise<OpenAI.Images.ImagesResponse> {
-    const imageTool: OpenAI.Responses.Tool = {
+function buildResponsesImageTool(
+    input: ResponsesImageGenerateInput,
+    partialImagesCount?: 1 | 2 | 3
+): OpenAI.Responses.Tool {
+    return {
         type: 'image_generation',
         action: 'generate',
         model: input.imageModel,
@@ -52,14 +58,20 @@ export async function generateImageWithResponsesBackend(
         output_format: input.outputFormat,
         background: input.background,
         moderation: input.moderation,
-        ...(input.outputCompression !== undefined ? { output_compression: input.outputCompression } : {})
+        ...(input.outputCompression !== undefined ? { output_compression: input.outputCompression } : {}),
+        ...(partialImagesCount !== undefined ? { partial_images: partialImagesCount } : {})
     };
+}
+
+export async function generateImageWithResponsesBackend(
+    input: ResponsesImageGenerateInput
+): Promise<OpenAI.Images.ImagesResponse> {
     const response = await input.responses.create({
         model: input.responsesModel,
         input: input.prompt,
         stream: false,
         tool_choice: { type: 'image_generation' },
-        tools: [imageTool]
+        tools: [buildResponsesImageTool(input)]
     });
     const imageResults = extractCompletedImageResults(response.output);
 
@@ -72,4 +84,14 @@ export async function generateImageWithResponsesBackend(
         data: imageResults.map((b64Json) => ({ b64_json: b64Json })),
         ...(response.usage ? { usage: response.usage as ImageUsage } : {})
     };
+}
+
+export async function createResponsesImageStream(input: ResponsesImageStreamInput): Promise<AsyncIterable<unknown>> {
+    return input.responses.create({
+        model: input.responsesModel,
+        input: input.prompt,
+        stream: true,
+        tool_choice: { type: 'image_generation' },
+        tools: [buildResponsesImageTool(input, input.partialImagesCount)]
+    });
 }

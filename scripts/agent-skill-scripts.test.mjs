@@ -76,6 +76,25 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
+    it('includes explicit upstream streaming options in generate dry-run requests', () => {
+        const result = runSkillScript('generate-image.mjs', [
+            '--image-backend',
+            'responses',
+            '--streaming-strategy',
+            'responses-sse',
+            '--partial-images',
+            '3',
+            'prompt'
+        ]);
+
+        assert.equal(result.status, 0);
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.request.image_backend, 'responses');
+        assert.equal(body.request.streaming_strategy, 'responses-sse');
+        assert.equal(body.request.partial_images, 3);
+        assert.equal(result.stderr.trim(), '');
+    });
+
     it('shows edit help without validating unrelated env values', () => {
         const result = runSkillScript('edit-image.mjs', ['--help'], {
             GPT_IMAGE_AGENT_MAX_ATTEMPTS: 'abc'

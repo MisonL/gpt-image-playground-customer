@@ -5,6 +5,7 @@ type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
 
 export type ImageStreamProviderDialect =
     | 'official_image_event'
+    | 'responses_image_event'
     | 'otokapi_image_event'
     | 'sdk_parsed_fallback'
     | 'unknown_ignored_event';
@@ -30,13 +31,16 @@ export type ImageStreamEventNormalizationResult = {
 const PARTIAL_EVENT_TYPES = new Set([
     'image_generation.partial_image',
     'image_edit.partial_image',
-    'image.generation.chunk'
+    'image.generation.chunk',
+    'response.image_generation_call.partial_image'
 ]);
 
 const COMPLETED_EVENT_TYPES = new Set([
     'image_generation.completed',
     'image_edit.completed',
-    'image.generation.result'
+    'image.generation.result',
+    'response.output_item.done',
+    'response.completed'
 ]);
 
 const OFFICIAL_EVENT_TYPES = new Set([
@@ -44,6 +48,14 @@ const OFFICIAL_EVENT_TYPES = new Set([
     'image_edit.partial_image',
     'image_generation.completed',
     'image_edit.completed'
+]);
+
+const RESPONSES_EVENT_TYPES = new Set([
+    'response.image_generation_call.partial_image',
+    'response.output_item.done',
+    'response.completed',
+    'response.failed',
+    'error'
 ]);
 
 const OTOKAPI_EVENT_TYPES = new Set(['image.generation.chunk', 'image.generation.result']);
@@ -122,6 +134,32 @@ function readFirstNestedUsage(record: JsonRecord): ImageUsage | undefined {
     return undefined;
 }
 
+function readResponseUsage(record: JsonRecord): ImageUsage | undefined {
+    const response = asRecord(record.response);
+    return response ? readUsage(response) : undefined;
+}
+
+function readErrorMessage(record: JsonRecord): string | undefined {
+    const direct = readString(record, 'message', 'error_description', 'error');
+    if (direct) {
+        return direct;
+    }
+    const error = asRecord(record.error);
+    return error ? readString(error, 'message', 'code') : undefined;
+}
+
+function readResponsesFailureMessage(record: JsonRecord): string {
+    const response = asRecord(record.response);
+    const message = (response ? readErrorMessage(response) : undefined) || readErrorMessage(record);
+    return message || '上游未提供错误信息。';
+}
+
+function assertNotExplicitFailureEvent(record: JsonRecord, eventType: string | undefined) {
+    if (eventType === 'response.failed' || eventType === 'error') {
+        throw new Error(`Responses API 流式响应失败：${readResponsesFailureMessage(record)}`);
+    }
+}
+
 function readNestedCompletedItems(record: JsonRecord): JsonRecord[] {
     const items: JsonRecord[] = [];
     const visit = (current: JsonRecord) => {
@@ -134,8 +172,55 @@ function readNestedCompletedItems(record: JsonRecord): JsonRecord[] {
     return items;
 }
 
+function readOutputItems(record: JsonRecord): JsonRecord[] {
+    const output = record.output;
+    if (!Array.isArray(output)) {
+        return [];
+    }
+    return output.flatMap((item) => {
+        const itemRecord = asRecord(item);
+        return itemRecord ? [itemRecord] : [];
+    });
+}
+
+function readResponsesImageGenerationItems(record: JsonRecord): JsonRecord[] {
+    const items: JsonRecord[] = [];
+    const visit = (current: JsonRecord) => {
+        if (readString(current, 'type') === 'image_generation_call') {
+            items.push(current);
+        }
+
+        const item = asRecord(current.item);
+        if (item) {
+            visit(item);
+        }
+
+        const response = asRecord(current.response);
+        if (response) {
+            visit(response);
+        }
+
+        for (const outputItem of readOutputItems(current)) {
+            visit(outputItem);
+        }
+    };
+    visit(record);
+    return items;
+}
+
+function readResponsesImageBase64(record: JsonRecord): string | undefined {
+    if (readString(record, 'type') !== 'image_generation_call') {
+        return undefined;
+    }
+    const result = readString(record, 'result');
+    return extractBase64FromDataUrl(result) || result || readImageBase64(record);
+}
+
 function hasCompletedImagePayload(record: JsonRecord): boolean {
-    return readNestedCompletedItems(record).some((item) => Boolean(readImageBase64(item)));
+    return (
+        readNestedCompletedItems(record).some((item) => Boolean(readImageBase64(item))) ||
+        readResponsesImageGenerationItems(record).some((item) => Boolean(readResponsesImageBase64(item)))
+    );
 }
 
 function normalizePartialEvent(record: JsonRecord): NormalizedImageStreamEvent[] {
@@ -154,13 +239,18 @@ function normalizePartialEvent(record: JsonRecord): NormalizedImageStreamEvent[]
 }
 
 function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefined): NormalizedImageStreamEvent[] {
-    const usage = readUsage(record) || readFirstNestedUsage(record);
+    const usage = readUsage(record) || readResponseUsage(record) || readFirstNestedUsage(record);
     const rootB64 = readImageBase64(record);
     const dataItems = readNestedCompletedItems(record);
+    const responsesItems = readResponsesImageGenerationItems(record);
     const completed = [
         ...(rootB64 ? [rootB64] : []),
         ...dataItems.flatMap((item) => {
             const b64Json = readImageBase64(item);
+            return b64Json ? [b64Json] : [];
+        }),
+        ...responsesItems.flatMap((item) => {
+            const b64Json = readResponsesImageBase64(item);
             return b64Json ? [b64Json] : [];
         })
     ];
@@ -183,6 +273,9 @@ function classifyProviderDialect(
     if (eventType && OFFICIAL_EVENT_TYPES.has(eventType)) {
         return 'official_image_event';
     }
+    if (eventType && RESPONSES_EVENT_TYPES.has(eventType)) {
+        return 'responses_image_event';
+    }
     if (eventType && OTOKAPI_EVENT_TYPES.has(eventType)) {
         return 'otokapi_image_event';
     }
@@ -199,6 +292,7 @@ export function normalizeUpstreamImageStreamEventWithDiagnostics(event: unknown)
     }
 
     const eventType = readString(record, 'type');
+    assertNotExplicitFailureEvent(record, eventType);
     let events: NormalizedImageStreamEvent[];
     if (eventType && PARTIAL_EVENT_TYPES.has(eventType)) {
         events = normalizePartialEvent(record);

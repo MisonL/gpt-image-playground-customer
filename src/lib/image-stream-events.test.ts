@@ -104,6 +104,78 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         );
     });
 
+    it('maps Responses image partial events to stable partial image events', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.partial_image',
+                partial_image_b64: 'responses-partial-base64',
+                partial_image_index: 0
+            }),
+            [
+                {
+                    type: 'partial_image',
+                    b64Json: 'responses-partial-base64',
+                    partialImageIndex: 0
+                }
+            ]
+        );
+    });
+
+    it('maps Responses output item image results to completed events', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    result: 'responses-final-base64'
+                }
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-final-base64'
+                }
+            ]
+        );
+    });
+
+    it('maps Responses completed output image results and usage to completed events', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.completed',
+                response: {
+                    usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 },
+                    output: [
+                        {
+                            type: 'image_generation_call',
+                            result: 'responses-final-a'
+                        },
+                        {
+                            type: 'message',
+                            content: [{ type: 'output_text', text: 'done' }]
+                        },
+                        {
+                            type: 'image_generation_call',
+                            result: 'data:image/png;base64,responses-final-b'
+                        }
+                    ]
+                }
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-final-a',
+                    usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 }
+                },
+                {
+                    type: 'completed',
+                    b64Json: 'responses-final-b',
+                    usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 }
+                }
+            ]
+        );
+    });
+
     it('treats SDK-parsed OtokAPI root image data as a partial chunk when the SSE event name is dropped', () => {
         assert.deepEqual(
             normalizeUpstreamImageStreamEvent({
@@ -144,6 +216,38 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         );
     });
 
+    it('fails explicitly when a completed image event only has a remote URL', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'image_generation.completed',
+                    url: 'https://example.test/image.png'
+                }),
+            /b64_json/
+        );
+    });
+
+    it('fails explicitly when a Responses stream reports response.failed', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.failed',
+                    response: {
+                        error: {
+                            code: 'invalid_prompt',
+                            message: 'blocked by upstream policy'
+                        }
+                    }
+                }),
+            /blocked by upstream policy/
+        );
+    });
+
+    it('ignores SSE keepalive comments and non-object events', () => {
+        assert.deepEqual(normalizeUpstreamImageStreamEvent(':'), []);
+        assert.deepEqual(normalizeUpstreamImageStreamEvent(null), []);
+    });
+
     it('reports provider dialect diagnostics without treating unknown completed-like payloads as success', () => {
         assert.equal(
             normalizeUpstreamImageStreamEventWithDiagnostics({
@@ -158,6 +262,16 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                 data: [{ b64_json: 'otokapi-final' }]
             }).providerDialect,
             'otokapi_image_event'
+        );
+        assert.equal(
+            normalizeUpstreamImageStreamEventWithDiagnostics({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    result: 'responses-final'
+                }
+            }).providerDialect,
+            'responses_image_event'
         );
         assert.equal(
             normalizeUpstreamImageStreamEventWithDiagnostics({

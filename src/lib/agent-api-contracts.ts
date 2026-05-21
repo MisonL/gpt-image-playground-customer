@@ -8,6 +8,18 @@ import {
     type ValidOutputFormat
 } from './image-request-utils';
 import {
+    parseImageGenerationBackendValue,
+    parseImageStreamingStrategyValue,
+    resolveImageStreamEnabled,
+    type ImageGenerationBackend,
+    type ImageStreamingStrategy
+} from './image-upstream-strategy';
+import { AGENT_ENDPOINTS, AGENT_JOB_ENDPOINTS } from './agent-api-paths.mjs';
+import {
+    CHINESE_POSITIVE_INTEGER_MESSAGES,
+    readPositiveIntegerFromEnv
+} from './positive-integer-config.mjs';
+import {
     GPT_IMAGE_2_EDGE_MULTIPLE,
     GPT_IMAGE_2_MAX_ASPECT,
     GPT_IMAGE_2_MAX_EDGE,
@@ -52,6 +64,9 @@ export type AgentGenerateRequest = {
     background: AgentBackground;
     moderation: AgentModeration;
     response_mode: AgentResponseMode;
+    image_backend: ImageGenerationBackend;
+    streaming_strategy: ImageStreamingStrategy;
+    partial_images: 1 | 2 | 3;
 };
 
 export type AgentImageResponseItem = {
@@ -142,6 +157,13 @@ export type AgentCapabilities = {
             supported: false;
             mode: 'non_streaming_only';
             endpoint: string;
+        };
+        upstream_sse: {
+            supported: true;
+            mode: 'internal_upstream_sse';
+            endpoint: string;
+            request_fields: ['image_backend', 'streaming_strategy', 'partial_images'];
+            final_response_contract: 'AgentImageResponse';
         };
         page_sse: {
             supported: true;
@@ -275,6 +297,48 @@ function readResponseMode(body: Record<string, unknown>, fields: FieldErrors): A
     return value;
 }
 
+function readAgentImageBackend(body: Record<string, unknown>, fields: FieldErrors): ImageGenerationBackend {
+    const value = readStringField(body, 'image_backend', 'images-api');
+    if (!value) return 'images-api';
+    try {
+        return parseImageGenerationBackendValue(value);
+    } catch (error) {
+        fields.image_backend = error instanceof Error ? error.message : 'image_backend 无效';
+        return 'images-api';
+    }
+}
+
+function readAgentStreamingStrategy(body: Record<string, unknown>, fields: FieldErrors): ImageStreamingStrategy {
+    const value = readStringField(body, 'streaming_strategy', 'off');
+    if (!value) return 'off';
+    try {
+        return parseImageStreamingStrategyValue(value);
+    } catch (error) {
+        fields.streaming_strategy = error instanceof Error ? error.message : 'streaming_strategy 无效';
+        return 'off';
+    }
+}
+
+function shouldAgentRequestUpstreamStream(streamingStrategy: ImageStreamingStrategy): boolean {
+    return streamingStrategy !== 'off' && streamingStrategy !== 'auto';
+}
+
+function validateAgentImageUpstreamStrategy(input: {
+    imageBackend: ImageGenerationBackend;
+    streamingStrategy: ImageStreamingStrategy;
+    fields: FieldErrors;
+}) {
+    try {
+        resolveImageStreamEnabled({
+            imageBackend: input.imageBackend,
+            requestedStream: shouldAgentRequestUpstreamStream(input.streamingStrategy),
+            streamingStrategy: input.streamingStrategy
+        });
+    } catch (error) {
+        input.fields.streaming_strategy = error instanceof Error ? error.message : 'streaming_strategy 与 image_backend 不兼容';
+    }
+}
+
 function readQuality(body: Record<string, unknown>, fields: FieldErrors): AgentQuality {
     const value = readStringField(body, 'quality', 'high');
     if (!value || !isOneOf(value, AGENT_QUALITIES)) {
@@ -340,6 +404,10 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const background = readBackground(objectBody, model, fields);
     const moderation = readModeration(objectBody, fields);
     const responseMode = readResponseMode(objectBody, fields);
+    const imageBackend = readAgentImageBackend(objectBody, fields);
+    const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
+    const partialImages = readIntegerField(objectBody, 'partial_images', 2, 1, 3, fields) as 1 | 2 | 3;
+    validateAgentImageUpstreamStrategy({ imageBackend, streamingStrategy, fields });
 
     if (Object.keys(fields).length > 0) {
         throw new RequestValidationError(JSON.stringify({ fields }), 422);
@@ -355,7 +423,10 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
         ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
         background,
         moderation,
-        response_mode: responseMode
+        response_mode: responseMode,
+        image_backend: imageBackend,
+        streaming_strategy: streamingStrategy,
+        partial_images: partialImages
     };
 }
 
@@ -415,16 +486,13 @@ export function buildAgentAuthCapabilities(env: Record<string, string | undefine
 }
 
 function readPositiveIntegerEnv(env: Record<string, string | undefined>, fieldName: string, fallback: number): number {
-    const value = env[fieldName]?.trim();
-    if (!value) return fallback;
-    if (!/^\d+$/.test(value)) {
-        throw new RequestValidationError(`${fieldName} 必须是正整数。`, 500);
+    try {
+        return readPositiveIntegerFromEnv(env, fieldName, fallback, {
+            messages: CHINESE_POSITIVE_INTEGER_MESSAGES
+        });
+    } catch (error) {
+        throw new RequestValidationError(error instanceof Error ? error.message : `${fieldName} 必须是正整数。`, 500);
     }
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < 1) {
-        throw new RequestValidationError(`${fieldName} 必须是正整数。`, 500);
-    }
-    return parsed;
 }
 
 export function buildAgentCapabilities(env: Record<string, string | undefined>): AgentCapabilities {
@@ -432,18 +500,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         api_version: AGENT_API_VERSION,
         schema_version: AGENT_SCHEMA_VERSION,
         auth: buildAgentAuthCapabilities(env),
-        endpoints: {
-            capabilities: '/api/agent/capabilities',
-            openapi: '/api/agent/openapi.json',
-            generate: '/api/agent/images/generate',
-            edit: '/api/agent/images/edit',
-            create_generate_job: '/api/agent/jobs/images/generate',
-            job: '/api/agent/jobs/{id}',
-            job_result: '/api/agent/jobs/{id}/result',
-            artifact_metadata: '/api/agent/artifacts/{id}',
-            artifact_content: '/api/agent/artifacts/{id}/content',
-            artifact_delete: '/api/agent/artifacts/{id}'
-        },
+        endpoints: { ...AGENT_ENDPOINTS },
         defaults: {
             model: 'gpt-image-2',
             response_mode: 'path',
@@ -477,12 +534,19 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             generate: {
                 supported: false,
                 mode: 'non_streaming_only',
-                endpoint: '/api/agent/images/generate'
+                endpoint: AGENT_ENDPOINTS.generate
             },
             edit: {
                 supported: false,
                 mode: 'non_streaming_only',
-                endpoint: '/api/agent/images/edit'
+                endpoint: AGENT_ENDPOINTS.edit
+            },
+            upstream_sse: {
+                supported: true,
+                mode: 'internal_upstream_sse',
+                endpoint: AGENT_ENDPOINTS.generate,
+                request_fields: ['image_backend', 'streaming_strategy', 'partial_images'],
+                final_response_contract: 'AgentImageResponse'
             },
             page_sse: {
                 supported: true,
@@ -495,11 +559,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             supported: true,
             mode: 'job_polling',
             intended_for: ['quality=high', 'max_edge>=3072', 'long_running_upstream', 'manual_billable_gate'],
-            endpoints: {
-                create_generate_job: '/api/agent/jobs/images/generate',
-                get_job: '/api/agent/jobs/{id}',
-                get_job_result: '/api/agent/jobs/{id}/result'
-            },
+            endpoints: { ...AGENT_JOB_ENDPOINTS },
             states: AGENT_JOB_STATES,
             current_guidance:
                 '对 4K/high 或长耗时请求优先使用 job polling：先创建 generate job，再轮询状态，最后读取 result。运行中 job 会刷新 lease。当前执行模型为同实例后台任务，不是跨实例持久队列。'

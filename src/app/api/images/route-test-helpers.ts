@@ -11,7 +11,8 @@ export function imageFormRequest(input: {
     apiKey: string;
     stream: boolean;
     mode?: 'generate' | 'edit';
-    imageBackend?: 'images' | 'responses';
+    imageBackend?: 'images' | 'responses' | 'images-api' | 'responses-image-generation';
+    imageStreamingStrategy?: 'off' | 'auto' | 'openai-sse' | 'newapi-keepalive-sse' | 'responses-sse' | 'force-sse';
     n?: string;
     responsesModel?: string;
 }): NextRequest {
@@ -27,6 +28,9 @@ export function imageFormRequest(input: {
     formData.append('clientRequestId', 'client-route-stream');
     if (input.imageBackend) {
         formData.append('imageBackend', input.imageBackend);
+    }
+    if (input.imageStreamingStrategy) {
+        formData.append('imageStreamingStrategy', input.imageStreamingStrategy);
     }
     if (input.responsesModel) {
         formData.append('responsesModel', input.responsesModel);
@@ -92,6 +96,32 @@ export async function startResponsesImageUpstream(
         const payload = await handler(Buffer.concat(chunks).toString('utf8'));
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify(payload));
+    });
+    return listen(server);
+}
+
+export async function startStreamingResponsesImageUpstream(
+    handler: (body: string) => Promise<Array<{ event?: string; data: unknown }>>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const events = await handler(Buffer.concat(chunks).toString('utf8'));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        for (const event of events) {
+            if (event.event) {
+                response.write(`event: ${event.event}\n`);
+            }
+            response.write(`data: ${JSON.stringify(event.data)}\n\n`);
+        }
+        response.write('data: [DONE]\n\n');
+        response.end();
     });
     return listen(server);
 }

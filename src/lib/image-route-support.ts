@@ -5,6 +5,7 @@ import {
     isChannelFailure,
     isCredentialFailure
 } from './channel-router';
+import type { ImageGenerationBackend } from './image-upstream-strategy';
 import { RequestValidationError } from './image-request-utils';
 import { getServerChannelState } from './server-channel-router';
 import { buildAccessCookie, outputDir, readBooleanEnv, serializeAccessCookie } from './server-runtime';
@@ -13,7 +14,7 @@ import fs from 'fs/promises';
 import { NextResponse } from 'next/server';
 
 export type AccessCookie = ReturnType<typeof buildAccessCookie>;
-export type ImageBackend = 'images' | 'responses';
+export type ImageBackend = ImageGenerationBackend;
 export type RequestLogContext = { clientRequestId: string };
 
 export function readClientRequestId(formData: FormData): string | undefined {
@@ -24,23 +25,11 @@ export function readClientRequestId(formData: FormData): string | undefined {
     return normalized.slice(0, 128);
 }
 
-export function readImageBackend(formData: FormData): ImageBackend {
-    const value = formData.get('imageBackend');
-    if (value === null || value === undefined || value === '' || value === 'images') {
-        return 'images';
-    }
-    if (value === 'responses') {
-        return 'responses';
-    }
-    throw new RequestValidationError('imageBackend 必须是 images 或 responses。', 400);
-}
-
 export function assertResponsesImageBackendAllowed(input: {
     imageBackend: ImageBackend;
     mode: string;
-    streamEnabled: boolean;
 }) {
-    if (input.imageBackend !== 'responses') return;
+    if (input.imageBackend !== 'responses-image-generation') return;
     if (!readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND')) {
         throw new RequestValidationError(
             'Responses API 图片后端仍是实验能力，必须设置 ENABLE_RESPONSES_IMAGE_BACKEND=true 后才能使用。',
@@ -49,9 +38,6 @@ export function assertResponsesImageBackendAllowed(input: {
     }
     if (input.mode !== 'generate') {
         throw new RequestValidationError('Responses API 图片后端当前只支持 generate 模式。', 400);
-    }
-    if (input.streamEnabled) {
-        throw new RequestValidationError('Responses API 图片后端当前不接入现有 Images API 流式预览。', 400);
     }
 }
 
