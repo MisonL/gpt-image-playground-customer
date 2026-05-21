@@ -228,6 +228,9 @@ function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () =
         async beginRequest() {
             throw new Error('not implemented');
         },
+        async refreshRequestLease() {
+            return false;
+        },
         async saveArtifacts() {},
         async completeRequest() {},
         async failRequest() {},

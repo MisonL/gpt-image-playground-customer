@@ -6,8 +6,8 @@ import {
     isPagePasswordAuthErrorCode
 } from './page-password-auth';
 
-describe('page password auth error codes', () => {
-    it('recognizes only page password auth errors', () => {
+describe('page access code auth error codes', () => {
+    it('recognizes only page access code auth errors', () => {
         assert.equal(isPagePasswordAuthErrorCode(PAGE_PASSWORD_AUTH_ERROR_CODES.missing), true);
         assert.equal(isPagePasswordAuthErrorCode(PAGE_PASSWORD_AUTH_ERROR_CODES.invalid), true);
         assert.equal(isPagePasswordAuthErrorCode('upstream_unauthorized'), false);

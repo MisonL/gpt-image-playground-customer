@@ -180,6 +180,43 @@ describe('SqliteAgentStateStore', () => {
         assert.equal(reacquired.type, 'acquired');
     });
 
+    it('keeps refreshed running requests out of recovery', async () => {
+        const requestJson = { prompt: 'sqlite lease refresh' };
+        const requestHash = hashAgentPayload(requestJson);
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-sqlite-refresh',
+            requestHash,
+            mode: 'generate',
+            requestJson,
+            leaseMs: 100,
+            ttlSeconds: 60,
+            now: new Date('2026-05-12T00:00:00.000Z')
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+
+        assert.equal(
+            await store.refreshRequestLease({
+                requestId: begin.record.requestId,
+                leaseMs: 1000,
+                now: new Date('2026-05-12T00:00:00.050Z')
+            }),
+            true
+        );
+        await store.recoverExpiredRequests(new Date('2026-05-12T00:00:00.200Z'));
+
+        const retry = await store.beginRequest({
+            idempotencyKey: 'idem-sqlite-refresh',
+            requestHash,
+            mode: 'generate',
+            requestJson,
+            leaseMs: 100,
+            ttlSeconds: 60,
+            now: new Date('2026-05-12T00:00:00.200Z')
+        });
+        assert.equal(retry.type, 'in_progress');
+    });
+
     it('recovers expired running requests with artifact metadata as succeeded', async () => {
         const requestJson = { prompt: 'recover artifact' };
         const requestHash = hashAgentPayload(requestJson);

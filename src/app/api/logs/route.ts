@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (!isAuthorized(request)) {
-        return NextResponse.json({ error: '未授权：缺少或无效的密码哈希。' }, { status: 401 });
+        return NextResponse.json({ error: '未授权：缺少或无效的访问码哈希。' }, { status: 401 });
     }
 
     appLogger.info('日志查看器已连接。');

@@ -149,13 +149,14 @@ export function readPositiveIntegerEnv(
     fieldName: string,
     fallback: number
 ): number {
-    const value = env[fieldName];
-    if (!value || !/^\d+$/.test(value.trim())) {
-        return fallback;
+    const value = env[fieldName]?.trim();
+    if (!value) return fallback;
+    if (!/^\d+$/.test(value)) {
+        throw new Error(`${fieldName} 必须是正整数。`);
     }
     const parsed = Number(value);
     if (!Number.isSafeInteger(parsed) || parsed < 1) {
-        return fallback;
+        throw new Error(`${fieldName} 必须是正整数。`);
     }
     return parsed;
 }

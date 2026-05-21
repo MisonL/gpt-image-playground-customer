@@ -6,8 +6,8 @@ import { afterEach, describe, it } from 'node:test';
 import { NextRequest } from 'next/server';
 
 const originalAppPassword = process.env.APP_PASSWORD;
-const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
-const OTHER_PAGE_PASSWORD_FIXTURE = ['other', 'password'].join('-');
+const PAGE_PASSWORD_FIXTURE = ['customer', 'access', 'code'].join('-');
+const OTHER_PAGE_PASSWORD_FIXTURE = ['other', 'access', 'code'].join('-');
 
 afterEach(() => {
     if (originalAppPassword === undefined) {
@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe('GET /api/image/[filename]', () => {
-    it('returns a missing page password code when the access cookie is absent', async () => {
+    it('returns a missing page access code error when the access cookie is absent', async () => {
         process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
         const request = new NextRequest('http://localhost/api/image/sample.png');
 
@@ -29,7 +29,7 @@ describe('GET /api/image/[filename]', () => {
         assert.equal(result.code, PAGE_PASSWORD_AUTH_ERROR_CODES.missing);
     });
 
-    it('returns an invalid page password code when the access cookie is wrong', async () => {
+    it('returns an invalid page access code error when the access cookie is wrong', async () => {
         process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
         const request = new NextRequest('http://localhost/api/image/sample.png', {
             headers: {

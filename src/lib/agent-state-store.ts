@@ -66,14 +66,22 @@ export type FailAgentRequestInput = {
     now?: Date;
 };
 
+export type RefreshAgentRequestLeaseInput = {
+    requestId: string;
+    leaseMs: number;
+    now?: Date;
+};
+
 export type AgentStateStore = {
     init(): Promise<void>;
     recoverExpiredRequests(now?: Date): Promise<number>;
     purgeExpiredRequests(now?: Date): Promise<number>;
     beginRequest(input: BeginAgentRequestInput): Promise<BeginAgentRequestResult>;
+    refreshRequestLease(input: RefreshAgentRequestLeaseInput): Promise<boolean>;
     saveArtifacts(artifacts: AgentArtifactRecord[]): Promise<void>;
     completeRequest(input: CompleteAgentRequestInput): Promise<void>;
     failRequest(input: FailAgentRequestInput): Promise<void>;
+    getRequest(requestId: string): Promise<AgentRequestRecord | undefined>;
     getArtifact(id: string): Promise<AgentArtifactRecord | undefined>;
     listArtifactsForRequest(requestId: string): Promise<AgentArtifactRecord[]>;
     deleteArtifact(id: string): Promise<boolean>;

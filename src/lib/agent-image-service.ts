@@ -47,6 +47,7 @@ import { getServerChannelState } from './server-channel-router';
 import { readAffinityKey } from './server-runtime';
 import crypto from 'crypto';
 import OpenAI from 'openai';
+import type { AgentErrorDiagnostics } from './api-error-response';
 
 export type AgentRequestExecutionResult = {
     response: AgentImageResponse;
@@ -57,6 +58,7 @@ export type AgentRequestExecutionResult = {
 type CredentialContext = {
     openai: OpenAI;
     selectedCredential?: ChannelCredential;
+    baseUrl?: string;
 };
 
 export function readIdempotencyKey(headers: Headers): string {
@@ -129,6 +131,7 @@ export async function executeAgentGenerate(options: {
     cached: boolean;
 }): Promise<AgentRequestExecutionResult> {
     const credentialContext = createOpenAiClient(options.headers);
+    const startedAtMs = Date.now();
     try {
         const result = await credentialContext.openai.images.generate({
             model: options.request.model,
@@ -157,7 +160,7 @@ export async function executeAgentGenerate(options: {
         });
     } catch (error) {
         reportServerCredentialFailure(credentialContext.selectedCredential, error);
-        throw normalizeAgentError(error);
+        throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs));
     }
 }
 
@@ -169,6 +172,7 @@ export async function executeAgentEdit(options: {
     cached: boolean;
 }): Promise<AgentRequestExecutionResult> {
     const credentialContext = createOpenAiClient(options.headers);
+    const startedAtMs = Date.now();
     try {
         const prompt = readRequiredText(options.formData, 'prompt');
         const model = readModel(options.formData);
@@ -202,7 +206,7 @@ export async function executeAgentEdit(options: {
         });
     } catch (error) {
         reportServerCredentialFailure(credentialContext.selectedCredential, error);
-        throw normalizeAgentError(error);
+        throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs));
     }
 }
 
@@ -306,6 +310,7 @@ export function errorToAgentErrorBody(error: unknown, requestId: string): AgentE
             retryable: normalized.retryable,
             ...(normalized.details ? { details: normalized.details } : {}),
             ...(normalized.upstreamStatus ? { upstream_status: normalized.upstreamStatus } : {}),
+            ...(normalized.diagnostics ? { diagnostics: normalized.diagnostics } : {}),
             request_id: requestId
         }
     };
@@ -314,11 +319,12 @@ export function errorToAgentErrorBody(error: unknown, requestId: string): AgentE
 export async function hydrateAgentReplayResponse(
     store: AgentStateStore,
     record: { requestId: string; requestJson: unknown },
-    response: AgentImageResponse
+    response: AgentImageResponse,
+    cached = true
 ): Promise<AgentImageResponse> {
     const responseMode = readAgentResponseModeFromRequestJson(record.requestJson);
     if (!shouldIncludeBase64(responseMode)) {
-        return { ...response, cached: true };
+        return { ...response, cached };
     }
     const artifacts = await store.listArtifactsForRequest(record.requestId);
     const encodedById = new Map<string, string>();
@@ -328,7 +334,7 @@ export async function hydrateAgentReplayResponse(
     }
     return {
         ...response,
-        cached: true,
+        cached,
         images: response.images.map((image) => ({
             ...image,
             ...(encodedById.has(image.id) ? { b64_json: encodedById.get(image.id) } : {})
@@ -359,8 +365,26 @@ function createOpenAiClient(headers: Headers): CredentialContext {
             apiKey,
             baseURL: baseUrl || undefined
         }),
-        selectedCredential: effectiveSelectedCredential
+        selectedCredential: effectiveSelectedCredential,
+        baseUrl
     };
+}
+
+function buildAgentExecutionDiagnostics(context: CredentialContext, startedAtMs: number): AgentErrorDiagnostics {
+    const upstreamHost = context.baseUrl ? readUrlHost(context.baseUrl) : undefined;
+    return {
+        elapsed_ms: Date.now() - startedAtMs,
+        ...(context.selectedCredential?.channelId ? { selected_channel_id: context.selectedCredential.channelId } : {}),
+        ...(upstreamHost ? { upstream_host: upstreamHost } : {})
+    };
+}
+
+function readUrlHost(value: string): string | undefined {
+    try {
+        return new URL(value).host;
+    } catch {
+        return undefined;
+    }
 }
 
 function reportServerCredentialFailure(credential: ChannelCredential | undefined, error: unknown) {

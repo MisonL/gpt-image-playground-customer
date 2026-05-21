@@ -158,6 +158,23 @@ export class MemoryAgentStateStore implements AgentStateStore, ImageShareStateSt
         return { type: 'acquired', record: reacquired };
     }
 
+    async refreshRequestLease(input: { requestId: string; leaseMs: number; now?: Date }): Promise<boolean> {
+        const now = input.now ?? new Date();
+        const nowIso = isoDate(now);
+        const lockedUntil = isoDate(addMilliseconds(now, input.leaseMs));
+        let refreshed = false;
+        this.updateRequestById(input.requestId, (record) => {
+            if (record.status !== 'running' && record.status !== 'pending') return record;
+            refreshed = true;
+            return {
+                ...record,
+                lockedUntil,
+                updatedAt: nowIso
+            };
+        });
+        return refreshed;
+    }
+
     async saveArtifacts(artifacts: AgentArtifactRecord[]): Promise<void> {
         this.insertArtifacts(artifacts);
     }
@@ -187,6 +204,10 @@ export class MemoryAgentStateStore implements AgentStateStore, ImageShareStateSt
         }));
     }
 
+    async getRequest(requestId: string): Promise<AgentRequestRecord | undefined> {
+        return [...this.requestsByIdempotencyKey.values()].find((record) => record.requestId === requestId);
+    }
+
     async getArtifact(id: string): Promise<AgentArtifactRecord | undefined> {
         return this.artifactsById.get(id);
     }
@@ -200,6 +221,7 @@ export class MemoryAgentStateStore implements AgentStateStore, ImageShareStateSt
     }
 
     async createImageShareRecord(record: ImageShareRecord): Promise<void> {
+        validateImageShareAccessCodeMetadata(record);
         if (this.sharesByToken.has(record.token)) {
             throw new Error('UNIQUE constraint failed: image_shares.token');
         }
@@ -281,4 +303,15 @@ function withoutUndefined<T extends object>(record: T): T {
 
 function sameArtifactRecord(left: AgentArtifactRecord, right: AgentArtifactRecord): boolean {
     return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function validateImageShareAccessCodeMetadata(record: ImageShareRecord): void {
+    const hasAccessCodeSalt = record.accessCodeSalt !== undefined;
+    const hasAccessCodeHash = record.accessCodeHash !== undefined;
+    const isValid = record.accessCodeRequired
+        ? hasAccessCodeSalt && hasAccessCodeHash
+        : !hasAccessCodeSalt && !hasAccessCodeHash;
+    if (!isValid) {
+        throw new Error('CHECK constraint failed: image_shares.access_code_metadata');
+    }
 }

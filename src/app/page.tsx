@@ -471,7 +471,7 @@ export default function HomePage() {
             }
             return 'unavailable';
         } catch (error) {
-            console.error('验证入口密码失败：', error);
+            console.error('验证入口访问码失败：', error);
             return 'unavailable';
         }
     }, []);
@@ -683,7 +683,7 @@ export default function HomePage() {
                 await handleApiCall(...retryArgs, hash);
             }
         } catch (e) {
-            console.error('计算密码哈希失败：', e);
+            console.error('计算访问码哈希失败：', e);
             setError(createErrorNotice(t('password.hashError')));
         }
     };

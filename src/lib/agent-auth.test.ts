@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { describe, it } from 'node:test';
 
-const PAGE_PASSWORD_FIXTURE = ['customer', 'password'].join('-');
+const PAGE_PASSWORD_FIXTURE = ['customer', 'access', 'code'].join('-');
 
 describe('assertAgentAuthorized', () => {
     it('accepts the configured bearer token', () => {
@@ -20,14 +20,14 @@ describe('assertAgentAuthorized', () => {
         );
     });
 
-    it('rejects missing bearer tokens without falling back to password auth', () => {
+    it('rejects missing bearer tokens without falling back to access-code auth', () => {
         assert.throws(
-            () => assertAgentAuthorized(new Headers(), { AGENT_API_TOKEN: 'secret-token', APP_PASSWORD: 'password' }),
+            () => assertAgentAuthorized(new Headers(), { AGENT_API_TOKEN: 'secret-token', APP_PASSWORD: 'access-code' }),
             (error) => error instanceof AgentApiError && error.code === 'unauthorized'
         );
     });
 
-    it('trims APP_PASSWORD before verifying password hashes', () => {
+    it('trims APP_PASSWORD before verifying access-code hashes', () => {
         const passwordHash = crypto.createHash('sha256').update(PAGE_PASSWORD_FIXTURE).digest('hex');
         assert.doesNotThrow(() =>
             assertAgentAuthorized(new Headers({ 'X-App-Password-Hash': passwordHash }), {

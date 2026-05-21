@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 const translate = (key: string, values?: Record<string, string | number>) => {
     const messages: Record<string, string> = {
         'error.apiFailedWithAdvice': '{message}。建议：{advice}',
-        'error.adviceAuth': '检查 API Key、页面密码或渠道权限。',
+        'error.adviceAuth': '检查 API Key、访问码或渠道权限。',
         'error.adviceRateLimit': '请求被限流。请稍后重试，或降低并发和图片数量。',
         'error.adviceUpstream': '上游或 API 中转站异常。请稍后重试，或切换可用渠道。',
         'error.adviceCloudflare':
@@ -28,7 +28,7 @@ describe('buildUserFacingApiErrorMessage', () => {
             t: translate
         });
 
-        assert.match(message, /检查 API Key、页面密码或渠道权限/);
+        assert.match(message, /检查 API Key、访问码或渠道权限/);
     });
 
     it('adds rate-limit advice for 429 failures', () => {
