@@ -34,6 +34,7 @@ export async function POST(request: NextRequest) {
         if (beginResult.type === 'replay' || beginResult.type === 'failed') {
             requestId = beginResult.record.requestId;
             return NextResponse.json(buildAgentJobStatusResponse(beginResult.record), {
+                status: 202,
                 headers: { 'X-Idempotent-Replay': 'true', 'X-Request-Id': requestId }
             });
         }

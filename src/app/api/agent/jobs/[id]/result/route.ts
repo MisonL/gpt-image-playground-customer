@@ -1,7 +1,7 @@
 import {
     assertReadableJobRecord,
     readAgentJobState,
-    readCompletedJobResult
+    readJobResult
 } from '@/lib/agent-job-service';
 import {
     AgentApiError,
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
         const store = await ensureAgentStateStoreReady();
         const record = assertReadableJobRecord(await store.getRequest(id), id);
         requestId = record.requestId;
-        const result = await readCompletedJobResult(store, record);
+        const result = await readJobResult(store, record);
         if (result.type === 'response') {
             return NextResponse.json(result.response, { headers: { 'X-Request-Id': requestId } });
         }

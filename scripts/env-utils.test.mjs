@@ -14,6 +14,24 @@ describe('Environment utilities', () => {
         assert.equal(readPositiveIntegerEnv(TEST_ENV_NAME, 30), 30);
     });
 
+    it('returns valid integer env values', () => {
+        process.env[TEST_ENV_NAME] = '42';
+
+        assert.equal(readPositiveIntegerEnv(TEST_ENV_NAME, 30), 42);
+    });
+
+    it('accepts values exactly equal to the configured minimum', () => {
+        process.env[TEST_ENV_NAME] = '1000';
+
+        assert.equal(readPositiveIntegerEnv(TEST_ENV_NAME, 30, 1000), 1000);
+    });
+
+    it('accepts zero when the configured minimum is zero', () => {
+        process.env[TEST_ENV_NAME] = '0';
+
+        assert.equal(readPositiveIntegerEnv(TEST_ENV_NAME, 30, 0), 0);
+    });
+
     it('rejects non-digit values before parsing', () => {
         process.env[TEST_ENV_NAME] = '12ms';
 

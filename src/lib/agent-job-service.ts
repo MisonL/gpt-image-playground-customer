@@ -71,7 +71,7 @@ export function assertReadableJobRecord(record: AgentRequestRecord | undefined, 
     return record;
 }
 
-export async function readCompletedJobResult(
+export async function readJobResult(
     store: AgentStateStore,
     record: AgentRequestRecord
 ): Promise<ResponseReadyResult> {

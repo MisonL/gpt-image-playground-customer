@@ -412,6 +412,13 @@ describe('Agent route integration', () => {
             assert.equal(statusBody.job.error.upstream_status, 500);
             assert.equal(statusBody.job.error.diagnostics.upstream_status, 500);
             assert.equal(upstreamCalls > 0, true);
+
+            const replay = await createGenerateJob(agentJobJsonRequest('route-job-failure-key', { prompt: 'job failure' }));
+            assert.equal(replay.status, 202);
+            assert.equal(replay.headers.get('x-idempotent-replay'), 'true');
+            const replayBody = await replay.json();
+            assert.equal(replayBody.job.id, createdBody.job.id);
+            assert.equal(replayBody.job.state, 'failed');
         } finally {
             await upstream.close();
         }
