@@ -2,24 +2,52 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+
+import {
+    assertKnownOptions,
+    assertSpaceTargetConfig,
+    DEFAULT_ACCESS_FILE,
+    isMainModule,
+    parseAccessFile
+} from './hf-space-doctor-utils.mjs';
 
 const DEFAULT_SPACE_ID = 'misonL/gpt-image-playground-customer';
 const DEFAULT_SPACE_URL = 'https://misonl-gpt-image-playground-customer.hf.space';
-const DEFAULT_ACCESS_FILE = join(process.env.HOME || '', '.cache/gpt-image-playground-customer/hf-space-access.txt');
 const DEFAULT_SECRET_KEYS = ['APP_PASSWORD'];
+const FORBIDDEN_ACCESS_KEYS = ['HF_TOKEN', 'HUGGINGFACE_TOKEN', 'HF_PASSWORD', 'HUGGINGFACE_PASSWORD'];
 const STATUS_POLL_ATTEMPTS = 20;
 const STATUS_POLL_INTERVAL_MS = 5_000;
 const VERIFY_ATTEMPTS = 6;
 const VERIFY_INTERVAL_MS = 3_000;
 
+class NonRetryableHfError extends Error {}
+
 function parseArgs(argv) {
+    assertKnownOptions(argv, ['--help', '-h', '--no-restart', '--skip-verify', '--use-default-target']);
     return {
+        help: argv.includes('--help') || argv.includes('-h'),
         restart: !argv.includes('--no-restart'),
+        useDefaultTarget: argv.includes('--use-default-target'),
         verify: !argv.includes('--skip-verify')
     };
+}
+
+function printHelp() {
+    console.log(`Usage:
+  npm run sync-secret:hf-space
+
+Options:
+  --no-restart         Sync secrets without restarting the Space.
+  --skip-verify        Skip APP_PASSWORD access-code verification.
+  --use-default-target Allow the built-in default Space target.
+  --help               Show this help.
+
+Environment overrides:
+  HF_SPACE_ACCESS_FILE
+  HF_SPACE_ID
+  HF_SPACE_URL
+  HF_SPACE_SECRET_KEYS`);
 }
 
 function readRequiredEnv(name, fallback) {
@@ -28,8 +56,14 @@ function readRequiredEnv(name, fallback) {
     return value;
 }
 
-function readSecretKeys() {
-    const rawValue = process.env.HF_SPACE_SECRET_KEYS?.trim();
+function readConfigValue(name, secrets, fallback) {
+    const value = process.env[name]?.trim() || secrets.get(name)?.trim() || fallback;
+    if (!value) throw new Error(`${name} is required`);
+    return value;
+}
+
+function readSecretKeys(secrets) {
+    const rawValue = process.env.HF_SPACE_SECRET_KEYS?.trim() || secrets.get('HF_SPACE_SECRET_KEYS')?.trim();
     if (!rawValue) return DEFAULT_SECRET_KEYS;
     const keys = rawValue
         .split(',')
@@ -39,18 +73,18 @@ function readSecretKeys() {
     return keys;
 }
 
-function readAccessFileSecrets(accessFile) {
-    const secrets = new Map();
-    const text = readFileSync(accessFile, 'utf8');
-    for (const rawLine of text.split(/\r?\n/)) {
-        if (!rawLine || rawLine.startsWith('#')) continue;
-        const separatorIndex = rawLine.indexOf('=');
-        if (separatorIndex <= 0) continue;
-        const key = rawLine.slice(0, separatorIndex).trim();
-        const value = rawLine.slice(separatorIndex + 1);
-        if (key) secrets.set(key, value);
+function validateSecretValues(secretKeys, secrets) {
+    const forbidden = FORBIDDEN_ACCESS_KEYS.filter((key) => secrets.has(key));
+    if (forbidden.length) {
+        throw new Error(`Access file must not contain Hugging Face credentials: ${forbidden.join(', ')}.`);
     }
-    return secrets;
+    const secretValues = new Map();
+    for (const key of secretKeys) {
+        const value = secrets.get(key);
+        if (!value?.trim()) throw new Error(`${key} is missing or blank in access file`);
+        secretValues.set(key, value);
+    }
+    return secretValues;
 }
 
 function redactSensitiveText(text, secretValues = []) {
@@ -62,16 +96,38 @@ function redactSensitiveText(text, secretValues = []) {
 }
 
 function runHf(args, options = {}) {
+    const commandLabel = redactSensitiveText(`hf ${args.join(' ')}`, options.secretValues);
     const result = spawnSync('hf', args, {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe']
     });
+    if (result.error) {
+        throw new NonRetryableHfError(`${commandLabel} failed: ${result.error.message}`);
+    }
     if (result.status !== 0) {
         const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-        const safeOutput = redactSensitiveText(output || `hf ${args.join(' ')} failed`, options.secretValues);
+        const safeOutput = redactSensitiveText(output || `${commandLabel} failed`, options.secretValues);
         throw new Error(safeOutput);
     }
     return result.stdout || '';
+}
+
+function assertHfAuthenticated() {
+    try {
+        runHf(['auth', 'whoami']);
+    } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        throw new Error(`Hugging Face CLI is not authenticated. Run "hf auth login" with an access token that can manage the target Space. Cause: ${cause}`);
+    }
+}
+
+function assertSpaceReadable(spaceId) {
+    try {
+        runHf(['spaces', 'info', spaceId, '--format', 'json']);
+    } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        throw new Error(`Cannot read Hugging Face Space "${spaceId}". Check HF_SPACE_ID and the logged-in token permissions. Cause: ${cause}`);
+    }
 }
 
 async function syncSecret({ spaceId, key, value }) {
@@ -83,6 +139,7 @@ async function syncSecret({ spaceId, key, value }) {
             });
             return;
         } catch (error) {
+            if (error instanceof NonRetryableHfError) throw error;
             lastError = error;
             await delay(VERIFY_INTERVAL_MS);
         }
@@ -144,9 +201,9 @@ async function verifyAppPassword({ spaceUrl, appPassword }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ passwordHash })
             });
-            const body = await response.json().catch(async () => ({ raw: await response.text() }));
+            const body = await readJsonResponseBody(response);
             if (!response.ok || body?.authenticated !== true) {
-                throw new Error(`APP_PASSWORD verification failed with HTTP ${response.status}`);
+                throw new Error(`APP_PASSWORD access-code verification failed with HTTP ${response.status}`);
             }
             return { status: response.status, authenticated: body.authenticated };
         } catch (error) {
@@ -157,18 +214,39 @@ async function verifyAppPassword({ spaceUrl, appPassword }) {
     throw lastError;
 }
 
+export async function readJsonResponseBody(response) {
+    const text = await response.text();
+    if (!text) return {};
+    try {
+        return JSON.parse(text);
+    } catch {
+        return { raw: text.slice(0, 200) };
+    }
+}
+
 async function main() {
     const options = parseArgs(process.argv.slice(2));
-    const spaceId = readRequiredEnv('HF_SPACE_ID', DEFAULT_SPACE_ID);
-    const spaceUrl = readRequiredEnv('HF_SPACE_URL', DEFAULT_SPACE_URL);
+    if (options.help) {
+        printHelp();
+        return;
+    }
+
     const accessFile = readRequiredEnv('HF_SPACE_ACCESS_FILE', DEFAULT_ACCESS_FILE);
-    const secretKeys = readSecretKeys();
-    const secrets = readAccessFileSecrets(accessFile);
+    const secrets = parseAccessFile(accessFile);
+    const fallbackSpaceId = options.useDefaultTarget ? DEFAULT_SPACE_ID : undefined;
+    const fallbackSpaceUrl = options.useDefaultTarget ? DEFAULT_SPACE_URL : undefined;
+    const spaceId = readConfigValue('HF_SPACE_ID', secrets, fallbackSpaceId);
+    const spaceUrl = readConfigValue('HF_SPACE_URL', secrets, fallbackSpaceUrl);
+    assertSpaceTargetConfig({ spaceId, spaceUrl });
+    const secretKeys = readSecretKeys(secrets);
+    const secretValues = validateSecretValues(secretKeys, secrets);
     const syncedKeys = [];
 
+    assertHfAuthenticated();
+    assertSpaceReadable(spaceId);
+
     for (const key of secretKeys) {
-        const value = secrets.get(key);
-        if (!value?.trim()) throw new Error(`${key} is missing or blank in access file`);
+        const value = secretValues.get(key);
         await syncSecret({ spaceId, key, value });
         syncedKeys.push(key);
     }
@@ -186,7 +264,7 @@ async function main() {
     if (options.verify && syncedKeys.includes('APP_PASSWORD')) {
         verification = await verifyAppPassword({
             spaceUrl,
-            appPassword: secrets.get('APP_PASSWORD')
+            appPassword: secretValues.get('APP_PASSWORD')
         });
     }
 
@@ -206,16 +284,18 @@ async function main() {
     );
 }
 
-main().catch((error) => {
-    console.error(
-        JSON.stringify(
-            {
-                ok: false,
-                error: error instanceof Error ? error.message : String(error)
-            },
-            null,
-            2
-        )
-    );
-    process.exit(1);
-});
+if (isMainModule(import.meta.url, process.argv[1])) {
+    main().catch((error) => {
+        console.error(
+            JSON.stringify(
+                {
+                    ok: false,
+                    error: error instanceof Error ? error.message : String(error)
+                },
+                null,
+                2
+            )
+        );
+        process.exit(1);
+    });
+}

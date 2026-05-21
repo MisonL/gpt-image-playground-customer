@@ -7,13 +7,17 @@
     "prebuild": "node scripts/clean-standalone.mjs",
     "build": "next build",
     "postbuild": "node scripts/patch-standalone-runtime.mjs",
-    "test": "node --test --import tsx \"src/**/*.test.ts\"",
+    "test": "node --test --import tsx \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\"",
+    "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "test:postgres": "node scripts/test-postgres-live.mjs",
+    "doctor:hf-space": "node scripts/doctor-hf-space.mjs",
+    "init-access:hf-space": "node scripts/init-hf-space-access.mjs",
     "keepalive:hf-space": "node scripts/keepalive-hf-space.mjs",
     "sync-secret:hf-space": "node scripts/sync-hf-space-secret.mjs",
     "smoke:hf-space": "node scripts/smoke-hf-space-memory.mjs",
     "start": "node scripts/start-standalone.mjs",
     "lint": "eslint src",
+    "lint:scripts": "node scripts/check-node-syntax.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {

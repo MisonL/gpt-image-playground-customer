@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { validateSpaceUrl } from './hf-space-doctor-utils.mjs';
+
 const DEFAULT_SPACE_URL = 'https://misonl-gpt-image-playground-customer.hf.space';
 const DEFAULT_KEEPALIVE_PATH = '/api/auth-status';
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -8,7 +10,10 @@ const MIN_TIMEOUT_MS = 1_000;
 function readPositiveIntegerEnv(name, fallback) {
     const rawValue = process.env[name]?.trim();
     if (!rawValue) return fallback;
-    const value = Number.parseInt(rawValue, 10);
+    if (!/^\d+$/.test(rawValue)) {
+        throw new Error(`${name} must be an integer greater than or equal to ${MIN_TIMEOUT_MS}`);
+    }
+    const value = Number(rawValue);
     if (!Number.isSafeInteger(value) || value < MIN_TIMEOUT_MS) {
         throw new Error(`${name} must be an integer greater than or equal to ${MIN_TIMEOUT_MS}`);
     }
@@ -16,6 +21,10 @@ function readPositiveIntegerEnv(name, fallback) {
 }
 
 function normalizeUrl(rawUrl, path) {
+    const urlError = validateSpaceUrl(rawUrl);
+    if (urlError) {
+        throw new Error(urlError.replace('HF Space URL', 'HF_SPACE_KEEPALIVE_URL'));
+    }
     const baseUrl = new URL(rawUrl);
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     return new URL(normalizedPath, baseUrl).toString();
