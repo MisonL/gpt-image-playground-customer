@@ -2,12 +2,15 @@ import { MAX_IMAGE_COUNT, MAX_PROMPT_LENGTH } from './image-request-utils';
 import { AGENT_ENDPOINTS } from './agent-api-paths.mjs';
 import {
     AGENT_BACKGROUNDS,
+    AGENT_IMAGE_BACKENDS,
     AGENT_JOB_STATES,
     AGENT_MODERATIONS,
     AGENT_MODELS,
     AGENT_OUTPUT_FORMATS,
     AGENT_QUALITIES,
     AGENT_RESPONSE_MODES,
+    AGENT_STREAMING_STRATEGIES,
+    AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES,
     type AgentAuthScheme,
     buildAgentCapabilities,
     readAgentPublicBaseUrl
@@ -291,12 +294,57 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             }
                         },
                         endpoints: { type: 'object', additionalProperties: { type: 'string' } },
-                        defaults: { type: 'object' },
+                        defaults: {
+                            type: 'object',
+                            required: [
+                                'model',
+                                'response_mode',
+                                'state_backend',
+                                'image_backend',
+                                'streaming_strategy',
+                                'partial_images'
+                            ],
+                            properties: {
+                                model: { type: 'string', enum: AGENT_MODELS },
+                                response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES },
+                                state_backend: { type: 'string', enum: ['memory', 'sqlite', 'postgres'] },
+                                image_backend: { type: 'string', enum: AGENT_IMAGE_BACKENDS },
+                                streaming_strategy: { type: 'string', enum: AGENT_STREAMING_STRATEGIES },
+                                partial_images: { type: 'integer', minimum: 1, maximum: 3 }
+                            }
+                        },
                         limits: { type: 'object' },
                         model_limits: { $ref: '#/components/schemas/AgentModelLimits' },
                         agent_streaming: { $ref: '#/components/schemas/AgentStreamingCapabilities' },
                         agent_jobs: { $ref: '#/components/schemas/AgentJobCapabilities' },
-                        supported: { type: 'object' },
+                        supported: {
+                            type: 'object',
+                            required: [
+                                'models',
+                                'output_formats',
+                                'response_modes',
+                                'qualities',
+                                'backgrounds',
+                                'moderations',
+                                'legacy_sizes',
+                                'image_backends',
+                                'streaming_strategies'
+                            ],
+                            properties: {
+                                models: { type: 'array', items: { type: 'string', enum: AGENT_MODELS } },
+                                output_formats: { type: 'array', items: { type: 'string', enum: AGENT_OUTPUT_FORMATS } },
+                                response_modes: { type: 'array', items: { type: 'string', enum: AGENT_RESPONSE_MODES } },
+                                qualities: { type: 'array', items: { type: 'string', enum: AGENT_QUALITIES } },
+                                backgrounds: { type: 'array', items: { type: 'string', enum: AGENT_BACKGROUNDS } },
+                                moderations: { type: 'array', items: { type: 'string', enum: AGENT_MODERATIONS } },
+                                legacy_sizes: { type: 'array', items: { type: 'string' } },
+                                image_backends: { type: 'array', items: { type: 'string', enum: AGENT_IMAGE_BACKENDS } },
+                                streaming_strategies: {
+                                    type: 'array',
+                                    items: { type: 'string', enum: AGENT_STREAMING_STRATEGIES }
+                                }
+                            }
+                        },
                         storage: {
                             type: 'object',
                             required: ['image_storage_mode', 'postgres_configured'],
@@ -361,7 +409,16 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         edit: { $ref: '#/components/schemas/AgentEndpointStreamingCapability' },
                         upstream_sse: {
                             type: 'object',
-                            required: ['supported', 'mode', 'endpoint', 'request_fields', 'final_response_contract'],
+                            required: [
+                                'supported',
+                                'mode',
+                                'endpoint',
+                                'request_fields',
+                                'image_backends',
+                                'streaming_strategies',
+                                'activation_strategies',
+                                'final_response_contract'
+                            ],
                             properties: {
                                 supported: { type: 'boolean', const: true },
                                 mode: { type: 'string', enum: ['internal_upstream_sse'] },
@@ -370,6 +427,15 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     type: 'array',
                                     items: { type: 'string' },
                                     const: ['image_backend', 'streaming_strategy', 'partial_images']
+                                },
+                                image_backends: { type: 'array', items: { type: 'string', enum: AGENT_IMAGE_BACKENDS } },
+                                streaming_strategies: {
+                                    type: 'array',
+                                    items: { type: 'string', enum: AGENT_STREAMING_STRATEGIES }
+                                },
+                                activation_strategies: {
+                                    type: 'array',
+                                    items: { type: 'string', enum: AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES }
                                 },
                                 final_response_contract: { type: 'string', enum: ['AgentImageResponse'] }
                             }
@@ -438,19 +504,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES, default: 'path' },
                         image_backend: {
                             type: 'string',
-                            enum: ['images-api', 'responses-image-generation', 'images', 'responses'],
+                            enum: AGENT_IMAGE_BACKENDS,
                             default: 'images-api'
                         },
                         streaming_strategy: {
                             type: 'string',
-                            enum: [
-                                'off',
-                                'auto',
-                                'openai-sse',
-                                'newapi-keepalive-sse',
-                                'responses-sse',
-                                'force-sse'
-                            ],
+                            enum: AGENT_STREAMING_STRATEGIES,
                             default: 'off'
                         },
                         partial_images: { type: 'integer', minimum: 1, maximum: 3, default: 2 }

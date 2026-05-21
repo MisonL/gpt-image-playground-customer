@@ -38,6 +38,7 @@ export class InvalidOpenAiImagesResponseError extends Error {
 
 export class MissingOpenAiImageDataError extends Error {
     readonly index: number;
+    readonly status = 502;
 
     constructor(index: number) {
         super(`索引 ${index} 的图片数据缺少 base64 数据。`);

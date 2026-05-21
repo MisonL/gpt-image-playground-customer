@@ -9,7 +9,7 @@ export const PNG_BASE64 =
 export function imageFormRequest(input: {
     apiBaseUrl: string;
     apiKey: string;
-    stream: boolean;
+    stream?: boolean;
     mode?: 'generate' | 'edit';
     imageBackend?: 'images' | 'responses' | 'images-api' | 'responses-image-generation';
     imageStreamingStrategy?: 'off' | 'auto' | 'openai-sse' | 'newapi-keepalive-sse' | 'responses-sse' | 'force-sse';
@@ -77,6 +77,26 @@ export async function startStreamingImageUpstream(
         }
         response.write('data: [DONE]\n\n');
         response.end();
+    });
+    return listen(server);
+}
+
+export async function startImagesJsonUpstream(
+    handler: (body: string, url: string) => Promise<unknown>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer(async (request, response) => {
+        const isImagePath = request.url?.endsWith('/images/generations') || request.url?.endsWith('/images/edits');
+        if (request.method !== 'POST' || !isImagePath) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const payload = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(payload));
     });
     return listen(server);
 }

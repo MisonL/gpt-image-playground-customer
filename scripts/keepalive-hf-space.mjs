@@ -6,7 +6,6 @@ import { validateSpaceUrl } from './hf-space-doctor-utils.mjs';
 const DEFAULT_SPACE_URL = 'https://misonl-gpt-image-playground-customer.hf.space';
 const DEFAULT_KEEPALIVE_PATH = '/api/auth-status';
 const DEFAULT_TIMEOUT_MS = 30_000;
-
 function normalizeUrl(rawUrl, path) {
     const urlError = validateSpaceUrl(rawUrl);
     if (urlError) {

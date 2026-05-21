@@ -138,3 +138,16 @@ export function resolveImageStreamEnabled(input: {
 
     return true;
 }
+
+export function shouldRecommendImageStreaming(input: {
+    streamingStrategy: ImageStreamingStrategy;
+    quality: 'low' | 'medium' | 'high' | 'auto';
+    width: number;
+    height: number;
+    streamEnabled: boolean;
+}): boolean {
+    if (input.streamEnabled || input.streamingStrategy !== 'auto' || input.quality !== 'high') {
+        return false;
+    }
+    return Math.max(input.width, input.height) >= 3072;
+}

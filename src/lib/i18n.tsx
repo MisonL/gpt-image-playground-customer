@@ -76,6 +76,8 @@ const messages: Record<Locale, Record<string, string>> = {
         'streaming.description': '生成过程中显示局部预览图，交互反馈更及时。',
         'streaming.batchDescription': '并发批处理已启用：每张图会拆成独立流式任务。',
         'streaming.costHint': '每张预览图约增加约 $0.003 成本（额外 100 个输出 token）。',
+        'streaming.highResolutionRecommendation':
+            '当前是 high 质量 4K 级请求，建议启用流式预览或选择支持 keepalive SSE 的上游。',
         'upstream.backend': '图片生成后端',
         'upstream.backendImages': 'Images API',
         'upstream.backendResponses': 'Responses image_generation',
@@ -126,6 +128,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'output.generating': '正在生成图片...',
         'output.editing': '正在编辑图片...',
         'output.streaming': '流式生成中...',
+        'output.keepalive': '连接保持中...',
         'output.sendToEdit': '发送到编辑',
         'output.download': '下载',
         'output.share': '分享',
@@ -360,6 +363,8 @@ const messages: Record<Locale, Record<string, string>> = {
             'Shows partial preview images as they are generated, providing a more interactive experience.',
         'streaming.batchDescription': 'Batch streaming is enabled: each image runs as a separate streaming job.',
         'streaming.costHint': 'Each preview image adds about $0.003 to the cost (100 additional output tokens).',
+        'streaming.highResolutionRecommendation':
+            'This is a high quality 4K-class request. Streaming preview or a keepalive SSE upstream is recommended.',
         'upstream.backend': 'Image backend',
         'upstream.backendImages': 'Images API',
         'upstream.backendResponses': 'Responses image_generation',
@@ -411,6 +416,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'output.generating': 'Generating image...',
         'output.editing': 'Editing image...',
         'output.streaming': 'Streaming...',
+        'output.keepalive': 'Connection kept alive...',
         'output.sendToEdit': 'Send to Edit',
         'output.download': 'Download',
         'output.share': 'Share',

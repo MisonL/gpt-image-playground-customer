@@ -369,8 +369,9 @@ export default function HomePage() {
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
 
     // 流式状态，由生成和编辑模式共用。
-    const [enableStreaming, setEnableStreaming] = React.useState(true);
+    const [enableStreaming, setEnableStreaming] = React.useState(false);
     const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(1);
+    const [activeRequestStreaming, setActiveRequestStreaming] = React.useState(false);
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
@@ -1067,6 +1068,7 @@ export default function HomePage() {
         let durationMs = 0;
 
         setIsLoading(true);
+        setActiveRequestStreaming(requestStreaming);
         setError(null);
         setLatestImageBatch(null);
         setImageOutputView('grid');
@@ -1181,6 +1183,7 @@ export default function HomePage() {
             await refreshRuntimeCapabilities();
         } finally {
             if (durationMs === 0) durationMs = Date.now() - startTime;
+            setActiveRequestStreaming(false);
             setIsLoading(false);
         }
     }
@@ -1700,6 +1703,7 @@ export default function HomePage() {
                                     currentMode={mode}
                                     baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
                                     streamingPreviewImages={streamingPreviewImages}
+                                    isStreamingRequest={activeRequestStreaming}
                                     clientPasswordHash={clientPasswordHash}
                                     canOpenLogs={canOpenLogs}
                                     openLogsSignal={openLogsSignal}

@@ -63,6 +63,7 @@ export type ImageStreamResponseOptions = {
 
 type StreamState = {
     completedImages: CompletedImage[];
+    completedImagePayloads: Set<string>;
     finalUsage?: ImageUsage;
     imageIndex: number;
 };
@@ -217,7 +218,21 @@ async function consumeUpstreamStream(runtime: StreamRuntime): Promise<boolean> {
             normalizedEventCount: diagnostics.events.length
         });
         for (const normalizedEvent of diagnostics.events) {
+            if (
+                normalizedEvent.type === 'completed' &&
+                runtime.state.completedImagePayloads.has(normalizedEvent.b64Json)
+            ) {
+                if (normalizedEvent.usage) {
+                    runtime.state.finalUsage = normalizedEvent.usage;
+                }
+                continue;
+            }
             if (!(await emitNormalizedEvent(runtime, normalizedEvent))) return false;
+        }
+        for (const normalizedEvent of diagnostics.events) {
+            if (normalizedEvent.type === 'completed') {
+                runtime.state.completedImagePayloads.add(normalizedEvent.b64Json);
+            }
         }
     }
     return true;
@@ -272,7 +287,7 @@ export function createImageStreamResponse(options: ImageStreamResponseOptions): 
                 options,
                 batchId,
                 sse,
-                state: { completedImages: [], imageIndex: 0 }
+                state: { completedImages: [], completedImagePayloads: new Set(), imageIndex: 0 }
             };
             try {
                 if (!(await consumeUpstreamStream(runtime))) return;

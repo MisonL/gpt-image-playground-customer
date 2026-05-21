@@ -1,0 +1,606 @@
+#!/usr/bin/env node
+import fs from 'node:fs';
+
+const originalEnv = { ...process.env };
+const CASES = [
+    { id: 'original-images-json', prefix: 'IMAGE_REAL_SMOKE_ORIGINAL', stream: false },
+    { id: 'gaoren-images-sse', prefix: 'IMAGE_REAL_SMOKE_GAOREN', stream: true, strategy: 'newapi-keepalive-sse' },
+    { id: 'sub2api-images-sse', prefix: 'IMAGE_REAL_SMOKE_SUB2API', stream: true, strategy: 'newapi-keepalive-sse' },
+    {
+        id: 'sub2api-responses-json',
+        prefix: 'IMAGE_REAL_SMOKE_SUB2API_RESPONSES',
+        fallbackPrefix: 'IMAGE_REAL_SMOKE_SUB2API',
+        stream: false,
+        backend: 'responses-image-generation'
+    },
+    {
+        id: 'gpt2image-responses-sse',
+        prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE',
+        stream: true,
+        strategy: 'responses-sse',
+        backend: 'responses-image-generation'
+    }
+];
+const SERVER_CHANNEL_CASES = [
+    { id: 'server-channel-images-json', prefix: 'IMAGE_REAL_SMOKE_SERVER', stream: false, serverChannel: true },
+    {
+        id: 'server-channel-images-sse',
+        prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        stream: true,
+        strategy: 'newapi-keepalive-sse',
+        serverChannel: true
+    },
+    {
+        id: 'server-channel-responses-sse',
+        prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        stream: true,
+        strategy: 'responses-sse',
+        backend: 'responses-image-generation',
+        serverChannel: true
+    },
+    {
+        id: 'server-channel-responses-json',
+        prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        stream: false,
+        backend: 'responses-image-generation',
+        serverChannel: true
+    },
+    {
+        id: 'server-channel-agent-images-sse',
+        prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        stream: true,
+        strategy: 'newapi-keepalive-sse',
+        serverChannel: true,
+        endpoint: 'agent-generate'
+    },
+    {
+        id: 'server-channel-agent-responses-sse',
+        prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        stream: true,
+        strategy: 'responses-sse',
+        backend: 'responses-image-generation',
+        serverChannel: true,
+        endpoint: 'agent-generate'
+    }
+];
+
+const argv = process.argv.slice(2);
+if (!isHelpRequested(argv)) loadDotEnvFiles(argv);
+const options = parseArgs(argv);
+if (options.help) {
+    printUsage();
+    process.exit(0);
+}
+
+try {
+    configureRouteEnv();
+    const availableCases = options.includeServerChannel ? [...CASES, ...SERVER_CHANNEL_CASES] : CASES;
+    const selectedCases = availableCases.filter((testCase) => options.caseId === 'all' || testCase.id === options.caseId);
+    if (selectedCases.length === 0) throw new Error(`未知真实 smoke 场景：${options.caseId}`);
+    const results = [];
+    let routeHandlers;
+    for (const testCase of selectedCases) {
+        const loadHandlers = async () => {
+            routeHandlers ||= await loadRouteHandlers();
+            return routeHandlers;
+        };
+        const result = await runCase(loadHandlers, testCase);
+        results.push(result);
+        if (result.timed_out) break;
+    }
+    const independentTargetSummary = buildIndependentTargetSummary(results, options.requireIndependentTargets);
+    const unselectedRequiredCases = options.requireIndependentTargets
+        ? independentTargetSummary?.unselected_required_cases || []
+        : [];
+    const skippedRequiredCases = options.requireIndependentTargets
+        ? results.filter((item) => item.skipped && !item.server_channel).map((item) => item.id)
+        : [];
+    const missingRequiredCaseSet = new Set([...unselectedRequiredCases, ...skippedRequiredCases]);
+    const missingRequiredCases = CASES.map((testCase) => testCase.id).filter((id) => missingRequiredCaseSet.has(id));
+    const finalGateSatisfied = isFinalGateSatisfied(results, missingRequiredCases);
+    const report = {
+        ok: results.every((item) => item.ok || item.skipped) && missingRequiredCases.length === 0,
+        billable: options.allowBillable,
+        final_gate_satisfied: finalGateSatisfied,
+        ...(independentTargetSummary ? { independent_targets: independentTargetSummary } : {}),
+        ...(unselectedRequiredCases.length > 0 ? { unselected_required_cases: unselectedRequiredCases } : {}),
+        ...(skippedRequiredCases.length > 0 ? { skipped_required_cases: skippedRequiredCases } : {}),
+        ...(missingRequiredCases.length > 0 ? { missing_required_count: missingRequiredCases.length } : {}),
+        ...(missingRequiredCases.length > 0 ? { missing_required_cases: missingRequiredCases } : {}),
+        results
+    };
+    console.log(JSON.stringify(report, null, 2));
+    process.exit(report.ok ? 0 : 1);
+} catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+} finally {
+    restoreProcessEnv();
+}
+
+function isFinalGateSatisfied(results, missingRequiredCases) {
+    if (!options.requireIndependentTargets || !options.allowBillable || missingRequiredCases.length > 0) return false;
+    const passedIndependentCases = new Set(
+        results.filter((item) => !item.server_channel && !item.skipped && item.ok).map((item) => item.id)
+    );
+    return CASES.every((testCase) => passedIndependentCases.has(testCase.id));
+}
+
+function parseArgs(argv) {
+    const parsed = {
+        allowBillable: false,
+        caseId: 'all',
+        envFilePath: undefined,
+        help: false,
+        includeServerChannel: false,
+        requireIndependentTargets: false,
+        timeoutMs: readTimeoutMs(env('IMAGE_REAL_SMOKE_TIMEOUT_MS') || '240000', 'IMAGE_REAL_SMOKE_TIMEOUT_MS')
+    };
+    for (let index = 0; index < argv.length; index += 1) {
+        const arg = argv[index];
+        if (arg === '--allow-billable') parsed.allowBillable = true;
+        else if (arg === '--env-file') parsed.envFilePath = readArgValue(argv, (index += 1), arg);
+        else if (arg === '--include-server-channel') parsed.includeServerChannel = true;
+        else if (arg === '--require-independent-targets') parsed.requireIndependentTargets = true;
+        else if (arg === '--timeout-ms') parsed.timeoutMs = readTimeoutMs(readArgValue(argv, (index += 1), arg), arg);
+        else if (arg === '--case') parsed.caseId = readArgValue(argv, (index += 1), arg);
+        else if (arg === '--help' || arg === '-h') parsed.help = true;
+        else throw new Error(`未知参数：${arg}`);
+    }
+    return parsed;
+}
+
+function isHelpRequested(argv) {
+    return argv.includes('--help') || argv.includes('-h');
+}
+
+function readTimeoutMs(value, source) {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1000) {
+        throw new Error(`${source} 必须是不小于 1000 的整数毫秒。`);
+    }
+    return parsed;
+}
+
+function readArgValue(argv, index, flag) {
+    const value = argv[index];
+    if (!value || value.startsWith('--')) throw new Error(`${flag} 缺少参数值。`);
+    return value;
+}
+
+function loadDotEnvFiles(argv) {
+    if (env('IMAGE_REAL_SMOKE_SKIP_DOTENV') !== '1') {
+        loadEnvFileIfPresent('.env.local', { overrideLoadedValues: false });
+    }
+    for (let index = 0; index < argv.length; index += 1) {
+        if (argv[index] !== '--env-file') continue;
+        loadEnvFile(readArgValue(argv, (index += 1), '--env-file'), { overrideLoadedValues: true });
+    }
+}
+
+function loadEnvFileIfPresent(filepath, options) {
+    if (!fs.existsSync(filepath)) return;
+    loadEnvFile(filepath, options);
+}
+
+function loadEnvFile(filepath, options) {
+    if (!fs.existsSync(filepath)) throw new Error(`--env-file 指定的文件不存在：${filepath}`);
+    for (const line of fs.readFileSync(filepath, 'utf8').split(/\r?\n/)) {
+        const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+        if (!match || !shouldSetLoadedEnv(match[1], options)) continue;
+        process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '').trim();
+    }
+}
+
+function shouldSetLoadedEnv(key, options) {
+    if (originalEnv[key] !== undefined) return false;
+    return options.overrideLoadedValues || process.env[key] === undefined;
+}
+
+function restoreProcessEnv() {
+    for (const key of Object.keys(process.env)) {
+        if (!(key in originalEnv)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(originalEnv)) process.env[key] = value;
+}
+
+function configureRouteEnv() {
+    process.env.APP_LOG_LEVEL = 'warn';
+    process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE = 'indexeddb';
+    process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+    process.env.AGENT_STATE_BACKEND = 'memory';
+    process.env.IMAGE_OUTPUT_DIR = process.env.IMAGE_OUTPUT_DIR || 'generated-images/.real-smoke';
+}
+
+async function loadRouteHandlers() {
+    const imageRoute = await import('../src/app/api/images/route.ts');
+    const agentGenerateRoute = await import('../src/app/api/agent/images/generate/route.ts');
+    return {
+        images: readPostHandler(imageRoute, '/api/images'),
+        agentGenerate: readPostHandler(agentGenerateRoute, '/api/agent/images/generate')
+    };
+}
+
+function readPostHandler(routeModule, label) {
+    const handler = routeModule.POST || routeModule.default?.POST || routeModule['module.exports']?.POST;
+    if (typeof handler !== 'function') {
+        throw new Error(`${label} route 缺少 POST handler。`);
+    }
+    return handler;
+}
+
+async function runCase(loadRouteHandlersForBillable, testCase) {
+    const target = readTarget(testCase);
+    validateTarget(testCase, target);
+    if (!isRunnableTarget(target)) return skipped(testCase, target);
+    if (!options.allowBillable) {
+        return {
+            id: testCase.id,
+            skipped: true,
+            ok: true,
+            reason: 'requires --allow-billable',
+            upstream_host: readHost(target.baseUrl),
+            ...(target.serverChannel ? { server_channel: true } : {})
+        };
+    }
+    const startedAt = Date.now();
+    const routeHandlers = await loadRouteHandlersForBillable();
+    return withCaseTimeout(runBillableCase(routeHandlers, testCase, target, startedAt), testCase, target, startedAt);
+}
+
+async function runBillableCase(routeHandlers, testCase, target, startedAt) {
+    const outputFilesBefore = snapshotRealSmokeOutputFiles();
+    if (testCase.endpoint === 'agent-generate' && testCase.backend === 'responses-image-generation') {
+        process.env.OPENAI_RESPONSES_API_MODEL = target.responsesModel;
+    }
+    try {
+        const response =
+            testCase.endpoint === 'agent-generate'
+                ? await routeHandlers.agentGenerate(agentGenerateRequest(testCase, target))
+                : await routeHandlers.images(imageRequest(testCase, target));
+        return {
+            id: testCase.id,
+            ok: response.ok,
+            status: response.status,
+            elapsed_ms: Date.now() - startedAt,
+            upstream_host: readHost(target.baseUrl),
+            ...(target.serverChannel ? { server_channel: true } : {}),
+            ...(testCase.endpoint === 'agent-generate' ? await summarizeAgentResponse(response) : await summarizeResponse(response))
+        };
+    } finally {
+        removeNewRealSmokeOutputFiles(outputFilesBefore);
+    }
+}
+
+function withCaseTimeout(promise, testCase, target, startedAt) {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            resolve({
+                id: testCase.id,
+                ok: false,
+                timed_out: true,
+                elapsed_ms: Date.now() - startedAt,
+                upstream_host: readHost(target.baseUrl),
+                ...(target.serverChannel ? { server_channel: true } : {}),
+                error: `real upstream smoke timed out after ${options.timeoutMs}ms`
+            });
+        }, options.timeoutMs);
+        promise.then(
+            (value) => {
+                clearTimeout(timeout);
+                resolve(value);
+            },
+            (error) => {
+                clearTimeout(timeout);
+                reject(error);
+            }
+        );
+    });
+}
+
+function readTarget(testCase) {
+    const basePrefix = testCase.prefix;
+    const fallbackPrefix = testCase.fallbackPrefix || basePrefix;
+    if (testCase.serverChannel) {
+        return {
+            serverChannel: true,
+            baseUrl: env(`${basePrefix}_BASE_URL`) || readFirstConfiguredServerBaseUrl(),
+            hasServerCredential: Boolean(env('OPENAI_API_KEY') || readFirstConfiguredServerApiKeys()),
+            model: env(`${basePrefix}_MODEL`) || 'gpt-image-2',
+            responsesModel: env(`${basePrefix}_RESPONSES_MODEL`) || env('OPENAI_RESPONSES_API_MODEL') || 'gpt-5.4',
+            size: env(`${basePrefix}_SIZE`) || '1024x1024',
+            quality: env(`${basePrefix}_QUALITY`) || 'low'
+        };
+    }
+    return {
+        baseUrl: env(`${basePrefix}_BASE_URL`) || env(`${fallbackPrefix}_BASE_URL`),
+        apiKey: env(`${basePrefix}_API_KEY`) || env(`${fallbackPrefix}_API_KEY`),
+        model: env(`${basePrefix}_MODEL`) || env(`${fallbackPrefix}_MODEL`) || 'gpt-image-2',
+        responsesModel:
+            env(`${basePrefix}_RESPONSES_MODEL`) ||
+            env(`${fallbackPrefix}_RESPONSES_MODEL`) ||
+            env('OPENAI_RESPONSES_API_MODEL') ||
+            'gpt-5.4',
+        size: env(`${basePrefix}_SIZE`) || env(`${fallbackPrefix}_SIZE`) || '1024x1024',
+        quality: env(`${basePrefix}_QUALITY`) || env(`${fallbackPrefix}_QUALITY`) || 'low'
+    };
+}
+
+function isRunnableTarget(target) {
+    if (!target.baseUrl) return false;
+    if (target.serverChannel) return target.hasServerCredential;
+    return Boolean(target.apiKey);
+}
+
+function validateTarget(testCase, target) {
+    if (!target.baseUrl) return;
+    validateSmokeBaseUrl(target.baseUrl, readBaseUrlLabel(testCase, target));
+}
+
+function validateSmokeBaseUrl(value, label) {
+    let url;
+    try {
+        url = new URL(value);
+    } catch {
+        throw new Error(`${label} 必须是 http/https 绝对 URL。`);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error(`${label} 必须是 http/https 绝对 URL。`);
+    }
+    if (url.username || url.password || url.search || url.hash) {
+        throw new Error(`${label} 不能包含凭据、查询参数或片段。`);
+    }
+}
+
+function readBaseUrlLabel(testCase, target) {
+    if (target.serverChannel) {
+        return `${testCase.prefix}_BASE_URL 或 OPENAI_API_BASE_URL / OPENAI_CHANNEL_N_BASE_URL`;
+    }
+    return readSmokeEnvAlternatives(testCase, 'BASE_URL').join(' 或 ');
+}
+
+function skipped(testCase, target) {
+    const missingEnvAny = readMissingEnvAny(testCase, target);
+    return {
+        id: testCase.id,
+        skipped: true,
+        ok: true,
+        reason: readSkippedReason(target),
+        ...(missingEnvAny.length > 0 ? { missing_env_any: missingEnvAny } : {}),
+        ...(target.serverChannel ? { server_channel: true } : {})
+    };
+}
+
+function buildIndependentTargetSummary(results, requireIndependentTargets = false) {
+    const independentResults = results.filter((item) => !item.server_channel);
+    const requiredCases = CASES.map((testCase) => testCase.id);
+    if (independentResults.length === 0 && !requireIndependentTargets) return undefined;
+    const selectedCases = independentResults.map((item) => item.id);
+    const unselectedRequiredCases = requiredCases.filter((id) => !selectedCases.includes(id));
+    const configuredCases = independentResults
+        .filter((item) => !Array.isArray(item.missing_env_any) || item.missing_env_any.length === 0)
+        .map((item) => item.id);
+    const missingCases = independentResults
+        .filter((item) => Array.isArray(item.missing_env_any) && item.missing_env_any.length > 0)
+        .map((item) => item.id);
+    return {
+        required_count: requiredCases.length,
+        required_cases: requiredCases,
+        selected_cases: selectedCases,
+        unselected_required_count: unselectedRequiredCases.length,
+        unselected_required_cases: unselectedRequiredCases,
+        configuration_complete: unselectedRequiredCases.length === 0 && missingCases.length === 0,
+        selected_count: independentResults.length,
+        configured_count: configuredCases.length,
+        missing_count: missingCases.length,
+        configured_cases: configuredCases,
+        missing_cases: missingCases,
+        final_gate_command:
+            'npm run smoke:image-upstream-real -- --env-file .env.real-smoke.local --require-independent-targets --allow-billable'
+    };
+}
+
+function readSkippedReason(target) {
+    if (!target.baseUrl) return target.serverChannel ? 'missing server channel base url env' : 'missing base url env';
+    return target.serverChannel ? 'missing server channel api key env' : 'missing api key env';
+}
+
+function readMissingEnvAny(testCase, target) {
+    const groups = [];
+    if (!target.baseUrl) {
+        groups.push(readSmokeEnvAlternatives(testCase, 'BASE_URL'));
+    }
+    if (target.serverChannel && target.baseUrl && !target.hasServerCredential) {
+        groups.push(['OPENAI_API_KEY', 'OPENAI_CHANNEL_1_API_KEYS']);
+    }
+    if (!target.serverChannel && target.baseUrl && !target.apiKey) {
+        groups.push(readSmokeEnvAlternatives(testCase, 'API_KEY'));
+    }
+    return groups;
+}
+
+function readSmokeEnvAlternatives(testCase, suffix) {
+    const keys = [`${testCase.prefix}_${suffix}`];
+    if (testCase.fallbackPrefix && testCase.fallbackPrefix !== testCase.prefix) {
+        keys.push(`${testCase.fallbackPrefix}_${suffix}`);
+    }
+    return keys;
+}
+
+function env(key) {
+    const value = process.env[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readFirstConfiguredServerBaseUrl() {
+    return env('OPENAI_API_BASE_URL') || readFirstNumberedEnv('OPENAI_CHANNEL_', '_BASE_URL');
+}
+
+function readFirstConfiguredServerApiKeys() {
+    return env('OPENAI_API_KEY') || readFirstNumberedEnv('OPENAI_CHANNEL_', '_API_KEYS');
+}
+
+function readFirstNumberedEnv(prefix, suffix) {
+    for (let index = 1; index <= 20; index += 1) {
+        const value = env(`${prefix}${index}${suffix}`);
+        if (value) return value;
+    }
+    return undefined;
+}
+
+function imageRequest(testCase, target) {
+    const formData = new FormData();
+    const fields = {
+        mode: 'generate',
+        prompt: 'real upstream compatibility smoke',
+        model: target.model,
+        n: '1',
+        size: target.size,
+        quality: target.quality,
+        output_format: 'png',
+        clientRequestId: `real-smoke-${testCase.id}`
+    };
+    for (const [key, value] of Object.entries(fields)) formData.append(key, value);
+    if (!target.serverChannel) {
+        formData.append('apiBaseUrl', target.baseUrl);
+        formData.append('apiKey', target.apiKey);
+    }
+    if (testCase.backend) formData.append('imageBackend', testCase.backend);
+    if (testCase.strategy) formData.append('imageStreamingStrategy', testCase.strategy);
+    if (testCase.backend === 'responses-image-generation') formData.append('responsesModel', target.responsesModel);
+    if (testCase.stream) {
+        formData.append('stream', 'true');
+        formData.append('partial_images', '2');
+    }
+    return new Request('http://localhost/api/images', { method: 'POST', body: formData });
+}
+
+function agentGenerateRequest(testCase, target) {
+    return new Request('http://localhost/api/agent/images/generate', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': `real-smoke-${testCase.id}-${Date.now()}`
+        },
+        body: JSON.stringify({
+            prompt: 'real agent upstream sse compatibility smoke',
+            model: target.model,
+            n: 1,
+            size: target.size,
+            quality: target.quality,
+            output_format: 'png',
+            response_mode: 'path',
+            image_backend: testCase.backend || 'images-api',
+            streaming_strategy: testCase.strategy || 'off',
+            partial_images: 2
+        })
+    });
+}
+
+async function summarizeResponse(response) {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/event-stream')) return summarizeSse(await response.text());
+    return summarizeJson(await response.text(), contentType);
+}
+
+function summarizeSse(text) {
+    const events = text
+        .split('\n\n')
+        .map((part) => part.trim())
+        .filter((part) => part.startsWith('data: ') && part !== 'data: [DONE]')
+        .map((part) => safeJson(part.slice('data: '.length)))
+        .filter(Boolean);
+    const done = events.findLast((event) => event.type === 'done');
+    const error = events.findLast((event) => event.type === 'error');
+    return {
+        content_type: 'text/event-stream',
+        event_types: events.map((event) => event.type || 'unknown'),
+        done_image_count: Array.isArray(done?.images) ? done.images.length : 0,
+        first_b64_length: readFirstB64Length(done?.images),
+        ...(error ? { error: String(error.error || 'stream error') } : {})
+    };
+}
+
+function summarizeJson(text, contentType) {
+    const body = safeJson(text);
+    return {
+        content_type: contentType || undefined,
+        image_count: Array.isArray(body?.images) ? body.images.length : 0,
+        first_b64_length: readFirstB64Length(body?.images),
+        ...(body?.error ? { error: String(body.error) } : {})
+    };
+}
+
+async function summarizeAgentResponse(response) {
+    const contentType = response.headers.get('content-type') || '';
+    const body = safeJson(await response.text());
+    return {
+        content_type: contentType || undefined,
+        image_count: Array.isArray(body?.images) ? body.images.length : 0,
+        first_content_url: typeof body?.images?.[0]?.content_url === 'string' ? body.images[0].content_url : undefined,
+        has_inline_base64: Boolean(body?.images?.[0]?.b64_json),
+        ...(body?.error ? { error: String(body.error.message || body.error) } : {})
+    };
+}
+
+function readFirstB64Length(images) {
+    if (!Array.isArray(images) || typeof images[0]?.b64_json !== 'string') return 0;
+    return images[0].b64_json.length;
+}
+
+function safeJson(text) {
+    try {
+        return JSON.parse(text);
+    } catch {
+        return undefined;
+    }
+}
+
+function readHost(value) {
+    try {
+        return new URL(value).host;
+    } catch {
+        return 'invalid-url';
+    }
+}
+
+function snapshotRealSmokeOutputFiles() {
+    const outputDir = readRealSmokeOutputDir();
+    if (!outputDir || !fs.existsSync(outputDir)) return new Set();
+    return new Set(fs.readdirSync(outputDir).filter(isGeneratedImageFile));
+}
+
+function removeNewRealSmokeOutputFiles(filesBefore) {
+    const outputDir = readRealSmokeOutputDir();
+    if (!outputDir || !fs.existsSync(outputDir)) return;
+    for (const filename of fs.readdirSync(outputDir).filter(isGeneratedImageFile)) {
+        if (filesBefore.has(filename)) continue;
+        fs.rmSync(`${outputDir}/${filename}`, { force: true });
+    }
+}
+
+function readRealSmokeOutputDir() {
+    return process.env.IMAGE_OUTPUT_DIR === 'generated-images/.real-smoke' ? process.env.IMAGE_OUTPUT_DIR : undefined;
+}
+
+function isGeneratedImageFile(filename) {
+    return /\.(png|jpe?g|webp)$/i.test(filename);
+}
+
+function printUsage() {
+    console.log(`用法：npm run smoke:image-upstream-real -- [--env-file <path>] [--allow-billable] [--include-server-channel] [--require-independent-targets] [--timeout-ms <ms>] [--case <id>]
+
+环境变量前缀：
+  IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL / IMAGE_REAL_SMOKE_ORIGINAL_API_KEY
+  IMAGE_REAL_SMOKE_GAOREN_BASE_URL / IMAGE_REAL_SMOKE_GAOREN_API_KEY
+  IMAGE_REAL_SMOKE_SUB2API_BASE_URL / IMAGE_REAL_SMOKE_SUB2API_API_KEY
+  IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL / IMAGE_REAL_SMOKE_SUB2API_RESPONSES_API_KEY
+  IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL / IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY
+  IMAGE_REAL_SMOKE_SERVER_* 可覆盖当前服务端渠道的 MODEL / SIZE / QUALITY / RESPONSES_MODEL
+
+可选 --case：all、original-images-json、gaoren-images-sse、sub2api-images-sse、sub2api-responses-json、gpt2image-responses-sse。
+添加 --include-server-channel 后还可运行：server-channel-images-json、server-channel-images-sse、server-channel-responses-sse、server-channel-responses-json、server-channel-agent-images-sse、server-channel-agent-responses-sse。
+默认只检查配置并跳过真实生图；必须加 --allow-billable 才会调用 /api/images 或 /api/agent/images/generate。
+可用 --env-file 指向独立真实上游凭据文件；shell 环境变量优先级高于 --env-file，--env-file 优先级高于 .env.local。
+添加 --require-independent-targets 后，任何独立真实上游场景未被选中或被跳过都会使脚本退出非零。默认单场景超时为 240000ms。`);
+}

@@ -13,6 +13,17 @@ import {
   sleep
 } from './lib/script-utils.mjs';
 
+const IMAGE_BACKENDS = new Set(['images-api', 'images', 'responses', 'responses-image-generation']);
+const STREAMING_STRATEGIES = new Set([
+  'off',
+  'auto',
+  'openai-sse',
+  'newapi-keepalive-sse',
+  'responses-sse',
+  'force-sse'
+]);
+const MIN_PARTIAL_IMAGES = 1;
+const MAX_PARTIAL_IMAGES = 3;
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1' || process.argv.includes('--contract-check');
@@ -200,14 +211,30 @@ function buildDryRunRequestBody(parsed) {
 }
 
 function addUpstreamStrategyFields(body, parsed) {
+  validateUpstreamStrategyOptions(parsed);
   return {
     ...body,
     ...(parsed.imageBackend ? { image_backend: parsed.imageBackend } : {}),
     ...(parsed.streamingStrategy ? { streaming_strategy: parsed.streamingStrategy } : {}),
-    ...(parsed.partialImages
-      ? { partial_images: readConfiguredPositiveInteger(parsed.partialImages, '--partial-images', 2) }
-      : {})
+    ...(parsed.partialImages ? { partial_images: readPartialImages(parsed.partialImages) } : {})
   };
+}
+
+function validateUpstreamStrategyOptions(parsed) {
+  if (parsed.imageBackend && !IMAGE_BACKENDS.has(parsed.imageBackend)) {
+    throw new Error('--image-backend 必须是 images-api、images、responses 或 responses-image-generation。');
+  }
+  if (parsed.streamingStrategy && !STREAMING_STRATEGIES.has(parsed.streamingStrategy)) {
+    throw new Error('--streaming-strategy 必须是 off、auto、openai-sse、newapi-keepalive-sse、responses-sse 或 force-sse。');
+  }
+}
+
+function readPartialImages(value) {
+  const parsed = readConfiguredPositiveInteger(value, '--partial-images', 2);
+  if (parsed < MIN_PARTIAL_IMAGES || parsed > MAX_PARTIAL_IMAGES) {
+    throw new Error('--partial-images 必须是 1 到 3 的整数。');
+  }
+  return parsed;
 }
 
 function hasPromptSource(parsed) {

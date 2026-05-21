@@ -44,6 +44,21 @@ export const AGENT_BACKGROUNDS = ['transparent', 'opaque', 'auto'] as const;
 export const AGENT_MODERATIONS = ['low', 'auto'] as const;
 export const AGENT_LEGACY_SIZES = ['auto', '1024x1024', '1536x1024', '1024x1536'] as const;
 export const AGENT_JOB_STATES = ['queued', 'running', 'succeeded', 'failed', 'expired'] as const;
+export const AGENT_IMAGE_BACKENDS = ['images-api', 'responses-image-generation'] as const;
+export const AGENT_STREAMING_STRATEGIES = [
+    'off',
+    'auto',
+    'openai-sse',
+    'newapi-keepalive-sse',
+    'responses-sse',
+    'force-sse'
+] as const;
+export const AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES = [
+    'openai-sse',
+    'newapi-keepalive-sse',
+    'responses-sse',
+    'force-sse'
+] as const;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
 export type AgentAuthScheme = 'bearer' | 'x-app-password-hash';
@@ -126,6 +141,9 @@ export type AgentCapabilities = {
         model: GptImageModel;
         response_mode: AgentResponseMode;
         state_backend: AgentStateBackend;
+        image_backend: ImageGenerationBackend;
+        streaming_strategy: ImageStreamingStrategy;
+        partial_images: 1 | 2 | 3;
     };
     limits: {
         max_prompt_length: number;
@@ -163,6 +181,9 @@ export type AgentCapabilities = {
             mode: 'internal_upstream_sse';
             endpoint: string;
             request_fields: ['image_backend', 'streaming_strategy', 'partial_images'];
+            image_backends: readonly ImageGenerationBackend[];
+            streaming_strategies: readonly ImageStreamingStrategy[];
+            activation_strategies: readonly ImageStreamingStrategy[];
             final_response_contract: 'AgentImageResponse';
         };
         page_sse: {
@@ -192,6 +213,8 @@ export type AgentCapabilities = {
         backgrounds: readonly string[];
         moderations: readonly string[];
         legacy_sizes: readonly string[];
+        image_backends: readonly ImageGenerationBackend[];
+        streaming_strategies: readonly ImageStreamingStrategy[];
     };
     storage: {
         image_storage_mode: string;
@@ -504,7 +527,10 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         defaults: {
             model: 'gpt-image-2',
             response_mode: 'path',
-            state_backend: readAgentStateBackend(env)
+            state_backend: readAgentStateBackend(env),
+            image_backend: 'images-api',
+            streaming_strategy: 'off',
+            partial_images: 2
         },
         limits: {
             max_prompt_length: MAX_PROMPT_LENGTH,
@@ -546,6 +572,9 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 mode: 'internal_upstream_sse',
                 endpoint: AGENT_ENDPOINTS.generate,
                 request_fields: ['image_backend', 'streaming_strategy', 'partial_images'],
+                image_backends: AGENT_IMAGE_BACKENDS,
+                streaming_strategies: AGENT_STREAMING_STRATEGIES,
+                activation_strategies: AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES,
                 final_response_contract: 'AgentImageResponse'
             },
             page_sse: {
@@ -571,7 +600,9 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             qualities: AGENT_QUALITIES,
             backgrounds: AGENT_BACKGROUNDS,
             moderations: AGENT_MODERATIONS,
-            legacy_sizes: AGENT_LEGACY_SIZES
+            legacy_sizes: AGENT_LEGACY_SIZES,
+            image_backends: AGENT_IMAGE_BACKENDS,
+            streaming_strategies: AGENT_STREAMING_STRATEGIES
         },
         storage: {
             image_storage_mode: env.NEXT_PUBLIC_IMAGE_STORAGE_MODE || (env.VERCEL === '1' ? 'indexeddb' : 'fs'),

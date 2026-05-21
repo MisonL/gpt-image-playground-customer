@@ -132,11 +132,14 @@ describe('appLogger', { concurrency: false }, () => {
 
         const entries = readAppLogEntries();
         assert.equal(entries.length, 2);
-        assert.equal(entries[0].level, 'info');
-        assert.equal(entries[0].message, 'visible info');
-        assert.equal(typeof entries[0].context, 'string');
-        assert.equal(entries[0].clientRequestId, undefined);
-        assert.match(entries[0].context, /"requestId": "req-3"/);
+        const firstEntry = entries[0];
+        assert.ok(firstEntry);
+        assert.equal(firstEntry.level, 'info');
+        assert.equal(firstEntry.message, 'visible info');
+        assert.equal(typeof firstEntry.context, 'string');
+        assert.equal(firstEntry.clientRequestId, undefined);
+        assert.ok(firstEntry.context);
+        assert.match(firstEntry.context, /"requestId": "req-3"/);
         assert.deepEqual(received, ['info:visible info']);
     });
 

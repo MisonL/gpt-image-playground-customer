@@ -13,9 +13,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
-import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
+import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
-import type { ImageGenerationBackend, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import {
+    shouldRecommendImageStreaming,
+    type ImageGenerationBackend,
+    type ImageStreamingStrategy
+} from '@/lib/image-upstream-strategy';
 import {
     Square,
     RectangleHorizontal,
@@ -136,6 +140,21 @@ const RadioItemWithIcon = ({
     );
 };
 
+function readConcreteSize(input: {
+    size: SizePreset;
+    model: GptImageModel;
+    customWidth: number;
+    customHeight: number;
+}): { width: number; height: number } | null {
+    if (input.size === 'custom') {
+        return { width: input.customWidth, height: input.customHeight };
+    }
+    const preset = getPresetDimensions(input.size, input.model);
+    if (!preset) return null;
+    const [width, height] = preset.split('x').map(Number);
+    return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null;
+}
+
 export function GenerationForm({
     onSubmit,
     isLoading,
@@ -197,6 +216,19 @@ export function GenerationForm({
 
     const streamingDisabledByCount = n[0] > 1 && !allowStreamingBatch;
     const streamingDisabledByStrategy = streamingStrategy === 'off';
+    const concreteSize = readConcreteSize({ size, model, customWidth, customHeight });
+    const recommendStreaming =
+        !streamingDisabledByCount &&
+        Boolean(
+            concreteSize &&
+                shouldRecommendImageStreaming({
+                    streamingStrategy,
+                    quality,
+                    width: concreteSize.width,
+                    height: concreteSize.height,
+                    streamEnabled: enableStreaming
+                })
+        );
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
@@ -326,6 +358,11 @@ export function GenerationForm({
                                           : t('streaming.description')}
                                 </TooltipContent>
                             </Tooltip>
+                            {recommendStreaming && (
+                                <p className='text-xs text-amber-700 dark:text-amber-300'>
+                                    {t('streaming.highResolutionRecommendation')}
+                                </p>
+                            )}
                         </div>
                     </div>
 

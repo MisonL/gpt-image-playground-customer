@@ -119,6 +119,21 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                 }
             ]
         );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.partial_image',
+                b64_json: 'responses-partial-b64-json',
+                partial_image_index: 1
+            }),
+            [
+                {
+                    type: 'partial_image',
+                    b64Json: 'responses-partial-b64-json',
+                    partialImageIndex: 1
+                }
+            ]
+        );
     });
 
     it('maps Responses output item image results to completed events', () => {
@@ -136,6 +151,178 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                     b64Json: 'responses-final-base64'
                 }
             ]
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    result: 'data:image/png;base64,responses-data-url-final-base64'
+                }
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-data-url-final-base64'
+                }
+            ]
+        );
+    });
+
+    it('recognizes Responses image generation completed markers without requiring them to carry final images', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.completed',
+                item_id: 'ig_123'
+            }),
+            []
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.completed',
+                item: {
+                    type: 'image_generation_call',
+                    result: 'responses-completed-final-base64'
+                }
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-completed-final-base64'
+                }
+            ]
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.completed',
+                result: 'responses-completed-top-level-final-base64'
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-completed-top-level-final-base64'
+                }
+            ]
+        );
+    });
+
+    it('ignores Responses output item done events when they do not carry image results', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'message',
+                    content: [{ type: 'output_text', text: 'done' }]
+                }
+            }),
+            []
+        );
+    });
+
+    it('fails explicitly when Responses output item done reports a failed image result', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        status: 'failed',
+                        error: {
+                            code: 'content_policy_violation',
+                            message: 'blocked by upstream policy'
+                        }
+                    }
+                }),
+            /blocked by upstream policy/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.completed',
+                    response: {
+                        output: [
+                            {
+                                type: 'image_generation_call',
+                                status: 'failed',
+                                error: {
+                                    message: 'responses completed image failed'
+                                }
+                            }
+                        ]
+                    }
+                }),
+            /responses completed image failed/
+        );
+    });
+
+    it('fails explicitly when Responses output item done lacks a final image result', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        status: 'completed'
+                    }
+                }),
+            /image_generation_call\.result/
+        );
+    });
+
+    it('fails explicitly when Responses image results only contain remote URLs', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: 'https://example.test/image.png'
+                    }
+                }),
+            /远程 URL/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        url: 'https://example.test/image.png'
+                    }
+                }),
+            /远程 URL/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.image_generation_call.completed',
+                    url: 'https://example.test/image.png'
+                }),
+            /远程 URL/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.completed',
+                    response: {
+                        output: [
+                            {
+                                type: 'image_generation_call',
+                                status: 'completed',
+                                result: 'https://example.test/image.png'
+                            }
+                        ]
+                    }
+                }),
+            /远程 URL/
         );
     });
 
@@ -171,6 +358,27 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                     type: 'completed',
                     b64Json: 'responses-final-b',
                     usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 }
+                }
+            ]
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.completed',
+                usage: { input_tokens: 3, output_tokens: 5, total_tokens: 8 },
+                output: [
+                    {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: 'responses-top-level-final'
+                    }
+                ]
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-top-level-final',
+                    usage: { input_tokens: 3, output_tokens: 5, total_tokens: 8 }
                 }
             ]
         );

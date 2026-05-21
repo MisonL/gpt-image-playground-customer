@@ -36,6 +36,7 @@ dev-server*.log
 .env*
 !.env.example
 !.env.agent.example
+!.env.real-smoke.example
 
 # vercel
 .vercel

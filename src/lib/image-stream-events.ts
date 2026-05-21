@@ -28,6 +28,15 @@ export type ImageStreamEventNormalizationResult = {
     upstreamEventType?: string;
 };
 
+class UpstreamImageStreamEventError extends Error {
+    readonly status = 502;
+
+    constructor(message: string) {
+        super(message);
+        this.name = 'UpstreamImageStreamEventError';
+    }
+}
+
 const PARTIAL_EVENT_TYPES = new Set([
     'image_generation.partial_image',
     'image_edit.partial_image',
@@ -39,6 +48,7 @@ const COMPLETED_EVENT_TYPES = new Set([
     'image_generation.completed',
     'image_edit.completed',
     'image.generation.result',
+    'response.image_generation_call.completed',
     'response.output_item.done',
     'response.completed'
 ]);
@@ -52,6 +62,7 @@ const OFFICIAL_EVENT_TYPES = new Set([
 
 const RESPONSES_EVENT_TYPES = new Set([
     'response.image_generation_call.partial_image',
+    'response.image_generation_call.completed',
     'response.output_item.done',
     'response.completed',
     'response.failed',
@@ -98,6 +109,23 @@ function extractBase64FromDataUrl(value: string | undefined): string | undefined
     }
     const payload = value.slice(separator + 1).trim();
     return payload || undefined;
+}
+
+function isRemoteHttpUrl(value: string): boolean {
+    try {
+        const url = new URL(value);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
+function readImageGenerationResultBase64(value: string | undefined): string | undefined {
+    if (!value) return undefined;
+    const dataUrlPayload = extractBase64FromDataUrl(value);
+    if (dataUrlPayload) return dataUrlPayload;
+    if (isRemoteHttpUrl(value)) return undefined;
+    return value;
 }
 
 function readImageBase64(record: JsonRecord): string | undefined {
@@ -154,9 +182,24 @@ function readResponsesFailureMessage(record: JsonRecord): string {
     return message || '上游未提供错误信息。';
 }
 
+function readFailedResponsesImageMessage(record: JsonRecord): string | undefined {
+    for (const item of readResponsesImageGenerationItems(record)) {
+        if (readString(item, 'status') === 'failed') {
+            return readErrorMessage(item) || '上游未提供错误信息。';
+        }
+    }
+    return undefined;
+}
+
 function assertNotExplicitFailureEvent(record: JsonRecord, eventType: string | undefined) {
     if (eventType === 'response.failed' || eventType === 'error') {
-        throw new Error(`Responses API 流式响应失败：${readResponsesFailureMessage(record)}`);
+        throw new UpstreamImageStreamEventError(`Responses API 流式响应失败：${readResponsesFailureMessage(record)}`);
+    }
+    if (eventType && RESPONSES_EVENT_TYPES.has(eventType)) {
+        const failedImageMessage = readFailedResponsesImageMessage(record);
+        if (failedImageMessage) {
+            throw new UpstreamImageStreamEventError(`Responses API image_generation_call 失败：${failedImageMessage}`);
+        }
     }
 }
 
@@ -173,7 +216,7 @@ function readNestedCompletedItems(record: JsonRecord): JsonRecord[] {
 }
 
 function readOutputItems(record: JsonRecord): JsonRecord[] {
-    const output = record.output;
+    const { output } = record;
     if (!Array.isArray(output)) {
         return [];
     }
@@ -186,8 +229,15 @@ function readOutputItems(record: JsonRecord): JsonRecord[] {
 function readResponsesImageGenerationItems(record: JsonRecord): JsonRecord[] {
     const items: JsonRecord[] = [];
     const visit = (current: JsonRecord) => {
-        if (readString(current, 'type') === 'image_generation_call') {
+        const currentType = readString(current, 'type');
+        if (currentType === 'image_generation_call') {
             items.push(current);
+        }
+        if (
+            currentType === 'response.image_generation_call.completed' &&
+            (readString(current, 'result', 'url') || readImageBase64(current))
+        ) {
+            items.push({ ...current, type: 'image_generation_call' });
         }
 
         const item = asRecord(current.item);
@@ -213,7 +263,22 @@ function readResponsesImageBase64(record: JsonRecord): string | undefined {
         return undefined;
     }
     const result = readString(record, 'result');
-    return extractBase64FromDataUrl(result) || result || readImageBase64(record);
+    return readImageGenerationResultBase64(result) || readImageBase64(record);
+}
+
+function hasRemoteOnlyResponsesImageResult(record: JsonRecord): boolean {
+    return readResponsesImageGenerationItems(record).some((item) => {
+        const result = readString(item, 'result');
+        const url = readString(item, 'url');
+        return Boolean(((result && isRemoteHttpUrl(result)) || (url && isRemoteHttpUrl(url))) && !readImageBase64(item));
+    });
+}
+
+function hasCompletedResponsesImageItem(record: JsonRecord): boolean {
+    return readResponsesImageGenerationItems(record).some((item) => {
+        const status = readString(item, 'status');
+        return status === 'completed' || Boolean(readString(item, 'result', 'url'));
+    });
 }
 
 function hasCompletedImagePayload(record: JsonRecord): boolean {
@@ -238,25 +303,56 @@ function normalizePartialEvent(record: JsonRecord): NormalizedImageStreamEvent[]
     ];
 }
 
+function appendCompletedSource(completed: string[], sourceValues: string[]) {
+    const previousPayloads = new Set(completed);
+    for (const value of sourceValues) {
+        if (!previousPayloads.has(value)) {
+            completed.push(value);
+        }
+    }
+}
+
 function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefined): NormalizedImageStreamEvent[] {
     const usage = readUsage(record) || readResponseUsage(record) || readFirstNestedUsage(record);
     const rootB64 = readImageBase64(record);
     const dataItems = readNestedCompletedItems(record);
     const responsesItems = readResponsesImageGenerationItems(record);
-    const completed = [
-        ...(rootB64 ? [rootB64] : []),
-        ...dataItems.flatMap((item) => {
+    const completed: string[] = [];
+    appendCompletedSource(completed, rootB64 ? [rootB64] : []);
+    appendCompletedSource(
+        completed,
+        dataItems.flatMap((item) => {
             const b64Json = readImageBase64(item);
             return b64Json ? [b64Json] : [];
-        }),
-        ...responsesItems.flatMap((item) => {
+        })
+    );
+    appendCompletedSource(
+        completed,
+        responsesItems.flatMap((item) => {
             const b64Json = readResponsesImageBase64(item);
             return b64Json ? [b64Json] : [];
         })
-    ];
+    );
 
-    if (completed.length === 0 && eventType && COMPLETED_EVENT_TYPES.has(eventType)) {
-        throw new Error(`流式图片完成事件缺少 b64_json。上游事件类型：${eventType}。`);
+    if (
+        completed.length === 0 &&
+        eventType &&
+        COMPLETED_EVENT_TYPES.has(eventType) &&
+        !RESPONSES_EVENT_TYPES.has(eventType)
+    ) {
+        throw new UpstreamImageStreamEventError(`流式图片完成事件缺少 b64_json。上游事件类型：${eventType}。`);
+    }
+    if (completed.length === 0 && eventType && RESPONSES_EVENT_TYPES.has(eventType)) {
+        if (hasRemoteOnlyResponsesImageResult(record)) {
+            throw new UpstreamImageStreamEventError(
+                `Responses API 图片完成事件只返回远程 URL，缺少可保存的 base64 result。上游事件类型：${eventType}。`
+            );
+        }
+        if (hasCompletedResponsesImageItem(record)) {
+            throw new UpstreamImageStreamEventError(
+                `Responses API 图片完成事件缺少 image_generation_call.result。上游事件类型：${eventType}。`
+            );
+        }
     }
 
     return completed.map((b64Json) => ({

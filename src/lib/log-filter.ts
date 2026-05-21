@@ -2,6 +2,7 @@ export type FilterableLogEntry = {
     clientRequestId?: string;
     context?: string;
     filenames?: string[];
+    message?: string;
 };
 
 function uniqueStrings(values: string[]): string[] {

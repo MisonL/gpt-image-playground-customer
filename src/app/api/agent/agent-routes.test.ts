@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
+import type { NextRequest } from 'next/server';
 import { Pool } from 'pg';
 
 const PNG_BASE64 =
@@ -113,6 +114,33 @@ describe('Agent route integration', () => {
         await upstream.close();
     });
 
+    it('does not send upstream stream parameters when Agent streaming_strategy is off', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startImageUpstream((body) => {
+            upstreamBody = body;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-upstream-stream-off-key', {
+                    prompt: 'agent upstream stream off',
+                    streaming_strategy: 'off'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, false);
+            assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('consumes upstream image SSE internally while keeping the Agent generate response non-streaming', async () => {
         const { generateImage } = await loadAgentRoutes();
         let upstreamBody = '';
@@ -151,6 +179,234 @@ describe('Agent route integration', () => {
             const upstreamJson = JSON.parse(upstreamBody);
             assert.equal(upstreamJson.stream, true);
             assert.equal(upstreamJson.partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('uses force-sse for Agent upstream image SSE while keeping the final JSON contract', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream((body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-force-sse-key', {
+                    prompt: 'agent force sse',
+                    response_mode: 'base64',
+                    streaming_strategy: 'force-sse',
+                    partial_images: 3
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            const body = await response.json();
+            assert.equal(body.images[0].b64_json, PNG_BASE64);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(upstreamJson.partial_images, 3);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('consumes Responses image_generation SSE internally while keeping the Agent generate response non-streaming', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startStreamingResponsesImageUpstream((body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'response.image_generation_call.partial_image',
+                    data: {
+                        type: 'response.image_generation_call.partial_image',
+                        partial_image_b64: 'agent-responses-partial-base64',
+                        partial_image_index: 0
+                    }
+                },
+                {
+                    event: 'response.output_item.done',
+                    data: {
+                        type: 'response.output_item.done',
+                        item: {
+                            type: 'image_generation_call',
+                            status: 'completed',
+                            result: PNG_BASE64
+                        }
+                    }
+                }
+            ];
+        });
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-responses-upstream-sse-key', {
+                    prompt: 'agent responses upstream sse',
+                    response_mode: 'base64',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            const body = await response.json();
+            assert.equal(body.cached, false);
+            assert.equal(body.images[0].b64_json, PNG_BASE64);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.model, 'gpt-5.4');
+            assert.equal(upstreamJson.stream, true);
+            const tools = upstreamJson.tools as Array<Record<string, unknown>>;
+            assert.equal(tools[0].type, 'image_generation');
+            assert.equal(tools[0].partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('uses force-sse for Agent Responses image_generation SSE while keeping the final JSON contract', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startStreamingResponsesImageUpstream((body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'response.output_item.done',
+                    data: {
+                        type: 'response.output_item.done',
+                        item: {
+                            type: 'image_generation_call',
+                            status: 'completed',
+                            result: PNG_BASE64
+                        }
+                    }
+                }
+            ];
+        });
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-responses-force-sse-key', {
+                    prompt: 'agent responses force sse',
+                    response_mode: 'base64',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'force-sse',
+                    partial_images: 3
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            const body = await response.json();
+            assert.equal(body.images[0].b64_json, PNG_BASE64);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.model, 'gpt-5.4');
+            assert.equal(upstreamJson.stream, true);
+            const tools = upstreamJson.tools as Array<Record<string, unknown>>;
+            assert.equal(tools[0].type, 'image_generation');
+            assert.equal(tools[0].partial_images, 3);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails Agent Responses upstream SSE requests when partial images arrive without a final image', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        const upstream = await startStreamingResponsesImageUpstream(() => [
+            {
+                event: 'response.image_generation_call.partial_image',
+                data: {
+                    type: 'response.image_generation_call.partial_image',
+                    partial_image_b64: 'agent-responses-partial-only',
+                    partial_image_index: 0
+                }
+            }
+        ]);
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-responses-upstream-sse-partial-only-key', {
+                    prompt: 'agent responses upstream sse partial only',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 502);
+            const body = await response.json();
+            assert.equal(body.error.code, 'upstream_unavailable');
+            assert.match(body.error.message, /最终图片 b64_json/);
+            assert.equal(JSON.stringify(body).includes('agent-responses-partial-only'), false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails Agent Responses upstream SSE requests when the image_generation_call fails', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        const upstream = await startStreamingResponsesImageUpstream(() => [
+            {
+                event: 'response.output_item.done',
+                data: {
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        status: 'failed',
+                        error: {
+                            code: 'content_policy_violation',
+                            message: 'blocked by upstream policy'
+                        }
+                    }
+                }
+            }
+        ]);
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-responses-upstream-sse-failed-call-key', {
+                    prompt: 'agent responses upstream sse failed call',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 502);
+            const body = await response.json();
+            assert.equal(body.error.code, 'upstream_unavailable');
+            assert.match(body.error.message, /blocked by upstream policy/);
         } finally {
             await upstream.close();
         }
@@ -373,6 +629,231 @@ describe('Agent route integration', () => {
             assert.equal('b64_json' in resultBody.images[0], false);
         } finally {
             releaseUpstream?.();
+            await upstream.close();
+        }
+    });
+
+    it('creates a generate job that consumes upstream image SSE and saves the final artifact', async () => {
+        const { createGenerateJob, getJobResult, getArtifactContent } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream((body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_generation.partial_image',
+                    data: { type: 'image_generation.partial_image', b64_json: 'job-partial-base64' }
+                },
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const created = await createGenerateJob(
+                agentJobJsonRequest('route-job-upstream-sse-key', {
+                    prompt: 'agent job upstream sse',
+                    streaming_strategy: 'newapi-keepalive-sse',
+                    partial_images: 2
+                })
+            );
+            assert.equal(created.status, 202);
+            const createdBody = await created.json();
+
+            const result = await waitForJobResult(getJobResult, createdBody.job.id);
+            assert.equal(result.status, 200);
+            assert.notEqual(result.headers.get('content-type'), 'text/event-stream');
+            const resultBody = await result.json();
+            assert.equal(resultBody.request_id, createdBody.job.id);
+            assert.equal(resultBody.cached, false);
+            assert.equal(resultBody.images.length, 1);
+            assert.equal('b64_json' in resultBody.images[0], false);
+            assert.match(resultBody.images[0].content_url, /^\/api\/agent\/artifacts\/[^/]+\/content$/);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(upstreamJson.partial_images, 2);
+
+            const artifactId = resultBody.images[0].content_url.split('/').at(-2);
+            assert.equal(typeof artifactId, 'string');
+            const content = await getArtifactContent(
+                new Request(`http://localhost/api/agent/artifacts/${artifactId}/content`),
+                { params: Promise.resolve({ id: artifactId }) }
+            );
+            assert.equal(content.status, 200);
+            assert.equal(Buffer.compare(Buffer.from(await content.arrayBuffer()), Buffer.from(PNG_BASE64, 'base64')), 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails image upstream SSE generate jobs when partial images arrive without a final image', async () => {
+        const { createGenerateJob, getJob, getJobResult } = await loadAgentRoutes();
+        const upstream = await startStreamingImageUpstream(() => [
+            {
+                event: 'image_generation.partial_image',
+                data: { type: 'image_generation.partial_image', b64_json: 'job-images-partial-only' }
+            }
+        ]);
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const created = await createGenerateJob(
+                agentJobJsonRequest('route-job-images-missing-final-key', {
+                    prompt: 'agent job images partial only',
+                    streaming_strategy: 'newapi-keepalive-sse',
+                    partial_images: 2
+                })
+            );
+            assert.equal(created.status, 202);
+            const createdBody = await created.json();
+
+            const result = await waitForJobResult(getJobResult, createdBody.job.id);
+            assert.equal(result.status, 502);
+            const resultBody = await result.json();
+            assert.equal(resultBody.error.code, 'upstream_unavailable');
+            assert.match(resultBody.error.message, /最终图片 b64_json/);
+            assert.equal(JSON.stringify(resultBody).includes('job-images-partial-only'), false);
+
+            const status = await getJob(new Request(`http://localhost/api/agent/jobs/${createdBody.job.id}`), {
+                params: Promise.resolve({ id: createdBody.job.id })
+            });
+            assert.equal(status.status, 200);
+            const statusBody = await status.json();
+            assert.equal(statusBody.job.state, 'failed');
+            assert.equal(statusBody.job.error.code, 'upstream_unavailable');
+            assert.match(statusBody.job.error.message, /最终图片 b64_json/);
+            assert.equal(JSON.stringify(statusBody).includes('job-images-partial-only'), false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('creates a generate job that consumes Responses image_generation SSE and saves the final artifact', async () => {
+        const { createGenerateJob, getJobResult, getArtifactContent } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startStreamingResponsesImageUpstream((body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'response.image_generation_call.partial_image',
+                    data: {
+                        type: 'response.image_generation_call.partial_image',
+                        partial_image_b64: 'job-responses-partial-base64',
+                        partial_image_index: 0
+                    }
+                },
+                {
+                    event: 'response.output_item.done',
+                    data: {
+                        type: 'response.output_item.done',
+                        item: {
+                            type: 'image_generation_call',
+                            status: 'completed',
+                            result: PNG_BASE64
+                        }
+                    }
+                }
+            ];
+        });
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const created = await createGenerateJob(
+                agentJobJsonRequest('route-job-responses-upstream-sse-key', {
+                    prompt: 'agent job responses upstream sse',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    partial_images: 2
+                })
+            );
+            assert.equal(created.status, 202);
+            const createdBody = await created.json();
+
+            const result = await waitForJobResult(getJobResult, createdBody.job.id);
+            assert.equal(result.status, 200);
+            assert.notEqual(result.headers.get('content-type'), 'text/event-stream');
+            const resultBody = await result.json();
+            assert.equal(resultBody.request_id, createdBody.job.id);
+            assert.equal(resultBody.cached, false);
+            assert.equal(resultBody.images.length, 1);
+            assert.equal('b64_json' in resultBody.images[0], false);
+            assert.match(resultBody.images[0].content_url, /^\/api\/agent\/artifacts\/[^/]+\/content$/);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.model, 'gpt-5.4');
+            assert.equal(upstreamJson.stream, true);
+            assert.equal((upstreamJson.tool_choice as Record<string, unknown>).type, 'image_generation');
+            const tools = upstreamJson.tools as Array<Record<string, unknown>>;
+            assert.equal(tools[0].type, 'image_generation');
+            assert.equal(tools[0].partial_images, 2);
+
+            const artifactId = resultBody.images[0].content_url.split('/').at(-2);
+            assert.equal(typeof artifactId, 'string');
+            const content = await getArtifactContent(
+                new Request(`http://localhost/api/agent/artifacts/${artifactId}/content`),
+                { params: Promise.resolve({ id: artifactId }) }
+            );
+            assert.equal(content.status, 200);
+            assert.equal(Buffer.compare(Buffer.from(await content.arrayBuffer()), Buffer.from(PNG_BASE64, 'base64')), 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails Responses upstream SSE generate jobs when partial images arrive without a final image', async () => {
+        const { createGenerateJob, getJob, getJobResult } = await loadAgentRoutes();
+        const upstream = await startStreamingResponsesImageUpstream(() => [
+            {
+                event: 'response.image_generation_call.partial_image',
+                data: {
+                    type: 'response.image_generation_call.partial_image',
+                    partial_image_b64: 'job-responses-partial-only',
+                    partial_image_index: 0
+                }
+            }
+        ]);
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const created = await createGenerateJob(
+                agentJobJsonRequest('route-job-responses-missing-final-key', {
+                    prompt: 'agent job responses partial only',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    partial_images: 2
+                })
+            );
+            assert.equal(created.status, 202);
+            const createdBody = await created.json();
+
+            const result = await waitForJobResult(getJobResult, createdBody.job.id);
+            assert.equal(result.status, 502);
+            const resultBody = await result.json();
+            assert.equal(resultBody.error.code, 'upstream_unavailable');
+            assert.match(resultBody.error.message, /最终图片 b64_json/);
+            assert.equal(JSON.stringify(resultBody).includes('job-responses-partial-only'), false);
+
+            const status = await getJob(new Request(`http://localhost/api/agent/jobs/${createdBody.job.id}`), {
+                params: Promise.resolve({ id: createdBody.job.id })
+            });
+            assert.equal(status.status, 200);
+            const statusBody = await status.json();
+            assert.equal(statusBody.job.state, 'failed');
+            assert.equal(statusBody.job.error.code, 'upstream_unavailable');
+            assert.match(statusBody.job.error.message, /最终图片 b64_json/);
+            assert.equal(JSON.stringify(statusBody).includes('job-responses-partial-only'), false);
+        } finally {
             await upstream.close();
         }
     });
@@ -1209,16 +1690,24 @@ async function loadAgentRoutes() {
     const jobRoute = await import('./jobs/[id]/route');
     const jobResultRoute = await import('./jobs/[id]/result/route');
     return {
-        getCapabilities: capabilitiesRoute.GET,
-        generateImage: generateRoute.POST,
-        editImage: editRoute.POST,
-        createGenerateJob: createGenerateJobRoute.POST,
-        getJob: jobRoute.GET,
-        getJobResult: jobResultRoute.GET,
-        getArtifact: artifactRoute.GET,
-        deleteArtifact: artifactRoute.DELETE,
-        getArtifactContent: artifactContentRoute.GET
+        getCapabilities: () => capabilitiesRoute.GET(),
+        generateImage: (request: Request) => generateRoute.POST(asNextRequest(request)),
+        editImage: (request: Request) => editRoute.POST(asNextRequest(request)),
+        createGenerateJob: (request: Request) => createGenerateJobRoute.POST(asNextRequest(request)),
+        getJob: (request: Request, context: AgentRouteContext) => jobRoute.GET(asNextRequest(request), context),
+        getJobResult: (request: Request, context: AgentRouteContext) => jobResultRoute.GET(asNextRequest(request), context),
+        getArtifact: (request: Request, context: AgentRouteContext) => artifactRoute.GET(asNextRequest(request), context),
+        deleteArtifact: (request: Request, context: AgentRouteContext) =>
+            artifactRoute.DELETE(asNextRequest(request), context),
+        getArtifactContent: (request: Request, context: AgentRouteContext) =>
+            artifactContentRoute.GET(asNextRequest(request), context)
     };
+}
+
+type AgentRouteContext = { params: Promise<{ id: string }> };
+
+function asNextRequest(request: Request): NextRequest {
+    return request as unknown as NextRequest;
 }
 
 function agentJsonRequest(idempotencyKey: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
@@ -1266,7 +1755,9 @@ function agentEditRequest(
     });
 }
 
-async function startImageUpstream(handler: () => unknown | Promise<unknown>): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+async function startImageUpstream(
+    handler: (body: string, url: string) => unknown | Promise<unknown>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         if (
             request.method !== 'POST' ||
@@ -1276,9 +1767,11 @@ async function startImageUpstream(handler: () => unknown | Promise<unknown>): Pr
             response.end(JSON.stringify({ error: { message: 'not found' } }));
             return;
         }
-        request.resume();
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
         try {
-            const body = await handler();
+            const body = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
             response.writeHead(200, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify(body));
         } catch (error) {
@@ -1301,6 +1794,38 @@ async function startStreamingImageUpstream(
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const events = await handler(Buffer.concat(chunks).toString('utf8'));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        for (const event of events) {
+            if (event.event) {
+                response.write(`event: ${event.event}\n`);
+            }
+            response.write(`data: ${JSON.stringify(event.data)}\n\n`);
+        }
+        response.write('data: [DONE]\n\n');
+        response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    };
+}
+
+async function startStreamingResponsesImageUpstream(
+    handler: (body: string) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
             response.writeHead(404, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({ error: { message: 'not found' } }));
             return;

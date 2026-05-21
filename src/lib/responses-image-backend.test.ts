@@ -18,13 +18,11 @@ function createResponsesClient(
         params: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming
     ) => Promise<ResponsesPayload | AsyncIterable<unknown>>
 ): ResponsesClient {
-    async function create(params: OpenAI.Responses.ResponseCreateParamsNonStreaming): Promise<ResponsesPayload>;
-    async function create(params: OpenAI.Responses.ResponseCreateParamsStreaming): Promise<AsyncIterable<unknown>>;
-    async function create(
+    const create = (async (
         params: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming
-    ): Promise<ResponsesPayload | AsyncIterable<unknown>> {
+    ): Promise<ResponsesPayload | AsyncIterable<unknown>> => {
         return handler(params);
-    }
+    }) as ResponsesClient['create'];
     return { create };
 }
 
@@ -85,7 +83,7 @@ describe('generateImageWithResponsesBackend', () => {
                         output: [
                             {
                                 type: 'image_generation_call',
-                                status: 'failed',
+                                status: 'completed',
                                 result: null
                             }
                         ]
@@ -103,14 +101,140 @@ describe('generateImageWithResponsesBackend', () => {
         );
     });
 
+    it('fails explicitly when the Responses API returns a failed image_generation_call', async () => {
+        await assert.rejects(
+            () =>
+                generateImageWithResponsesBackend({
+                    responses: createResponsesClient(async () => ({
+                        output: [
+                            {
+                                type: 'image_generation_call',
+                                status: 'failed',
+                                error: {
+                                    code: 'content_policy_violation',
+                                    message: 'blocked by upstream policy'
+                                }
+                            }
+                        ]
+                    })),
+                    prompt: 'draw a test image',
+                    responsesModel: 'gpt-4.1',
+                    imageModel: 'gpt-image-2',
+                    size: '1024x1024',
+                    quality: 'high',
+                    outputFormat: 'png',
+                    background: 'auto',
+                    moderation: 'auto'
+                }),
+            /blocked by upstream policy/
+        );
+    });
+
+    it('fails explicitly when the Responses API returns only a remote image URL', async () => {
+        await assert.rejects(
+            () =>
+                generateImageWithResponsesBackend({
+                    responses: createResponsesClient(async () => ({
+                        output: [
+                            {
+                                type: 'image_generation_call',
+                                status: 'completed',
+                                result: 'https://example.test/image.png'
+                            }
+                        ]
+                    })),
+                    prompt: 'draw a test image',
+                    responsesModel: 'gpt-4.1',
+                    imageModel: 'gpt-image-2',
+                    size: '1024x1024',
+                    quality: 'high',
+                    outputFormat: 'png',
+                    background: 'auto',
+                    moderation: 'auto'
+                }),
+            /远程图片 URL/
+        );
+
+        await assert.rejects(
+            () =>
+                generateImageWithResponsesBackend({
+                    responses: createResponsesClient(async () => ({
+                        output: [
+                            {
+                                type: 'image_generation_call',
+                                status: 'completed',
+                                url: 'https://example.test/image.png'
+                            }
+                        ]
+                    })),
+                    prompt: 'draw a test image',
+                    responsesModel: 'gpt-4.1',
+                    imageModel: 'gpt-image-2',
+                    size: '1024x1024',
+                    quality: 'high',
+                    outputFormat: 'png',
+                    background: 'auto',
+                    moderation: 'auto'
+                }),
+            /远程图片 URL/
+        );
+    });
+
+    it('extracts base64 payloads from Responses API data URL results', async () => {
+        const result = await generateImageWithResponsesBackend({
+            responses: createResponsesClient(async () => ({
+                output: [
+                    {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: 'data:image/png;base64,responses-final-base64'
+                    }
+                ]
+            })),
+            prompt: 'draw a test image',
+            responsesModel: 'gpt-4.1',
+            imageModel: 'gpt-image-2',
+            size: '1024x1024',
+            quality: 'high',
+            outputFormat: 'png',
+            background: 'auto',
+            moderation: 'auto'
+        });
+
+        assert.deepEqual(result.data, [{ b64_json: 'responses-final-base64' }]);
+    });
+
+    it('accepts completed Responses image results even when status is omitted', async () => {
+        const result = await generateImageWithResponsesBackend({
+            responses: createResponsesClient(async () => ({
+                output: [
+                    {
+                        type: 'image_generation_call',
+                        result: 'responses-final-without-status'
+                    }
+                ]
+            })),
+            prompt: 'draw a test image',
+            responsesModel: 'gpt-4.1',
+            imageModel: 'gpt-image-2',
+            size: '1024x1024',
+            quality: 'high',
+            outputFormat: 'png',
+            background: 'auto',
+            moderation: 'auto'
+        });
+
+        assert.deepEqual(result.data, [{ b64_json: 'responses-final-without-status' }]);
+    });
+
     it('calls the Responses API image_generation tool in streaming mode with partial images enabled', async () => {
         let capturedParams: unknown;
-        async function* streamEvents() {
+        const streamEvents = async function* () {
             yield {
                 type: 'response.output_item.done',
                 item: { type: 'image_generation_call', result: 'stream-final-base64' }
             };
-        }
+        };
 
         const stream = await createResponsesImageStream({
             responses: createResponsesClient(async (params) => {

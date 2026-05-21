@@ -1,7 +1,8 @@
 import {
     readImageGenerationBackend,
     readImageStreamingStrategy,
-    resolveImageStreamEnabled
+    resolveImageStreamEnabled,
+    shouldRecommendImageStreaming
 } from './image-upstream-strategy';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -135,6 +136,49 @@ describe('image upstream strategy', () => {
                 streamingStrategy: 'force-sse'
             }),
             true
+        );
+    });
+
+    it('recommends streaming only for high quality 4K-class auto strategy requests', () => {
+        assert.equal(
+            shouldRecommendImageStreaming({
+                streamingStrategy: 'auto',
+                quality: 'high',
+                width: 3072,
+                height: 2048,
+                streamEnabled: false
+            }),
+            true
+        );
+        assert.equal(
+            shouldRecommendImageStreaming({
+                streamingStrategy: 'auto',
+                quality: 'high',
+                width: 2048,
+                height: 2048,
+                streamEnabled: false
+            }),
+            false
+        );
+        assert.equal(
+            shouldRecommendImageStreaming({
+                streamingStrategy: 'newapi-keepalive-sse',
+                quality: 'high',
+                width: 3072,
+                height: 2048,
+                streamEnabled: false
+            }),
+            false
+        );
+        assert.equal(
+            shouldRecommendImageStreaming({
+                streamingStrategy: 'auto',
+                quality: 'high',
+                width: 3072,
+                height: 2048,
+                streamEnabled: true
+            }),
+            false
         );
     });
 });

@@ -161,6 +161,9 @@ describe('buildAgentCapabilities', () => {
         });
 
         assert.equal(capabilities.defaults.state_backend, 'postgres');
+        assert.equal(capabilities.defaults.image_backend, 'images-api');
+        assert.equal(capabilities.defaults.streaming_strategy, 'off');
+        assert.equal(capabilities.defaults.partial_images, 2);
         assert.equal(capabilities.auth.required, true);
         assert.deepEqual(capabilities.auth.schemes, ['bearer']);
         assert.equal(capabilities.storage.postgres_configured, true);
@@ -179,8 +182,35 @@ describe('buildAgentCapabilities', () => {
             'streaming_strategy',
             'partial_images'
         ]);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.image_backends, [
+            'images-api',
+            'responses-image-generation'
+        ]);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.streaming_strategies, [
+            'off',
+            'auto',
+            'openai-sse',
+            'newapi-keepalive-sse',
+            'responses-sse',
+            'force-sse'
+        ]);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.activation_strategies, [
+            'openai-sse',
+            'newapi-keepalive-sse',
+            'responses-sse',
+            'force-sse'
+        ]);
         assert.equal(capabilities.agent_streaming.upstream_sse.final_response_contract, 'AgentImageResponse');
         assert.equal(capabilities.agent_streaming.page_sse.endpoint, '/api/images');
+        assert.deepEqual(capabilities.supported.image_backends, ['images-api', 'responses-image-generation']);
+        assert.deepEqual(capabilities.supported.streaming_strategies, [
+            'off',
+            'auto',
+            'openai-sse',
+            'newapi-keepalive-sse',
+            'responses-sse',
+            'force-sse'
+        ]);
         assert.equal(capabilities.endpoints.create_generate_job, AGENT_ENDPOINTS.create_generate_job);
         assert.equal(capabilities.agent_jobs.supported, true);
         assert.equal(capabilities.agent_jobs.mode, 'job_polling');
@@ -256,9 +286,33 @@ describe('buildAgentCapabilities', () => {
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['429']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['502']);
         const generateProperties = document.components.schemas.GenerateRequest.properties;
-        assert.ok('image_backend' in generateProperties);
-        assert.ok('streaming_strategy' in generateProperties);
+        assert.deepEqual(generateProperties.image_backend.enum, ['images-api', 'responses-image-generation']);
+        assert.deepEqual(generateProperties.streaming_strategy.enum, [
+            'off',
+            'auto',
+            'openai-sse',
+            'newapi-keepalive-sse',
+            'responses-sse',
+            'force-sse'
+        ]);
         assert.ok('partial_images' in generateProperties);
+        const capabilityProperties = document.components.schemas.AgentCapabilities.properties;
+        assert.deepEqual(capabilityProperties.defaults.properties.image_backend.enum, [
+            'images-api',
+            'responses-image-generation'
+        ]);
+        assert.deepEqual(capabilityProperties.supported.properties.image_backends.items.enum, [
+            'images-api',
+            'responses-image-generation'
+        ]);
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.streaming_strategies.items.enum,
+            ['off', 'auto', 'openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
+        );
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.activation_strategies.items.enum,
+            ['openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
+        );
     });
 
     it('describes public capabilities without server-local SQLite paths', () => {

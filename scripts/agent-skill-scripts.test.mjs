@@ -95,6 +95,27 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
+    it('rejects invalid generate upstream streaming options before dry-run output', () => {
+        const invalidPartialImages = runSkillScript('generate-image.mjs', ['--partial-images', '4', 'prompt']);
+        assert.equal(invalidPartialImages.status, 2);
+        assert.match(invalidPartialImages.stderr, /--partial-images 必须是 1 到 3 的整数/);
+        assert.equal(invalidPartialImages.stdout.trim(), '');
+
+        const invalidBackend = runSkillScript('generate-image.mjs', ['--image-backend', 'unknown-backend', 'prompt']);
+        assert.equal(invalidBackend.status, 2);
+        assert.match(invalidBackend.stderr, /--image-backend 必须是/);
+        assert.equal(invalidBackend.stdout.trim(), '');
+
+        const invalidStrategy = runSkillScript('generate-image.mjs', [
+            '--streaming-strategy',
+            'unknown-strategy',
+            'prompt'
+        ]);
+        assert.equal(invalidStrategy.status, 2);
+        assert.match(invalidStrategy.stderr, /--streaming-strategy 必须是/);
+        assert.equal(invalidStrategy.stdout.trim(), '');
+    });
+
     it('shows edit help without validating unrelated env values', () => {
         const result = runSkillScript('edit-image.mjs', ['--help'], {
             GPT_IMAGE_AGENT_MAX_ATTEMPTS: 'abc'

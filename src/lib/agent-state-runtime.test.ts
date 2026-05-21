@@ -11,6 +11,7 @@ import { afterEach, describe, it } from 'node:test';
 import type { AgentStateStore } from './agent-state-store';
 import { MemoryAgentStateStore } from './agent-state-memory';
 import { runAgentStateStartupRecovery } from '../instrumentation';
+import type { ImageShareStateStore } from './share-store';
 
 afterEach(() => {
     setAgentStateStoreFactoryForTests(undefined);
@@ -200,7 +201,8 @@ describe('readAgentDatabaseUrl', () => {
     });
 });
 
-function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () => boolean } = {}): AgentStateStore & {
+function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () => boolean } = {}): AgentStateStore &
+    ImageShareStateStore & {
     recoveryCalls: number;
     initCalls: number;
     shareCleanupCalls: number;
@@ -237,11 +239,18 @@ function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () =
         async getArtifact() {
             return undefined;
         },
+        async getRequest() {
+            return undefined;
+        },
         async listArtifactsForRequest() {
             return [];
         },
         async deleteArtifact() {
             return false;
+        },
+        async createImageShareRecord() {},
+        async readImageShareRecord() {
+            return undefined;
         },
         async deleteExpiredImageShareRecords() {
             this.shareCleanupCalls += 1;

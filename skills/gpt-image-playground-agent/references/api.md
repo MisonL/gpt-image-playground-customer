@@ -72,7 +72,16 @@ GET /api/agent/capabilities
 - `model_limits.gpt-image-2.high_4k_risk`：高质量 4K 级请求的长耗时风险说明。
 - `agent_streaming.generate.mode`：当前为 `non_streaming_only`。
 - `agent_streaming.edit.mode`：当前为 `non_streaming_only`。
+- `agent_streaming.upstream_sse`：Agent generate 内部消费上游 SSE 的能力，客户端响应仍是最终 `AgentImageResponse` JSON。
+- `agent_streaming.upstream_sse.image_backends`：支持 `images-api`、`responses-image-generation`。
+- `agent_streaming.upstream_sse.streaming_strategies`：支持 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。
+- `agent_streaming.upstream_sse.activation_strategies`：会真正向上游发送 `stream=true` 的策略，当前为 `openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。
 - `agent_streaming.page_sse`：页面端 `/api/images` 的 form-data SSE 能力，不代表 Agent generate/edit 支持流式。
+- `defaults.image_backend`：Agent generate 默认 `images-api`。
+- `defaults.streaming_strategy`：Agent generate 默认 `off`，不会默认向上游发送 `stream=true`。
+- `defaults.partial_images`：Agent generate 默认 `2`，仅在显式启用上游 SSE 时使用。
+- `supported.image_backends`：机器可读的图片后端枚举。
+- `supported.streaming_strategies`：机器可读的流式兼容策略枚举。
 - `agent_jobs.supported`：当前为 `true`，表示可使用 job polling。
 - `agent_jobs.mode`：当前为 `job_polling`。
 - `agent_jobs.endpoints`：路径为 `POST /api/agent/jobs/images/generate`、`GET /api/agent/jobs/{id}`、`GET /api/agent/jobs/{id}/result`。
@@ -147,11 +156,14 @@ Content-Type: application/json
   "output_format": "png",
   "background": "auto",
   "moderation": "auto",
-  "response_mode": "path"
+  "response_mode": "path",
+  "image_backend": "images-api",
+  "streaming_strategy": "off",
+  "partial_images": 2
 }
 ```
 
-Agent 生成端点当前只支持非流式 JSON 响应。不要向该端点发送 `stream: true`；页面 SSE 使用独立的 `POST /api/images` form-data 路径。
+Agent 生成端点对外始终返回最终 JSON，不会对客户端返回 SSE。不要向该端点发送 `stream: true`；页面 SSE 使用独立的 `POST /api/images` form-data 路径。若 capabilities 中 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`streaming_strategy`、`partial_images` 显式启用服务端内部上游 SSE 消费，最终响应仍是 `AgentImageResponse`。
 
 响应：
 
