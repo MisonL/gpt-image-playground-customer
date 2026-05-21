@@ -62,6 +62,7 @@ describe('Agent route integration', () => {
         assert.equal(response.status, 200);
         const body = await response.json();
         assert.equal(body.auth.required, true);
+        assert.deepEqual(body.auth.schemes, ['bearer']);
         assert.equal(JSON.stringify(body).includes('capability-token'), false);
         assert.equal(JSON.stringify(body).includes('page-access-code'), false);
         assert.equal(body.defaults.state_backend, 'memory');
@@ -76,6 +77,7 @@ describe('Agent route integration', () => {
         assert.equal(response.status, 200);
         const body = await response.json();
         assert.equal(body.auth.required, false);
+        assert.deepEqual(body.auth.schemes, []);
     });
 
     it('generates through a compatible upstream once and replays the cached response for the same idempotency key', async () => {

@@ -1,4 +1,5 @@
 import {
+    buildAgentAuthCapabilities,
     buildAgentCapabilities,
     readAgentLeaseMs,
     readAgentPublicBaseUrl,
@@ -114,6 +115,7 @@ describe('buildAgentCapabilities', () => {
 
         assert.equal(capabilities.defaults.state_backend, 'postgres');
         assert.equal(capabilities.auth.required, true);
+        assert.deepEqual(capabilities.auth.schemes, ['bearer']);
         assert.equal(capabilities.storage.postgres_configured, true);
         assert.equal('sqlite_path' in capabilities.storage, false);
         assert.equal(capabilities.idempotency.header, 'Idempotency-Key');
@@ -130,6 +132,33 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.agent_jobs.endpoints.create_generate_job, '/api/agent/jobs/images/generate');
         assert.deepEqual(capabilities.agent_jobs.states, ['queued', 'running', 'succeeded', 'failed', 'expired']);
         assert.match(capabilities.agent_jobs.current_guidance, /poll/i);
+    });
+
+    it('exposes only the runtime-accepted bearer auth scheme when Agent token is configured', () => {
+        assert.deepEqual(
+            buildAgentAuthCapabilities({
+                AGENT_API_TOKEN: 'token',
+                APP_PASSWORD: 'page-access-code'
+            }),
+            { required: true, schemes: ['bearer'] }
+        );
+    });
+
+    it('exposes access-code hash auth only when no Agent token is configured', () => {
+        assert.deepEqual(buildAgentAuthCapabilities({ APP_PASSWORD: 'page-access-code' }), {
+            required: true,
+            schemes: ['x-app-password-hash']
+        });
+    });
+
+    it('marks Agent auth as optional when no auth env is configured', () => {
+        assert.deepEqual(
+            buildAgentAuthCapabilities({
+                AGENT_API_TOKEN: '   ',
+                APP_PASSWORD: '   '
+            }),
+            { required: false, schemes: [] }
+        );
     });
 
     it('exposes memory state backend for ephemeral deployments', () => {
@@ -182,15 +211,16 @@ describe('buildAgentCapabilities', () => {
         assert.equal('sqlite_path' in storageSchema.properties, false);
     });
 
-    it('describes Agent authentication and common runtime failures in OpenAPI', () => {
-        const document = buildAgentOpenApiDocument({});
+    it('describes bearer authentication and common runtime failures in OpenAPI', () => {
+        const document = buildAgentOpenApiDocument({
+            AGENT_API_TOKEN: 'token',
+            APP_PASSWORD: 'page-access-code'
+        });
 
         assert.ok(document.components.securitySchemes.BearerAuth);
-        assert.ok(document.components.securitySchemes.AppPasswordHash);
-        assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, [
-            { BearerAuth: [] },
-            { AppPasswordHash: [] }
-        ]);
+        assert.equal('AppPasswordHash' in document.components.securitySchemes, false);
+        assert.deepEqual(document.components.schemas.AgentCapabilities.properties.auth.properties.schemes.const, ['bearer']);
+        assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, [{ BearerAuth: [] }]);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['401']);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['415']);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['502']);
@@ -200,9 +230,28 @@ describe('buildAgentCapabilities', () => {
         assert.ok(document.paths['/api/agent/images/edit'].post.responses['502']);
     });
 
-    it('marks artifact routes as authenticated in OpenAPI', () => {
+    it('describes access-code hash authentication in OpenAPI when no Agent token is configured', () => {
+        const document = buildAgentOpenApiDocument({ APP_PASSWORD: 'page-access-code' });
+
+        assert.equal('BearerAuth' in document.components.securitySchemes, false);
+        assert.ok(document.components.securitySchemes.AppPasswordHash);
+        assert.deepEqual(document.components.schemas.AgentCapabilities.properties.auth.properties.schemes.const, [
+            'x-app-password-hash'
+        ]);
+        assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, [{ AppPasswordHash: [] }]);
+    });
+
+    it('does not require Agent authentication in OpenAPI when no auth env is configured', () => {
         const document = buildAgentOpenApiDocument({});
-        const expectedSecurity = [{ BearerAuth: [] }, { AppPasswordHash: [] }];
+
+        assert.deepEqual(document.components.securitySchemes, {});
+        assert.deepEqual(document.components.schemas.AgentCapabilities.properties.auth.properties.schemes.const, []);
+        assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, []);
+    });
+
+    it('marks artifact routes as authenticated in OpenAPI', () => {
+        const document = buildAgentOpenApiDocument({ AGENT_API_TOKEN: 'token' });
+        const expectedSecurity = [{ BearerAuth: [] }];
 
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}'].get.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}'].delete.security, expectedSecurity);

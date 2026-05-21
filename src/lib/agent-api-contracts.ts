@@ -34,6 +34,7 @@ export const AGENT_LEGACY_SIZES = ['auto', '1024x1024', '1536x1024', '1024x1536'
 export const AGENT_JOB_STATES = ['queued', 'running', 'succeeded', 'failed', 'expired'] as const;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
+export type AgentAuthScheme = 'bearer' | 'x-app-password-hash';
 export type AgentResponseMode = (typeof AGENT_RESPONSE_MODES)[number];
 export type AgentQuality = (typeof AGENT_QUALITIES)[number];
 export type AgentBackground = (typeof AGENT_BACKGROUNDS)[number];
@@ -103,7 +104,7 @@ export type AgentCapabilities = {
     schema_version: string;
     auth: {
         required: boolean;
-        schemes: string[];
+        schemes: AgentAuthScheme[];
     };
     endpoints: Record<string, string>;
     defaults: {
@@ -403,6 +404,16 @@ export function validateOptionalAgentApiBaseUrl(baseUrl: string | undefined): vo
     if (baseUrl) validateApiBaseUrl(baseUrl);
 }
 
+export function buildAgentAuthCapabilities(env: Record<string, string | undefined>): AgentCapabilities['auth'] {
+    if (env.AGENT_API_TOKEN?.trim()) {
+        return { required: true, schemes: ['bearer'] };
+    }
+    if (env.APP_PASSWORD?.trim()) {
+        return { required: true, schemes: ['x-app-password-hash'] };
+    }
+    return { required: false, schemes: [] };
+}
+
 function readPositiveIntegerEnv(env: Record<string, string | undefined>, fieldName: string, fallback: number): number {
     const value = env[fieldName]?.trim();
     if (!value) return fallback;
@@ -420,10 +431,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
     return {
         api_version: AGENT_API_VERSION,
         schema_version: AGENT_SCHEMA_VERSION,
-        auth: {
-            required: Boolean(env.AGENT_API_TOKEN || env.APP_PASSWORD),
-            schemes: ['bearer', 'x-app-password-hash']
-        },
+        auth: buildAgentAuthCapabilities(env),
         endpoints: {
             capabilities: '/api/agent/capabilities',
             openapi: '/api/agent/openapi.json',

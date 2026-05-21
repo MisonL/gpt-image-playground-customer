@@ -212,6 +212,8 @@ Agent 请求必须带 `Idempotency-Key`，避免超时重试造成重复出图�
 Authorization: Bearer your-agent-token
 ```
 
+`AGENT_API_TOKEN` 存在时 Agent API 只接受 Bearer token，不会回退到页面访问码哈希。只有未设置 `AGENT_API_TOKEN` 且设置了 `APP_PASSWORD` 时，Agent API 才接受 `X-App-Password-Hash`；实际可用方案以 `/api/agent/capabilities` 的 `auth.schemes` 为准。
+
 同一个 `Idempotency-Key` 如果已进入终态 `failed`，再次请求只会回放该失败，不会重新执行。终态失败回放会返回 `retryable=false`，并保留错误码、上游状态和脱敏诊断字段；需要重新尝试时，应创建新的业务操作和新的 `Idempotency-Key`。
 
 Job polling 当前是同一 Next.js 服务实例内的后台任务，结果和错误会写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在 job 结束前重启，客户端应继续按状态端点和结构化错误处理，必要时用相同 `Idempotency-Key` 重建同一业务操作。

@@ -9,7 +9,7 @@
 生成和编辑脚本默认只做 dry-run，不触发真实生图或编辑。必须显式添加 `--allow-billable` 才会调用 `/api/agent/images/generate` 或 `/api/agent/images/edit`。
 上游探针默认只检查 DNS、TLS 和 `/models`，必须显式添加 `--allow-billable` 才会调用上游 `/images/generations`。
 脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 或 `--contract-check` 做只读契约检查，不触发真实生图或编辑。
-鉴权支持 `GPT_IMAGE_AGENT_TOKEN` 或访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。
+鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API_TOKEN` 时只接受 Bearer token；只有未配置 `AGENT_API_TOKEN` 且配置了 `APP_PASSWORD` 时，才接受访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。
 当服务返回相对 `content_url` 或 `metadata_url` 时，辅助脚本会额外输出 `absolute_content_url` 和 `absolute_metadata_url`。
 同一个 `Idempotency-Key` 如果已经进入终态 `failed`，再次调用 generate/edit 或 job result/status 只会回放该失败，且 `retryable=false`。需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
 
@@ -61,6 +61,8 @@ GET /api/agent/capabilities
 
 关键字段：
 
+- `auth.required`：是否需要鉴权。
+- `auth.schemes`：当前部署实际接受的鉴权方案。`AGENT_API_TOKEN` 优先于 `APP_PASSWORD`，两者同时配置时只返回 `bearer`。
 - `model_limits.gpt-image-2.max_edge`：最大单边像素，当前为 `3840`。
 - `model_limits.gpt-image-2.max_pixels`：最大总像素，当前为 `8294400`。
 - `model_limits.gpt-image-2.edge_multiple`：宽高必须是该值的倍数，当前为 `16`。

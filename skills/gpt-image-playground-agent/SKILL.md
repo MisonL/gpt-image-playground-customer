@@ -29,7 +29,7 @@ description: 当用户需要通过 API 调用已部署的 GPT Image Playground �
 Authorization: Bearer <token>
 ```
 
-如果服务端配置页面访问码 `APP_PASSWORD`，发送 `X-App-Password-Hash`。下载或删除产物时必须复用同一鉴权方式。
+此时服务端只接受 Bearer token，不会回退到访问码哈希。如果未配置 `AGENT_API_TOKEN` 但配置了页面访问码 `APP_PASSWORD`，发送 `X-App-Password-Hash`。下载或删除产物时必须复用 capabilities 声明的同一鉴权方式。
 
 ## 调用约束
 

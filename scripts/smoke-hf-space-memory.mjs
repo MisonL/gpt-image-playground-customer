@@ -65,6 +65,14 @@ function assertEqual(actual, expected, label) {
   }
 }
 
+function assertJsonEqual(actual, expected, label) {
+  const actualJson = JSON.stringify(actual);
+  const expectedJson = JSON.stringify(expected);
+  if (actualJson !== expectedJson) {
+    throw new Error(`${label}: expected ${expectedJson}, got ${actualJson}`);
+  }
+}
+
 cleanup();
 
 try {
@@ -106,6 +114,7 @@ try {
 
   const capabilities = await fetchJson('/api/agent/capabilities');
   assertEqual(capabilities.auth?.required, true, 'Agent auth required flag');
+  assertJsonEqual(capabilities.auth?.schemes, ['bearer'], 'Agent auth schemes');
   assertEqual(capabilities.defaults?.state_backend, 'memory', 'Agent state backend');
   assertEqual(capabilities.storage?.image_storage_mode, 'indexeddb', 'Image storage mode');
   assertEqual(capabilities.storage?.postgres_configured, false, 'PostgreSQL configured flag');

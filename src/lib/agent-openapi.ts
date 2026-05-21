@@ -7,9 +7,34 @@ import {
     AGENT_OUTPUT_FORMATS,
     AGENT_QUALITIES,
     AGENT_RESPONSE_MODES,
+    type AgentAuthScheme,
     buildAgentCapabilities,
     readAgentPublicBaseUrl
 } from './agent-api-contracts';
+
+type AgentOpenApiSecurityRequirement = { BearerAuth: [] } | { AppPasswordHash: [] };
+
+function buildAgentOpenApiSecurity(schemes: readonly AgentAuthScheme[]): AgentOpenApiSecurityRequirement[] {
+    return schemes.map((scheme) => (scheme === 'bearer' ? { BearerAuth: [] } : { AppPasswordHash: [] }));
+}
+
+function buildAgentOpenApiSecuritySchemes(schemes: readonly AgentAuthScheme[]) {
+    const securitySchemes: Record<string, { type: string; scheme?: string; in?: string; name?: string }> = {};
+    if (schemes.includes('bearer')) {
+        securitySchemes.BearerAuth = {
+            type: 'http',
+            scheme: 'bearer'
+        };
+    }
+    if (schemes.includes('x-app-password-hash')) {
+        securitySchemes.AppPasswordHash = {
+            type: 'apiKey',
+            in: 'header',
+            name: 'X-App-Password-Hash'
+        };
+    }
+    return securitySchemes;
+}
 
 export function buildAgentOpenApiDocument(env: Record<string, string | undefined>) {
     const capabilities = buildAgentCapabilities(env);
@@ -20,7 +45,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
             }
         }
     });
-    const agentSecurity = [{ BearerAuth: [] }, { AppPasswordHash: [] }];
+    const agentSecurity = buildAgentOpenApiSecurity(capabilities.auth.schemes);
+    const securitySchemes = buildAgentOpenApiSecuritySchemes(capabilities.auth.schemes);
     const commonAgentErrors = {
         '401': jsonContent('#/components/schemas/AgentError'),
         '403': jsonContent('#/components/schemas/AgentError'),
@@ -210,17 +236,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
             }
         },
         components: {
-            securitySchemes: {
-                BearerAuth: {
-                    type: 'http',
-                    scheme: 'bearer'
-                },
-                AppPasswordHash: {
-                    type: 'apiKey',
-                    in: 'header',
-                    name: 'X-App-Password-Hash'
-                }
-            },
+            securitySchemes,
             parameters: {
                 IdempotencyKey: {
                     name: 'Idempotency-Key',
@@ -261,7 +277,18 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     properties: {
                         api_version: { type: 'string' },
                         schema_version: { type: 'string' },
-                        auth: { type: 'object' },
+                        auth: {
+                            type: 'object',
+                            required: ['required', 'schemes'],
+                            properties: {
+                                required: { type: 'boolean', const: capabilities.auth.required },
+                                schemes: {
+                                    type: 'array',
+                                    items: { type: 'string' },
+                                    const: capabilities.auth.schemes
+                                }
+                            }
+                        },
                         endpoints: { type: 'object', additionalProperties: { type: 'string' } },
                         defaults: { type: 'object' },
                         limits: { type: 'object' },
