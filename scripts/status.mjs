@@ -6,6 +6,19 @@ import { HF_SPACE_ID, HF_SPACE_URL } from './hf-space-doctor-utils.mjs';
 import { isMainModule, parseJsonPayload, printJson, runCommand, runCommandStrict } from './command-center-utils.mjs';
 
 const REMOTE_STATUS_TIMEOUT_MS = 30_000;
+const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
+    { id: 'original-images-json', prefix: 'IMAGE_REAL_SMOKE_ORIGINAL' },
+    { id: 'gaoren-images-sse', prefix: 'IMAGE_REAL_SMOKE_GAOREN' },
+    { id: 'sub2api-images-sse', prefix: 'IMAGE_REAL_SMOKE_SUB2API' },
+    {
+        id: 'sub2api-responses-json',
+        prefix: 'IMAGE_REAL_SMOKE_SUB2API_RESPONSES',
+        fallbackPrefix: 'IMAGE_REAL_SMOKE_SUB2API'
+    },
+    { id: 'gpt2image-responses-sse', prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE' }
+];
+const IMAGE_UPSTREAM_FINAL_GATE_COMMAND =
+    'npm run smoke:image-upstream-real -- --env-file .env.real-smoke.local --require-independent-targets --allow-billable';
 
 export function buildAdminCommands() {
     return {
@@ -30,6 +43,61 @@ export function parseGitStatusEntries(output) {
         if (status.includes('R') || status.includes('C')) index += 1;
     }
     return paths;
+}
+
+function readEnv(env, key) {
+    const value = env[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readSmokeEnvAlternatives(testCase, suffix) {
+    const keys = [`${testCase.prefix}_${suffix}`];
+    if (testCase.fallbackPrefix && testCase.fallbackPrefix !== testCase.prefix) {
+        keys.push(`${testCase.fallbackPrefix}_${suffix}`);
+    }
+    return keys;
+}
+
+function readTargetConfigured(testCase, env) {
+    const baseUrl =
+        readEnv(env, `${testCase.prefix}_BASE_URL`) ||
+        (testCase.fallbackPrefix ? readEnv(env, `${testCase.fallbackPrefix}_BASE_URL`) : undefined);
+    const apiKey =
+        readEnv(env, `${testCase.prefix}_API_KEY`) ||
+        (testCase.fallbackPrefix ? readEnv(env, `${testCase.fallbackPrefix}_API_KEY`) : undefined);
+    return { baseUrl: Boolean(baseUrl), apiKey: Boolean(apiKey) };
+}
+
+function readMissingEnvAny(testCase, target) {
+    const groups = [];
+    if (!target.baseUrl) groups.push(readSmokeEnvAlternatives(testCase, 'BASE_URL'));
+    if (target.baseUrl && !target.apiKey) groups.push(readSmokeEnvAlternatives(testCase, 'API_KEY'));
+    return groups;
+}
+
+export function buildImageUpstreamRealSmokeStatus(env = process.env) {
+    const caseSummaries = IMAGE_UPSTREAM_REAL_SMOKE_CASES.map((testCase) => {
+        const target = readTargetConfigured(testCase, env);
+        const missingEnvAny = readMissingEnvAny(testCase, target);
+        return {
+            id: testCase.id,
+            configured: missingEnvAny.length === 0,
+            ...(missingEnvAny.length > 0 ? { missing_env_any: missingEnvAny } : {})
+        };
+    });
+    const configuredCases = caseSummaries.filter((item) => item.configured).map((item) => item.id);
+    const missingCases = caseSummaries.filter((item) => !item.configured);
+    return {
+        required_count: IMAGE_UPSTREAM_REAL_SMOKE_CASES.length,
+        required_cases: IMAGE_UPSTREAM_REAL_SMOKE_CASES.map((testCase) => testCase.id),
+        configuration_complete: missingCases.length === 0,
+        configured_count: configuredCases.length,
+        configured_cases: configuredCases,
+        missing_count: missingCases.length,
+        missing_cases: missingCases.map((item) => item.id),
+        missing_env_any: Object.fromEntries(missingCases.map((item) => [item.id, item.missing_env_any])),
+        final_gate_command: IMAGE_UPSTREAM_FINAL_GATE_COMMAND
+    };
 }
 
 function parseArgs(argv) {
@@ -72,7 +140,8 @@ function buildLocalStatus() {
         agent: {
             capabilities: '/api/agent/capabilities',
             skill: 'skills/gpt-image-playground-agent/SKILL.md'
-        }
+        },
+        image_upstream_real_smoke: buildImageUpstreamRealSmokeStatus(process.env)
     };
 }
 

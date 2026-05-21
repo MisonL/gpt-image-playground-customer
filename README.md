@@ -482,7 +482,7 @@ npm run deploy:space
 npm run agent:doctor
 ```
 
-`status` 只读输出 git、Node、固定 Space 目标、Agent capabilities 路径和仓库 Skill 入口；`doctor` 汇总本机与 HF Space 诊断；`verify` 执行提交前基线，需要真实 PostgreSQL gate 时加 `--postgres`；`deploy:local` 重建本地 Docker 并探测真实端点；`deploy:space` 是 HF Space 发布的稳定别名；`agent:doctor` 对当前 Agent API 做只读契约检查。
+`status` 只读输出 git、Node、固定 Space 目标、Agent capabilities 路径、仓库 Skill 入口和独立真实图片上游 smoke 配置摘要；`doctor` 汇总本机与 HF Space 诊断；`verify` 执行提交前基线，需要真实 PostgreSQL gate 时加 `--postgres`；`deploy:local` 重建本地 Docker 并探测真实端点；`deploy:space` 是 HF Space 发布的稳定别名；`agent:doctor` 对当前 Agent API 做只读契约检查。
 
 如果只想诊断 HF Space 前置条件，可运行：
 
@@ -557,7 +557,7 @@ docker logs -f gpt-image-playground-customer
 | `npm run dev` | 启动本地开发服务。 |
 | `npm run build` | 执行生产构建。 |
 | `npm run start` | 启动生产模式服务。 |
-| `npm run status` | 只读输出 git、Node、Space 目标、Agent API 和 Skill 入口摘要。 |
+| `npm run status` | 只读输出 git、Node、Space 目标、Agent API、Skill 入口和独立真实图片上游 smoke 配置摘要。 |
 | `npm run doctor` | 运行统一诊断入口，默认包含 HF Space 只读远端检查。 |
 | `npm run verify` | 执行提交前基线：测试、lint、脚本语法、构建和 `git diff --check`；加 `-- --postgres` 会包含 live PostgreSQL gate。 |
 | `npm run deploy:local` | 重建本地 Docker 服务并探测 `/api/auth-status`、`/api/runtime-capabilities`、`/api/agent/capabilities`；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。 |
