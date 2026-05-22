@@ -1,4 +1,5 @@
 import {
+    AGENT_SCHEMA_VERSION,
     buildAgentAuthCapabilities,
     buildAgentCapabilities,
     readAgentLeaseMs,
@@ -161,6 +162,7 @@ describe('buildAgentCapabilities', () => {
         });
 
         assert.equal(capabilities.defaults.state_backend, 'postgres');
+        assert.equal(capabilities.schema_version, AGENT_SCHEMA_VERSION);
         assert.equal(capabilities.defaults.image_backend, 'images-api');
         assert.equal(capabilities.defaults.streaming_strategy, 'off');
         assert.equal(capabilities.defaults.partial_images, 2);
@@ -202,6 +204,25 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.equal(capabilities.agent_streaming.upstream_sse.final_response_contract, 'AgentImageResponse');
         assert.equal(capabilities.agent_streaming.page_sse.endpoint, '/api/images');
+        assert.equal(capabilities.agent_streaming.page_sse.contract, 'page_ui_only');
+        assert.equal(capabilities.agent_streaming.page_sse.transport_contract, 'page_form_data_sse');
+        assert.equal(capabilities.agent_streaming.page_sse.agent_usage, 'recommended_for_high_resolution_edit_and_complex_batch');
+        assert.deepEqual(capabilities.routing_rules.high_resolution_edit, {
+            when: ['operation=edit', 'max_edge>2048'],
+            endpoint: '/api/images',
+            transport: 'page_sse',
+            strength: 'must_use',
+            reason:
+                'Agent edit is non-streaming and rejects high-resolution edit requests; use the page form-data SSE endpoint instead.'
+        });
+        assert.equal(capabilities.routing_rules.complex_ui_batch.endpoint, '/api/images');
+        assert.equal(capabilities.routing_rules.complex_ui_batch.strength, 'recommended');
+        assert.equal(capabilities.routing_rules.long_image_recovery.endpoint, '/api/images');
+        assert.equal(capabilities.routing_rules.long_image_recovery.transport, 'page_sse');
+        assert.equal(capabilities.routing_rules.agent_generate_small_smoke.endpoint, AGENT_ENDPOINTS.generate);
+        assert.equal(capabilities.routing_rules.agent_job_polling_large_generate.endpoint, AGENT_ENDPOINTS.create_generate_job);
+        assert.equal(capabilities.routing_rules.retry_recovery.reuse_failed_idempotency_key, false);
+        assert.match(capabilities.routing_rules.retry_recovery.new_attempt_guidance, /new Idempotency-Key/);
         assert.deepEqual(capabilities.supported.image_backends, ['images-api', 'responses-image-generation']);
         assert.deepEqual(capabilities.supported.streaming_strategies, [
             'off',
@@ -217,6 +238,7 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.agent_jobs.endpoints.create_generate_job, AGENT_JOB_ENDPOINTS.create_generate_job);
         assert.deepEqual(capabilities.agent_jobs.states, ['queued', 'running', 'succeeded', 'failed', 'expired']);
         assert.match(capabilities.agent_jobs.current_guidance, /poll/i);
+        assert.match(capabilities.agent_jobs.current_guidance, /单次文生图/);
     });
 
     it('exposes only the runtime-accepted bearer auth scheme when Agent token is configured', () => {
@@ -274,6 +296,8 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentModelLimits' in document.components.schemas);
         assert.ok('AgentStreamingCapabilities' in document.components.schemas);
         assert.ok('AgentJobCapabilities' in document.components.schemas);
+        assert.ok('AgentRoutingRules' in document.components.schemas);
+        assert.ok('AgentRoutingRule' in document.components.schemas);
         assert.ok('AgentErrorDiagnostics' in document.components.schemas);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['403']);
@@ -297,6 +321,7 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.ok('partial_images' in generateProperties);
         const capabilityProperties = document.components.schemas.AgentCapabilities.properties;
+        assert.equal(capabilityProperties.routing_rules.$ref, '#/components/schemas/AgentRoutingRules');
         assert.deepEqual(capabilityProperties.defaults.properties.image_backend.enum, [
             'images-api',
             'responses-image-generation'
@@ -313,6 +338,19 @@ describe('buildAgentCapabilities', () => {
             document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.activation_strategies.items.enum,
             ['openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
         );
+        assert.equal(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.contract.enum[0],
+            'page_ui_only'
+        );
+        assert.equal(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.transport_contract.enum[0],
+            'page_form_data_sse'
+        );
+        assert.equal(document.components.schemas.AgentRoutingRules.required.includes('high_resolution_edit'), true);
+        assert.equal(document.components.schemas.AgentRoutingRules.required.includes('long_image_recovery'), true);
+        assert.match(document.components.schemas.EditRequest.description, /\/api\/images/);
+        assert.ok('upstream_event_type' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.ok('partial_image_count' in document.components.schemas.AgentErrorDiagnostics.properties);
     });
 
     it('describes public capabilities without server-local SQLite paths', () => {

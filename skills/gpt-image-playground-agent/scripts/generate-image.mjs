@@ -87,6 +87,7 @@ if (isNonBillableDryRun(options, contractCheck)) {
         dry_run: true,
         endpoint: dryRunEndpoint(options.jobMode),
         job_mode: options.jobMode,
+        routing_guidance: buildGenerateRoutingGuidance(requestBody, options.jobMode),
         idempotency_key: idempotencyKey,
         request: requestBody,
         next_step: '重新执行并添加 --allow-billable 才会发起真实生图请求。'
@@ -272,6 +273,23 @@ function dryRunEndpoint(jobMode) {
   if (jobMode === 'always') return `${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`;
   if (jobMode === 'never') return `${baseUrl}${AGENT_ENDPOINTS.generate}`;
   return `${baseUrl}${AGENT_ENDPOINTS.generate} 或 ${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`;
+}
+
+function buildGenerateRoutingGuidance(body, jobMode) {
+  if (jobMode === 'always' || (jobMode !== 'never' && isLargeHighQualityGenerate(body))) {
+    return {
+      recommended_endpoint: AGENT_ENDPOINTS.create_generate_job,
+      transport: 'agent_job_polling',
+      strength: 'recommended',
+      reason: '4K/high or long-running generate requests should use Agent job polling instead of a synchronous Agent JSON call.'
+    };
+  }
+  return {
+    recommended_endpoint: AGENT_ENDPOINTS.generate,
+    transport: 'agent_json',
+    strength: 'default',
+    reason: 'Normal single-image generate requests use the Agent JSON response contract.'
+  };
 }
 
 async function readCapabilities() {
@@ -467,6 +485,10 @@ function shouldUseJobPolling(capabilitiesValue, request, jobMode) {
     return false;
   }
   if (jobMode === 'always') return true;
+  return request.quality === 'high' && readMaxImageEdge(request.size) >= 3072;
+}
+
+function isLargeHighQualityGenerate(request) {
   return request.quality === 'high' && readMaxImageEdge(request.size) >= 3072;
 }
 

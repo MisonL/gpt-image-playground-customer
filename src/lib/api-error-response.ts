@@ -22,6 +22,8 @@ export type AgentErrorDiagnostics = {
     selected_channel_id?: string;
     upstream_host?: string;
     upstream_status?: number;
+    upstream_event_type?: string;
+    partial_image_count?: number;
     transport_error?: boolean;
     retry_after_seconds?: number;
     channel_cooldown_scope?: 'credential' | 'channel';
@@ -106,11 +108,15 @@ function buildDiagnostics(error: unknown, input: ErrorDiagnosticsInput = {}): Ag
     const { upstreamStatus, retryAfterSeconds, ...base } = input;
     const upstreamStatusValue = base.upstream_status ?? upstreamStatus;
     const retryAfterSecondsValue = base.retry_after_seconds ?? retryAfterSeconds ?? readRetryAfterSeconds(error);
+    const upstreamEventType = base.upstream_event_type ?? readStringField(error, 'upstreamEventType');
+    const partialImageCount = base.partial_image_count ?? readNumberField(error, 'partialImageCount');
     const transportError = base.transport_error ?? (isTransportError(error) || undefined);
     const responseHeaders = base.response_headers ?? readWhitelistedHeaders(error);
     return cleanDiagnostics({
         ...base,
         ...(upstreamStatusValue !== undefined ? { upstream_status: upstreamStatusValue } : {}),
+        ...(upstreamEventType !== undefined ? { upstream_event_type: upstreamEventType } : {}),
+        ...(partialImageCount !== undefined ? { partial_image_count: partialImageCount } : {}),
         ...(retryAfterSecondsValue !== undefined ? { retry_after_seconds: retryAfterSecondsValue } : {}),
         ...(transportError !== undefined ? { transport_error: transportError } : {}),
         ...(responseHeaders ? { response_headers: responseHeaders } : {})
@@ -124,11 +130,17 @@ function cleanDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): Agent
         diagnostics.retry_after_seconds !== undefined
             ? normalizeRetryAfterSeconds(diagnostics.retry_after_seconds)
             : undefined;
+    const partialImageCount =
+        diagnostics.partial_image_count !== undefined
+            ? normalizeNonNegativeInteger(diagnostics.partial_image_count)
+            : undefined;
     const cleaned: AgentErrorDiagnostics = {
         ...(diagnostics.elapsed_ms !== undefined ? { elapsed_ms: Math.max(0, Math.round(diagnostics.elapsed_ms)) } : {}),
         ...(diagnostics.selected_channel_id ? { selected_channel_id: diagnostics.selected_channel_id } : {}),
         ...(diagnostics.upstream_host ? { upstream_host: diagnostics.upstream_host } : {}),
         ...(diagnostics.upstream_status !== undefined ? { upstream_status: diagnostics.upstream_status } : {}),
+        ...(diagnostics.upstream_event_type ? { upstream_event_type: diagnostics.upstream_event_type } : {}),
+        ...(partialImageCount !== undefined ? { partial_image_count: partialImageCount } : {}),
         ...(diagnostics.transport_error !== undefined ? { transport_error: diagnostics.transport_error } : {}),
         ...(retryAfterSeconds !== undefined ? { retry_after_seconds: retryAfterSeconds } : {}),
         ...(diagnostics.channel_cooldown_scope ? { channel_cooldown_scope: diagnostics.channel_cooldown_scope } : {}),
@@ -163,6 +175,13 @@ function normalizeRetryAfterSeconds(value: number): number | undefined {
     if (!Number.isFinite(value)) return undefined;
     const rounded = Math.round(value);
     if (!Number.isSafeInteger(rounded) || rounded < 1 || rounded > MAX_UPSTREAM_RETRY_AFTER_SECONDS) return undefined;
+    return rounded;
+}
+
+function normalizeNonNegativeInteger(value: number): number | undefined {
+    if (!Number.isFinite(value)) return undefined;
+    const rounded = Math.round(value);
+    if (!Number.isSafeInteger(rounded) || rounded < 0) return undefined;
     return rounded;
 }
 
@@ -265,6 +284,7 @@ function readCauseChainString(error: unknown, fieldName: string, depth = 0): str
 }
 
 export function createAgentErrorBody(error: AgentApiError, requestId: string): AgentErrorBody {
+    const diagnostics = error.retryable ? error.diagnostics : stripRetryDiagnostics(error.diagnostics);
     return {
         error: {
             code: error.code,
@@ -272,7 +292,7 @@ export function createAgentErrorBody(error: AgentApiError, requestId: string): A
             retryable: error.retryable,
             ...(error.details ? { details: error.details } : {}),
             ...(error.upstreamStatus ? { upstream_status: error.upstreamStatus } : {}),
-            ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}),
+            ...(diagnostics ? { diagnostics } : {}),
             request_id: requestId
         }
     };
@@ -282,7 +302,7 @@ export function agentErrorResponse(error: AgentApiError, requestId: string): Nex
     const headers: Record<string, string> = {
         'X-Request-Id': requestId
     };
-    if (error.retryAfterSeconds) {
+    if (error.retryable && error.retryAfterSeconds) {
         headers['Retry-After'] = String(error.retryAfterSeconds);
     }
     return NextResponse.json(createAgentErrorBody(error, requestId), { status: error.status, headers });
@@ -302,10 +322,26 @@ export function storedAgentErrorResponse(
 export function toTerminalAgentErrorBody(errorBody: AgentErrorBody): AgentErrorBody {
     return {
         error: {
-            ...errorBody.error,
+            ...stripTerminalRetryDiagnostics(errorBody.error),
             retryable: false
         }
     };
+}
+
+function stripTerminalRetryDiagnostics(error: AgentErrorBody['error']): AgentErrorBody['error'] {
+    if (!error.diagnostics?.retry_after_seconds) return error;
+    const diagnostics = stripRetryDiagnostics(error.diagnostics);
+    return {
+        ...error,
+        diagnostics
+    };
+}
+
+function stripRetryDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): AgentErrorDiagnostics | undefined {
+    if (!diagnostics?.retry_after_seconds) return diagnostics;
+    const stripped = { ...diagnostics };
+    delete stripped.retry_after_seconds;
+    return Object.keys(stripped).length > 0 ? stripped : undefined;
 }
 
 export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagnostics = {}): AgentApiError {

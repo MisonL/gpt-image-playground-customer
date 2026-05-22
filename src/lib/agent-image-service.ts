@@ -13,7 +13,7 @@ import {
     validateAgentGenerateRequest
 } from './agent-api-contracts';
 import { AgentApiError, normalizeAgentError, type AgentErrorBody } from './api-error-response';
-import { assertArtifactFilepathAllowed, deleteArtifactFileIfAllowed } from './agent-file-utils';
+import { assertArtifactFilepathAllowed, deleteArtifactFileIfAllowed, readImageDimensions } from './agent-file-utils';
 import {
     artifactRecordToResponseItem,
     createArtifactId,
@@ -113,6 +113,12 @@ export async function snapshotAgentEditFormData(formData: FormData): Promise<Rec
     }
     const files = await Promise.all(fileFields);
     return { mode: 'edit', fields, files: files.sort((a, b) => a.key.localeCompare(b.key)) };
+}
+
+export async function assertAgentEditRouteAllowedFromFormData(formData: FormData): Promise<void> {
+    const model = readModel(formData);
+    const size = readSize(formData, 'size', 'auto', model);
+    assertAgentEditRouteAllowed(size, await readAgentEditSourceMaxEdge(size, formData));
 }
 
 async function snapshotFileField(
@@ -248,7 +254,7 @@ export async function executeAgentEdit(options: {
     idempotencyKey: string;
     cached: boolean;
 }): Promise<AgentRequestExecutionResult> {
-    const credentialContext = createOpenAiClient(options.headers);
+    let credentialContext: CredentialContext | undefined;
     const startedAtMs = Date.now();
     try {
         const prompt = readRequiredText(options.formData, 'prompt');
@@ -258,8 +264,10 @@ export async function executeAgentEdit(options: {
         const quality = readEditQuality(options.formData) as OpenAI.Images.ImageEditParams['quality'];
         const responseMode = readAgentResponseModeFromForm(options.formData);
         const imageFiles = readImageFiles(options.formData);
+        assertAgentEditRouteAllowed(size, await readImageFileMaxEdge(imageFiles));
         const maskFile = readMaskFile(options.formData);
 
+        credentialContext = createOpenAiClient(options.headers);
         const result = await credentialContext.openai.images.edit({
             model,
             prompt,
@@ -282,9 +290,41 @@ export async function executeAgentEdit(options: {
             cached: options.cached
         });
     } catch (error) {
-        reportServerCredentialFailure(credentialContext.selectedCredential, error);
+        reportServerCredentialFailure(credentialContext?.selectedCredential, error);
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs));
     }
+}
+
+function assertAgentEditRouteAllowed(size: string | null | undefined, sourceMaxEdge = 0): void {
+    const maxEdge = Math.max(readMaxImageEdge(size), sourceMaxEdge);
+    if (maxEdge <= 2048) return;
+    throw new RequestValidationError(
+        '高分辨率 Agent edit 必须使用页面端 /api/images form-data SSE 路径。',
+        422
+    );
+}
+
+async function readAgentEditSourceMaxEdge(size: string | null | undefined, formData: FormData): Promise<number> {
+    if (readMaxImageEdge(size) > 2048 || size !== 'auto') return 0;
+    const imageFiles = readImageFiles(formData);
+    return readImageFileMaxEdge(imageFiles);
+}
+
+async function readImageFileMaxEdge(imageFiles: File[]): Promise<number> {
+    const maxEdges = await Promise.all(
+        imageFiles.map(async (file) => {
+            const dimensions = readImageDimensions(Buffer.from(await file.arrayBuffer()));
+            return Math.max(dimensions.width ?? 0, dimensions.height ?? 0);
+        })
+    );
+    return Math.max(0, ...maxEdges);
+}
+
+function readMaxImageEdge(size: string | null | undefined): number {
+    if (typeof size !== 'string') return 0;
+    const match = size.match(/^(\d+)x(\d+)$/);
+    if (!match) return 0;
+    return Math.max(Number(match[1]), Number(match[2]));
 }
 
 export async function parseAgentGenerateRequest(request: Request): Promise<AgentGenerateRequest> {
@@ -447,11 +487,11 @@ function createOpenAiClient(headers: Headers): CredentialContext {
     };
 }
 
-function buildAgentExecutionDiagnostics(context: CredentialContext, startedAtMs: number): AgentErrorDiagnostics {
-    const upstreamHost = context.baseUrl ? readUrlHost(context.baseUrl) : undefined;
+function buildAgentExecutionDiagnostics(context: CredentialContext | undefined, startedAtMs: number): AgentErrorDiagnostics {
+    const upstreamHost = context?.baseUrl ? readUrlHost(context.baseUrl) : undefined;
     return {
         elapsed_ms: Date.now() - startedAtMs,
-        ...(context.selectedCredential?.channelId ? { selected_channel_id: context.selectedCredential.channelId } : {}),
+        ...(context?.selectedCredential?.channelId ? { selected_channel_id: context.selectedCredential.channelId } : {}),
         ...(upstreamHost ? { upstream_host: upstreamHost } : {})
     };
 }

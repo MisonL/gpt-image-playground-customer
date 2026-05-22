@@ -12,6 +12,8 @@ import {
     AGENT_STREAMING_STRATEGIES,
     AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES,
     type AgentAuthScheme,
+    type AgentRoutingStrength,
+    type AgentRoutingTransport,
     buildAgentCapabilities,
     readAgentPublicBaseUrl
 } from './agent-api-contracts';
@@ -273,6 +275,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'limits',
                         'model_limits',
                         'agent_streaming',
+                        'routing_rules',
                         'agent_jobs',
                         'supported',
                         'storage',
@@ -316,6 +319,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         limits: { type: 'object' },
                         model_limits: { $ref: '#/components/schemas/AgentModelLimits' },
                         agent_streaming: { $ref: '#/components/schemas/AgentStreamingCapabilities' },
+                        routing_rules: { $ref: '#/components/schemas/AgentRoutingRules' },
                         agent_jobs: { $ref: '#/components/schemas/AgentJobCapabilities' },
                         supported: {
                             type: 'object',
@@ -442,14 +446,62 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         page_sse: {
                             type: 'object',
-                            required: ['supported', 'mode', 'endpoint', 'contract'],
+                            required: ['supported', 'mode', 'endpoint', 'contract', 'transport_contract', 'agent_usage'],
                             properties: {
                                 supported: { type: 'boolean', const: true },
                                 mode: { type: 'string', enum: ['form_data_sse'] },
                                 endpoint: { type: 'string' },
-                                contract: { type: 'string', enum: ['page_ui_only'] }
+                                contract: { type: 'string', enum: ['page_ui_only'] },
+                                transport_contract: { type: 'string', enum: ['page_form_data_sse'] },
+                                agent_usage: {
+                                    type: 'string',
+                                    enum: ['recommended_for_high_resolution_edit_and_complex_batch']
+                                }
                             }
                         }
+                    }
+                },
+                AgentRoutingRules: {
+                    type: 'object',
+                    required: [
+                        'high_resolution_edit',
+                        'complex_ui_batch',
+                        'long_image_recovery',
+                        'agent_generate_small_smoke',
+                        'agent_job_polling_large_generate',
+                        'retry_recovery'
+                    ],
+                    properties: {
+                        high_resolution_edit: { $ref: '#/components/schemas/AgentRoutingRule' },
+                        complex_ui_batch: { $ref: '#/components/schemas/AgentRoutingRule' },
+                        long_image_recovery: { $ref: '#/components/schemas/AgentRoutingRule' },
+                        agent_generate_small_smoke: { $ref: '#/components/schemas/AgentRoutingRule' },
+                        agent_job_polling_large_generate: { $ref: '#/components/schemas/AgentRoutingRule' },
+                        retry_recovery: {
+                            type: 'object',
+                            required: ['reuse_failed_idempotency_key', 'new_attempt_guidance'],
+                            properties: {
+                                reuse_failed_idempotency_key: { type: 'boolean', const: false },
+                                new_attempt_guidance: { type: 'string' }
+                            }
+                        }
+                    }
+                },
+                AgentRoutingRule: {
+                    type: 'object',
+                    required: ['when', 'endpoint', 'transport', 'strength', 'reason'],
+                    properties: {
+                        when: { type: 'array', items: { type: 'string' } },
+                        endpoint: { type: 'string' },
+                        transport: {
+                            type: 'string',
+                            enum: ['agent_json', 'agent_job_polling', 'page_sse'] satisfies AgentRoutingTransport[]
+                        },
+                        strength: {
+                            type: 'string',
+                            enum: ['default', 'recommended', 'must_use'] satisfies AgentRoutingStrength[]
+                        },
+                        reason: { type: 'string' }
                     }
                 },
                 AgentEndpointStreamingCapability: {
@@ -518,6 +570,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 EditRequest: {
                     type: 'object',
                     required: ['prompt', 'image_0'],
+                    description:
+                        'Agent edit 仅接受非高分辨率请求。size 最大边大于 2048 时会被服务端拒绝，必须切换到页面端 /api/images form-data SSE 路径。',
                     properties: {
                         prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
                         model: { type: 'string', enum: AGENT_MODELS, default: 'gpt-image-2' },
@@ -644,6 +698,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         selected_channel_id: { type: 'string' },
                         upstream_host: { type: 'string' },
                         upstream_status: { type: 'integer' },
+                        upstream_event_type: { type: 'string' },
+                        partial_image_count: { type: 'integer', minimum: 0 },
                         transport_error: { type: 'boolean' },
                         retry_after_seconds: { type: 'integer', minimum: 1 },
                         channel_cooldown_scope: { type: 'string', enum: ['credential', 'channel'] },

@@ -30,7 +30,7 @@ import {
 import type { AgentErrorDiagnostics } from './api-error-response';
 
 export const AGENT_API_VERSION = '1.0.0';
-export const AGENT_SCHEMA_VERSION = '2026-05-20';
+export const AGENT_SCHEMA_VERSION = '2026-05-22';
 export const AGENT_DEFAULT_SQLITE_PATH = 'generated-images/.agent-state/agent.sqlite';
 export const AGENT_DEFAULT_LEASE_MS = 10 * 60 * 1000;
 export const AGENT_DEFAULT_REQUEST_TTL_SECONDS = 24 * 60 * 60;
@@ -67,6 +67,8 @@ export type AgentQuality = (typeof AGENT_QUALITIES)[number];
 export type AgentBackground = (typeof AGENT_BACKGROUNDS)[number];
 export type AgentModeration = (typeof AGENT_MODERATIONS)[number];
 export type AgentJobState = (typeof AGENT_JOB_STATES)[number];
+export type AgentRoutingTransport = 'agent_json' | 'agent_job_polling' | 'page_sse';
+export type AgentRoutingStrength = 'default' | 'recommended' | 'must_use';
 
 export type AgentGenerateRequest = {
     model: GptImageModel;
@@ -191,6 +193,19 @@ export type AgentCapabilities = {
             mode: 'form_data_sse';
             endpoint: string;
             contract: 'page_ui_only';
+            transport_contract: 'page_form_data_sse';
+            agent_usage: 'recommended_for_high_resolution_edit_and_complex_batch';
+        };
+    };
+    routing_rules: {
+        high_resolution_edit: AgentRoutingRule;
+        complex_ui_batch: AgentRoutingRule;
+        long_image_recovery: AgentRoutingRule;
+        agent_generate_small_smoke: AgentRoutingRule;
+        agent_job_polling_large_generate: AgentRoutingRule;
+        retry_recovery: {
+            reuse_failed_idempotency_key: false;
+            new_attempt_guidance: string;
         };
     };
     agent_jobs: {
@@ -225,6 +240,14 @@ export type AgentCapabilities = {
         header: string;
         ttl_seconds: number;
     };
+};
+
+export type AgentRoutingRule = {
+    when: string[];
+    endpoint: string;
+    transport: AgentRoutingTransport;
+    strength: AgentRoutingStrength;
+    reason: string;
 };
 
 type FieldErrors = Record<string, string>;
@@ -581,7 +604,55 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 supported: true,
                 mode: 'form_data_sse',
                 endpoint: '/api/images',
-                contract: 'page_ui_only'
+                contract: 'page_ui_only',
+                transport_contract: 'page_form_data_sse',
+                agent_usage: 'recommended_for_high_resolution_edit_and_complex_batch'
+            }
+        },
+        routing_rules: {
+            high_resolution_edit: {
+                when: ['operation=edit', 'max_edge>2048'],
+                endpoint: '/api/images',
+                transport: 'page_sse',
+                strength: 'must_use',
+                reason:
+                    'Agent edit is non-streaming and rejects high-resolution edit requests; use the page form-data SSE endpoint instead.'
+            },
+            complex_ui_batch: {
+                when: ['operation=generate_or_edit', 'complex_ui=true', 'batch=true'],
+                endpoint: '/api/images',
+                transport: 'page_sse',
+                strength: 'recommended',
+                reason:
+                    'Page form-data SSE keeps long-running image production observable and recoverable for complex UI batches.'
+            },
+            long_image_recovery: {
+                when: ['operation=generate_or_edit', 'long_image=true', 'resume_or_recover=true'],
+                endpoint: '/api/images',
+                transport: 'page_sse',
+                strength: 'recommended',
+                reason:
+                    'Page form-data SSE exposes partial progress and final-image diagnostics needed for long-image recovery runs.'
+            },
+            agent_generate_small_smoke: {
+                when: ['operation=generate', 'max_edge<=2048', 'single_request=true'],
+                endpoint: AGENT_ENDPOINTS.generate,
+                transport: 'agent_json',
+                strength: 'default',
+                reason: 'Agent JSON generate remains the stable contract and smoke path for normal single-image requests.'
+            },
+            agent_job_polling_large_generate: {
+                when: ['operation=generate', 'quality=high', 'max_edge>=3072', 'single_request=true'],
+                endpoint: AGENT_ENDPOINTS.create_generate_job,
+                transport: 'agent_job_polling',
+                strength: 'recommended',
+                reason:
+                    'Job polling keeps Agent generate idempotent and avoids client-side request timeouts for large high-quality requests.'
+            },
+            retry_recovery: {
+                reuse_failed_idempotency_key: false,
+                new_attempt_guidance:
+                    'A failed terminal Agent request only replays the stored failure. Diagnose the failure, then create a new business operation with a new Idempotency-Key.'
             }
         },
         agent_jobs: {
@@ -591,7 +662,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             endpoints: { ...AGENT_JOB_ENDPOINTS },
             states: AGENT_JOB_STATES,
             current_guidance:
-                '对 4K/high 或长耗时请求优先使用 job polling：先创建 generate job，再轮询状态，最后读取 result。运行中 job 会刷新 lease。当前执行模型为同实例后台任务，不是跨实例持久队列。'
+                '对 4K/high 单次文生图或长耗时文生图请求优先使用 job polling：先创建 generate job，再轮询状态，最后读取 result。运行中 job 会刷新 lease。当前执行模型为同实例后台任务，不是跨实例持久队列。'
         },
         supported: {
             models: AGENT_MODELS,

@@ -1,4 +1,4 @@
-import { collectOpenAiImagesFromStream } from './image-stream-collector';
+import { collectOpenAiImagesFromStream, MissingFinalImageStreamResultError } from './image-stream-collector';
 import { upstreamEvents } from './sse-test-utils';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -85,5 +85,32 @@ describe('collectOpenAiImagesFromStream', () => {
 
         assert.equal(result.data?.length, 1);
         assert.equal(result.data?.[0]?.b64_json, PNG_BASE64);
+    });
+
+    it('reports missing-final stream diagnostics without exposing partial image data', async () => {
+        await assert.rejects(
+            () =>
+                collectOpenAiImagesFromStream(
+                    upstreamEvents([
+                        {
+                            type: 'image_generation.partial_image',
+                            partial_image_index: 0,
+                            b64_json: 'partial-one'
+                        },
+                        {
+                            type: 'image_generation.partial_image',
+                            partial_image_index: 1,
+                            b64_json: 'partial-two'
+                        }
+                    ])
+                ),
+            (error) => {
+                assert.ok(error instanceof MissingFinalImageStreamResultError);
+                assert.equal(error.upstreamEventType, 'image_generation.partial_image');
+                assert.equal(error.partialImageCount, 2);
+                assert.equal(JSON.stringify(error).includes('partial-one'), false);
+                return true;
+            }
+        );
     });
 });

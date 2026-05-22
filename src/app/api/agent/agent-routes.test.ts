@@ -365,6 +365,9 @@ describe('Agent route integration', () => {
             const body = await response.json();
             assert.equal(body.error.code, 'upstream_unavailable');
             assert.match(body.error.message, /最终图片 b64_json/);
+            assert.equal(body.error.diagnostics.upstream_event_type, 'response.image_generation_call.partial_image');
+            assert.equal(body.error.diagnostics.partial_image_count, 1);
+            assert.equal(body.error.diagnostics.retry_after_seconds, 15);
             assert.equal(JSON.stringify(body).includes('agent-responses-partial-only'), false);
         } finally {
             await upstream.close();
@@ -437,6 +440,8 @@ describe('Agent route integration', () => {
             const body = await response.json();
             assert.equal(body.error.code, 'upstream_unavailable');
             assert.match(body.error.message, /最终图片 b64_json/);
+            assert.equal(body.error.diagnostics.upstream_event_type, 'image_generation.partial_image');
+            assert.equal(body.error.diagnostics.partial_image_count, 1);
         } finally {
             await upstream.close();
         }
@@ -718,6 +723,10 @@ describe('Agent route integration', () => {
             const resultBody = await result.json();
             assert.equal(resultBody.error.code, 'upstream_unavailable');
             assert.match(resultBody.error.message, /最终图片 b64_json/);
+            assert.equal(resultBody.error.retryable, false);
+            assert.equal(resultBody.error.diagnostics.upstream_event_type, 'image_generation.partial_image');
+            assert.equal(resultBody.error.diagnostics.partial_image_count, 1);
+            assert.equal(resultBody.error.diagnostics.retry_after_seconds, undefined);
             assert.equal(JSON.stringify(resultBody).includes('job-images-partial-only'), false);
 
             const status = await getJob(new Request(`http://localhost/api/agent/jobs/${createdBody.job.id}`), {
@@ -728,6 +737,10 @@ describe('Agent route integration', () => {
             assert.equal(statusBody.job.state, 'failed');
             assert.equal(statusBody.job.error.code, 'upstream_unavailable');
             assert.match(statusBody.job.error.message, /最终图片 b64_json/);
+            assert.equal(statusBody.job.error.retryable, false);
+            assert.equal(statusBody.job.error.diagnostics.upstream_event_type, 'image_generation.partial_image');
+            assert.equal(statusBody.job.error.diagnostics.partial_image_count, 1);
+            assert.equal(statusBody.job.error.diagnostics.retry_after_seconds, undefined);
             assert.equal(JSON.stringify(statusBody).includes('job-images-partial-only'), false);
         } finally {
             await upstream.close();
@@ -843,6 +856,10 @@ describe('Agent route integration', () => {
             const resultBody = await result.json();
             assert.equal(resultBody.error.code, 'upstream_unavailable');
             assert.match(resultBody.error.message, /最终图片 b64_json/);
+            assert.equal(resultBody.error.retryable, false);
+            assert.equal(resultBody.error.diagnostics.upstream_event_type, 'response.image_generation_call.partial_image');
+            assert.equal(resultBody.error.diagnostics.partial_image_count, 1);
+            assert.equal(resultBody.error.diagnostics.retry_after_seconds, undefined);
             assert.equal(JSON.stringify(resultBody).includes('job-responses-partial-only'), false);
 
             const status = await getJob(new Request(`http://localhost/api/agent/jobs/${createdBody.job.id}`), {
@@ -853,6 +870,10 @@ describe('Agent route integration', () => {
             assert.equal(statusBody.job.state, 'failed');
             assert.equal(statusBody.job.error.code, 'upstream_unavailable');
             assert.match(statusBody.job.error.message, /最终图片 b64_json/);
+            assert.equal(statusBody.job.error.retryable, false);
+            assert.equal(statusBody.job.error.diagnostics.upstream_event_type, 'response.image_generation_call.partial_image');
+            assert.equal(statusBody.job.error.diagnostics.partial_image_count, 1);
+            assert.equal(statusBody.job.error.diagnostics.retry_after_seconds, undefined);
             assert.equal(JSON.stringify(statusBody).includes('job-responses-partial-only'), false);
         } finally {
             await upstream.close();
@@ -1220,6 +1241,88 @@ describe('Agent route integration', () => {
         assert.match(body.error.details.fields.response_mode, /path/);
 
         await upstream.close();
+    });
+
+    it('rejects high-resolution Agent edit requests before contacting upstream', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await editImage(
+                agentEditRequest('route-edit-high-resolution-key', 'high resolution edit', {}, { size: '3072x2048' })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.message, /\/api\/images/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects high-resolution Agent edit requests before reading files or API credentials', async () => {
+        const { editImage } = await loadAgentRoutes();
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.OPENAI_API_BASE_URL;
+
+        const formData = new FormData();
+        formData.append('prompt', 'high resolution edit without file');
+        formData.append('model', 'gpt-image-2');
+        formData.append('size', '3072x2048');
+        formData.append('response_mode', 'path');
+
+        const response = await editImage(
+            new Request('http://localhost/api/agent/images/edit', {
+                method: 'POST',
+                headers: {
+                    'Idempotency-Key': 'route-edit-high-resolution-no-file-key'
+                },
+                body: formData
+            })
+        );
+
+        assert.equal(response.status, 422);
+        const body = await response.json();
+        assert.equal(body.error.code, 'validation_error');
+        assert.match(body.error.message, /\/api\/images/);
+        assert.equal(body.error.details?.fields?.image_0, undefined);
+        assert.doesNotMatch(body.error.message, /API Key|图片文件/);
+    });
+
+    it('rejects auto-size Agent edit when the uploaded source image is high resolution', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await editImage(
+                agentEditRequest('route-edit-auto-high-resolution-source-key', 'auto high resolution source', {}, {
+                    size: 'auto',
+                    image_0: createPngWithDimensions(3072, 2048)
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.message, /\/api\/images/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
     });
 
     it('returns validation errors for non-multipart edit requests', async () => {
@@ -1739,13 +1842,21 @@ function agentEditRequest(
     idempotencyKey: string,
     prompt: string,
     headers: Record<string, string> = {},
-    responseMode = 'path'
+    responseModeOrFields: string | (Record<string, string> & { image_0?: Buffer }) = 'path'
 ) {
+    const fields =
+        typeof responseModeOrFields === 'string'
+            ? { response_mode: responseModeOrFields }
+            : { response_mode: 'path', ...responseModeOrFields };
+    const imageBuffer = typeof responseModeOrFields === 'string' ? Buffer.from(PNG_BASE64, 'base64') : (fields.image_0 ?? Buffer.from(PNG_BASE64, 'base64'));
     const formData = new FormData();
     formData.append('prompt', prompt);
     formData.append('model', 'gpt-image-2');
-    formData.append('response_mode', responseMode);
-    formData.append('image_0', new File([Buffer.from(PNG_BASE64, 'base64')], 'input.png', { type: 'image/png' }));
+    for (const [key, value] of Object.entries(fields)) {
+        if (key === 'image_0') continue;
+        formData.append(key, value);
+    }
+    formData.append('image_0', new File([imageBuffer], 'input.png', { type: 'image/png' }));
     return new Request('http://localhost/api/agent/images/edit', {
         method: 'POST',
         headers: {
@@ -1754,6 +1865,13 @@ function agentEditRequest(
         },
         body: formData
     });
+}
+
+function createPngWithDimensions(width: number, height: number): Buffer {
+    const buffer = Buffer.from(PNG_BASE64, 'base64');
+    buffer.writeUInt32BE(width, 16);
+    buffer.writeUInt32BE(height, 20);
+    return buffer;
 }
 
 async function startImageUpstream(

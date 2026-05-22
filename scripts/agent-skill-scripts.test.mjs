@@ -95,6 +95,52 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
+    it('prints routing guidance for high-resolution generate dry-runs', () => {
+        const result = runSkillScript('generate-image.mjs', ['--size', '3072x2048', '--quality', 'high', 'prompt']);
+
+        assert.equal(result.status, 0);
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.routing_guidance.recommended_endpoint, '/api/agent/jobs/images/generate');
+        assert.equal(body.routing_guidance.transport, 'agent_job_polling');
+        assert.equal(body.routing_guidance.reason.includes('4K'), true);
+        assert.equal(result.stderr.trim(), '');
+    });
+
+    it('prints page SSE guidance for high-resolution edit dry-runs', () => {
+        const result = runSkillScript('edit-image.mjs', [
+            '--size',
+            '3072x2048',
+            '--quality',
+            'high',
+            '/tmp/source.png',
+            'prompt'
+        ]);
+
+        assert.equal(result.status, 0);
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.routing_guidance.recommended_endpoint, '/api/images');
+        assert.equal(body.routing_guidance.transport, 'page_sse');
+        assert.equal(body.routing_guidance.strength, 'must_use');
+        assert.equal(result.stderr.trim(), '');
+    });
+
+    it('blocks billable high-resolution Agent edit requests before reading image files', () => {
+        const result = runSkillScript('edit-image.mjs', [
+            '--allow-billable',
+            '--size',
+            '3072x2048',
+            '/tmp/missing-source.png',
+            'prompt'
+        ]);
+
+        assert.equal(result.status, 2);
+        const body = JSON.parse(result.stderr);
+        assert.equal(body.billable, false);
+        assert.equal(body.routing_guidance.recommended_endpoint, '/api/images');
+        assert.equal(body.routing_guidance.strength, 'must_use');
+        assert.equal(result.stdout.trim(), '');
+    });
+
     it('rejects invalid generate upstream streaming options before dry-run output', () => {
         const invalidPartialImages = runSkillScript('generate-image.mjs', ['--partial-images', '4', 'prompt']);
         assert.equal(invalidPartialImages.status, 2);

@@ -1,5 +1,15 @@
 # GPT Image Playground Agent API 参考
 
+## 目录
+
+- [辅助脚本](#辅助脚本)
+- [能力查询](#能力查询)
+- [Job Polling](#job-polling)
+- [生成图片](#生成图片)
+- [编辑图片](#编辑图片)
+- [产物元数据](#产物元数据)
+- [错误](#错误)
+
 ## 辅助脚本
 
 - `skills/gpt-image-playground-agent/scripts/generate-image.mjs`：JSON 文生图调用。
@@ -77,6 +87,12 @@ GET /api/agent/capabilities
 - `agent_streaming.upstream_sse.streaming_strategies`：支持 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。
 - `agent_streaming.upstream_sse.activation_strategies`：会真正向上游发送 `stream=true` 的策略，当前为 `openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。
 - `agent_streaming.page_sse`：页面端 `/api/images` 的 form-data SSE 能力，不代表 Agent generate/edit 支持流式。
+- `routing_rules.high_resolution_edit`：`edit` 且最大边大于 `2048` 时必须使用页面端 `/api/images` SSE。
+- `routing_rules.complex_ui_batch`：复杂 UI 批量出图推荐使用页面端 `/api/images` SSE。
+- `routing_rules.long_image_recovery`：长图恢复或续跑锚点场景推荐使用页面端 `/api/images` SSE。
+- `routing_rules.agent_generate_small_smoke`：普通小图单次文生图默认使用 `/api/agent/images/generate`。
+- `routing_rules.agent_job_polling_large_generate`：`quality=high` 且最大边不小于 `3072` 的单次文生图推荐使用 `/api/agent/jobs/images/generate`。
+- `routing_rules.retry_recovery`：终态失败不会用同一 `Idempotency-Key` 重新执行，必须诊断后创建新的业务操作和新的 key。
 - `defaults.image_backend`：Agent generate 默认 `images-api`。
 - `defaults.streaming_strategy`：Agent generate 默认 `off`，不会默认向上游发送 `stream=true`。
 - `defaults.partial_images`：Agent generate 默认 `2`，仅在显式启用上游 SSE 时使用。
@@ -87,7 +103,7 @@ GET /api/agent/capabilities
 - `agent_jobs.endpoints`：路径为 `POST /api/agent/jobs/images/generate`、`GET /api/agent/jobs/{id}`、`GET /api/agent/jobs/{id}/result`。
 - `agent_jobs.states`：状态机为 `queued`、`running`、`succeeded`、`failed`、`expired`。
 
-当 `agent_jobs.supported=true` 且 `mode=job_polling` 时，4K/high 长耗时请求优先创建 job 并轮询结果；同步 Agent generate 仍适用于普通非流式请求。当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。
+当 `agent_jobs.supported=true` 且 `mode=job_polling` 时，4K/high 单次文生图请求优先创建 job 并轮询结果；同步 Agent generate 仍适用于普通非流式请求。高分辨率 edit 和复杂 UI 批量生产不应走 Agent 非流式 edit，优先按 `routing_rules` 使用页面端 `/api/images` SSE。当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。
 
 ## Job Polling
 
@@ -210,6 +226,8 @@ Content-Type: multipart/form-data
 - `image_0..image_9`：源图片。
 - `mask`：可选 PNG 遮罩。
 
+当 `size` 的最大边大于 `2048` 时，Agent edit 端点会返回 `validation_error`，不会联系上游；该场景必须按 `routing_rules.high_resolution_edit` 使用页面端 `/api/images` form-data SSE 路径。
+
 ## 产物元数据
 
 ```http
@@ -240,6 +258,8 @@ DELETE /api/agent/artifacts/{id}
       "selected_channel_id": "default",
       "upstream_host": "api.example.test",
       "upstream_status": 524,
+      "upstream_event_type": "image_generation.partial_image",
+      "partial_image_count": 1,
       "transport_error": false,
       "retry_after_seconds": 15,
       "channel_cooldown_scope": "channel",
