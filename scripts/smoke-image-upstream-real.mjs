@@ -65,70 +65,75 @@ const SERVER_CHANNEL_CASES = [
 ];
 
 const argv = process.argv.slice(2);
-if (!isHelpRequested(argv)) loadDotEnvFiles(argv);
-const options = parseArgs(argv);
-if (options.help) {
-    printUsage();
-    process.exit(0);
-}
-
+let options;
+let exitCode = 0;
 try {
-    configureRouteEnv();
-    const availableCases = options.includeServerChannel ? [...CASES, ...SERVER_CHANNEL_CASES] : CASES;
-    const selectedCases = availableCases.filter((testCase) => options.caseId === 'all' || testCase.id === options.caseId);
-    if (selectedCases.length === 0) throw new Error(`未知真实 smoke 场景：${options.caseId}`);
-    const billablePreflight = buildBillablePreflight(selectedCases);
-    const results = [];
-    let routeHandlers;
-    for (const testCase of selectedCases) {
-        const loadHandlers = async () => {
-            routeHandlers ||= await loadRouteHandlers();
-            return routeHandlers;
+    if (!isHelpRequested(argv)) loadDotEnvFiles(argv);
+    options = parseArgs(argv);
+    if (options.help) {
+        printUsage();
+    } else {
+        configureRouteEnv();
+        const availableCases = options.includeServerChannel ? [...CASES, ...SERVER_CHANNEL_CASES] : CASES;
+        const selectedCases = availableCases.filter((testCase) => options.caseId === 'all' || testCase.id === options.caseId);
+        if (selectedCases.length === 0) throw new Error(`未知真实 smoke 场景：${options.caseId}`);
+        const billablePreflight = buildBillablePreflight(selectedCases);
+        const results = [];
+        let routeHandlers;
+        for (const testCase of selectedCases) {
+            const loadHandlers = async () => {
+                routeHandlers ||= await loadRouteHandlers();
+                return routeHandlers;
+            };
+            const result = await runCase(loadHandlers, testCase, billablePreflight);
+            results.push(result);
+            if (result.timed_out) break;
+        }
+        const independentTargetSummary = buildIndependentTargetSummary(results, options.requireIndependentTargets);
+        const unselectedRequiredCases = options.requireIndependentTargets
+            ? independentTargetSummary?.unselected_required_cases || []
+            : [];
+        const invalidRequiredCases = options.requireIndependentTargets ? independentTargetSummary?.invalid_cases || [] : [];
+        const blockedCases = results.filter((item) => item.blocked).map((item) => item.id);
+        const blockedRequiredCases = options.requireIndependentTargets
+            ? blockedCases.filter((id) => CASES.some((testCase) => testCase.id === id))
+            : [];
+        const skippedRequiredCases = options.requireIndependentTargets
+            ? results.filter((item) => item.skipped && !item.blocked && !item.server_channel).map((item) => item.id)
+            : [];
+        const missingRequiredCaseSet = new Set([...unselectedRequiredCases, ...skippedRequiredCases]);
+        const missingRequiredCases = CASES.map((testCase) => testCase.id).filter((id) => missingRequiredCaseSet.has(id));
+        const finalGateSatisfied = isFinalGateSatisfied(results, missingRequiredCases);
+        const report = {
+            ok:
+                results.every((item) => item.ok || item.skipped) &&
+                missingRequiredCases.length === 0 &&
+                invalidRequiredCases.length === 0,
+            billable: options.allowBillable,
+            final_gate_satisfied: finalGateSatisfied,
+            ...(independentTargetSummary ? { independent_targets: independentTargetSummary } : {}),
+            ...(unselectedRequiredCases.length > 0 ? { unselected_required_cases: unselectedRequiredCases } : {}),
+            ...(invalidRequiredCases.length > 0 ? { invalid_required_count: invalidRequiredCases.length } : {}),
+            ...(invalidRequiredCases.length > 0 ? { invalid_required_cases: invalidRequiredCases } : {}),
+            ...(blockedCases.length > 0 ? { blocked_count: blockedCases.length } : {}),
+            ...(blockedCases.length > 0 ? { blocked_cases: blockedCases } : {}),
+            ...(blockedRequiredCases.length > 0 ? { blocked_required_count: blockedRequiredCases.length } : {}),
+            ...(blockedRequiredCases.length > 0 ? { blocked_required_cases: blockedRequiredCases } : {}),
+            ...(skippedRequiredCases.length > 0 ? { skipped_required_cases: skippedRequiredCases } : {}),
+            ...(missingRequiredCases.length > 0 ? { missing_required_count: missingRequiredCases.length } : {}),
+            ...(missingRequiredCases.length > 0 ? { missing_required_cases: missingRequiredCases } : {}),
+            results
         };
-        const result = await runCase(loadHandlers, testCase, billablePreflight);
-        results.push(result);
-        if (result.timed_out) break;
+        console.log(JSON.stringify(report, null, 2));
+        exitCode = report.ok ? 0 : 1;
     }
-    const independentTargetSummary = buildIndependentTargetSummary(results, options.requireIndependentTargets);
-    const unselectedRequiredCases = options.requireIndependentTargets
-        ? independentTargetSummary?.unselected_required_cases || []
-        : [];
-    const invalidRequiredCases = options.requireIndependentTargets ? independentTargetSummary?.invalid_cases || [] : [];
-    const blockedCases = results.filter((item) => item.blocked).map((item) => item.id);
-    const blockedRequiredCases = options.requireIndependentTargets
-        ? blockedCases.filter((id) => CASES.some((testCase) => testCase.id === id))
-        : [];
-    const skippedRequiredCases = options.requireIndependentTargets
-        ? results.filter((item) => item.skipped && !item.blocked && !item.server_channel).map((item) => item.id)
-        : [];
-    const missingRequiredCaseSet = new Set([...unselectedRequiredCases, ...skippedRequiredCases]);
-    const missingRequiredCases = CASES.map((testCase) => testCase.id).filter((id) => missingRequiredCaseSet.has(id));
-    const finalGateSatisfied = isFinalGateSatisfied(results, missingRequiredCases);
-    const report = {
-        ok: results.every((item) => item.ok || item.skipped) && missingRequiredCases.length === 0 && invalidRequiredCases.length === 0,
-        billable: options.allowBillable,
-        final_gate_satisfied: finalGateSatisfied,
-        ...(independentTargetSummary ? { independent_targets: independentTargetSummary } : {}),
-        ...(unselectedRequiredCases.length > 0 ? { unselected_required_cases: unselectedRequiredCases } : {}),
-        ...(invalidRequiredCases.length > 0 ? { invalid_required_count: invalidRequiredCases.length } : {}),
-        ...(invalidRequiredCases.length > 0 ? { invalid_required_cases: invalidRequiredCases } : {}),
-        ...(blockedCases.length > 0 ? { blocked_count: blockedCases.length } : {}),
-        ...(blockedCases.length > 0 ? { blocked_cases: blockedCases } : {}),
-        ...(blockedRequiredCases.length > 0 ? { blocked_required_count: blockedRequiredCases.length } : {}),
-        ...(blockedRequiredCases.length > 0 ? { blocked_required_cases: blockedRequiredCases } : {}),
-        ...(skippedRequiredCases.length > 0 ? { skipped_required_cases: skippedRequiredCases } : {}),
-        ...(missingRequiredCases.length > 0 ? { missing_required_count: missingRequiredCases.length } : {}),
-        ...(missingRequiredCases.length > 0 ? { missing_required_cases: missingRequiredCases } : {}),
-        results
-    };
-    console.log(JSON.stringify(report, null, 2));
-    process.exit(report.ok ? 0 : 1);
 } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    exitCode = 1;
 } finally {
     restoreProcessEnv();
 }
+process.exitCode = exitCode;
 
 function isFinalGateSatisfied(results, missingRequiredCases) {
     if (!options.requireIndependentTargets || !options.allowBillable || missingRequiredCases.length > 0) return false;

@@ -463,6 +463,26 @@ describe('image upstream real smoke script', () => {
         assert.match(result.stderr, /--env-file 缺少参数值/);
     });
 
+    it('lets the npm smoke script pass --env-file through to the smoke script', () => {
+        const missingEnvFilePath = join(repoRoot, 'generated-images/.missing-real-smoke.env');
+        rmSync(missingEnvFilePath, { force: true });
+
+        const result = spawnSync(
+            'npm',
+            ['run', 'smoke:image-upstream-real', '--', '--env-file', missingEnvFilePath],
+            {
+                cwd: repoRoot,
+                encoding: 'utf8',
+                env: buildScriptEnv()
+            }
+        );
+
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /--env-file 指定的文件不存在/);
+        assert.doesNotMatch(result.stderr, /node: .*not found/);
+        assert.doesNotMatch(result.stderr, /ModuleJob\.run|Node\.js v|at loadEnvFile/);
+    });
+
     it('fails explicitly for unknown real upstream smoke cases', () => {
         const result = runScript(['--case', 'missing-case']);
 
