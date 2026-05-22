@@ -120,6 +120,17 @@
 | `npx tsc --noEmit` | 0 | TypeScript 静态检查通过。 |
 | `npm run smoke:image-upstream-real -- --require-independent-targets` | 1 | 按最终门禁预期失败；仍缺 5 个独立真实上游目标，`final_gate_satisfied=false`。 |
 
+## 2026-05-22 final gate preflight 补充
+
+本轮基线基于 `fc55a26 Block incomplete real smoke final gate`，该提交已推送到 `origin/codex/image-upstream-compat`。本轮补齐 `--require-independent-targets --allow-billable` 的 readiness 安全边界：若最终独立真实上游门禁发现必跑场景未选全、缺少配置或配置非法，脚本会在加载 `/api/images` / `/api/agent/images/generate` route 之前阻断已配置的可运行目标，先输出结构化失败，不发任何真实上游计费请求。该边界避免“最终门禁必然失败但已产生部分真实计费请求”的状态。
+
+| 命令或检查 | 退出码 | 摘要 |
+| --- | --- | --- |
+| `npm run smoke:image-upstream-compat` | 0 | 原版 new-api Images JSON、sub2api Images JSON、gaoren keepalive SSE、gaoren JSON-as-SSE、sub2api Images SSE、sub2api Responses bridge、GPT2Image Responses SSE 七个本地 mock 兼容场景通过。 |
+| `node --import tsx --test scripts/smoke-image-upstream-real.test.mjs` | 0 | 23 个真实 smoke 脚本测试通过。新增覆盖最终独立门禁只配置一个目标但缺少其它必跑目标时，已配置目标被列入 `blocked_required_cases`，本地 mock 上游 `calls.length=0`。 |
+| `IMAGE_REAL_SMOKE_SKIP_DOTENV=1 npm run smoke:image-upstream-real -- --require-independent-targets --allow-billable` | 1 | 预期失败；`configuration_complete=false`、`configured_count=0`、`missing_count=5`、`missing_required_count=5`。命令虽然带 `--allow-billable`，但由于独立目标配置不完整，仅输出缺失项报告，不进入上游调用路径。 |
+| `npm run status` | 0 | 当前工作树干净，`head=fc55a26`；独立真实上游仍为 `configured_count=0`、`missing_count=5`，最终门禁命令仍指向 `--env-file .env.real-smoke.local --require-independent-targets --allow-billable`。 |
+
 ## 完成度审计矩阵
 
 | 要求 | 当前证据 | 状态 |
@@ -133,7 +144,7 @@
 | 缺 final base64、远程 URL-only、上游断流、Responses failed image call 必须显式失败 | `src/lib/image-stream-events.test.ts`、`src/lib/responses-image-backend.test.ts`、`src/app/api/images/route.test.ts` 的非流式 Images URL-only 502、Responses JSON/SSE failed image call 用例、`src/app/api/agent/agent-routes.test.ts` 的 Agent upstream SSE failed image call 用例、`server-channel-images-json` 首次真实 `Connection error` 显式失败记录 | 已覆盖 |
 | Agent API 对外保持最终 JSON，内部可消费上游 SSE 并保存 artifact | `src/app/api/agent/agent-routes.test.ts` 的直接 generate Images SSE、直接 generate Responses SSE、job polling Images SSE + artifact content、job polling Responses SSE + artifact content 用例，以及 `server-channel-agent-images-sse` 与 `server-channel-agent-responses-sse` 脚本化真实 smoke | 已覆盖 |
 | capabilities/OpenAPI/skill 文档清楚区分页面 SSE、Agent 内部 upstream SSE 和最终响应契约 | `src/lib/agent-api-contracts.test.ts`、`src/lib/agent-openapi.ts`、`skills/gpt-image-playground-agent/SKILL.md`、`skills/gpt-image-playground-agent/references/api.md`、运行态 `GET /api/agent/capabilities` 和 `GET /api/agent/openapi.json` smoke | 已覆盖 |
-| 三类独立上游真实 smoke：原版 new-api、gaoren/new-api、sub2api/GPT2Image | `scripts/smoke-image-upstream-real.mjs` 已支持独立 `IMAGE_REAL_SMOKE_*` 目标和 `--env-file <path>`；当前 dry-run 证明本机未配置专用 `BASE_URL`，`independent_targets` 汇总缺失目标并给出最终门禁命令，`missing_env_any` 指出缺失 env；`--require-independent-targets` 可作为最终门禁 | 未完成，缺少独立真实上游地址和 key |
+| 三类独立上游真实 smoke：原版 new-api、gaoren/new-api、sub2api/GPT2Image | `scripts/smoke-image-upstream-real.mjs` 已支持独立 `IMAGE_REAL_SMOKE_*` 目标和 `--env-file <path>`；当前 dry-run 证明本机未配置专用 `BASE_URL`，`independent_targets` 汇总缺失目标并给出最终门禁命令，`missing_env_any` 指出缺失 env；`--require-independent-targets --allow-billable` 在配置不完整时会先失败并阻断部分真实调用；配置齐全后才允许最终门禁实际计费执行 | 未完成，缺少独立真实上游地址和 key |
 
 ## 结论
 
