@@ -44,7 +44,7 @@ describe('image upstream real smoke script', () => {
             invalid_cases: [],
             invalid_env: {},
             final_gate_command:
-                'npm run smoke:image-upstream-real -- --env-file .env.real-smoke.local --require-independent-targets --allow-billable'
+                'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable'
         });
     });
 
@@ -483,6 +483,36 @@ describe('image upstream real smoke script', () => {
         assert.doesNotMatch(result.stderr, /ModuleJob\.run|Node\.js v|at loadEnvFile/);
     });
 
+    it('lets the npm final gate report readiness when the optional env file is absent', () => {
+        const missingEnvFilePath = join(repoRoot, 'generated-images/.missing-real-smoke.env');
+        rmSync(missingEnvFilePath, { force: true });
+
+        const result = spawnSync(
+            'npm',
+            [
+                'run',
+                'smoke:image-upstream-real',
+                '--',
+                '--env-file-if-exists',
+                missingEnvFilePath,
+                '--require-independent-targets',
+                '--allow-billable'
+            ],
+            {
+                cwd: repoRoot,
+                encoding: 'utf8',
+                env: buildScriptEnv()
+            }
+        );
+
+        assert.equal(result.status, 1);
+        assert.equal(result.stderr.trim(), '');
+        const report = JSON.parse(result.stdout.slice(result.stdout.indexOf('{')));
+        assert.equal(report.independent_targets.configuration_complete, false);
+        assert.equal(report.missing_required_count, 5);
+        assert.deepEqual(report.missing_required_cases, independentSmokeCaseIds());
+    });
+
     it('fails explicitly for unknown real upstream smoke cases', () => {
         const result = runScript(['--case', 'missing-case']);
 
@@ -496,6 +526,7 @@ describe('image upstream real smoke script', () => {
         assert.equal(result.status, 0);
         assert.equal(result.stderr.trim(), '');
         assert.match(result.stdout, /--env-file <path>/);
+        assert.match(result.stdout, /--env-file-if-exists <path>/);
         for (const prefix of independentSmokePrefixes()) {
             assert.match(result.stdout, new RegExp(`${prefix}_BASE_URL / ${prefix}_API_KEY`));
         }

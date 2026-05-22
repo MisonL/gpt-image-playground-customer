@@ -95,6 +95,10 @@ describe('Command center scripts', () => {
             'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL',
             'IMAGE_REAL_SMOKE_SUB2API_BASE_URL'
         ]);
+        assert.equal(
+            missing.final_gate_command,
+            'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable'
+        );
 
         const configured = buildImageUpstreamRealSmokeStatus({
             IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://original.example/v1',

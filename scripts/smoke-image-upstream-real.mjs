@@ -179,6 +179,7 @@ function parseArgs(argv) {
         const arg = argv[index];
         if (arg === '--allow-billable') parsed.allowBillable = true;
         else if (arg === '--env-file') parsed.envFilePath = readArgValue(argv, (index += 1), arg);
+        else if (arg === '--env-file-if-exists') parsed.envFileIfExistsPath = readArgValue(argv, (index += 1), arg);
         else if (arg === '--include-server-channel') parsed.includeServerChannel = true;
         else if (arg === '--require-independent-targets') parsed.requireIndependentTargets = true;
         else if (arg === '--timeout-ms') parsed.timeoutMs = readTimeoutMs(readArgValue(argv, (index += 1), arg), arg);
@@ -214,6 +215,10 @@ function loadDotEnvFiles(argv) {
     for (let index = 0; index < argv.length; index += 1) {
         if (argv[index] !== '--env-file') continue;
         loadEnvFile(readArgValue(argv, (index += 1), '--env-file'), { overrideLoadedValues: true });
+    }
+    for (let index = 0; index < argv.length; index += 1) {
+        if (argv[index] !== '--env-file-if-exists') continue;
+        loadEnvFileIfPresent(readArgValue(argv, (index += 1), '--env-file-if-exists'), { overrideLoadedValues: true });
     }
 }
 
@@ -471,7 +476,7 @@ function buildIndependentTargetSummary(results, requireIndependentTargets = fals
                 .map((item) => [item.id, item.invalid_env])
         ),
         final_gate_command:
-            'npm run smoke:image-upstream-real -- --env-file .env.real-smoke.local --require-independent-targets --allow-billable'
+            'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable'
     };
 }
 
@@ -684,7 +689,7 @@ function isGeneratedImageFile(filename) {
 }
 
 function printUsage() {
-    console.log(`用法：npm run smoke:image-upstream-real -- [--env-file <path>] [--allow-billable] [--include-server-channel] [--require-independent-targets] [--timeout-ms <ms>] [--case <id>]
+    console.log(`用法：npm run smoke:image-upstream-real -- [--env-file <path>] [--env-file-if-exists <path>] [--allow-billable] [--include-server-channel] [--require-independent-targets] [--timeout-ms <ms>] [--case <id>]
 
 环境变量前缀：
   IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL / IMAGE_REAL_SMOKE_ORIGINAL_API_KEY
@@ -698,5 +703,6 @@ function printUsage() {
 添加 --include-server-channel 后还可运行：server-channel-images-json、server-channel-images-sse、server-channel-responses-sse、server-channel-responses-json、server-channel-agent-images-sse、server-channel-agent-responses-sse。
 默认只检查配置并跳过真实生图；必须加 --allow-billable 才会调用 /api/images 或 /api/agent/images/generate。
 可用 --env-file 指向独立真实上游凭据文件；shell 环境变量优先级高于 --env-file，--env-file 优先级高于 .env.local。
+可用 --env-file-if-exists 在凭据文件存在时加载，不存在时继续输出结构化 readiness 报告。
 添加 --require-independent-targets 后，任何独立真实上游场景未被选中或被跳过都会使脚本退出非零。默认单场景超时为 240000ms。`);
 }

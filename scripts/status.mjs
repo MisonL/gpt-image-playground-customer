@@ -18,7 +18,7 @@ const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
     { id: 'gpt2image-responses-sse', prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE' }
 ];
 const IMAGE_UPSTREAM_FINAL_GATE_COMMAND =
-    'npm run smoke:image-upstream-real -- --env-file .env.real-smoke.local --require-independent-targets --allow-billable';
+    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable';
 const STATUS_ENV_FILES = [
     { path: '.env.local', override: false },
     { path: '.env.real-smoke.local', override: true }

@@ -129,7 +129,7 @@
 | `npm run smoke:image-upstream-compat` | 0 | 原版 new-api Images JSON、sub2api Images JSON、gaoren keepalive SSE、gaoren JSON-as-SSE、sub2api Images SSE、sub2api Responses bridge、GPT2Image Responses SSE 七个本地 mock 兼容场景通过。 |
 | `node --import tsx --test scripts/smoke-image-upstream-real.test.mjs` | 0 | 23 个真实 smoke 脚本测试通过。新增覆盖最终独立门禁只配置一个目标但缺少其它必跑目标时，已配置目标被列入 `blocked_required_cases`，本地 mock 上游 `calls.length=0`。 |
 | `IMAGE_REAL_SMOKE_SKIP_DOTENV=1 npm run smoke:image-upstream-real -- --require-independent-targets --allow-billable` | 1 | 预期失败；`configuration_complete=false`、`configured_count=0`、`missing_count=5`、`missing_required_count=5`。命令虽然带 `--allow-billable`，但由于独立目标配置不完整，仅输出缺失项报告，不进入上游调用路径。 |
-| `npm run status` | 0 | 当前工作树干净，`head=fc55a26`；独立真实上游仍为 `configured_count=0`、`missing_count=5`，最终门禁命令仍指向 `--env-file .env.real-smoke.local --require-independent-targets --allow-billable`。 |
+| `npm run status` | 0 | 当前工作树干净，`head=fc55a26`；独立真实上游仍为 `configured_count=0`、`missing_count=5`，最终门禁命令仍指向 `--env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable`。 |
 
 ## 完成度审计矩阵
 
