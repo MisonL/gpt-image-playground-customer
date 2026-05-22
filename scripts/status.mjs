@@ -84,14 +84,36 @@ function readSmokeEnvAlternatives(testCase, suffix) {
     return keys;
 }
 
+function readFirstStatusEnv(env, keys) {
+    for (const key of keys) {
+        const value = readEnv(env, key);
+        if (value) return { key, value };
+    }
+    return undefined;
+}
+
+function readBaseUrlValidationError(value) {
+    let url;
+    try {
+        url = new URL(value);
+    } catch {
+        return 'must_be_http_or_https_absolute_url';
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'must_use_http_or_https';
+    if (url.username || url.password) return 'must_not_include_credentials';
+    if (url.search || url.hash) return 'must_not_include_query_or_fragment';
+    return undefined;
+}
+
 function readTargetConfigured(testCase, env) {
-    const baseUrl =
-        readEnv(env, `${testCase.prefix}_BASE_URL`) ||
-        (testCase.fallbackPrefix ? readEnv(env, `${testCase.fallbackPrefix}_BASE_URL`) : undefined);
-    const apiKey =
-        readEnv(env, `${testCase.prefix}_API_KEY`) ||
-        (testCase.fallbackPrefix ? readEnv(env, `${testCase.fallbackPrefix}_API_KEY`) : undefined);
-    return { baseUrl: Boolean(baseUrl), apiKey: Boolean(apiKey) };
+    const baseUrl = readFirstStatusEnv(env, readSmokeEnvAlternatives(testCase, 'BASE_URL'));
+    const apiKey = readFirstStatusEnv(env, readSmokeEnvAlternatives(testCase, 'API_KEY'));
+    const baseUrlError = baseUrl ? readBaseUrlValidationError(baseUrl.value) : undefined;
+    return {
+        baseUrl: Boolean(baseUrl),
+        apiKey: Boolean(apiKey),
+        invalidEnv: baseUrlError ? [{ key: baseUrl.key, reason: baseUrlError }] : []
+    };
 }
 
 function readMissingEnvAny(testCase, target) {
@@ -107,21 +129,28 @@ export function buildImageUpstreamRealSmokeStatus(env = process.env) {
         const missingEnvAny = readMissingEnvAny(testCase, target);
         return {
             id: testCase.id,
-            configured: missingEnvAny.length === 0,
-            ...(missingEnvAny.length > 0 ? { missing_env_any: missingEnvAny } : {})
+            configured: missingEnvAny.length === 0 && target.invalidEnv.length === 0,
+            ...(missingEnvAny.length > 0 ? { missing_env_any: missingEnvAny } : {}),
+            ...(target.invalidEnv.length > 0 ? { invalid_env: target.invalidEnv } : {})
         };
     });
     const configuredCases = caseSummaries.filter((item) => item.configured).map((item) => item.id);
-    const missingCases = caseSummaries.filter((item) => !item.configured);
+    const missingCases = caseSummaries.filter(
+        (item) => Array.isArray(item.missing_env_any) && item.missing_env_any.length > 0
+    );
+    const invalidCases = caseSummaries.filter((item) => Array.isArray(item.invalid_env) && item.invalid_env.length > 0);
     return {
         required_count: IMAGE_UPSTREAM_REAL_SMOKE_CASES.length,
         required_cases: IMAGE_UPSTREAM_REAL_SMOKE_CASES.map((testCase) => testCase.id),
-        configuration_complete: missingCases.length === 0,
+        configuration_complete: missingCases.length === 0 && invalidCases.length === 0,
         configured_count: configuredCases.length,
         configured_cases: configuredCases,
         missing_count: missingCases.length,
         missing_cases: missingCases.map((item) => item.id),
         missing_env_any: Object.fromEntries(missingCases.map((item) => [item.id, item.missing_env_any])),
+        invalid_count: invalidCases.length,
+        invalid_cases: invalidCases.map((item) => item.id),
+        invalid_env: Object.fromEntries(invalidCases.map((item) => [item.id, item.invalid_env])),
         final_gate_command: IMAGE_UPSTREAM_FINAL_GATE_COMMAND
     };
 }

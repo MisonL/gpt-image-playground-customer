@@ -112,6 +112,27 @@ describe('Command center scripts', () => {
         assert.doesNotMatch(JSON.stringify(configured), /secret|example\/v1/);
     });
 
+    it('reports unsafe independent image upstream base URLs without exposing values', () => {
+        const status = buildImageUpstreamRealSmokeStatus({
+            IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@original.example/v1?token=secret#frag',
+            IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'original-secret'
+        });
+
+        assert.equal(status.configuration_complete, false);
+        assert.equal(status.configured_count, 0);
+        assert.equal(status.missing_count, 4);
+        assert.equal(status.invalid_count, 1);
+        assert.deepEqual(status.invalid_cases, ['original-images-json']);
+        assert.deepEqual(status.invalid_env['original-images-json'], [
+            {
+                key: 'IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL',
+                reason: 'must_not_include_credentials'
+            }
+        ]);
+        assert.equal(status.missing_env_any['original-images-json'], undefined);
+        assert.doesNotMatch(JSON.stringify(status), /user:pass|original\.example|token=secret|original-secret/);
+    });
+
     it('loads independent image upstream smoke readiness from env files without overriding shell env', async () => {
         const tempDir = await mkdtemp(path.join(os.tmpdir(), 'image-upstream-status-'));
         const localEnvPath = path.join(tempDir, '.env.local');
