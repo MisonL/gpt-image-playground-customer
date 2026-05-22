@@ -129,7 +129,25 @@
 | `npm run smoke:image-upstream-compat` | 0 | 原版 new-api Images JSON、sub2api Images JSON、gaoren keepalive SSE、gaoren JSON-as-SSE、sub2api Images SSE、sub2api Responses bridge、GPT2Image Responses SSE 七个本地 mock 兼容场景通过。 |
 | `node --import tsx --test scripts/smoke-image-upstream-real.test.mjs` | 0 | 23 个真实 smoke 脚本测试通过。新增覆盖最终独立门禁只配置一个目标但缺少其它必跑目标时，已配置目标被列入 `blocked_required_cases`，本地 mock 上游 `calls.length=0`。 |
 | `IMAGE_REAL_SMOKE_SKIP_DOTENV=1 npm run smoke:image-upstream-real -- --require-independent-targets --allow-billable` | 1 | 预期失败；`configuration_complete=false`、`configured_count=0`、`missing_count=5`、`missing_required_count=5`。命令虽然带 `--allow-billable`，但由于独立目标配置不完整，仅输出缺失项报告，不进入上游调用路径。 |
-| `npm run status` | 0 | 当前工作树干净，`head=fc55a26`；独立真实上游仍为 `configured_count=0`、`missing_count=5`，最终门禁命令仍指向 `--env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable`。 |
+
+## 2026-05-22 Responses readiness 模型口径补充
+
+本轮继续修正真实 smoke readiness 对 Responses 顶层模型的判断：`IMAGE_REAL_SMOKE_SUB2API_RESPONSES_MODEL` 是 sub2api Responses 场景的图片模型覆盖项，不能被当成 `/responses` 顶层模型。`npm run status` 与 `npm run smoke:image-upstream-real` 现在只接受 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL` 或 `OPENAI_RESPONSES_API_MODEL` 作为 sub2api Responses 顶层模型；GPT2Image 场景仍接受 `IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL` 或 `OPENAI_RESPONSES_API_MODEL`。
+
+| 命令或检查 | 退出码 | 摘要 |
+| --- | --- | --- |
+| `node --test scripts/command-center.test.mjs` | 0 | 新增覆盖 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_MODEL=gpt-image-2` 不会让 status readiness 误判 sub2api Responses 场景配置完成。 |
+| `node --import tsx --test scripts/smoke-image-upstream-real.test.mjs` | 0 | 新增覆盖真实 smoke dry-run 同样不会把 sub2api Responses 图片模型变量当成 `/responses` 顶层模型。 |
+| `npm run status` | 0 | 当前本轮工作树有未提交改动，`head=5c6e21b`；独立真实上游仍为 `configured_count=0`、`missing_count=5`，最终门禁命令仍指向 `--env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable`。 |
+
+## 2026-05-22 GPT2Image Responses SSE 去重补充
+
+本轮兼容 mock smoke 暴露 GPT2Image 风格 Responses SSE 会先返回 `response.output_item.done`，再在 `response.completed.response.output[]` 中重复同一个无 id 的 `image_generation_call.result`。事件归一化现在在 Responses image call 缺少 `id` / `item_id` / `call_id` 时，使用最终 base64 payload 作为内部 dedupe key；如果上游提供不同 id，即使 payload 相同仍会保留为不同最终图片。
+
+| 命令或检查 | 退出码 | 摘要 |
+| --- | --- | --- |
+| `node --test --import tsx src/lib/image-stream-collector.test.ts` | 0 | 新增覆盖 Responses 上游缺少 image call id 时，`response.output_item.done` 与 `response.completed` 的同 payload final image 只落一张。 |
+| `npm run smoke:image-upstream-compat` | 0 | GPT2Image Responses SSE 场景恢复为 `partial_image, completed, done`，不再出现重复 `completed`。 |
 
 ## 完成度审计矩阵
 

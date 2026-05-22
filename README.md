@@ -573,11 +573,11 @@ docker logs -f gpt-image-playground-customer
 | `npm run lint:scripts` | 跨平台检查仓库脚本和 skill 脚本语法。 |
 | `npm run format` | 格式化 `src/` 下的 TypeScript 和 React 文件。 |
 
-真实上游 smoke 使用以下环境变量前缀逐类配置：`IMAGE_REAL_SMOKE_ORIGINAL_*`、`IMAGE_REAL_SMOKE_GAOREN_*`、`IMAGE_REAL_SMOKE_SUB2API_*`、`IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`、`IMAGE_REAL_SMOKE_GPT2IMAGE_*`。每类至少提供 `BASE_URL` 和 `API_KEY`；可选覆盖 `MODEL`、`SIZE`、`QUALITY`、`RESPONSES_MODEL`。`BASE_URL` 必须是无凭据、无查询参数、无片段的 `http`/`https` 绝对 URL。默认不触发计费请求，必须显式加 `-- --allow-billable`。可复制 `.env.real-smoke.example` 为未跟踪的 `.env.real-smoke.local`，再通过 `-- --env-file .env.real-smoke.local` 加载；shell 环境变量优先级高于 `--env-file`，`--env-file` 优先级高于 `.env.local`。
+真实上游 smoke 使用以下环境变量前缀逐类配置：`IMAGE_REAL_SMOKE_ORIGINAL_*`、`IMAGE_REAL_SMOKE_GAOREN_*`、`IMAGE_REAL_SMOKE_SUB2API_*`、`IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`、`IMAGE_REAL_SMOKE_GPT2IMAGE_*`。每类至少提供 `BASE_URL` 和 `API_KEY`；Responses 场景还必须提供 `/responses` 顶层模型。可选覆盖图片 `MODEL`、`SIZE`、`QUALITY`。`BASE_URL` 必须是无凭据、无查询参数、无片段的 `http`/`https` 绝对 URL。默认不触发计费请求，必须显式加 `-- --allow-billable`。可复制 `.env.real-smoke.example` 为未跟踪的 `.env.real-smoke.local`，再通过 `-- --env-file .env.real-smoke.local` 加载；shell 环境变量优先级高于 `--env-file`，`--env-file` 优先级高于 `.env.local`。
 
 若只需要验证当前 `.env.local` 中的 `OPENAI_API_KEY` 或 `OPENAI_CHANNEL_N_*` 服务端渠道，可追加 `-- --include-server-channel`。该模式不会把服务端 API Key 写入表单或输出，真实执行仍需同时追加 `--allow-billable`；可覆盖 Images JSON、Images SSE、Responses JSON、Responses SSE、Agent 内部 Images SSE 和 Agent 内部 Responses SSE 场景。可用 `IMAGE_REAL_SMOKE_SERVER_MODEL`、`IMAGE_REAL_SMOKE_SERVER_SIZE`、`IMAGE_REAL_SMOKE_SERVER_QUALITY`、`IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL` 覆盖模型、尺寸、质量和 Responses 顶层模型。单场景默认超时 `240000ms`，可用 `--timeout-ms` 或 `IMAGE_REAL_SMOKE_TIMEOUT_MS` 调整。
 
-dry-run 输出中的 `independent_targets` 会汇总必跑、已选、未选、已配置和缺失的独立真实上游场景，并给出最终门禁命令；`required_count` 和 `unselected_required_count` 用于区分必跑总数和未选择数量，`configuration_complete=true` 只表示 5 个必跑场景都已选中且配置齐全，不代表已经执行计费生图。顶层 `final_gate_satisfied=true` 才表示最终独立真实上游门禁已实际执行并通过。`missing_env_any` 表示每组任选一个环境变量即可补齐该缺失项。例如 `sub2api-responses-json` 可单独配置 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`，也可以复用 `IMAGE_REAL_SMOKE_SUB2API_*`。
+dry-run 输出中的 `independent_targets` 会汇总必跑、已选、未选、已配置和缺失的独立真实上游场景，并给出最终门禁命令；`required_count` 和 `unselected_required_count` 用于区分必跑总数和未选择数量，`configuration_complete=true` 只表示 5 个必跑场景都已选中且配置齐全，不代表已经执行计费生图。顶层 `final_gate_satisfied=true` 才表示最终独立真实上游门禁已实际执行并通过。`missing_env_any` 表示每组任选一个环境变量即可补齐该缺失项。例如 `sub2api-responses-json` 的 `BASE_URL` 和 `API_KEY` 可单独配置 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`，也可以复用 `IMAGE_REAL_SMOKE_SUB2API_*`；它的 `/responses` 顶层模型必须使用 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL` 或 `OPENAI_RESPONSES_API_MODEL`，避免和图片模型 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_MODEL` 混淆。
 
 最终验收独立真实上游时追加 `-- --require-independent-targets --allow-billable`。此时任一独立真实上游场景未被选中或被跳过都会让脚本以非零退出，并在 `unselected_required_cases`、`skipped_required_cases`、`missing_required_count` 和 `missing_required_cases` 中列出未完成的场景。若最终门禁预检发现必跑场景未选全、缺少配置或配置非法，脚本会阻断可运行目标并先失败，不触发任何真实上游计费调用。
 
@@ -588,8 +588,8 @@ dry-run 输出中的 `independent_targets` 会汇总必跑、已选、未选、�
 | `original-images-json` | 原版 QuantumNous/new-api 兼容 Images API JSON | `IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL`、`IMAGE_REAL_SMOKE_ORIGINAL_API_KEY` |
 | `gaoren-images-sse` | gaoren002/new-api Images API SSE/keepalive 分支 | `IMAGE_REAL_SMOKE_GAOREN_BASE_URL`、`IMAGE_REAL_SMOKE_GAOREN_API_KEY` |
 | `sub2api-images-sse` | Wei-Shaw/sub2api Images API SSE | `IMAGE_REAL_SMOKE_SUB2API_BASE_URL`、`IMAGE_REAL_SMOKE_SUB2API_API_KEY` |
-| `sub2api-responses-json` | sub2api Responses image_generation bridge | `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`，或复用 `IMAGE_REAL_SMOKE_SUB2API_*` |
-| `gpt2image-responses-sse` | GPT2Image 风格 Responses image_generation SSE | `IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL`、`IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY`、`IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL` |
+| `sub2api-responses-json` | sub2api Responses image_generation bridge | `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL`、`IMAGE_REAL_SMOKE_SUB2API_RESPONSES_API_KEY` 或复用 `IMAGE_REAL_SMOKE_SUB2API_BASE_URL`、`IMAGE_REAL_SMOKE_SUB2API_API_KEY`；另需 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL` 或 `OPENAI_RESPONSES_API_MODEL` |
+| `gpt2image-responses-sse` | GPT2Image 风格 Responses image_generation SSE | `IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL`、`IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY`；另需 `IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL` 或 `OPENAI_RESPONSES_API_MODEL` |
 
 ## 常见问题
 

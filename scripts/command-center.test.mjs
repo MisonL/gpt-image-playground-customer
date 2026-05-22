@@ -107,13 +107,69 @@ describe('Command center scripts', () => {
             IMAGE_REAL_SMOKE_GAOREN_API_KEY: 'gaoren-secret',
             IMAGE_REAL_SMOKE_SUB2API_BASE_URL: 'https://sub2api.example/v1',
             IMAGE_REAL_SMOKE_SUB2API_API_KEY: 'sub2api-secret',
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL: 'gpt-4.1',
             IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL: 'https://gpt2image.example/v1',
-            IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'gpt2image-secret'
+            IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'gpt2image-secret',
+            IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL: 'gpt-5.4'
         });
         assert.equal(configured.configuration_complete, true);
         assert.equal(configured.configured_count, 5);
         assert.equal(configured.missing_count, 0);
         assert.doesNotMatch(JSON.stringify(configured), /secret|example\/v1/);
+    });
+
+    it('requires Responses top-level models in image upstream status readiness', () => {
+        const status = buildImageUpstreamRealSmokeStatus({
+            IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://original.example/v1',
+            IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'original-secret',
+            IMAGE_REAL_SMOKE_GAOREN_BASE_URL: 'https://gaoren.example/v1',
+            IMAGE_REAL_SMOKE_GAOREN_API_KEY: 'gaoren-secret',
+            IMAGE_REAL_SMOKE_SUB2API_BASE_URL: 'https://sub2api.example/v1',
+            IMAGE_REAL_SMOKE_SUB2API_API_KEY: 'sub2api-secret',
+            IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL: 'https://gpt2image.example/v1',
+            IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'gpt2image-secret'
+        });
+
+        assert.equal(status.configuration_complete, false);
+        assert.equal(status.configured_count, 3);
+        assert.deepEqual(status.configured_cases, [
+            'original-images-json',
+            'gaoren-images-sse',
+            'sub2api-images-sse'
+        ]);
+        assert.deepEqual(status.missing_cases, ['sub2api-responses-json', 'gpt2image-responses-sse']);
+        assert.deepEqual(status.missing_env_any['sub2api-responses-json'][0], [
+            'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL',
+            'OPENAI_RESPONSES_API_MODEL'
+        ]);
+        assert.deepEqual(status.missing_env_any['gpt2image-responses-sse'][0], [
+            'IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL',
+            'OPENAI_RESPONSES_API_MODEL'
+        ]);
+        assert.doesNotMatch(JSON.stringify(status), /secret|example\/v1/);
+    });
+
+    it('does not treat the sub2api Responses image model as the Responses top-level model', () => {
+        const status = buildImageUpstreamRealSmokeStatus({
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL: 'https://sub2api-responses.example/v1',
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_API_KEY: 'sub2api-responses-secret',
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_MODEL: 'gpt-image-2'
+        });
+
+        assert.equal(status.configuration_complete, false);
+        assert.equal(status.configured_count, 0);
+        assert.deepEqual(status.missing_cases, [
+            'original-images-json',
+            'gaoren-images-sse',
+            'sub2api-images-sse',
+            'sub2api-responses-json',
+            'gpt2image-responses-sse'
+        ]);
+        assert.deepEqual(status.missing_env_any['sub2api-responses-json'][0], [
+            'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL',
+            'OPENAI_RESPONSES_API_MODEL'
+        ]);
+        assert.doesNotMatch(JSON.stringify(status), /sub2api-responses-secret|sub2api-responses\.example/);
     });
 
     it('reports unsafe independent image upstream base URLs without exposing values', () => {
@@ -157,8 +213,10 @@ describe('Command center scripts', () => {
                 'IMAGE_REAL_SMOKE_GAOREN_API_KEY=real-gaoren-secret',
                 'IMAGE_REAL_SMOKE_SUB2API_BASE_URL=https://real-sub2api.example/v1',
                 'IMAGE_REAL_SMOKE_SUB2API_API_KEY=real-sub2api-secret',
+                'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL=gpt-4.1',
                 'IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL=https://real-gpt2image.example/v1',
-                'IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY=real-gpt2image-secret'
+                'IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY=real-gpt2image-secret',
+                'IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL=gpt-5.4'
             ].join('\n')
         );
 

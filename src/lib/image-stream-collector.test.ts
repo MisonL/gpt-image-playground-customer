@@ -26,6 +26,26 @@ describe('collectOpenAiImagesFromStream', () => {
         assert.equal(result.data?.[0]?.b64_json, PNG_BASE64);
     });
 
+    it('deduplicates repeated Responses final payloads when the upstream omits image call ids', async () => {
+        const result = await collectOpenAiImagesFromStream(
+            upstreamEvents([
+                {
+                    type: 'response.output_item.done',
+                    item: { type: 'image_generation_call', status: 'completed', result: PNG_BASE64 }
+                },
+                {
+                    type: 'response.completed',
+                    response: {
+                        output: [{ type: 'image_generation_call', status: 'completed', result: PNG_BASE64 }]
+                    }
+                }
+            ])
+        );
+
+        assert.equal(result.data?.length, 1);
+        assert.equal(result.data?.[0]?.b64_json, PNG_BASE64);
+    });
+
     it('keeps separate Responses final items when their base64 payloads match', async () => {
         const result = await collectOpenAiImagesFromStream(
             upstreamEvents([

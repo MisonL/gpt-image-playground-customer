@@ -371,10 +371,7 @@ function readTarget(testCase) {
         baseUrlKey: baseUrl?.key,
         apiKey: apiKey?.value,
         model: env(`${basePrefix}_MODEL`) || env(`${fallbackPrefix}_MODEL`) || 'gpt-image-2',
-        responsesModel:
-            env(`${basePrefix}_RESPONSES_MODEL`) ||
-            env(`${fallbackPrefix}_RESPONSES_MODEL`) ||
-            env('OPENAI_RESPONSES_API_MODEL'),
+        responsesModel: env(`${basePrefix}_RESPONSES_MODEL`) || env('OPENAI_RESPONSES_API_MODEL'),
         size: env(`${basePrefix}_SIZE`) || env(`${fallbackPrefix}_SIZE`) || '1024x1024',
         quality: env(`${basePrefix}_QUALITY`) || env(`${fallbackPrefix}_QUALITY`) || 'low'
     };
@@ -519,12 +516,7 @@ function readSmokeEnvAlternatives(testCase, suffix) {
 }
 
 function readResponsesModelEnvAlternatives(testCase) {
-    const keys = [`${testCase.prefix}_RESPONSES_MODEL`];
-    if (testCase.fallbackPrefix && testCase.fallbackPrefix !== testCase.prefix) {
-        keys.push(`${testCase.fallbackPrefix}_RESPONSES_MODEL`);
-    }
-    keys.push('OPENAI_RESPONSES_API_MODEL');
-    return keys;
+    return [`${testCase.prefix}_RESPONSES_MODEL`, 'OPENAI_RESPONSES_API_MODEL'];
 }
 
 function env(key) {

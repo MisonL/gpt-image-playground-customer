@@ -267,12 +267,13 @@ function readResponsesImageBase64(record: JsonRecord): string | undefined {
     return readImageGenerationResultBase64(result) || readImageBase64(record);
 }
 
-function readResponsesImageDedupeKey(record: JsonRecord): string | undefined {
+function readResponsesImageDedupeKey(record: JsonRecord, b64Json?: string): string | undefined {
     if (readString(record, 'type') !== 'image_generation_call') {
         return undefined;
     }
     const id = readString(record, 'id', 'item_id', 'itemId', 'call_id', 'callId');
-    return id ? `responses:${id}` : undefined;
+    if (id) return `responses:${id}`;
+    return b64Json ? `responses:result:${b64Json}` : undefined;
 }
 
 function hasRemoteOnlyResponsesImageResult(record: JsonRecord): boolean {
@@ -340,7 +341,7 @@ function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefin
         dataItems.flatMap((item) => {
             const b64Json = readImageBase64(item);
             if (!b64Json) return [];
-            const dedupeKey = readResponsesImageDedupeKey(item);
+            const dedupeKey = readResponsesImageDedupeKey(item, b64Json);
             return [{ b64Json, ...(dedupeKey ? { dedupeKey } : {}) }];
         })
     );
@@ -349,7 +350,7 @@ function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefin
         responsesItems.flatMap((item) => {
             const b64Json = readResponsesImageBase64(item);
             if (!b64Json) return [];
-            const dedupeKey = readResponsesImageDedupeKey(item);
+            const dedupeKey = readResponsesImageDedupeKey(item, b64Json);
             return [{ b64Json, ...(dedupeKey ? { dedupeKey } : {}) }];
         })
     );

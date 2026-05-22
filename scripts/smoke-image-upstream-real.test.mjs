@@ -388,7 +388,28 @@ describe('image upstream real smoke script', () => {
         assert.deepEqual(report.results[0].missing_env_any, [
             [
                 'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL',
-                'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_MODEL',
+                'OPENAI_RESPONSES_API_MODEL'
+            ]
+        ]);
+        assert.equal(report.independent_targets.configuration_complete, false);
+        assert.deepEqual(report.independent_targets.missing_cases, ['sub2api-responses-json']);
+    });
+
+    it('does not treat the sub2api Responses image model env as readiness for the Responses top-level model', () => {
+        const result = runScript(['--case', 'sub2api-responses-json'], {
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL: 'https://responses.example/v1',
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_API_KEY: 'secret-responses-key',
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_MODEL: 'gpt-image-2'
+        });
+
+        assert.equal(result.status, 0);
+        assert.doesNotMatch(result.stdout, /secret-responses-key|responses\.example/);
+        const report = JSON.parse(result.stdout);
+        assert.equal(report.ok, true);
+        assert.equal(report.results[0].reason, 'missing responses model env');
+        assert.deepEqual(report.results[0].missing_env_any, [
+            [
+                'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL',
                 'OPENAI_RESPONSES_API_MODEL'
             ]
         ]);

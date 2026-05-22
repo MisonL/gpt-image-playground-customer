@@ -13,9 +13,10 @@ const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
     {
         id: 'sub2api-responses-json',
         prefix: 'IMAGE_REAL_SMOKE_SUB2API_RESPONSES',
-        fallbackPrefix: 'IMAGE_REAL_SMOKE_SUB2API'
+        fallbackPrefix: 'IMAGE_REAL_SMOKE_SUB2API',
+        requiresResponsesModel: true
     },
-    { id: 'gpt2image-responses-sse', prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE' }
+    { id: 'gpt2image-responses-sse', prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE', requiresResponsesModel: true }
 ];
 const IMAGE_UPSTREAM_FINAL_GATE_COMMAND =
     'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable';
@@ -84,6 +85,10 @@ function readSmokeEnvAlternatives(testCase, suffix) {
     return keys;
 }
 
+function readResponsesModelEnvAlternatives(testCase) {
+    return [`${testCase.prefix}_RESPONSES_MODEL`, 'OPENAI_RESPONSES_API_MODEL'];
+}
+
 function readFirstStatusEnv(env, keys) {
     for (const key of keys) {
         const value = readEnv(env, key);
@@ -108,10 +113,14 @@ function readBaseUrlValidationError(value) {
 function readTargetConfigured(testCase, env) {
     const baseUrl = readFirstStatusEnv(env, readSmokeEnvAlternatives(testCase, 'BASE_URL'));
     const apiKey = readFirstStatusEnv(env, readSmokeEnvAlternatives(testCase, 'API_KEY'));
+    const responsesModel = testCase.requiresResponsesModel
+        ? readFirstStatusEnv(env, readResponsesModelEnvAlternatives(testCase))
+        : undefined;
     const baseUrlError = baseUrl ? readBaseUrlValidationError(baseUrl.value) : undefined;
     return {
         baseUrl: Boolean(baseUrl),
         apiKey: Boolean(apiKey),
+        responsesModel: Boolean(responsesModel),
         invalidEnv: baseUrlError ? [{ key: baseUrl.key, reason: baseUrlError }] : []
     };
 }
@@ -120,6 +129,9 @@ function readMissingEnvAny(testCase, target) {
     const groups = [];
     if (!target.baseUrl) groups.push(readSmokeEnvAlternatives(testCase, 'BASE_URL'));
     if (target.baseUrl && !target.apiKey) groups.push(readSmokeEnvAlternatives(testCase, 'API_KEY'));
+    if (target.baseUrl && testCase.requiresResponsesModel && !target.responsesModel) {
+        groups.push(readResponsesModelEnvAlternatives(testCase));
+    }
     return groups;
 }
 
