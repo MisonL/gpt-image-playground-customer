@@ -92,6 +92,7 @@ try {
     const unselectedRequiredCases = options.requireIndependentTargets
         ? independentTargetSummary?.unselected_required_cases || []
         : [];
+    const invalidRequiredCases = options.requireIndependentTargets ? independentTargetSummary?.invalid_cases || [] : [];
     const skippedRequiredCases = options.requireIndependentTargets
         ? results.filter((item) => item.skipped && !item.server_channel).map((item) => item.id)
         : [];
@@ -99,11 +100,13 @@ try {
     const missingRequiredCases = CASES.map((testCase) => testCase.id).filter((id) => missingRequiredCaseSet.has(id));
     const finalGateSatisfied = isFinalGateSatisfied(results, missingRequiredCases);
     const report = {
-        ok: results.every((item) => item.ok || item.skipped) && missingRequiredCases.length === 0,
+        ok: results.every((item) => item.ok || item.skipped) && missingRequiredCases.length === 0 && invalidRequiredCases.length === 0,
         billable: options.allowBillable,
         final_gate_satisfied: finalGateSatisfied,
         ...(independentTargetSummary ? { independent_targets: independentTargetSummary } : {}),
         ...(unselectedRequiredCases.length > 0 ? { unselected_required_cases: unselectedRequiredCases } : {}),
+        ...(invalidRequiredCases.length > 0 ? { invalid_required_count: invalidRequiredCases.length } : {}),
+        ...(invalidRequiredCases.length > 0 ? { invalid_required_cases: invalidRequiredCases } : {}),
         ...(skippedRequiredCases.length > 0 ? { skipped_required_cases: skippedRequiredCases } : {}),
         ...(missingRequiredCases.length > 0 ? { missing_required_count: missingRequiredCases.length } : {}),
         ...(missingRequiredCases.length > 0 ? { missing_required_cases: missingRequiredCases } : {}),
@@ -231,7 +234,8 @@ function readPostHandler(routeModule, label) {
 
 async function runCase(loadRouteHandlersForBillable, testCase) {
     const target = readTarget(testCase);
-    validateTarget(testCase, target);
+    const invalidEnv = readInvalidEnv(target);
+    if (invalidEnv.length > 0) return invalid(testCase, target, invalidEnv);
     if (!isRunnableTarget(target)) return skipped(testCase, target);
     if (!options.allowBillable) {
         return {
@@ -302,9 +306,11 @@ function readTarget(testCase) {
     const basePrefix = testCase.prefix;
     const fallbackPrefix = testCase.fallbackPrefix || basePrefix;
     if (testCase.serverChannel) {
+        const serverBaseUrl = readEnvEntry(`${basePrefix}_BASE_URL`) || readFirstConfiguredServerBaseUrl();
         return {
             serverChannel: true,
-            baseUrl: env(`${basePrefix}_BASE_URL`) || readFirstConfiguredServerBaseUrl(),
+            baseUrl: serverBaseUrl?.value,
+            baseUrlKey: serverBaseUrl?.key,
             hasServerCredential: Boolean(env('OPENAI_API_KEY') || readFirstConfiguredServerApiKeys()),
             model: env(`${basePrefix}_MODEL`) || 'gpt-image-2',
             responsesModel: env(`${basePrefix}_RESPONSES_MODEL`) || env('OPENAI_RESPONSES_API_MODEL') || 'gpt-5.4',
@@ -312,9 +318,12 @@ function readTarget(testCase) {
             quality: env(`${basePrefix}_QUALITY`) || 'low'
         };
     }
+    const baseUrl = readFirstEnvEntry(readSmokeEnvAlternatives(testCase, 'BASE_URL'));
+    const apiKey = readFirstEnvEntry(readSmokeEnvAlternatives(testCase, 'API_KEY'));
     return {
-        baseUrl: env(`${basePrefix}_BASE_URL`) || env(`${fallbackPrefix}_BASE_URL`),
-        apiKey: env(`${basePrefix}_API_KEY`) || env(`${fallbackPrefix}_API_KEY`),
+        baseUrl: baseUrl?.value,
+        baseUrlKey: baseUrl?.key,
+        apiKey: apiKey?.value,
         model: env(`${basePrefix}_MODEL`) || env(`${fallbackPrefix}_MODEL`) || 'gpt-image-2',
         responsesModel:
             env(`${basePrefix}_RESPONSES_MODEL`) ||
@@ -332,31 +341,23 @@ function isRunnableTarget(target) {
     return Boolean(target.apiKey);
 }
 
-function validateTarget(testCase, target) {
-    if (!target.baseUrl) return;
-    validateSmokeBaseUrl(target.baseUrl, readBaseUrlLabel(testCase, target));
+function readInvalidEnv(target) {
+    if (!target.baseUrl || !target.baseUrlKey) return [];
+    const reason = readBaseUrlValidationReason(target.baseUrl);
+    return reason ? [{ key: target.baseUrlKey, reason }] : [];
 }
 
-function validateSmokeBaseUrl(value, label) {
+function readBaseUrlValidationReason(value) {
     let url;
     try {
         url = new URL(value);
     } catch {
-        throw new Error(`${label} 必须是 http/https 绝对 URL。`);
+        return 'must_be_http_or_https_absolute_url';
     }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        throw new Error(`${label} 必须是 http/https 绝对 URL。`);
-    }
-    if (url.username || url.password || url.search || url.hash) {
-        throw new Error(`${label} 不能包含凭据、查询参数或片段。`);
-    }
-}
-
-function readBaseUrlLabel(testCase, target) {
-    if (target.serverChannel) {
-        return `${testCase.prefix}_BASE_URL 或 OPENAI_API_BASE_URL / OPENAI_CHANNEL_N_BASE_URL`;
-    }
-    return readSmokeEnvAlternatives(testCase, 'BASE_URL').join(' 或 ');
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'must_use_http_or_https';
+    if (url.username || url.password) return 'must_not_include_credentials';
+    if (url.search || url.hash) return 'must_not_include_query_or_fragment';
+    return undefined;
 }
 
 function skipped(testCase, target) {
@@ -371,6 +372,17 @@ function skipped(testCase, target) {
     };
 }
 
+function invalid(testCase, target, invalidEnv) {
+    return {
+        id: testCase.id,
+        ok: false,
+        invalid: true,
+        reason: 'invalid base url env',
+        invalid_env: invalidEnv,
+        ...(target.serverChannel ? { server_channel: true } : {})
+    };
+}
+
 function buildIndependentTargetSummary(results, requireIndependentTargets = false) {
     const independentResults = results.filter((item) => !item.server_channel);
     const requiredCases = CASES.map((testCase) => testCase.id);
@@ -378,10 +390,17 @@ function buildIndependentTargetSummary(results, requireIndependentTargets = fals
     const selectedCases = independentResults.map((item) => item.id);
     const unselectedRequiredCases = requiredCases.filter((id) => !selectedCases.includes(id));
     const configuredCases = independentResults
-        .filter((item) => !Array.isArray(item.missing_env_any) || item.missing_env_any.length === 0)
+        .filter(
+            (item) =>
+                (!Array.isArray(item.missing_env_any) || item.missing_env_any.length === 0) &&
+                (!Array.isArray(item.invalid_env) || item.invalid_env.length === 0)
+        )
         .map((item) => item.id);
     const missingCases = independentResults
         .filter((item) => Array.isArray(item.missing_env_any) && item.missing_env_any.length > 0)
+        .map((item) => item.id);
+    const invalidCases = independentResults
+        .filter((item) => Array.isArray(item.invalid_env) && item.invalid_env.length > 0)
         .map((item) => item.id);
     return {
         required_count: requiredCases.length,
@@ -389,12 +408,19 @@ function buildIndependentTargetSummary(results, requireIndependentTargets = fals
         selected_cases: selectedCases,
         unselected_required_count: unselectedRequiredCases.length,
         unselected_required_cases: unselectedRequiredCases,
-        configuration_complete: unselectedRequiredCases.length === 0 && missingCases.length === 0,
+        configuration_complete: unselectedRequiredCases.length === 0 && missingCases.length === 0 && invalidCases.length === 0,
         selected_count: independentResults.length,
         configured_count: configuredCases.length,
         missing_count: missingCases.length,
         configured_cases: configuredCases,
         missing_cases: missingCases,
+        invalid_count: invalidCases.length,
+        invalid_cases: invalidCases,
+        invalid_env: Object.fromEntries(
+            independentResults
+                .filter((item) => Array.isArray(item.invalid_env) && item.invalid_env.length > 0)
+                .map((item) => [item.id, item.invalid_env])
+        ),
         final_gate_command:
             'npm run smoke:image-upstream-real -- --env-file .env.real-smoke.local --require-independent-targets --allow-billable'
     };
@@ -432,8 +458,21 @@ function env(key) {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function readEnvEntry(key) {
+    const value = env(key);
+    return value ? { key, value } : undefined;
+}
+
+function readFirstEnvEntry(keys) {
+    for (const key of keys) {
+        const value = readEnvEntry(key);
+        if (value) return value;
+    }
+    return undefined;
+}
+
 function readFirstConfiguredServerBaseUrl() {
-    return env('OPENAI_API_BASE_URL') || readFirstNumberedEnv('OPENAI_CHANNEL_', '_BASE_URL');
+    return readEnvEntry('OPENAI_API_BASE_URL') || readFirstNumberedEnvEntry('OPENAI_CHANNEL_', '_BASE_URL');
 }
 
 function readFirstConfiguredServerApiKeys() {
@@ -443,6 +482,14 @@ function readFirstConfiguredServerApiKeys() {
 function readFirstNumberedEnv(prefix, suffix) {
     for (let index = 1; index <= 20; index += 1) {
         const value = env(`${prefix}${index}${suffix}`);
+        if (value) return value;
+    }
+    return undefined;
+}
+
+function readFirstNumberedEnvEntry(prefix, suffix) {
+    for (let index = 1; index <= 20; index += 1) {
+        const value = readEnvEntry(`${prefix}${index}${suffix}`);
         if (value) return value;
     }
     return undefined;

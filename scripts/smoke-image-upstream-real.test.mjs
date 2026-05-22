@@ -40,6 +40,9 @@ describe('image upstream real smoke script', () => {
             missing_count: 5,
             configured_cases: [],
             missing_cases: independentSmokeCaseIds(),
+            invalid_count: 0,
+            invalid_cases: [],
+            invalid_env: {},
             final_gate_command:
                 'npm run smoke:image-upstream-real -- --env-file .env.real-smoke.local --require-independent-targets --allow-billable'
         });
@@ -135,16 +138,34 @@ describe('image upstream real smoke script', () => {
         assert.deepEqual(report.results[0].missing_env_any, [['IMAGE_REAL_SMOKE_GAOREN_API_KEY']]);
     });
 
-    it('rejects unsafe real upstream base URLs before billable calls', () => {
+    it('reports unsafe real upstream base URLs in the structured readiness summary', () => {
         const result = runScript(['--case', 'original-images-json'], {
             IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag',
             IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
         });
 
         assert.equal(result.status, 1);
-        assert.doesNotMatch(result.stderr, /user:pass|secret-real-smoke-key|token=secret/);
-        assert.match(result.stderr, /IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL/);
-        assert.match(result.stderr, /不能包含凭据、查询参数或片段/);
+        assert.equal(result.stderr.trim(), '');
+        assert.doesNotMatch(result.stdout, /user:pass|example\.test|secret-real-smoke-key|token=secret/);
+        const report = JSON.parse(result.stdout);
+        assert.equal(report.ok, false);
+        assert.equal(report.final_gate_satisfied, false);
+        assert.equal(report.independent_targets.configuration_complete, false);
+        assert.equal(report.independent_targets.configured_count, 0);
+        assert.equal(report.independent_targets.invalid_count, 1);
+        assert.deepEqual(report.independent_targets.invalid_cases, ['original-images-json']);
+        assert.deepEqual(report.independent_targets.invalid_env['original-images-json'], [
+            {
+                key: 'IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL',
+                reason: 'must_not_include_credentials'
+            }
+        ]);
+        assert.deepEqual(report.results[0].invalid_env, [
+            {
+                key: 'IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL',
+                reason: 'must_not_include_credentials'
+            }
+        ]);
     });
 
     it('fails the run when independent upstream targets are required but skipped', () => {

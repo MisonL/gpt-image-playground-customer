@@ -104,13 +104,17 @@
 
 ## 2026-05-22 status readiness 补充
 
-当前 HEAD 为 `be9e7cb Read real smoke env files in status` 后继续补充 `npm run status` 的 env 文件读取与 URL 安全校验。`status` 现在按 shell 环境变量、`.env.real-smoke.local`、`.env.local` 的优先级只读判断独立真实上游 smoke 配置是否齐全；输出只包含场景 ID、配置数量、缺失 env 键、非法 env 键与原因、最终门禁命令，不输出 URL 或 API Key。`scripts/command-center.test.mjs` 已覆盖 `.env.local` 与 `.env.real-smoke.local` 合并、shell env 优先、sub2api Responses 复用 sub2api 配置、unsafe `BASE_URL` 不泄露值，以及输出不包含 URL/key。
+在 `be9e7cb Read real smoke env files in status` 基础上继续补充 `npm run status` 的 env 文件读取与 URL 安全校验。`status` 现在按 shell 环境变量、`.env.real-smoke.local`、`.env.local` 的优先级只读判断独立真实上游 smoke 配置是否齐全；输出只包含场景 ID、配置数量、缺失 env 键、非法 env 键与原因、最终门禁命令，不输出 URL 或 API Key。`scripts/command-center.test.mjs` 已覆盖 `.env.local` 与 `.env.real-smoke.local` 合并、shell env 优先、sub2api Responses 复用 sub2api 配置、unsafe `BASE_URL` 不泄露值，以及输出不包含 URL/key。
+
+在 `40d87f9 Harden image upstream status readiness` 基础上继续补充 `npm run smoke:image-upstream-real` 的结构化 readiness 失败报告。真实 smoke 脚本现在遇到 unsafe 独立上游 `BASE_URL` 时不再只把错误写到 stderr，而是在 JSON 报告中输出 `invalid_env`、`invalid_cases`、`invalid_required_cases`，同样只包含 env 键与 reason，不输出 URL 或 API Key。
 
 | 命令或检查 | 退出码 | 摘要 |
 | --- | --- | --- |
 | `node --test scripts/command-center.test.mjs` | 0 | 22 个脚本测试通过。 |
+| `node --import tsx --test scripts/smoke-image-upstream-real.test.mjs` | 0 | 20 个真实 smoke 脚本测试通过，新增覆盖 unsafe 独立上游 `BASE_URL` 的结构化 JSON 报告。 |
 | `npm run status` | 0 | `image_upstream_real_smoke.configuration_complete=false`、`configured_count=0`、`missing_count=5`，并列出 5 个独立真实上游目标缺失的 `BASE_URL` env。 |
 | unsafe `BASE_URL` status 探针 | 0 | 临时注入含凭据、查询参数和片段的 `IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL` 后，`status` 只输出 `IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL` 与 `must_not_include_credentials`，不输出 URL、查询 token 或 API Key。 |
+| unsafe `BASE_URL` real-smoke 探针 | 1 | 临时注入含凭据、查询参数和片段的 `IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL` 后，`smoke:image-upstream-real` 返回 JSON；`invalid_required_cases=original-images-json`，`missing_required_count=4`，不输出 URL、查询 token 或 API Key。 |
 | `npm run verify -- --postgres` | 0 | `npm test`、lint、script lint、build、live PostgreSQL gate、diff checks 全部通过。 |
 | `npm run smoke:image-upstream-compat` | 0 | 7 个本地 mock 兼容场景通过。 |
 | `npx tsc --noEmit` | 0 | TypeScript 静态检查通过。 |
