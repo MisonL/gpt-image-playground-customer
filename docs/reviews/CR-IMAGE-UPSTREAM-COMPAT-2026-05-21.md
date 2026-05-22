@@ -149,6 +149,22 @@
 | `node --test --import tsx src/lib/image-stream-collector.test.ts` | 0 | 新增覆盖 Responses 上游缺少 image call id 时，`response.output_item.done` 与 `response.completed` 的同 payload final image 只落一张。 |
 | `npm run smoke:image-upstream-compat` | 0 | GPT2Image Responses SSE 场景恢复为 `partial_image, completed, done`，不再出现重复 `completed`。 |
 
+## 2026-05-22 fcdd698 基线复验
+
+复验基线为 `fcdd698 Fix Responses upstream smoke readiness`，分支 `codex/image-upstream-compat` 已同步到 `origin/codex/image-upstream-compat`。本小节为后续追加的文档记录，不改变业务代码。PR #7 仍为 Draft/Open，`mergeStateStatus=CLEAN`，当前 GitGuardian Security Checks 通过。
+
+| 命令或检查 | 退出码 | 摘要 |
+| --- | --- | --- |
+| `npm run status` | 0 | 当前仅有本审计文档改动；独立真实上游 readiness 为 `configured_count=0`、`missing_count=5`，缺少 `original-images-json`、`gaoren-images-sse`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。 |
+| `npm run smoke:image-upstream-compat` | 0 | 7 个本地 mock 兼容场景通过：original Images JSON、sub2api Images JSON、gaoren keepalive SSE、gaoren JSON-as-SSE、sub2api Images SSE、sub2api Responses bridge、GPT2Image Responses SSE。 |
+| `npm run smoke:image-upstream-real -- --include-server-channel` | 0 | 非计费 dry-run 通过；5 个独立真实上游目标仍因缺少专用 `IMAGE_REAL_SMOKE_*_BASE_URL` 跳过，当前服务端渠道未触发真实生图。 |
+| `IMAGE_REAL_SMOKE_SKIP_DOTENV=1 npm run smoke:image-upstream-real -- --require-independent-targets --allow-billable` | 1 | 预期失败；`configuration_complete=false`、`configured_count=0`、`missing_required_count=5`。配置不完整时先输出缺失报告，不进入上游调用路径。 |
+| `npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable` | 1 | 最终独立真实上游门禁仍失败；`.env.real-smoke.local` 当前不存在，5 个必跑目标全部列入 `skipped_required_cases`。 |
+| `npm run verify` | 0 | `npm test`、`npm run lint`、`npm run lint:scripts`、`npm run build`、`git diff --check`、`git diff --cached --check` 全部通过。 |
+| `find generated-images/.real-smoke ...` | 0 | 当前没有 `png`、`jpg`、`jpeg`、`webp` 真实 smoke 产物残留。 |
+
+本轮没有追加 `--allow-billable` 的真实生图请求。最终完成判定仍缺独立真实上游凭据和地址，需要配置 `.env.real-smoke.local` 后跑通最终门禁命令。
+
 ## 完成度审计矩阵
 
 | 要求 | 当前证据 | 状态 |
