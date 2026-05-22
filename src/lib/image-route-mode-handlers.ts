@@ -21,6 +21,7 @@ import {
     type ValidOutputFormat
 } from './image-request-utils';
 import { createImageStreamResponse } from './image-stream-service';
+import { createImagesApiGenerateStream } from './images-api-stream';
 import {
     createResponsesImageStream,
     generateImageWithResponsesBackend,
@@ -203,7 +204,11 @@ async function createGenerateStreamResponse(input: CommonModeInput, options: Gen
         stream: true as const,
         partial_images: input.partialImagesCount
     } satisfies OpenAI.Images.ImageGenerateParamsStreaming;
-    const stream = await input.openai.images.generate(streamParams);
+    const stream = await createImagesApiGenerateStream({
+        apiBaseUrl: input.apiBaseUrl,
+        apiKey: input.apiKey,
+        params: streamParams
+    });
     const response = createImageStreamResponse({
         stream,
         modeLabel: '生成',

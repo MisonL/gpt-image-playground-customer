@@ -568,12 +568,15 @@ docker logs -f gpt-image-playground-customer
 | `npm run keepalive:hf-space` | 访问 HF Space 只读状态端点，用于 keepalive 验证。 |
 | `npm run smoke:hf-space` | 构建并启动 HF 免费层近似容器，验证 memory 状态后端和 Agent API 契约；慢机器可设置 `HF_SPACE_SMOKE_READY_TIMEOUT_MS`。 |
 | `npm run smoke:image-upstream-compat` | 启动本地 mock 上游，验证 Images API、new-api/sub2api SSE 和 Responses image_generation 兼容契约。 |
+| `npm run smoke:image-upstream-local` | 启动本地 fixture，并通过真实 smoke final gate 跑满 `original-images-json`、`gaoren-images-sse`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse` 五个独立场景。 |
 | `npm run smoke:image-upstream-real` | 检查真实上游 smoke 配置；加 `-- --allow-billable` 后才会触发真实生图。 |
 | `npm run lint` | 检查 `src/` 代码。 |
 | `npm run lint:scripts` | 跨平台检查仓库脚本和 skill 脚本语法。 |
 | `npm run format` | 格式化 `src/` 下的 TypeScript 和 React 文件。 |
 
 真实上游 smoke 使用以下环境变量前缀逐类配置：`IMAGE_REAL_SMOKE_ORIGINAL_*`、`IMAGE_REAL_SMOKE_GAOREN_*`、`IMAGE_REAL_SMOKE_SUB2API_*`、`IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`、`IMAGE_REAL_SMOKE_GPT2IMAGE_*`。每类至少提供 `BASE_URL` 和 `API_KEY`；Responses 场景还必须提供 `/responses` 顶层模型。可选覆盖图片 `MODEL`、`SIZE`、`QUALITY`。`BASE_URL` 必须是无凭据、无查询参数、无片段的 `http`/`https` 绝对 URL。默认不触发计费请求，必须显式加 `-- --allow-billable`。可复制 `.env.real-smoke.example` 为未跟踪的 `.env.real-smoke.local`，再通过 `-- --env-file .env.real-smoke.local` 加载；shell 环境变量优先级高于 `--env-file`，`--env-file` 优先级高于 `.env.local`。
+
+`npm run smoke:image-upstream-local` 会临时启动仓库内置 fixture，把 5 个独立场景全部指向本机 `/v1` 兼容服务，并调用同一个 `smoke:image-upstream-real -- --require-independent-targets --allow-billable` 门禁路径。该命令用于验证本项目的 final-gate 脚本、事件归一化和本地可复现环境；输出会标记 `local_fixture=true`。它不证明原版 new-api、gaoren/new-api、sub2api 或 GPT2Image 第三方部署当前可访问，真实验收仍需配置 `.env.real-smoke.local` 后运行真实上游门禁。
 
 若只需要验证当前 `.env.local` 中的 `OPENAI_API_KEY` 或 `OPENAI_CHANNEL_N_*` 服务端渠道，可追加 `-- --include-server-channel`。该模式不会把服务端 API Key 写入表单或输出，真实执行仍需同时追加 `--allow-billable`；可覆盖 Images JSON、Images SSE、Responses JSON、Responses SSE、Agent 内部 Images SSE 和 Agent 内部 Responses SSE 场景。可用 `IMAGE_REAL_SMOKE_SERVER_MODEL`、`IMAGE_REAL_SMOKE_SERVER_SIZE`、`IMAGE_REAL_SMOKE_SERVER_QUALITY`、`IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL` 覆盖模型、尺寸、质量和 Responses 顶层模型。单场景默认超时 `240000ms`，可用 `--timeout-ms` 或 `IMAGE_REAL_SMOKE_TIMEOUT_MS` 调整。
 

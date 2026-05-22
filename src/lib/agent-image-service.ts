@@ -31,6 +31,7 @@ import {
     MissingOpenAiImageDataError,
     persistOpenAiImages as persistSharedOpenAiImages
 } from './image-service';
+import { createImagesApiGenerateStream } from './images-api-stream';
 import {
     RequestValidationError,
     readCount,
@@ -65,6 +66,7 @@ type CredentialContext = {
     openai: OpenAI;
     selectedCredential?: ChannelCredential;
     baseUrl?: string;
+    apiKey: string;
 };
 
 export function readIdempotencyKey(headers: Headers): string {
@@ -139,7 +141,7 @@ export async function executeAgentGenerate(options: {
     const credentialContext = createOpenAiClient(options.headers);
     const startedAtMs = Date.now();
     try {
-        const result = await executeAgentGenerateUpstream(options.request, credentialContext.openai);
+        const result = await executeAgentGenerateUpstream(options.request, credentialContext);
         return await persistOpenAiImages({
             result,
             mode: 'generate',
@@ -159,8 +161,9 @@ export async function executeAgentGenerate(options: {
 
 async function executeAgentGenerateUpstream(
     request: AgentGenerateRequest,
-    openai: OpenAI
+    credentialContext: CredentialContext
 ): Promise<OpenAI.Images.ImagesResponse> {
+    const { openai } = credentialContext;
     if (request.image_backend === 'responses-image-generation') {
         return executeAgentResponsesGenerate(request, openai);
     }
@@ -178,10 +181,14 @@ async function executeAgentGenerateUpstream(
     if (!shouldUseAgentUpstreamStream(request)) {
         return openai.images.generate({ ...baseParams, stream: false });
     }
-    const stream = await openai.images.generate({
-        ...baseParams,
-        stream: true,
-        partial_images: request.partial_images
+    const stream = await createImagesApiGenerateStream({
+        apiBaseUrl: credentialContext.baseUrl,
+        apiKey: credentialContext.apiKey,
+        params: {
+            ...baseParams,
+            stream: true,
+            partial_images: request.partial_images
+        }
     });
     return collectOpenAiImagesFromStream(stream);
 }
@@ -443,7 +450,8 @@ function createOpenAiClient(headers: Headers): CredentialContext {
             baseURL: baseUrl || undefined
         }),
         selectedCredential: effectiveSelectedCredential,
-        baseUrl
+        baseUrl,
+        apiKey
     };
 }
 

@@ -185,6 +185,39 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('consumes JSON Images responses returned to Agent stream requests as final results', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startImageUpstream((body) => {
+            upstreamBody = body;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-stream-json-fallback-key', {
+                    prompt: 'agent stream json fallback',
+                    response_mode: 'base64',
+                    streaming_strategy: 'newapi-keepalive-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            const body = await response.json();
+            assert.equal(body.images[0].b64_json, PNG_BASE64);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(upstreamJson.partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('uses force-sse for Agent upstream image SSE while keeping the final JSON contract', async () => {
         const { generateImage } = await loadAgentRoutes();
         let upstreamBody = '';

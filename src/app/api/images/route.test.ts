@@ -133,6 +133,42 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
+    it('normalizes JSON Images responses returned to stream requests into the stable SSE contract', async () => {
+        const { POST } = await import('./route');
+        let upstreamBody = '';
+        const upstream = await startImagesJsonUpstream(async (body) => {
+            upstreamBody = body;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: true,
+                    imageStreamingStrategy: 'newapi-keepalive-sse'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'done']
+            );
+            assert.equal(events[0].b64_json, PNG_BASE64);
+            assert.equal((events[1].images as Array<Record<string, unknown>>)[0].b64_json, PNG_BASE64);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(upstreamJson.partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('returns an explicit SSE error when the upstream completed event has no image payload', async () => {
         const { POST } = await import('./route');
         const upstream = await startStreamingImageUpstream(async () => [
