@@ -221,6 +221,34 @@ describe('image upstream real smoke script', () => {
         }
     });
 
+    it('does not make billable upstream calls when the required independent gate is missing target config', async () => {
+        const upstream = await startLocalImageAndResponsesUpstream();
+        try {
+            const result = await runScriptAsync(
+                ['--allow-billable', '--require-independent-targets'],
+                {
+                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                    IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
+                }
+            );
+
+            assert.equal(result.status, 1);
+            assert.doesNotMatch(result.stdout, /secret-real-smoke-key/);
+            const report = JSON.parse(result.stdout);
+            assert.equal(report.ok, false);
+            assert.deepEqual(report.blocked_required_cases, ['original-images-json']);
+            assert.deepEqual(report.skipped_required_cases, [
+                'gaoren-images-sse',
+                'sub2api-images-sse',
+                'sub2api-responses-json',
+                'gpt2image-responses-sse'
+            ]);
+            assert.equal(upstream.calls.length, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('fails the run when independent upstream targets are required but skipped', () => {
         const result = runScript(['--require-independent-targets']);
 

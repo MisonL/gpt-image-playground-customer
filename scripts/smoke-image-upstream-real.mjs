@@ -77,7 +77,7 @@ try {
     const availableCases = options.includeServerChannel ? [...CASES, ...SERVER_CHANNEL_CASES] : CASES;
     const selectedCases = availableCases.filter((testCase) => options.caseId === 'all' || testCase.id === options.caseId);
     if (selectedCases.length === 0) throw new Error(`未知真实 smoke 场景：${options.caseId}`);
-    const hasInvalidSelectedTarget = selectedCases.some((testCase) => readInvalidEnv(readTarget(testCase)).length > 0);
+    const billablePreflight = buildBillablePreflight(selectedCases);
     const results = [];
     let routeHandlers;
     for (const testCase of selectedCases) {
@@ -85,7 +85,7 @@ try {
             routeHandlers ||= await loadRouteHandlers();
             return routeHandlers;
         };
-        const result = await runCase(loadHandlers, testCase, { blockBillable: hasInvalidSelectedTarget });
+        const result = await runCase(loadHandlers, testCase, billablePreflight);
         results.push(result);
         if (result.timed_out) break;
     }
@@ -136,6 +136,28 @@ function isFinalGateSatisfied(results, missingRequiredCases) {
         results.filter((item) => !item.server_channel && !item.skipped && item.ok).map((item) => item.id)
     );
     return CASES.every((testCase) => passedIndependentCases.has(testCase.id));
+}
+
+function buildBillablePreflight(selectedCases) {
+    if (!options.allowBillable) return {};
+    if (selectedCases.some((testCase) => readInvalidEnv(readTarget(testCase)).length > 0)) {
+        return { blockBillable: true, blockReason: 'blocked by invalid base url env' };
+    }
+    if (options.requireIndependentTargets && !isRequiredIndependentGateConfigured(selectedCases)) {
+        return { blockBillable: true, blockReason: 'blocked by incomplete independent target configuration' };
+    }
+    return {};
+}
+
+function isRequiredIndependentGateConfigured(selectedCases) {
+    const selectedIndependentCaseIds = new Set(
+        selectedCases.filter((testCase) => !testCase.serverChannel).map((testCase) => testCase.id)
+    );
+    return CASES.every((testCase) => {
+        if (!selectedIndependentCaseIds.has(testCase.id)) return false;
+        const target = readTarget(testCase);
+        return readInvalidEnv(target).length === 0 && isRunnableTarget(target);
+    });
 }
 
 function parseArgs(argv) {
@@ -246,7 +268,7 @@ async function runCase(loadRouteHandlersForBillable, testCase, preflight = {}) {
     const invalidEnv = readInvalidEnv(target);
     if (invalidEnv.length > 0) return invalid(testCase, target, invalidEnv);
     if (!isRunnableTarget(target)) return skipped(testCase, target);
-    if (preflight.blockBillable && options.allowBillable) return blocked(testCase, target);
+    if (preflight.blockBillable && options.allowBillable) return blocked(testCase, target, preflight.blockReason);
     if (!options.allowBillable) {
         return {
             id: testCase.id,
@@ -393,13 +415,13 @@ function invalid(testCase, target, invalidEnv) {
     };
 }
 
-function blocked(testCase, target) {
+function blocked(testCase, target, reason = 'blocked by invalid base url env') {
     return {
         id: testCase.id,
         skipped: true,
         blocked: true,
         ok: true,
-        reason: 'blocked by invalid base url env',
+        reason,
         upstream_host: readHost(target.baseUrl),
         ...(target.serverChannel ? { server_channel: true } : {})
     };

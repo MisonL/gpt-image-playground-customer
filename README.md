@@ -579,7 +579,7 @@ docker logs -f gpt-image-playground-customer
 
 dry-run 输出中的 `independent_targets` 会汇总必跑、已选、未选、已配置和缺失的独立真实上游场景，并给出最终门禁命令；`required_count` 和 `unselected_required_count` 用于区分必跑总数和未选择数量，`configuration_complete=true` 只表示 5 个必跑场景都已选中且配置齐全，不代表已经执行计费生图。顶层 `final_gate_satisfied=true` 才表示最终独立真实上游门禁已实际执行并通过。`missing_env_any` 表示每组任选一个环境变量即可补齐该缺失项。例如 `sub2api-responses-json` 可单独配置 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`，也可以复用 `IMAGE_REAL_SMOKE_SUB2API_*`。
 
-最终验收独立真实上游时追加 `-- --require-independent-targets --allow-billable`。此时任一独立真实上游场景未被选中或被跳过都会让脚本以非零退出，并在 `unselected_required_cases`、`skipped_required_cases`、`missing_required_count` 和 `missing_required_cases` 中列出未完成的场景。
+最终验收独立真实上游时追加 `-- --require-independent-targets --allow-billable`。此时任一独立真实上游场景未被选中或被跳过都会让脚本以非零退出，并在 `unselected_required_cases`、`skipped_required_cases`、`missing_required_count` 和 `missing_required_cases` 中列出未完成的场景。若最终门禁预检发现必跑场景未选全、缺少配置或配置非法，脚本会阻断可运行目标并先失败，不触发任何真实上游计费调用。
 
 `--include-server-channel` 只能验证当前 `.env.local` 服务端渠道，不能替代独立真实上游门禁。最终验收必须让以下 5 个独立场景都实际执行，且结果中 `skipped=false`：
 
