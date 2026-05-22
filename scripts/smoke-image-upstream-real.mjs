@@ -77,6 +77,7 @@ try {
     const availableCases = options.includeServerChannel ? [...CASES, ...SERVER_CHANNEL_CASES] : CASES;
     const selectedCases = availableCases.filter((testCase) => options.caseId === 'all' || testCase.id === options.caseId);
     if (selectedCases.length === 0) throw new Error(`未知真实 smoke 场景：${options.caseId}`);
+    const hasInvalidSelectedTarget = selectedCases.some((testCase) => readInvalidEnv(readTarget(testCase)).length > 0);
     const results = [];
     let routeHandlers;
     for (const testCase of selectedCases) {
@@ -84,7 +85,7 @@ try {
             routeHandlers ||= await loadRouteHandlers();
             return routeHandlers;
         };
-        const result = await runCase(loadHandlers, testCase);
+        const result = await runCase(loadHandlers, testCase, { blockBillable: hasInvalidSelectedTarget });
         results.push(result);
         if (result.timed_out) break;
     }
@@ -93,8 +94,11 @@ try {
         ? independentTargetSummary?.unselected_required_cases || []
         : [];
     const invalidRequiredCases = options.requireIndependentTargets ? independentTargetSummary?.invalid_cases || [] : [];
+    const blockedRequiredCases = options.requireIndependentTargets
+        ? results.filter((item) => item.blocked && !item.server_channel).map((item) => item.id)
+        : [];
     const skippedRequiredCases = options.requireIndependentTargets
-        ? results.filter((item) => item.skipped && !item.server_channel).map((item) => item.id)
+        ? results.filter((item) => item.skipped && !item.blocked && !item.server_channel).map((item) => item.id)
         : [];
     const missingRequiredCaseSet = new Set([...unselectedRequiredCases, ...skippedRequiredCases]);
     const missingRequiredCases = CASES.map((testCase) => testCase.id).filter((id) => missingRequiredCaseSet.has(id));
@@ -107,6 +111,8 @@ try {
         ...(unselectedRequiredCases.length > 0 ? { unselected_required_cases: unselectedRequiredCases } : {}),
         ...(invalidRequiredCases.length > 0 ? { invalid_required_count: invalidRequiredCases.length } : {}),
         ...(invalidRequiredCases.length > 0 ? { invalid_required_cases: invalidRequiredCases } : {}),
+        ...(blockedRequiredCases.length > 0 ? { blocked_required_count: blockedRequiredCases.length } : {}),
+        ...(blockedRequiredCases.length > 0 ? { blocked_required_cases: blockedRequiredCases } : {}),
         ...(skippedRequiredCases.length > 0 ? { skipped_required_cases: skippedRequiredCases } : {}),
         ...(missingRequiredCases.length > 0 ? { missing_required_count: missingRequiredCases.length } : {}),
         ...(missingRequiredCases.length > 0 ? { missing_required_cases: missingRequiredCases } : {}),
@@ -232,11 +238,12 @@ function readPostHandler(routeModule, label) {
     return handler;
 }
 
-async function runCase(loadRouteHandlersForBillable, testCase) {
+async function runCase(loadRouteHandlersForBillable, testCase, preflight = {}) {
     const target = readTarget(testCase);
     const invalidEnv = readInvalidEnv(target);
     if (invalidEnv.length > 0) return invalid(testCase, target, invalidEnv);
     if (!isRunnableTarget(target)) return skipped(testCase, target);
+    if (preflight.blockBillable && options.allowBillable) return blocked(testCase, target);
     if (!options.allowBillable) {
         return {
             id: testCase.id,
@@ -379,6 +386,18 @@ function invalid(testCase, target, invalidEnv) {
         invalid: true,
         reason: 'invalid base url env',
         invalid_env: invalidEnv,
+        ...(target.serverChannel ? { server_channel: true } : {})
+    };
+}
+
+function blocked(testCase, target) {
+    return {
+        id: testCase.id,
+        skipped: true,
+        blocked: true,
+        ok: true,
+        reason: 'blocked by invalid base url env',
+        upstream_host: readHost(target.baseUrl),
         ...(target.serverChannel ? { server_channel: true } : {})
     };
 }

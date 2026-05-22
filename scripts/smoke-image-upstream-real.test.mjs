@@ -168,6 +168,34 @@ describe('image upstream real smoke script', () => {
         ]);
     });
 
+    it('does not make billable upstream calls when any selected target has unsafe configuration', async () => {
+        const upstream = await startLocalImageAndResponsesUpstream();
+        try {
+            const result = await runScriptAsync(
+                ['--allow-billable', '--require-independent-targets'],
+                {
+                    ...buildAllIndependentTargetEnv(upstream.baseUrl),
+                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
+                }
+            );
+
+            assert.equal(result.status, 1);
+            assert.doesNotMatch(result.stdout, /user:pass|example\.test|secret-independent-key|token=secret/);
+            const report = JSON.parse(result.stdout);
+            assert.equal(report.ok, false);
+            assert.deepEqual(report.invalid_required_cases, ['original-images-json']);
+            assert.deepEqual(report.blocked_required_cases, [
+                'gaoren-images-sse',
+                'sub2api-images-sse',
+                'sub2api-responses-json',
+                'gpt2image-responses-sse'
+            ]);
+            assert.equal(upstream.calls.length, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('fails the run when independent upstream targets are required but skipped', () => {
         const result = runScript(['--require-independent-targets']);
 
@@ -555,12 +583,14 @@ async function startLocalImagesSseUpstream() {
 }
 
 async function startLocalImageAndResponsesUpstream() {
+    const calls = [];
     const server = createServer(async (request, response) => {
         if (request.method !== 'POST') {
             response.writeHead(404, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({ error: { message: 'not found' } }));
             return;
         }
+        calls.push(request.url);
         const body = await readRequestBody(request);
         if (request.url?.endsWith('/images/generations')) {
             respondToImageGenerationRequest(response, body);
@@ -578,6 +608,7 @@ async function startLocalImageAndResponsesUpstream() {
     assert.ok(address && typeof address === 'object');
     return {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        calls,
         close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
     };
 }
