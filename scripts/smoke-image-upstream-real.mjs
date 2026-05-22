@@ -94,8 +94,9 @@ try {
         ? independentTargetSummary?.unselected_required_cases || []
         : [];
     const invalidRequiredCases = options.requireIndependentTargets ? independentTargetSummary?.invalid_cases || [] : [];
+    const blockedCases = results.filter((item) => item.blocked).map((item) => item.id);
     const blockedRequiredCases = options.requireIndependentTargets
-        ? results.filter((item) => item.blocked && !item.server_channel).map((item) => item.id)
+        ? blockedCases.filter((id) => CASES.some((testCase) => testCase.id === id))
         : [];
     const skippedRequiredCases = options.requireIndependentTargets
         ? results.filter((item) => item.skipped && !item.blocked && !item.server_channel).map((item) => item.id)
@@ -111,6 +112,8 @@ try {
         ...(unselectedRequiredCases.length > 0 ? { unselected_required_cases: unselectedRequiredCases } : {}),
         ...(invalidRequiredCases.length > 0 ? { invalid_required_count: invalidRequiredCases.length } : {}),
         ...(invalidRequiredCases.length > 0 ? { invalid_required_cases: invalidRequiredCases } : {}),
+        ...(blockedCases.length > 0 ? { blocked_count: blockedCases.length } : {}),
+        ...(blockedCases.length > 0 ? { blocked_cases: blockedCases } : {}),
         ...(blockedRequiredCases.length > 0 ? { blocked_required_count: blockedRequiredCases.length } : {}),
         ...(blockedRequiredCases.length > 0 ? { blocked_required_cases: blockedRequiredCases } : {}),
         ...(skippedRequiredCases.length > 0 ? { skipped_required_cases: skippedRequiredCases } : {}),

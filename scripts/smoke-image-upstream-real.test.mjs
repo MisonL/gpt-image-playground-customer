@@ -196,6 +196,31 @@ describe('image upstream real smoke script', () => {
         }
     });
 
+    it('reports blocked cases at the top level for non-final-gate billable smoke runs', async () => {
+        const upstream = await startLocalImageAndResponsesUpstream();
+        try {
+            const result = await runScriptAsync(
+                ['--allow-billable'],
+                {
+                    ...buildAllIndependentTargetEnv(upstream.baseUrl),
+                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
+                }
+            );
+
+            assert.equal(result.status, 1);
+            const report = JSON.parse(result.stdout);
+            assert.deepEqual(report.blocked_cases, [
+                'gaoren-images-sse',
+                'sub2api-images-sse',
+                'sub2api-responses-json',
+                'gpt2image-responses-sse'
+            ]);
+            assert.equal(upstream.calls.length, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('fails the run when independent upstream targets are required but skipped', () => {
         const result = runScript(['--require-independent-targets']);
 
