@@ -11,12 +11,12 @@ describe('collectOpenAiImagesFromStream', () => {
             upstreamEvents([
                 {
                     type: 'response.output_item.done',
-                    item: { type: 'image_generation_call', result: PNG_BASE64 }
+                    item: { id: 'ig_repeat', type: 'image_generation_call', result: PNG_BASE64 }
                 },
                 {
                     type: 'response.completed',
                     response: {
-                        output: [{ type: 'image_generation_call', result: PNG_BASE64 }]
+                        output: [{ id: 'ig_repeat', type: 'image_generation_call', result: PNG_BASE64 }]
                     }
                 }
             ])
@@ -26,14 +26,38 @@ describe('collectOpenAiImagesFromStream', () => {
         assert.equal(result.data?.[0]?.b64_json, PNG_BASE64);
     });
 
+    it('keeps separate Responses final items when their base64 payloads match', async () => {
+        const result = await collectOpenAiImagesFromStream(
+            upstreamEvents([
+                {
+                    type: 'response.output_item.done',
+                    item: { id: 'ig_same_payload_a', type: 'image_generation_call', result: PNG_BASE64 }
+                },
+                {
+                    type: 'response.output_item.done',
+                    item: { id: 'ig_same_payload_b', type: 'image_generation_call', result: PNG_BASE64 }
+                }
+            ])
+        );
+
+        assert.equal(result.data?.length, 2);
+        assert.deepEqual(
+            result.data?.map((item) => item.b64_json),
+            [PNG_BASE64, PNG_BASE64]
+        );
+    });
+
     it('deduplicates repeated final image payloads within a single Responses event', async () => {
         const result = await collectOpenAiImagesFromStream(
             upstreamEvents([
                 {
                     type: 'response.completed',
-                    data: [{ b64_json: PNG_BASE64 }],
+                    data: [],
                     response: {
-                        output: [{ type: 'image_generation_call', result: PNG_BASE64 }]
+                        output: [
+                            { id: 'ig_repeat', type: 'image_generation_call', result: PNG_BASE64 },
+                            { id: 'ig_repeat', type: 'image_generation_call', result: PNG_BASE64 }
+                        ]
                     }
                 }
             ])

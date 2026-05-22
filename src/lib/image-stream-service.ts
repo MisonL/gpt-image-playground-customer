@@ -63,7 +63,7 @@ export type ImageStreamResponseOptions = {
 
 type StreamState = {
     completedImages: CompletedImage[];
-    completedImagePayloads: Set<string>;
+    completedImageDedupeKeys: Set<string>;
     finalUsage?: ImageUsage;
     imageIndex: number;
 };
@@ -218,21 +218,22 @@ async function consumeUpstreamStream(runtime: StreamRuntime): Promise<boolean> {
             normalizedEventCount: diagnostics.events.length
         });
         for (const normalizedEvent of diagnostics.events) {
-            if (
-                normalizedEvent.type === 'completed' &&
-                runtime.state.completedImagePayloads.has(normalizedEvent.b64Json)
-            ) {
+            if (normalizedEvent.type === 'completed') {
+                if (!normalizedEvent.dedupeKey) {
+                    if (!(await emitNormalizedEvent(runtime, normalizedEvent))) return false;
+                    continue;
+                }
+                if (!runtime.state.completedImageDedupeKeys.has(normalizedEvent.dedupeKey)) {
+                    if (!(await emitNormalizedEvent(runtime, normalizedEvent))) return false;
+                    runtime.state.completedImageDedupeKeys.add(normalizedEvent.dedupeKey);
+                    continue;
+                }
                 if (normalizedEvent.usage) {
                     runtime.state.finalUsage = normalizedEvent.usage;
                 }
                 continue;
             }
             if (!(await emitNormalizedEvent(runtime, normalizedEvent))) return false;
-        }
-        for (const normalizedEvent of diagnostics.events) {
-            if (normalizedEvent.type === 'completed') {
-                runtime.state.completedImagePayloads.add(normalizedEvent.b64Json);
-            }
         }
     }
     return true;
@@ -287,7 +288,7 @@ export function createImageStreamResponse(options: ImageStreamResponseOptions): 
                 options,
                 batchId,
                 sse,
-                state: { completedImages: [], completedImagePayloads: new Set(), imageIndex: 0 }
+                state: { completedImages: [], completedImageDedupeKeys: new Set(), imageIndex: 0 }
             };
             try {
                 if (!(await consumeUpstreamStream(runtime))) return;

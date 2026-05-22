@@ -339,7 +339,8 @@ describe('image upstream real smoke script', () => {
     it('can dry-run the current server channel Agent Responses SSE smoke case without leaking keys', () => {
         const result = runScript(['--include-server-channel', '--case', 'server-channel-agent-responses-sse'], {
             OPENAI_CHANNEL_1_BASE_URL: 'https://server-channel.example/v1',
-            OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key'
+            OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+            IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL: 'gpt-4.1'
         });
 
         assert.equal(result.status, 0);
@@ -357,7 +358,8 @@ describe('image upstream real smoke script', () => {
     it('can dry-run the current server channel Responses JSON smoke case without leaking keys', () => {
         const result = runScript(['--include-server-channel', '--case', 'server-channel-responses-json'], {
             OPENAI_CHANNEL_1_BASE_URL: 'https://server-channel.example/v1',
-            OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key'
+            OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+            IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL: 'gpt-4.1'
         });
 
         assert.equal(result.status, 0);
@@ -370,6 +372,97 @@ describe('image upstream real smoke script', () => {
         assert.equal(report.results[0].reason, 'requires --allow-billable');
         assert.equal(report.results[0].server_channel, true);
         assert.equal(report.results[0].upstream_host, 'server-channel.example');
+    });
+
+    it('requires an explicit Responses top-level model for Responses smoke readiness', () => {
+        const result = runScript(['--case', 'sub2api-responses-json'], {
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL: 'https://responses.example/v1',
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_API_KEY: 'secret-responses-key'
+        });
+
+        assert.equal(result.status, 0);
+        assert.doesNotMatch(result.stdout, /secret-responses-key|responses\.example/);
+        const report = JSON.parse(result.stdout);
+        assert.equal(report.ok, true);
+        assert.equal(report.results[0].reason, 'missing responses model env');
+        assert.deepEqual(report.results[0].missing_env_any, [
+            [
+                'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL',
+                'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_MODEL',
+                'OPENAI_RESPONSES_API_MODEL'
+            ]
+        ]);
+        assert.equal(report.independent_targets.configuration_complete, false);
+        assert.deepEqual(report.independent_targets.missing_cases, ['sub2api-responses-json']);
+    });
+
+    it('passes APP_PASSWORD auth to in-process page route billable smoke runs', async () => {
+        const upstream = await startLocalImageAndResponsesUpstream();
+        try {
+            const result = await runScriptAsync(
+                ['--allow-billable', '--case', 'original-images-json'],
+                {
+                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                    IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
+                    APP_PASSWORD: 'page-access-code'
+                }
+            );
+
+            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.doesNotMatch(result.stdout, /secret-real-smoke-key|page-access-code/);
+            const report = JSON.parse(result.stdout);
+            assert.equal(report.results[0].status, 200);
+            assert.equal(report.results[0].image_count, 1);
+            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('passes AGENT_API_TOKEN auth to in-process Agent route billable smoke runs', async () => {
+        const upstream = await startLocalImageAndResponsesUpstream();
+        try {
+            const result = await runScriptAsync(
+                ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
+                {
+                    OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
+                    OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                    AGENT_API_TOKEN: 'secret-agent-token'
+                }
+            );
+
+            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.doesNotMatch(result.stdout, /secret-server-channel-key|secret-agent-token/);
+            const report = JSON.parse(result.stdout);
+            assert.equal(report.results[0].status, 200);
+            assert.equal(report.results[0].image_count, 1);
+            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('passes APP_PASSWORD auth to in-process Agent route billable smoke runs when no Agent token is configured', async () => {
+        const upstream = await startLocalImageAndResponsesUpstream();
+        try {
+            const result = await runScriptAsync(
+                ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
+                {
+                    OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
+                    OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                    APP_PASSWORD: 'page-access-code'
+                }
+            );
+
+            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.doesNotMatch(result.stdout, /secret-server-channel-key|page-access-code/);
+            const report = JSON.parse(result.stdout);
+            assert.equal(report.results[0].status, 200);
+            assert.equal(report.results[0].image_count, 1);
+            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+        } finally {
+            await upstream.close();
+        }
     });
 
     it('removes generated .real-smoke artifact files after billable local Agent smoke runs', async () => {
@@ -579,6 +672,7 @@ function buildAllIndependentTargetEnv(baseUrl) {
         IMAGE_REAL_SMOKE_SUB2API_API_KEY: 'secret-independent-key-sub2api',
         IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL: baseUrl,
         IMAGE_REAL_SMOKE_SUB2API_RESPONSES_API_KEY: 'secret-independent-key-sub2api-responses',
+        IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL: 'gpt-4.1',
         IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL: baseUrl,
         IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'secret-independent-key-gpt2image',
         IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL: 'gpt-5.4'

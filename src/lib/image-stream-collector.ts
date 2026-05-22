@@ -16,28 +16,26 @@ export async function collectOpenAiImagesFromStream(
     stream: AsyncIterable<unknown>
 ): Promise<OpenAI.Images.ImagesResponse> {
     const data: Array<{ b64_json: string }> = [];
-    const seenPayloads = new Set<string>();
+    const seenCompletedKeys = new Set<string>();
     let usage: ImageUsage | undefined;
 
     for await (const event of stream) {
         const diagnostics = normalizeUpstreamImageStreamEventWithDiagnostics(event);
         for (const normalizedEvent of diagnostics.events) {
             if (normalizedEvent.type === 'completed') {
-                if (seenPayloads.has(normalizedEvent.b64Json)) {
+                if (normalizedEvent.dedupeKey && seenCompletedKeys.has(normalizedEvent.dedupeKey)) {
                     if (normalizedEvent.usage) {
                         usage = normalizedEvent.usage;
                     }
                     continue;
                 }
                 data.push({ b64_json: normalizedEvent.b64Json });
+                if (normalizedEvent.dedupeKey) {
+                    seenCompletedKeys.add(normalizedEvent.dedupeKey);
+                }
                 if (normalizedEvent.usage) {
                     usage = normalizedEvent.usage;
                 }
-            }
-        }
-        for (const normalizedEvent of diagnostics.events) {
-            if (normalizedEvent.type === 'completed') {
-                seenPayloads.add(normalizedEvent.b64Json);
             }
         }
     }

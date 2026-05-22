@@ -51,7 +51,7 @@ afterEach(async () => {
     console.error = originalConsoleError;
 });
 
-describe('POST /api/images streaming', () => {
+describe('POST /api/images streaming', { concurrency: false }, () => {
     it('normalizes OtokAPI image stream events into the stable client SSE contract', async () => {
         const { POST } = await import('./route');
         let upstreamBody = '';
@@ -628,6 +628,60 @@ describe('POST /api/images streaming', () => {
         }
     });
 
+    it('keeps separate Responses final items when their base64 payloads match', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        const { POST } = await import('./route');
+        const upstream = await startStreamingResponsesImageUpstream(async () => [
+            {
+                event: 'response.output_item.done',
+                data: {
+                    type: 'response.output_item.done',
+                    item: {
+                        id: 'ig_same_payload_a',
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: PNG_BASE64
+                    }
+                }
+            },
+            {
+                event: 'response.output_item.done',
+                data: {
+                    type: 'response.output_item.done',
+                    item: {
+                        id: 'ig_same_payload_b',
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: PNG_BASE64
+                    }
+                }
+            }
+        ]);
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: true,
+                    imageBackend: 'responses',
+                    imageStreamingStrategy: 'responses-sse'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'completed', 'done']
+            );
+            assert.equal((events[2].images as Array<Record<string, unknown>>).length, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('uses force-sse for Responses image_generation without the legacy stream field', async () => {
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
@@ -761,6 +815,34 @@ describe('POST /api/images streaming', () => {
             const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
             assert.equal(upstreamJson.model, 'gpt-4.1');
             assert.equal(upstreamJson.stream, false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('does not apply the generate backend env default to edit requests', async () => {
+        process.env.IMAGE_GENERATION_BACKEND = 'responses';
+        const { POST } = await import('./route');
+        let upstreamUrl = '';
+        const upstream = await startImagesJsonUpstream(async (_body, url) => {
+            upstreamUrl = url;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: false
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = (await response.json()) as { images?: Array<Record<string, unknown>> };
+            assert.equal(body.images?.[0]?.b64_json, PNG_BASE64);
+            assert.equal(upstreamUrl, '/v1/images/edits');
         } finally {
             await upstream.close();
         }

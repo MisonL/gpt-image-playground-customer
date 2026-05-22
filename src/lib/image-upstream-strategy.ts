@@ -88,11 +88,15 @@ export function parseImageStreamingStrategyValue(value: string): ImageStreamingS
 
 export function readImageGenerationBackend(
     formData: FormData,
-    env: ImageUpstreamEnv = process.env
+    env: ImageUpstreamEnv = process.env,
+    options: { useEnvDefault?: boolean } = {}
 ): ImageGenerationBackend {
     const requestValue = readStringField(formData, 'image_backend', 'imageBackend');
     if (requestValue) {
         return readBackendValue(requestValue, 'request');
+    }
+    if (options.useEnvDefault === false) {
+        return 'images-api';
     }
     const envValue = readStringEnv(env, 'IMAGE_GENERATION_BACKEND');
     return envValue ? readBackendValue(envValue, 'env') : 'images-api';

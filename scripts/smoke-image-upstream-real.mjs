@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const originalEnv = { ...process.env };
@@ -347,15 +348,17 @@ function withCaseTimeout(promise, testCase, target, startedAt) {
 function readTarget(testCase) {
     const basePrefix = testCase.prefix;
     const fallbackPrefix = testCase.fallbackPrefix || basePrefix;
+    const requiresResponsesModel = testCase.backend === 'responses-image-generation';
     if (testCase.serverChannel) {
         const serverBaseUrl = readEnvEntry(`${basePrefix}_BASE_URL`) || readFirstConfiguredServerBaseUrl();
         return {
             serverChannel: true,
+            requiresResponsesModel,
             baseUrl: serverBaseUrl?.value,
             baseUrlKey: serverBaseUrl?.key,
             hasServerCredential: Boolean(env('OPENAI_API_KEY') || readFirstConfiguredServerApiKeys()),
             model: env(`${basePrefix}_MODEL`) || 'gpt-image-2',
-            responsesModel: env(`${basePrefix}_RESPONSES_MODEL`) || env('OPENAI_RESPONSES_API_MODEL') || 'gpt-5.4',
+            responsesModel: env(`${basePrefix}_RESPONSES_MODEL`) || env('OPENAI_RESPONSES_API_MODEL'),
             size: env(`${basePrefix}_SIZE`) || '1024x1024',
             quality: env(`${basePrefix}_QUALITY`) || 'low'
         };
@@ -363,6 +366,7 @@ function readTarget(testCase) {
     const baseUrl = readFirstEnvEntry(readSmokeEnvAlternatives(testCase, 'BASE_URL'));
     const apiKey = readFirstEnvEntry(readSmokeEnvAlternatives(testCase, 'API_KEY'));
     return {
+        requiresResponsesModel,
         baseUrl: baseUrl?.value,
         baseUrlKey: baseUrl?.key,
         apiKey: apiKey?.value,
@@ -370,8 +374,7 @@ function readTarget(testCase) {
         responsesModel:
             env(`${basePrefix}_RESPONSES_MODEL`) ||
             env(`${fallbackPrefix}_RESPONSES_MODEL`) ||
-            env('OPENAI_RESPONSES_API_MODEL') ||
-            'gpt-5.4',
+            env('OPENAI_RESPONSES_API_MODEL'),
         size: env(`${basePrefix}_SIZE`) || env(`${fallbackPrefix}_SIZE`) || '1024x1024',
         quality: env(`${basePrefix}_QUALITY`) || env(`${fallbackPrefix}_QUALITY`) || 'low'
     };
@@ -379,8 +382,10 @@ function readTarget(testCase) {
 
 function isRunnableTarget(target) {
     if (!target.baseUrl) return false;
+    if (target.requiresResponsesModel && !target.responsesModel) return false;
     if (target.serverChannel) return target.hasServerCredential;
-    return Boolean(target.apiKey);
+    if (!target.apiKey) return false;
+    return true;
 }
 
 function readInvalidEnv(target) {
@@ -482,6 +487,9 @@ function buildIndependentTargetSummary(results, requireIndependentTargets = fals
 
 function readSkippedReason(target) {
     if (!target.baseUrl) return target.serverChannel ? 'missing server channel base url env' : 'missing base url env';
+    if (target.serverChannel && !target.hasServerCredential) return 'missing server channel api key env';
+    if (!target.serverChannel && !target.apiKey) return 'missing api key env';
+    if (target.requiresResponsesModel && !target.responsesModel) return 'missing responses model env';
     return target.serverChannel ? 'missing server channel api key env' : 'missing api key env';
 }
 
@@ -496,6 +504,9 @@ function readMissingEnvAny(testCase, target) {
     if (!target.serverChannel && target.baseUrl && !target.apiKey) {
         groups.push(readSmokeEnvAlternatives(testCase, 'API_KEY'));
     }
+    if (target.requiresResponsesModel && target.baseUrl && !target.responsesModel) {
+        groups.push(readResponsesModelEnvAlternatives(testCase));
+    }
     return groups;
 }
 
@@ -504,6 +515,15 @@ function readSmokeEnvAlternatives(testCase, suffix) {
     if (testCase.fallbackPrefix && testCase.fallbackPrefix !== testCase.prefix) {
         keys.push(`${testCase.fallbackPrefix}_${suffix}`);
     }
+    return keys;
+}
+
+function readResponsesModelEnvAlternatives(testCase) {
+    const keys = [`${testCase.prefix}_RESPONSES_MODEL`];
+    if (testCase.fallbackPrefix && testCase.fallbackPrefix !== testCase.prefix) {
+        keys.push(`${testCase.fallbackPrefix}_RESPONSES_MODEL`);
+    }
+    keys.push('OPENAI_RESPONSES_API_MODEL');
     return keys;
 }
 
@@ -566,6 +586,8 @@ function imageRequest(testCase, target) {
         formData.append('apiBaseUrl', target.baseUrl);
         formData.append('apiKey', target.apiKey);
     }
+    const pagePasswordHash = readAppPasswordHash();
+    if (pagePasswordHash) formData.append('passwordHash', pagePasswordHash);
     if (testCase.backend) formData.append('imageBackend', testCase.backend);
     if (testCase.strategy) formData.append('imageStreamingStrategy', testCase.strategy);
     if (testCase.backend === 'responses-image-generation') formData.append('responsesModel', target.responsesModel);
@@ -579,10 +601,7 @@ function imageRequest(testCase, target) {
 function agentGenerateRequest(testCase, target) {
     return new Request('http://localhost/api/agent/images/generate', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Idempotency-Key': `real-smoke-${testCase.id}-${Date.now()}`
-        },
+        headers: buildAgentRequestHeaders(testCase),
         body: JSON.stringify({
             prompt: 'real agent upstream sse compatibility smoke',
             model: target.model,
@@ -596,6 +615,27 @@ function agentGenerateRequest(testCase, target) {
             partial_images: 2
         })
     });
+}
+
+function buildAgentRequestHeaders(testCase) {
+    return {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `real-smoke-${testCase.id}-${Date.now()}`,
+        ...readAgentAuthHeaders()
+    };
+}
+
+function readAgentAuthHeaders() {
+    const token = env('AGENT_API_TOKEN');
+    if (token) return { Authorization: `Bearer ${token}` };
+    const passwordHash = readAppPasswordHash();
+    return passwordHash ? { 'X-App-Password-Hash': passwordHash } : {};
+}
+
+function readAppPasswordHash() {
+    const password = process.env.APP_PASSWORD;
+    if (typeof password !== 'string' || !password) return undefined;
+    return crypto.createHash('sha256').update(password).digest('hex');
 }
 
 async function summarizeResponse(response) {

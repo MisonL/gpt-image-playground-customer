@@ -20,6 +20,7 @@ export type NormalizedImageStreamEvent =
           type: 'completed';
           b64Json: string;
           usage?: ImageUsage;
+          dedupeKey?: string;
       };
 
 export type ImageStreamEventNormalizationResult = {
@@ -266,6 +267,14 @@ function readResponsesImageBase64(record: JsonRecord): string | undefined {
     return readImageGenerationResultBase64(result) || readImageBase64(record);
 }
 
+function readResponsesImageDedupeKey(record: JsonRecord): string | undefined {
+    if (readString(record, 'type') !== 'image_generation_call') {
+        return undefined;
+    }
+    const id = readString(record, 'id', 'item_id', 'itemId', 'call_id', 'callId');
+    return id ? `responses:${id}` : undefined;
+}
+
 function hasRemoteOnlyResponsesImageResult(record: JsonRecord): boolean {
     return readResponsesImageGenerationItems(record).some((item) => {
         const result = readString(item, 'result');
@@ -303,12 +312,19 @@ function normalizePartialEvent(record: JsonRecord): NormalizedImageStreamEvent[]
     ];
 }
 
-function appendCompletedSource(completed: string[], sourceValues: string[]) {
-    const previousPayloads = new Set(completed);
+type CompletedImageSource = {
+    b64Json: string;
+    dedupeKey?: string;
+};
+
+function appendCompletedSource(completed: CompletedImageSource[], sourceValues: CompletedImageSource[]) {
+    const previousKeys = new Set(completed.flatMap((item) => (item.dedupeKey ? [item.dedupeKey] : [])));
     for (const value of sourceValues) {
-        if (!previousPayloads.has(value)) {
-            completed.push(value);
+        if (value.dedupeKey && previousKeys.has(value.dedupeKey)) {
+            continue;
         }
+        completed.push(value);
+        if (value.dedupeKey) previousKeys.add(value.dedupeKey);
     }
 }
 
@@ -317,20 +333,24 @@ function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefin
     const rootB64 = readImageBase64(record);
     const dataItems = readNestedCompletedItems(record);
     const responsesItems = readResponsesImageGenerationItems(record);
-    const completed: string[] = [];
-    appendCompletedSource(completed, rootB64 ? [rootB64] : []);
+    const completed: CompletedImageSource[] = [];
+    appendCompletedSource(completed, rootB64 ? [{ b64Json: rootB64 }] : []);
     appendCompletedSource(
         completed,
         dataItems.flatMap((item) => {
             const b64Json = readImageBase64(item);
-            return b64Json ? [b64Json] : [];
+            if (!b64Json) return [];
+            const dedupeKey = readResponsesImageDedupeKey(item);
+            return [{ b64Json, ...(dedupeKey ? { dedupeKey } : {}) }];
         })
     );
     appendCompletedSource(
         completed,
         responsesItems.flatMap((item) => {
             const b64Json = readResponsesImageBase64(item);
-            return b64Json ? [b64Json] : [];
+            if (!b64Json) return [];
+            const dedupeKey = readResponsesImageDedupeKey(item);
+            return [{ b64Json, ...(dedupeKey ? { dedupeKey } : {}) }];
         })
     );
 
@@ -355,9 +375,10 @@ function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefin
         }
     }
 
-    return completed.map((b64Json) => ({
+    return completed.map((item) => ({
         type: 'completed' as const,
-        b64Json,
+        b64Json: item.b64Json,
+        ...(item.dedupeKey ? { dedupeKey: item.dedupeKey } : {}),
         ...(usage ? { usage } : {})
     }));
 }
@@ -409,5 +430,14 @@ export function normalizeUpstreamImageStreamEventWithDiagnostics(event: unknown)
 }
 
 export function normalizeUpstreamImageStreamEvent(event: unknown): NormalizedImageStreamEvent[] {
-    return normalizeUpstreamImageStreamEventWithDiagnostics(event).events;
+    return normalizeUpstreamImageStreamEventWithDiagnostics(event).events.map((normalizedEvent) => {
+        if (normalizedEvent.type !== 'completed' || !normalizedEvent.dedupeKey) {
+            return normalizedEvent;
+        }
+        return {
+            type: 'completed',
+            b64Json: normalizedEvent.b64Json,
+            ...(normalizedEvent.usage ? { usage: normalizedEvent.usage } : {})
+        };
+    });
 }
