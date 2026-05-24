@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -14,11 +14,7 @@ describe('live PostgreSQL test launcher cleanup', () => {
         const tempDir = await mkdtemp(path.join(os.tmpdir(), 'pg-live-launcher-'));
         const logPath = path.join(tempDir, 'docker.log');
         const binDir = path.join(tempDir, 'bin');
-        await writeFile(path.join(tempDir, 'noop'), '');
-        await writeFile(path.join(tempDir, 'node'), buildFailingNodeShim(), { mode: 0o755 });
-        await writeFile(path.join(tempDir, 'docker'), buildDockerShim(logPath), { mode: 0o755 });
-        await rm(binDir, { recursive: true, force: true });
-        await import('node:fs/promises').then(({ mkdir }) => mkdir(binDir));
+        await mkdir(binDir);
         await writeFile(path.join(binDir, 'node'), buildFailingNodeShim(), { mode: 0o755 });
         await writeFile(path.join(binDir, 'docker'), buildDockerShim(logPath), { mode: 0o755 });
 
@@ -38,6 +34,32 @@ describe('live PostgreSQL test launcher cleanup', () => {
             assert.match(dockerLog, /^exec /m);
             assert.match(dockerLog, /^port /m);
             assert.match(dockerLog, /^rm -f gpt-image-agent-test-pg-/m);
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('preserves the test exit code when a PostgreSQL URL is provided', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'pg-live-launcher-'));
+        const logPath = path.join(tempDir, 'docker.log');
+        const binDir = path.join(tempDir, 'bin');
+        await mkdir(binDir);
+        await writeFile(path.join(binDir, 'node'), buildFailingNodeShim(), { mode: 0o755 });
+        await writeFile(path.join(binDir, 'docker'), buildDockerShim(logPath), { mode: 0o755 });
+
+        try {
+            const result = spawnSync(process.execPath, [scriptPath], {
+                cwd: repoRoot,
+                encoding: 'utf8',
+                env: {
+                    ...process.env,
+                    AGENT_POSTGRES_TEST_DATABASE_URL: 'postgres://agent_test:agent_test@127.0.0.1:55432/agent_test',
+                    PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`
+                }
+            });
+
+            assert.equal(result.status, 37, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            await assert.rejects(readFile(logPath, 'utf8'), { code: 'ENOENT' });
         } finally {
             await rm(tempDir, { recursive: true, force: true });
         }

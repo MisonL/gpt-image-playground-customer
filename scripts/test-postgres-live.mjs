@@ -38,6 +38,10 @@ function runTests(databaseUrl) {
   });
 }
 
+function statusFromError(error) {
+  return error instanceof CommandFailedError ? error.status : 1;
+}
+
 async function waitForPostgres(containerName) {
   for (let attempt = 0; attempt < POSTGRES_READY_ATTEMPTS; attempt += 1) {
     const result = spawnSync('docker', ['exec', containerName, 'pg_isready', '-U', 'agent_test', '-d', 'agent_test'], {
@@ -63,7 +67,11 @@ function readMappedPort(containerName) {
 }
 
 if (process.env.AGENT_POSTGRES_TEST_DATABASE_URL) {
-  runTests(process.env.AGENT_POSTGRES_TEST_DATABASE_URL);
+  try {
+    runTests(process.env.AGENT_POSTGRES_TEST_DATABASE_URL);
+  } catch (error) {
+    process.exit(statusFromError(error));
+  }
   process.exit(0);
 }
 
@@ -89,7 +97,7 @@ try {
   const port = readMappedPort(containerName);
   runTests(`postgres://agent_test:agent_test@127.0.0.1:${port}/agent_test`);
 } catch (error) {
-  process.exitCode = error instanceof CommandFailedError ? error.status : 1;
+  process.exitCode = statusFromError(error);
   if (!(error instanceof CommandFailedError)) {
     console.error(error instanceof Error ? error.message : String(error));
   }
