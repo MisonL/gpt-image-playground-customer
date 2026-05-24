@@ -255,9 +255,12 @@ describe('Command center scripts', () => {
             [
                 'MATCHED_DOUBLE="https://quoted.example/v1"',
                 "MATCHED_SINGLE='single-secret'",
+                'MATCHED_DOUBLE_SPACES="  kept value  "',
                 'MISMATCHED_LEADING="kept-value',
                 'MISMATCHED_TRAILING=kept-value"',
-                'MISMATCHED_PAIR="kept-value\''
+                'MISMATCHED_PAIR="kept-value\'',
+                'SINGLE_DOUBLE_QUOTE="',
+                "SINGLE_SINGLE_QUOTE='"
             ].join('\n')
         );
 
@@ -266,9 +269,12 @@ describe('Command center scripts', () => {
 
             assert.equal(statusEnv.MATCHED_DOUBLE, 'https://quoted.example/v1');
             assert.equal(statusEnv.MATCHED_SINGLE, 'single-secret');
+            assert.equal(statusEnv.MATCHED_DOUBLE_SPACES, '  kept value  ');
             assert.equal(statusEnv.MISMATCHED_LEADING, '"kept-value');
             assert.equal(statusEnv.MISMATCHED_TRAILING, 'kept-value"');
             assert.equal(statusEnv.MISMATCHED_PAIR, '"kept-value\'');
+            assert.equal(statusEnv.SINGLE_DOUBLE_QUOTE, '"');
+            assert.equal(statusEnv.SINGLE_SINGLE_QUOTE, "'");
         } finally {
             await rm(tempDir, { recursive: true, force: true });
         }

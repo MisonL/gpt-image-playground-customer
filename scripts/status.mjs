@@ -67,8 +67,9 @@ function loadStatusEnvFile(statusEnv, baseEnv, options) {
         if (!match || !shouldSetStatusEnv(match[1], baseEnv, statusEnv, options)) continue;
         const value = match[2].trim();
         const quoted =
-            (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"));
-        statusEnv[match[1]] = quoted ? value.slice(1, -1).trim() : value;
+            value.length >= 2 &&
+            ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")));
+        statusEnv[match[1]] = quoted ? value.slice(1, -1) : value;
     }
 }
 
