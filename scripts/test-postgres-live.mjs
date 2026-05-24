@@ -6,6 +6,13 @@ const testFiles = ['src/lib/agent-state-postgres.test.ts', 'src/app/api/agent/ag
 const POSTGRES_READY_ATTEMPTS = 30;
 const POSTGRES_READY_INTERVAL_MS = 1000;
 
+class CommandFailedError extends Error {
+  constructor(command, args, status) {
+    super(`${command} ${args.join(' ')} failed with exit code ${status}`);
+    this.status = status;
+  }
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     stdio: options.capture ? ['ignore', 'pipe', 'pipe'] : options.silent ? 'ignore' : 'inherit',
@@ -16,7 +23,7 @@ function run(command, args, options = {}) {
     return result;
   }
   if (result.status !== 0) {
-    process.exit(result.status || 1);
+    throw new CommandFailedError(command, args, result.status || 1);
   }
   return result;
 }
@@ -81,6 +88,11 @@ try {
   await waitForPostgres(containerName);
   const port = readMappedPort(containerName);
   runTests(`postgres://agent_test:agent_test@127.0.0.1:${port}/agent_test`);
+} catch (error) {
+  process.exitCode = error instanceof CommandFailedError ? error.status : 1;
+  if (!(error instanceof CommandFailedError)) {
+    console.error(error instanceof Error ? error.message : String(error));
+  }
 } finally {
   spawnSync('docker', ['rm', '-f', containerName], { stdio: 'ignore' });
 }
