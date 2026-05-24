@@ -7,15 +7,16 @@ const POSTGRES_READY_ATTEMPTS = 30;
 const POSTGRES_READY_INTERVAL_MS = 1000;
 
 class CommandFailedError extends Error {
-  constructor(command, args, status) {
+  constructor(command, args, status, stderr = '') {
     super(`${command} ${args.join(' ')} failed with exit code ${status}`);
     this.status = status;
+    this.stderr = stderr;
   }
 }
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
-    stdio: options.capture ? ['ignore', 'pipe', 'pipe'] : options.silent ? 'ignore' : 'inherit',
+    stdio: options.capture || options.silent ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
     env: options.env || process.env
   });
@@ -23,7 +24,7 @@ function run(command, args, options = {}) {
     return result;
   }
   if (result.status !== 0) {
-    throw new CommandFailedError(command, args, result.status || 1);
+    throw new CommandFailedError(command, args, result.status || 1, result.stderr || '');
   }
   return result;
 }
@@ -98,7 +99,11 @@ try {
   runTests(`postgres://agent_test:agent_test@127.0.0.1:${port}/agent_test`);
 } catch (error) {
   process.exitCode = statusFromError(error);
-  if (!(error instanceof CommandFailedError)) {
+  if (error instanceof CommandFailedError) {
+    if (error.stderr.trim()) {
+      console.error(error.stderr.trim());
+    }
+  } else {
     console.error(error instanceof Error ? error.message : String(error));
   }
 } finally {
