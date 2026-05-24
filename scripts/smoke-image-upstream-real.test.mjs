@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { createServer } from 'node:http';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = join(repoRoot, 'scripts/smoke-image-upstream-real.mjs');
@@ -22,8 +22,14 @@ describe('image upstream real smoke script', () => {
         assert.equal(report.final_gate_satisfied, false);
         assert.equal(report.billable, false);
         assert.equal(report.results.length, 5);
-        assert.equal(report.results.every((item) => item.skipped === true), true);
-        assert.equal(report.results.every((item) => item.reason === 'missing base url env'), true);
+        assert.equal(
+            report.results.every((item) => item.skipped === true),
+            true
+        );
+        assert.equal(
+            report.results.every((item) => item.reason === 'missing base url env'),
+            true
+        );
         assert.deepEqual(report.results[0].missing_env_any, [['IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL']]);
         assert.deepEqual(report.results[3].missing_env_any, [
             ['IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL', 'IMAGE_REAL_SMOKE_SUB2API_BASE_URL']
@@ -110,13 +116,10 @@ describe('image upstream real smoke script', () => {
                     'IMAGE_REAL_SMOKE_ORIGINAL_API_KEY=secret-env-file-key'
                 ].join('\n')
             );
-            const result = runScript(
-                ['--env-file', envFilePath, '--case', 'original-images-json'],
-                {
-                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://shell.example/v1',
-                    IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-shell-key'
-                }
-            );
+            const result = runScript(['--env-file', envFilePath, '--case', 'original-images-json'], {
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://shell.example/v1',
+                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-shell-key'
+            });
 
             assert.equal(result.status, 0);
             assert.doesNotMatch(result.stdout, /secret-env-file-key|secret-shell-key/);
@@ -171,13 +174,10 @@ describe('image upstream real smoke script', () => {
     it('does not make billable upstream calls when any selected target has unsafe configuration', async () => {
         const upstream = await startLocalImageAndResponsesUpstream();
         try {
-            const result = await runScriptAsync(
-                ['--allow-billable', '--require-independent-targets'],
-                {
-                    ...buildAllIndependentTargetEnv(upstream.baseUrl),
-                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
-                }
-            );
+            const result = await runScriptAsync(['--allow-billable', '--require-independent-targets'], {
+                ...buildAllIndependentTargetEnv(upstream.baseUrl),
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
+            });
 
             assert.equal(result.status, 1);
             assert.doesNotMatch(result.stdout, /user:pass|example\.test|secret-independent-key|token=secret/);
@@ -199,13 +199,10 @@ describe('image upstream real smoke script', () => {
     it('reports blocked cases at the top level for non-final-gate billable smoke runs', async () => {
         const upstream = await startLocalImageAndResponsesUpstream();
         try {
-            const result = await runScriptAsync(
-                ['--allow-billable'],
-                {
-                    ...buildAllIndependentTargetEnv(upstream.baseUrl),
-                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
-                }
-            );
+            const result = await runScriptAsync(['--allow-billable'], {
+                ...buildAllIndependentTargetEnv(upstream.baseUrl),
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
+            });
 
             assert.equal(result.status, 1);
             const report = JSON.parse(result.stdout);
@@ -224,13 +221,10 @@ describe('image upstream real smoke script', () => {
     it('does not make billable upstream calls when the required independent gate is missing target config', async () => {
         const upstream = await startLocalImageAndResponsesUpstream();
         try {
-            const result = await runScriptAsync(
-                ['--allow-billable', '--require-independent-targets'],
-                {
-                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
-                    IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
-                }
-            );
+            const result = await runScriptAsync(['--allow-billable', '--require-independent-targets'], {
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
+            });
 
             assert.equal(result.status, 1);
             assert.doesNotMatch(result.stdout, /secret-real-smoke-key/);
@@ -386,10 +380,7 @@ describe('image upstream real smoke script', () => {
         assert.equal(report.ok, true);
         assert.equal(report.results[0].reason, 'missing responses model env');
         assert.deepEqual(report.results[0].missing_env_any, [
-            [
-                'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL',
-                'OPENAI_RESPONSES_API_MODEL'
-            ]
+            ['IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL', 'OPENAI_RESPONSES_API_MODEL']
         ]);
         assert.equal(report.independent_targets.configuration_complete, false);
         assert.deepEqual(report.independent_targets.missing_cases, ['sub2api-responses-json']);
@@ -408,10 +399,7 @@ describe('image upstream real smoke script', () => {
         assert.equal(report.ok, true);
         assert.equal(report.results[0].reason, 'missing responses model env');
         assert.deepEqual(report.results[0].missing_env_any, [
-            [
-                'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL',
-                'OPENAI_RESPONSES_API_MODEL'
-            ]
+            ['IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL', 'OPENAI_RESPONSES_API_MODEL']
         ]);
         assert.equal(report.independent_targets.configuration_complete, false);
         assert.deepEqual(report.independent_targets.missing_cases, ['sub2api-responses-json']);
@@ -420,14 +408,55 @@ describe('image upstream real smoke script', () => {
     it('passes APP_PASSWORD auth to in-process page route billable smoke runs', async () => {
         const upstream = await startLocalImageAndResponsesUpstream();
         try {
-            const result = await runScriptAsync(
-                ['--allow-billable', '--case', 'original-images-json'],
-                {
-                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
-                    IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
-                    APP_PASSWORD: 'page-access-code'
-                }
-            );
+            const result = await runScriptAsync(['--allow-billable', '--case', 'original-images-json'], {
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
+                APP_PASSWORD: 'page-access-code'
+            });
+
+            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.doesNotMatch(result.stdout, /secret-real-smoke-key|page-access-code/);
+            const report = JSON.parse(result.stdout);
+            assert.equal(report.results[0].status, 200);
+            assert.equal(report.results[0].image_count, 1);
+            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('pins page route smoke backend and strategy against global route defaults', async () => {
+        const upstream = await startLocalImageAndResponsesUpstream();
+        try {
+            const result = await runScriptAsync(['--allow-billable', '--case', 'original-images-json'], {
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
+                IMAGE_GENERATION_BACKEND: 'responses-image-generation',
+                IMAGE_STREAMING_STRATEGY: 'force-sse',
+                ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+                OPENAI_RESPONSES_API_MODEL: 'gpt-4.1-env'
+            });
+
+            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.doesNotMatch(result.stdout, /secret-real-smoke-key|gpt-4\.1-env/);
+            const report = JSON.parse(result.stdout);
+            assert.equal(report.results[0].status, 200);
+            assert.equal(report.results[0].content_type, 'application/json');
+            assert.equal(report.results[0].image_count, 1);
+            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('trims APP_PASSWORD before hashing page route billable smoke auth', async () => {
+        const upstream = await startLocalImageAndResponsesUpstream();
+        try {
+            const result = await runScriptAsync(['--allow-billable', '--case', 'original-images-json'], {
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
+                APP_PASSWORD: '  page-access-code  '
+            });
 
             assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
             assert.doesNotMatch(result.stdout, /secret-real-smoke-key|page-access-code/);
@@ -556,8 +585,66 @@ describe('image upstream real smoke script', () => {
             assert.equal(report.independent_targets.configuration_complete, true);
             assert.equal(report.independent_targets.configured_count, 5);
             assert.equal(report.results.length, 5);
-            assert.equal(report.results.every((item) => item.ok === true && item.skipped !== true), true);
+            assert.equal(
+                report.results.every((item) => item.ok === true && item.skipped !== true),
+                true
+            );
             assert.equal('missing_required_cases' in report, false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails the final gate when a page SSE smoke case returns a stream error event', async () => {
+        const successUpstream = await startLocalImageAndResponsesUpstream();
+        const failingSseUpstream = await startLocalFailingImagesSseUpstream();
+        try {
+            const result = await runScriptAsync(['--allow-billable', '--require-independent-targets'], {
+                ...buildAllIndependentTargetEnv(successUpstream.baseUrl),
+                IMAGE_REAL_SMOKE_GAOREN_BASE_URL: failingSseUpstream.baseUrl,
+                IMAGE_REAL_SMOKE_GAOREN_API_KEY: 'secret-independent-key-gaoren'
+            });
+
+            assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.doesNotMatch(result.stdout, /secret-independent-key/);
+            const report = JSON.parse(result.stdout);
+            const failedCase = report.results.find((item) => item.id === 'gaoren-images-sse');
+
+            assert.equal(report.ok, false);
+            assert.equal(report.final_gate_satisfied, false);
+            assert.equal(failedCase?.ok, false);
+            assert.equal(failedCase?.status, 200);
+            assert.equal(failedCase?.done_image_count, 0);
+            assert.match(failedCase?.error || '', /b64_json|最终图片/);
+            assert.equal(successUpstream.calls.length, 4);
+        } finally {
+            await successUpstream.close();
+            await failingSseUpstream.close();
+        }
+    });
+
+    it('exits after its own timeout when a billable upstream never responds', async () => {
+        const upstream = await startLocalHangingImageUpstream();
+        try {
+            const result = await runScriptAsync(
+                ['--allow-billable', '--case', 'original-images-json', '--timeout-ms', '1000'],
+                {
+                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                    IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
+                },
+                { killAfterMs: 4500 }
+            );
+
+            assert.equal(result.signal, null, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.equal(result.killedByTest, false, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.doesNotMatch(result.stdout, /secret-real-smoke-key/);
+            const report = JSON.parse(result.stdout);
+            assert.equal(report.ok, false);
+            assert.equal(report.final_gate_satisfied, false);
+            assert.equal(report.results[0].timed_out, true);
+            assert.equal(report.results[0].ok, false);
+            assert.match(report.results[0].error, /timed out after 1000ms/);
         } finally {
             await upstream.close();
         }
@@ -581,15 +668,11 @@ describe('image upstream real smoke script', () => {
         const missingEnvFilePath = join(repoRoot, 'generated-images/.missing-real-smoke.env');
         rmSync(missingEnvFilePath, { force: true });
 
-        const result = spawnSync(
-            'npm',
-            ['run', 'smoke:image-upstream-real', '--', '--env-file', missingEnvFilePath],
-            {
-                cwd: repoRoot,
-                encoding: 'utf8',
-                env: buildScriptEnv()
-            }
-        );
+        const result = spawnSync('npm', ['run', 'smoke:image-upstream-real', '--', '--env-file', missingEnvFilePath], {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            env: buildScriptEnv()
+        });
 
         assert.equal(result.status, 1);
         assert.match(result.stderr, /--env-file 指定的文件不存在/);
@@ -708,15 +791,23 @@ function runScript(args = [], env = {}) {
     });
 }
 
-function runScriptAsync(args = [], env = {}) {
+function runScriptAsync(args = [], env = {}, options = {}) {
     return new Promise((resolve) => {
         const child = spawn(process.execPath, ['--import', 'tsx', scriptPath, ...args], {
             cwd: repoRoot,
             env: buildScriptEnv(env),
             stdio: ['ignore', 'pipe', 'pipe']
         });
+        const startedAt = Date.now();
         let stdout = '';
         let stderr = '';
+        let killedByTest = false;
+        const killTimer = options.killAfterMs
+            ? setTimeout(() => {
+                  killedByTest = true;
+                  child.kill('SIGTERM');
+              }, options.killAfterMs)
+            : undefined;
         child.stdout.setEncoding('utf8');
         child.stderr.setEncoding('utf8');
         child.stdout.on('data', (chunk) => {
@@ -725,15 +816,18 @@ function runScriptAsync(args = [], env = {}) {
         child.stderr.on('data', (chunk) => {
             stderr += chunk;
         });
-        child.on('close', (status) => {
-            resolve({ status, stdout, stderr });
+        child.on('close', (status, signal) => {
+            if (killTimer) clearTimeout(killTimer);
+            resolve({ status, signal, stdout, stderr, killedByTest, elapsedMs: Date.now() - startedAt });
         });
     });
 }
 
 function listRealSmokeFiles() {
     try {
-        return readdirSync(realSmokeOutputDir).filter((item) => item.endsWith('.png') || item.endsWith('.jpeg')).sort();
+        return readdirSync(realSmokeOutputDir)
+            .filter((item) => item.endsWith('.png') || item.endsWith('.jpeg'))
+            .sort();
     } catch {
         return [];
     }
@@ -772,6 +866,9 @@ function isSmokeEnvKey(key) {
         key === 'OPENAI_RESPONSES_API_MODEL' ||
         key === 'OPENAI_ROUTING_STRATEGY' ||
         key === 'OPENAI_CHANNELS_JSON' ||
+        key === 'IMAGE_GENERATION_BACKEND' ||
+        key === 'IMAGE_STREAMING_STRATEGY' ||
+        key === 'ENABLE_RESPONSES_IMAGE_BACKEND' ||
         key === 'IMAGE_OUTPUT_DIR' ||
         key === 'APP_PASSWORD' ||
         key === 'AGENT_API_TOKEN'
@@ -788,7 +885,9 @@ async function startLocalImagesSseUpstream() {
         request.resume();
         await new Promise((resolve) => request.on('end', resolve));
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-        response.write(`event: image_generation.completed\ndata: ${JSON.stringify({ type: 'image_generation.completed', b64_json: pngBase64 })}\n\n`);
+        response.write(
+            `event: image_generation.completed\ndata: ${JSON.stringify({ type: 'image_generation.completed', b64_json: pngBase64 })}\n\n`
+        );
         response.write('data: [DONE]\n\n');
         response.end();
     });
@@ -798,6 +897,57 @@ async function startLocalImagesSseUpstream() {
     return {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
         close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    };
+}
+
+async function startLocalFailingImagesSseUpstream() {
+    const server = createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        request.resume();
+        await new Promise((resolve) => request.on('end', resolve));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write(
+            `event: image_generation.completed\ndata: ${JSON.stringify({ type: 'image_generation.completed' })}\n\n`
+        );
+        response.write('data: [DONE]\n\n');
+        response.end();
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    };
+}
+
+async function startLocalHangingImageUpstream() {
+    const sockets = new Set();
+    const server = createServer(async (request) => {
+        if (request.method === 'POST' && request.url?.endsWith('/images/generations')) {
+            request.resume();
+            return;
+        }
+        request.resume();
+    });
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        close: () =>
+            new Promise((resolve, reject) => {
+                for (const socket of sockets) socket.destroy();
+                server.close((error) => (error ? reject(error) : resolve()));
+            })
     };
 }
 
@@ -845,7 +995,9 @@ async function readRequestBody(request) {
 function respondToImageGenerationRequest(response, body) {
     if (body.stream === true) {
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-        response.write(`event: image_generation.completed\ndata: ${JSON.stringify({ type: 'image_generation.completed', b64_json: pngBase64 })}\n\n`);
+        response.write(
+            `event: image_generation.completed\ndata: ${JSON.stringify({ type: 'image_generation.completed', b64_json: pngBase64 })}\n\n`
+        );
         response.write('data: [DONE]\n\n');
         response.end();
         return;
@@ -873,7 +1025,9 @@ function respondToResponsesImageRequest(response, body) {
         return;
     }
     response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ output: [{ type: 'image_generation_call', status: 'completed', result: pngBase64 }] }));
+    response.end(
+        JSON.stringify({ output: [{ type: 'image_generation_call', status: 'completed', result: pngBase64 }] })
+    );
 }
 
 async function startLocalResponsesJsonUpstream() {
@@ -890,7 +1044,11 @@ async function startLocalResponsesJsonUpstream() {
         });
         await new Promise((resolve) => request.on('end', resolve));
         const parsed = JSON.parse(body);
-        if (parsed.stream !== false || parsed.tool_choice?.type !== 'image_generation' || parsed.tools?.[0]?.type !== 'image_generation') {
+        if (
+            parsed.stream !== false ||
+            parsed.tool_choice?.type !== 'image_generation' ||
+            parsed.tools?.[0]?.type !== 'image_generation'
+        ) {
             response.writeHead(400, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({ error: { message: 'invalid responses image request' } }));
             return;
