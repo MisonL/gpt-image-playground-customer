@@ -1,3 +1,5 @@
+import { readAgentLeaseMs, readAgentRequestTtlSeconds } from '@/lib/agent-api-contracts';
+import { assertAgentAuthorized } from '@/lib/agent-auth';
 import {
     assertAgentEditRouteAllowedFromFormData,
     buildEditRequestHashFromSnapshot,
@@ -13,11 +15,14 @@ import {
     saveAgentExecutionArtifacts,
     snapshotAgentEditFormData
 } from '@/lib/agent-image-service';
-import { readAgentLeaseMs, readAgentRequestTtlSeconds } from '@/lib/agent-api-contracts';
-import { AgentApiError, agentErrorResponse, normalizeAgentError, storedAgentErrorResponse } from '@/lib/api-error-response';
-import { assertAgentAuthorized } from '@/lib/agent-auth';
 import { ensureAgentStateStoreReady } from '@/lib/agent-state-runtime';
 import { createRequestId } from '@/lib/agent-state-store';
+import {
+    AgentApiError,
+    agentErrorResponse,
+    normalizeAgentError,
+    storedAgentErrorResponse
+} from '@/lib/api-error-response';
 import { appLogger } from '@/lib/app-logger';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -47,7 +52,10 @@ export async function POST(request: NextRequest) {
         }
         if (beginResult.type === 'failed') {
             requestId = beginResult.record.requestId;
-            return storedAgentErrorResponse(beginResult.error, { 'X-Idempotent-Replay': 'true', 'X-Request-Id': requestId });
+            return storedAgentErrorResponse(beginResult.error, {
+                'X-Idempotent-Replay': 'true',
+                'X-Request-Id': requestId
+            });
         }
         if (beginResult.type === 'conflict') {
             throw new AgentApiError({
@@ -73,7 +81,8 @@ export async function POST(request: NextRequest) {
             headers: request.headers,
             requestId,
             idempotencyKey,
-            cached: false
+            cached: false,
+            abortSignal: request.signal
         }).catch(async (error) => {
             const errorBody = errorToAgentErrorBody(error, requestId);
             await store.failRequest({ requestId, error: errorBody });

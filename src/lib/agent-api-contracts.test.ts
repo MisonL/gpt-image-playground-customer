@@ -1,5 +1,6 @@
 import {
     AGENT_SCHEMA_VERSION,
+    PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH,
     buildAgentAuthCapabilities,
     buildAgentCapabilities,
     readAgentLeaseMs,
@@ -53,6 +54,25 @@ describe('validateAgentGenerateRequest', () => {
                 image_backend: 'images-api',
                 streaming_strategy: 'newapi-keepalive-sse',
                 partial_images: 3
+            }
+        );
+    });
+
+    it('rejects non-string Agent upstream strategy fields instead of defaulting them', () => {
+        assert.throws(
+            () =>
+                validateAgentGenerateRequest({
+                    prompt: 'bad upstream strategy fields',
+                    image_backend: 123,
+                    streaming_strategy: true
+                }),
+            (error) => {
+                assert.ok(error instanceof RequestValidationError);
+                assert.equal(error.status, 422);
+                const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                assert.match(details.fields.image_backend, /字符串/);
+                assert.match(details.fields.streaming_strategy, /字符串/);
+                return true;
             }
         );
     });
@@ -136,19 +156,40 @@ describe('Agent numeric configuration', () => {
     });
 
     it('fails explicitly when numeric env values are invalid', () => {
-        assert.throws(() => readAgentRequestTtlSeconds({ AGENT_REQUEST_TTL_SECONDS: 'abc' }), /AGENT_REQUEST_TTL_SECONDS/);
+        assert.throws(
+            () => readAgentRequestTtlSeconds({ AGENT_REQUEST_TTL_SECONDS: 'abc' }),
+            /AGENT_REQUEST_TTL_SECONDS/
+        );
         assert.throws(() => readAgentLeaseMs({ AGENT_REQUEST_LEASE_MS: '0' }), /AGENT_REQUEST_LEASE_MS/);
-        assert.throws(() => readAgentRecoveryIntervalMs({ AGENT_RECOVERY_INTERVAL_MS: '-1' }), /AGENT_RECOVERY_INTERVAL_MS/);
+        assert.throws(
+            () => readAgentRecoveryIntervalMs({ AGENT_RECOVERY_INTERVAL_MS: '-1' }),
+            /AGENT_RECOVERY_INTERVAL_MS/
+        );
     });
 
     it('validates the public OpenAPI server URL', () => {
         assert.equal(readAgentPublicBaseUrl({}), '/');
-        assert.equal(readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'https://images.example.test/' }), 'https://images.example.test');
-        assert.equal(readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'http://localhost:4783' }), 'http://localhost:4783');
+        assert.equal(
+            readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'https://images.example.test/' }),
+            'https://images.example.test'
+        );
+        assert.equal(
+            readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'http://localhost:4783' }),
+            'http://localhost:4783'
+        );
         assert.throws(() => readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'not a url' }), /AGENT_PUBLIC_BASE_URL/);
-        assert.throws(() => readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'javascript:alert(1)' }), /AGENT_PUBLIC_BASE_URL/);
-        assert.throws(() => readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'https://user:pass@images.example.test' }), /AGENT_PUBLIC_BASE_URL/);
-        assert.throws(() => readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'https://images.example.test?token=secret' }), /AGENT_PUBLIC_BASE_URL/);
+        assert.throws(
+            () => readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'javascript:alert(1)' }),
+            /AGENT_PUBLIC_BASE_URL/
+        );
+        assert.throws(
+            () => readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'https://user:pass@images.example.test' }),
+            /AGENT_PUBLIC_BASE_URL/
+        );
+        assert.throws(
+            () => readAgentPublicBaseUrl({ AGENT_PUBLIC_BASE_URL: 'https://images.example.test?token=secret' }),
+            /AGENT_PUBLIC_BASE_URL/
+        );
     });
 });
 
@@ -175,6 +216,11 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.model_limits['gpt-image-2'].max_edge, 3840);
         assert.equal(capabilities.model_limits['gpt-image-2'].edge_multiple, 16);
         assert.equal(capabilities.model_limits['gpt-image-2'].max_pixels, 8294400);
+        assert.deepEqual(capabilities.model_limits['gpt-image-2'].large_image_risk.applies_to, [
+            'max_edge>2048',
+            'long_running_upstream'
+        ]);
+        assert.match(capabilities.model_limits['gpt-image-2'].large_image_risk.guidance, /大尺寸/);
         assert.equal(capabilities.agent_streaming.generate.supported, false);
         assert.equal(capabilities.agent_streaming.generate.mode, 'non_streaming_only');
         assert.equal(capabilities.agent_streaming.upstream_sse.supported, true);
@@ -188,6 +234,7 @@ describe('buildAgentCapabilities', () => {
             'images-api',
             'responses-image-generation'
         ]);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.enabled_image_backends, ['images-api']);
         assert.deepEqual(capabilities.agent_streaming.upstream_sse.streaming_strategies, [
             'off',
             'auto',
@@ -206,24 +253,51 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.agent_streaming.page_sse.endpoint, '/api/images');
         assert.equal(capabilities.agent_streaming.page_sse.contract, 'page_ui_only');
         assert.equal(capabilities.agent_streaming.page_sse.transport_contract, 'page_form_data_sse');
-        assert.equal(capabilities.agent_streaming.page_sse.agent_usage, 'recommended_for_high_resolution_edit_and_complex_batch');
+        assert.deepEqual(capabilities.agent_streaming.page_sse.auth, {
+            required: false,
+            schemes: [],
+            form_field: 'passwordHash'
+        });
+        assert.deepEqual(capabilities.agent_streaming.page_sse.client_request_id, {
+            form_field: 'clientRequestId',
+            source_header: 'Idempotency-Key',
+            max_length: PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
+        });
+        assert.equal(
+            capabilities.agent_streaming.page_sse.agent_usage,
+            'recommended_for_high_resolution_generate_edit_and_complex_batch'
+        );
         assert.deepEqual(capabilities.routing_rules.high_resolution_edit, {
             when: ['operation=edit', 'max_edge>2048'],
             endpoint: '/api/images',
             transport: 'page_sse',
             strength: 'must_use',
-            reason:
-                'Agent edit is non-streaming and rejects high-resolution edit requests; use the page form-data SSE endpoint instead.'
+            reason: 'Agent edit is non-streaming and rejects high-resolution edit requests; use the page form-data SSE endpoint instead.'
         });
         assert.equal(capabilities.routing_rules.complex_ui_batch.endpoint, '/api/images');
         assert.equal(capabilities.routing_rules.complex_ui_batch.strength, 'recommended');
         assert.equal(capabilities.routing_rules.long_image_recovery.endpoint, '/api/images');
         assert.equal(capabilities.routing_rules.long_image_recovery.transport, 'page_sse');
         assert.equal(capabilities.routing_rules.agent_generate_small_smoke.endpoint, AGENT_ENDPOINTS.generate);
-        assert.equal(capabilities.routing_rules.agent_job_polling_large_generate.endpoint, AGENT_ENDPOINTS.create_generate_job);
+        assert.equal(capabilities.routing_rules.page_sse_large_generate.endpoint, '/api/images');
+        assert.equal(capabilities.routing_rules.page_sse_large_generate.transport, 'page_sse');
+        assert.equal(capabilities.routing_rules.page_sse_large_generate.strength, 'recommended');
         assert.equal(capabilities.routing_rules.retry_recovery.reuse_failed_idempotency_key, false);
         assert.match(capabilities.routing_rules.retry_recovery.new_attempt_guidance, /new Idempotency-Key/);
         assert.deepEqual(capabilities.supported.image_backends, ['images-api', 'responses-image-generation']);
+        assert.deepEqual(capabilities.supported.enabled_image_backends, ['images-api']);
+        assert.deepEqual(capabilities.supported.image_backend_requirements['images-api'], {
+            supported: true,
+            enabled: true,
+            required_env: [],
+            missing_env: []
+        });
+        assert.deepEqual(capabilities.supported.image_backend_requirements['responses-image-generation'], {
+            supported: true,
+            enabled: false,
+            required_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL'],
+            missing_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL']
+        });
         assert.deepEqual(capabilities.supported.streaming_strategies, [
             'off',
             'auto',
@@ -235,10 +309,16 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.endpoints.create_generate_job, AGENT_ENDPOINTS.create_generate_job);
         assert.equal(capabilities.agent_jobs.supported, true);
         assert.equal(capabilities.agent_jobs.mode, 'job_polling');
+        assert.deepEqual(capabilities.agent_jobs.intended_for, [
+            'explicit_job_route',
+            'manual_after_diagnosis',
+            'long_running_upstream_when_page_sse_not_selected'
+        ]);
         assert.equal(capabilities.agent_jobs.endpoints.create_generate_job, AGENT_JOB_ENDPOINTS.create_generate_job);
         assert.deepEqual(capabilities.agent_jobs.states, ['queued', 'running', 'succeeded', 'failed', 'expired']);
-        assert.match(capabilities.agent_jobs.current_guidance, /poll/i);
-        assert.match(capabilities.agent_jobs.current_guidance, /单次文生图/);
+        assert.match(capabilities.agent_jobs.current_guidance, /\/api\/images SSE/);
+        assert.match(capabilities.agent_jobs.current_guidance, /不自动回退/);
+        assert.match(capabilities.agent_jobs.current_guidance, /job/);
     });
 
     it('exposes only the runtime-accepted bearer auth scheme when Agent token is configured', () => {
@@ -249,6 +329,46 @@ describe('buildAgentCapabilities', () => {
             }),
             { required: true, schemes: ['bearer'] }
         );
+    });
+
+    it('marks Responses image backend runtime-enabled only when its feature flag and model are configured', () => {
+        const missingModel = buildAgentCapabilities({
+            ENABLE_RESPONSES_IMAGE_BACKEND: 'true'
+        });
+        assert.deepEqual(missingModel.supported.enabled_image_backends, ['images-api']);
+        assert.deepEqual(missingModel.supported.image_backend_requirements['responses-image-generation'].missing_env, [
+            'OPENAI_RESPONSES_API_MODEL'
+        ]);
+
+        const enabled = buildAgentCapabilities({
+            ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+            OPENAI_RESPONSES_API_MODEL: 'gpt-4.1'
+        });
+        assert.deepEqual(enabled.agent_streaming.upstream_sse.enabled_image_backends, [
+            'images-api',
+            'responses-image-generation'
+        ]);
+        assert.deepEqual(enabled.supported.enabled_image_backends, ['images-api', 'responses-image-generation']);
+        assert.deepEqual(enabled.supported.image_backend_requirements['responses-image-generation'], {
+            supported: true,
+            enabled: true,
+            required_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL'],
+            missing_env: []
+        });
+    });
+
+    it('exposes page SSE form password auth separately from Agent bearer auth', () => {
+        const capabilities = buildAgentCapabilities({
+            AGENT_API_TOKEN: 'token',
+            APP_PASSWORD: 'page-access-code'
+        });
+
+        assert.deepEqual(capabilities.auth, { required: true, schemes: ['bearer'] });
+        assert.deepEqual(capabilities.agent_streaming.page_sse.auth, {
+            required: true,
+            schemes: ['form-password-hash'],
+            form_field: 'passwordHash'
+        });
     });
 
     it('exposes access-code hash auth only when no Agent token is configured', () => {
@@ -330,12 +450,24 @@ describe('buildAgentCapabilities', () => {
             'images-api',
             'responses-image-generation'
         ]);
+        assert.deepEqual(capabilityProperties.supported.properties.enabled_image_backends.items.enum, [
+            'images-api',
+            'responses-image-generation'
+        ]);
+        assert.ok(capabilityProperties.supported.properties.image_backend_requirements);
         assert.deepEqual(
-            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.streaming_strategies.items.enum,
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
+                .enabled_image_backends.items.enum,
+            ['images-api', 'responses-image-generation']
+        );
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
+                .streaming_strategies.items.enum,
             ['off', 'auto', 'openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
         );
         assert.deepEqual(
-            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.activation_strategies.items.enum,
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
+                .activation_strategies.items.enum,
             ['openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
         );
         assert.equal(
@@ -343,8 +475,24 @@ describe('buildAgentCapabilities', () => {
             'page_ui_only'
         );
         assert.equal(
-            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.transport_contract.enum[0],
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.transport_contract
+                .enum[0],
             'page_form_data_sse'
+        );
+        assert.equal(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.auth.properties
+                .form_field.const,
+            'passwordHash'
+        );
+        assert.equal(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.client_request_id
+                .properties.max_length.const,
+            PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
+        );
+        assert.equal(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.client_request_id
+                .properties.source_header.const,
+            'Idempotency-Key'
         );
         assert.equal(document.components.schemas.AgentRoutingRules.required.includes('high_resolution_edit'), true);
         assert.equal(document.components.schemas.AgentRoutingRules.required.includes('long_image_recovery'), true);
@@ -370,7 +518,19 @@ describe('buildAgentCapabilities', () => {
 
         assert.ok(document.components.securitySchemes.BearerAuth);
         assert.equal('AppPasswordHash' in document.components.securitySchemes, false);
-        assert.deepEqual(document.components.schemas.AgentCapabilities.properties.auth.properties.schemes.const, ['bearer']);
+        assert.deepEqual(document.components.schemas.AgentCapabilities.properties.auth.properties.schemes.const, [
+            'bearer'
+        ]);
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.auth.properties
+                .schemes.const,
+            ['form-password-hash']
+        );
+        assert.equal(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.auth.properties
+                .required.const,
+            true
+        );
         assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, [{ BearerAuth: [] }]);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['401']);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['415']);
@@ -397,6 +557,16 @@ describe('buildAgentCapabilities', () => {
 
         assert.deepEqual(document.components.securitySchemes, {});
         assert.deepEqual(document.components.schemas.AgentCapabilities.properties.auth.properties.schemes.const, []);
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.auth.properties
+                .schemes.const,
+            []
+        );
+        assert.equal(
+            document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.auth.properties
+                .required.const,
+            false
+        );
         assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, []);
     });
 

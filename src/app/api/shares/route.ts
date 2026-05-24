@@ -1,6 +1,6 @@
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
-import { createImageShare } from '@/lib/share-store';
 import { verifyAccessToken } from '@/lib/server-runtime';
+import { createImageShare } from '@/lib/share-store';
 import { NextRequest, NextResponse } from 'next/server';
 
 const MAX_SHARE_IMAGE_BYTES = 30 * 1024 * 1024;
@@ -21,7 +21,11 @@ function detectImageMimeType(buffer: Buffer): string | undefined {
     if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
         return 'image/jpeg';
     }
-    if (buffer.length >= 30 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') {
+    if (
+        buffer.length >= 30 &&
+        buffer.toString('ascii', 0, 4) === 'RIFF' &&
+        buffer.toString('ascii', 8, 12) === 'WEBP'
+    ) {
         return 'image/webp';
     }
     return undefined;
@@ -72,9 +76,10 @@ function parseSourceFilename(value: FormDataEntryValue | null, fallback: string)
 }
 
 function verifyShareCreator(request: NextRequest) {
-    if (!process.env.APP_PASSWORD) return undefined;
+    const appPassword = process.env.APP_PASSWORD?.trim();
+    if (!appPassword) return undefined;
     const accessToken = request.cookies.get('gptImageAccess')?.value;
-    if (verifyAccessToken(accessToken, process.env.APP_PASSWORD)) return undefined;
+    if (verifyAccessToken(accessToken, appPassword)) return undefined;
     const code = accessToken ? PAGE_PASSWORD_AUTH_ERROR_CODES.invalid : PAGE_PASSWORD_AUTH_ERROR_CODES.missing;
     return jsonError(code, '未授权：无效的访问令牌。', 401);
 }

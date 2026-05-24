@@ -4,11 +4,17 @@ import type OpenAI from 'openai';
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
 
 type ResponsesCreateClient = {
-    create(params: OpenAI.Responses.ResponseCreateParamsNonStreaming): Promise<{
+    create(
+        params: OpenAI.Responses.ResponseCreateParamsNonStreaming,
+        options?: OpenAI.RequestOptions
+    ): Promise<{
         output?: unknown[];
         usage?: unknown;
     }>;
-    create(params: OpenAI.Responses.ResponseCreateParamsStreaming): Promise<AsyncIterable<unknown>>;
+    create(
+        params: OpenAI.Responses.ResponseCreateParamsStreaming,
+        options?: OpenAI.RequestOptions
+    ): Promise<AsyncIterable<unknown>>;
 };
 
 export type ResponsesImageGenerateInput = {
@@ -22,6 +28,7 @@ export type ResponsesImageGenerateInput = {
     background: 'transparent' | 'opaque' | 'auto';
     moderation: 'auto' | 'low';
     outputCompression?: number;
+    abortSignal?: AbortSignal;
 };
 
 export type ResponsesImageStreamInput = ResponsesImageGenerateInput & {
@@ -149,13 +156,16 @@ function buildResponsesImageTool(
 export async function generateImageWithResponsesBackend(
     input: ResponsesImageGenerateInput
 ): Promise<OpenAI.Images.ImagesResponse> {
-    const response = await input.responses.create({
-        model: input.responsesModel,
-        input: input.prompt,
-        stream: false,
-        tool_choice: { type: 'image_generation' },
-        tools: [buildResponsesImageTool(input)]
-    });
+    const response = await input.responses.create(
+        {
+            model: input.responsesModel,
+            input: input.prompt,
+            stream: false,
+            tool_choice: { type: 'image_generation' },
+            tools: [buildResponsesImageTool(input)]
+        },
+        input.abortSignal ? { signal: input.abortSignal } : undefined
+    );
     const imageResults = extractCompletedImageResults(response.output);
 
     if (imageResults.length === 0) {
@@ -179,11 +189,14 @@ export async function generateImageWithResponsesBackend(
 }
 
 export async function createResponsesImageStream(input: ResponsesImageStreamInput): Promise<AsyncIterable<unknown>> {
-    return input.responses.create({
-        model: input.responsesModel,
-        input: input.prompt,
-        stream: true,
-        tool_choice: { type: 'image_generation' },
-        tools: [buildResponsesImageTool(input, input.partialImagesCount)]
-    });
+    return input.responses.create(
+        {
+            model: input.responsesModel,
+            input: input.prompt,
+            stream: true,
+            tool_choice: { type: 'image_generation' },
+            tools: [buildResponsesImageTool(input, input.partialImagesCount)]
+        },
+        input.abortSignal ? { signal: input.abortSignal } : undefined
+    );
 }

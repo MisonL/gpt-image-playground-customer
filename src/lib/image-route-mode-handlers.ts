@@ -20,12 +20,6 @@ import {
     type StorageMode,
     type ValidOutputFormat
 } from './image-request-utils';
-import { createImageStreamResponse } from './image-stream-service';
-import {
-    createResponsesImageStream,
-    generateImageWithResponsesBackend,
-    type ResponsesImageGenerateInput
-} from './responses-image-backend';
 import {
     appendAccessCookie,
     reportServerCredentialFailure,
@@ -34,6 +28,12 @@ import {
     type ImageBackend,
     type RequestLogContext
 } from './image-route-support';
+import { createImageStreamResponse } from './image-stream-service';
+import {
+    createResponsesImageStream,
+    generateImageWithResponsesBackend,
+    type ResponsesImageGenerateInput
+} from './responses-image-backend';
 import type OpenAI from 'openai';
 
 type CommonModeInput = {
@@ -51,6 +51,7 @@ type CommonModeInput = {
     requestLogContext?: RequestLogContext;
     selectedCredential?: ChannelCredential;
     accessCookie?: AccessCookie;
+    abortSignal?: AbortSignal;
 };
 
 export type ImageModeResult =
@@ -113,15 +114,16 @@ function readResponsesImageSize(size: string): ResponsesImageGenerateInput['size
     if (size === 'auto' || size === '1024x1024' || size === '1024x1536' || size === '1536x1024') {
         return size;
     }
-    throw new RequestValidationError('Responses API 图片后端当前只支持 auto、1024x1024、1024x1536 或 1536x1024 尺寸。', 400);
+    throw new RequestValidationError(
+        'Responses API 图片后端当前只支持 auto、1024x1024、1024x1536 或 1536x1024 尺寸。',
+        400
+    );
 }
 
 function readResponsesApiModel(formData: FormData): string {
     const requestValue = formData.get('responsesModel');
     const rawValue =
-        typeof requestValue === 'string' && requestValue.trim()
-            ? requestValue
-            : process.env.OPENAI_RESPONSES_API_MODEL;
+        typeof requestValue === 'string' && requestValue.trim() ? requestValue : process.env.OPENAI_RESPONSES_API_MODEL;
     const model = rawValue?.trim();
     if (!model) {
         throw new RequestValidationError(
@@ -135,10 +137,11 @@ function readResponsesApiModel(formData: FormData): string {
     return model;
 }
 
-async function createResponsesImageResult(
-    input: CommonModeInput,
-    options: GenerateOptions
-): Promise<ImageModeResult> {
+function openAiRequestOptions(input: CommonModeInput): OpenAI.RequestOptions | undefined {
+    return input.abortSignal ? { signal: input.abortSignal } : undefined;
+}
+
+async function createResponsesImageResult(input: CommonModeInput, options: GenerateOptions): Promise<ImageModeResult> {
     if (options.n !== 1) {
         throw new RequestValidationError('Responses API 图片后端当前只支持单张生成。', 400);
     }
@@ -155,15 +158,13 @@ async function createResponsesImageResult(
             outputFormat: options.outputFormat,
             background: options.background,
             moderation: options.moderation,
+            abortSignal: input.abortSignal,
             ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {})
         })
     };
 }
 
-async function createResponsesImageStreamResponse(
-    input: CommonModeInput,
-    options: GenerateOptions
-): Promise<Response> {
+async function createResponsesImageStreamResponse(input: CommonModeInput, options: GenerateOptions): Promise<Response> {
     if (options.n !== 1) {
         throw new RequestValidationError('Responses API 图片后端当前只支持单张生成。', 400);
     }
@@ -178,6 +179,7 @@ async function createResponsesImageStreamResponse(
         background: options.background,
         moderation: options.moderation,
         partialImagesCount: input.partialImagesCount,
+        abortSignal: input.abortSignal,
         ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {})
     });
     const response = createImageStreamResponse({
@@ -203,7 +205,7 @@ async function createGenerateStreamResponse(input: CommonModeInput, options: Gen
         stream: true as const,
         partial_images: input.partialImagesCount
     } satisfies OpenAI.Images.ImageGenerateParamsStreaming;
-    const stream = await input.openai.images.generate(streamParams);
+    const stream = await input.openai.images.generate(streamParams, openAiRequestOptions(input));
     const response = createImageStreamResponse({
         stream,
         modeLabel: '生成',
@@ -235,7 +237,10 @@ export async function handleGenerateImageMode(
         const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...options.baseParams, stream: false };
         appLogger.info('调用 OpenAI generate。', input.requestLogContext);
         appLogger.debug('调用 OpenAI generate，参数：', { ...params, ...input.requestLogContext });
-        return { outputFormat: options.outputFormat, result: await input.openai.images.generate(params) };
+        return {
+            outputFormat: options.outputFormat,
+            result: await input.openai.images.generate(params, openAiRequestOptions(input))
+        };
     }
     return createGenerateStreamResponse(input, options);
 }
@@ -282,7 +287,7 @@ async function createEditStreamResponse(input: CommonModeInput, options: EditOpt
         partial_images: input.partialImagesCount,
         ...(options.maskFile ? { mask: options.maskFile } : {})
     };
-    const stream = await input.openai.images.edit(streamEditParams);
+    const stream = await input.openai.images.edit(streamEditParams, openAiRequestOptions(input));
     const response = createImageStreamResponse({
         stream,
         modeLabel: '编辑',
@@ -309,7 +314,7 @@ export async function handleEditImageMode(input: CommonModeInput): Promise<Image
         };
         appLogger.info('调用 OpenAI edit。', input.requestLogContext);
         logEditParams(input, options, params);
-        return { outputFormat: 'png', result: await input.openai.images.edit(params) };
+        return { outputFormat: 'png', result: await input.openai.images.edit(params, openAiRequestOptions(input)) };
     }
     return createEditStreamResponse(input, options);
 }

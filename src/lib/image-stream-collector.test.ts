@@ -46,6 +46,28 @@ describe('collectOpenAiImagesFromStream', () => {
         assert.equal(result.data?.[0]?.b64_json, PNG_BASE64);
     });
 
+    it('keeps distinct same-length Responses final payloads when ids are omitted', async () => {
+        const first = 'A'.repeat(1000);
+        const second = `${first.slice(0, 100)}B${first.slice(101)}`;
+        const result = await collectOpenAiImagesFromStream(
+            upstreamEvents([
+                {
+                    type: 'response.output_item.done',
+                    item: { type: 'image_generation_call', status: 'completed', result: first }
+                },
+                {
+                    type: 'response.output_item.done',
+                    item: { type: 'image_generation_call', status: 'completed', result: second }
+                }
+            ])
+        );
+
+        assert.deepEqual(
+            result.data?.map((item) => item.b64_json),
+            [first, second]
+        );
+    });
+
     it('keeps separate Responses final items when their base64 payloads match', async () => {
         const result = await collectOpenAiImagesFromStream(
             upstreamEvents([
