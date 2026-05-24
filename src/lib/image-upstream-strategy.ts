@@ -104,11 +104,15 @@ export function readImageGenerationBackend(
 
 export function readImageStreamingStrategy(
     formData: FormData,
-    env: ImageUpstreamEnv = process.env
+    env: ImageUpstreamEnv = process.env,
+    options: { useEnvDefault?: boolean } = {}
 ): ImageStreamingStrategy {
     const requestValue = readStringField(formData, 'image_streaming_strategy', 'imageStreamingStrategy');
     if (requestValue) {
         return readStreamingStrategyValue(requestValue, 'request');
+    }
+    if (options.useEnvDefault === false) {
+        return 'auto';
     }
     const envValue = readStringEnv(env, 'IMAGE_STREAMING_STRATEGY');
     return envValue ? readStreamingStrategyValue(envValue, 'env') : 'auto';
@@ -153,5 +157,5 @@ export function shouldRecommendImageStreaming(input: {
     if (input.streamEnabled || input.streamingStrategy !== 'auto' || input.quality !== 'high') {
         return false;
     }
-    return Math.max(input.width, input.height) >= 3072;
+    return Math.max(input.width, input.height) > 2048;
 }

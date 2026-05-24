@@ -77,7 +77,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'streaming.batchDescription': '并发批处理已启用：每张图会拆成独立流式任务。',
         'streaming.costHint': '每张预览图约增加约 $0.003 成本（额外 100 个输出 token）。',
         'streaming.highResolutionRecommendation':
-            '当前是 high 质量 4K 级请求，建议启用流式预览或选择支持 keepalive SSE 的上游。',
+            '当前是 high 质量大尺寸请求，建议启用流式预览或选择支持 keepalive SSE 的上游。',
         'upstream.backend': '图片生成后端',
         'upstream.backendImages': 'Images API',
         'upstream.backendResponses': 'Responses image_generation',
@@ -88,6 +88,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'upstream.strategyKeepaliveSse': 'new-api/sub2api keepalive SSE',
         'upstream.strategyResponsesSse': 'Responses SSE',
         'upstream.strategyForceSse': '强制 SSE',
+        'upstream.serverDefault': '服务端默认',
         'upstream.responsesModel': 'Responses 顶层模型',
         'generate.title': '生成图片',
         'generate.description': '根据文本提示词创建新图片。',
@@ -364,7 +365,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'streaming.batchDescription': 'Batch streaming is enabled: each image runs as a separate streaming job.',
         'streaming.costHint': 'Each preview image adds about $0.003 to the cost (100 additional output tokens).',
         'streaming.highResolutionRecommendation':
-            'This is a high quality 4K-class request. Streaming preview or a keepalive SSE upstream is recommended.',
+            'This is a high quality large image request. Streaming preview or a keepalive SSE upstream is recommended.',
         'upstream.backend': 'Image backend',
         'upstream.backendImages': 'Images API',
         'upstream.backendResponses': 'Responses image_generation',
@@ -375,6 +376,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'upstream.strategyKeepaliveSse': 'new-api/sub2api keepalive SSE',
         'upstream.strategyResponsesSse': 'Responses SSE',
         'upstream.strategyForceSse': 'Force SSE',
+        'upstream.serverDefault': 'Server default',
         'upstream.responsesModel': 'Responses top-level model',
         'generate.title': 'Generate Image',
         'generate.description': 'Create a new image from a text prompt.',
