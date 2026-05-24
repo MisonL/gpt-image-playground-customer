@@ -84,6 +84,23 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.auth.schemes, []);
     });
 
+    it('reports enabled Responses image backend from the deployed runtime environment', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.deepEqual(body.supported.enabled_image_backends, ['images-api', 'responses-image-generation']);
+        assert.equal(body.supported.image_backend_requirements['responses-image-generation'].enabled, true);
+        assert.deepEqual(body.supported.image_backend_requirements['responses-image-generation'].missing_env, []);
+        assert.deepEqual(body.agent_streaming.upstream_sse.enabled_image_backends, [
+            'images-api',
+            'responses-image-generation'
+        ]);
+    });
+
     it('generates through a compatible upstream once and replays the cached response for the same idempotency key', async () => {
         const { generateImage } = await loadAgentRoutes();
         let upstreamCalls = 0;

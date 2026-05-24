@@ -16,6 +16,8 @@ function readPublicCapabilitiesEnv(): Record<string, string | undefined> {
         AGENT_DB_PASSWORD_FILE: process.env.AGENT_DB_PASSWORD_FILE ? 'configured' : undefined,
         AGENT_REQUEST_TTL_SECONDS: process.env.AGENT_REQUEST_TTL_SECONDS,
         AGENT_PUBLIC_BASE_URL: process.env.AGENT_PUBLIC_BASE_URL,
+        ENABLE_RESPONSES_IMAGE_BACKEND: process.env.ENABLE_RESPONSES_IMAGE_BACKEND,
+        OPENAI_RESPONSES_API_MODEL: process.env.OPENAI_RESPONSES_API_MODEL?.trim() ? 'configured' : undefined,
         NEXT_PUBLIC_IMAGE_STORAGE_MODE: process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE,
         VERCEL: process.env.VERCEL
     };
