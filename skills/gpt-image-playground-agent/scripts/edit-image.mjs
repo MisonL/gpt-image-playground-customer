@@ -55,6 +55,7 @@ try {
 }
 
 if (options.dryRun || (!contractCheck && !options.allowBillable)) {
+  const routingGuidance = buildEditRoutingGuidance(options);
   console.log(
     JSON.stringify(
       {
@@ -62,6 +63,7 @@ if (options.dryRun || (!contractCheck && !options.allowBillable)) {
         billable: false,
         dry_run: true,
         endpoint: `${baseUrl}/api/agent/images/edit`,
+        routing_guidance: routingGuidance,
         idempotency_key: idempotencyKey,
         request: {
           image_path: imagePath,
@@ -78,6 +80,23 @@ if (options.dryRun || (!contractCheck && !options.allowBillable)) {
     )
   );
   process.exit(0);
+}
+
+const routingGuidance = buildEditRoutingGuidance(options);
+if (routingGuidance.strength === 'must_use') {
+  console.error(
+    JSON.stringify(
+      {
+        ok: false,
+        billable: false,
+        error: '当前请求命中高分辨率 edit 路由硬规则；请使用页面端 /api/images form-data SSE 路径。',
+        routing_guidance: routingGuidance
+      },
+      null,
+      2
+    )
+  );
+  process.exit(2);
 }
 
 function parseArgs(argv) {
@@ -122,6 +141,30 @@ function authHeaders() {
 function absoluteUrl(value) {
   if (typeof value !== 'string' || !value) return undefined;
   return new URL(value, `${baseUrl}/`).toString();
+}
+
+function buildEditRoutingGuidance(parsed) {
+  if (readMaxImageEdge(parsed.size) > 2048) {
+    return {
+      recommended_endpoint: '/api/images',
+      transport: 'page_sse',
+      strength: 'must_use',
+      reason: 'Agent edit is non-streaming; high-resolution edit should use the page form-data SSE endpoint.'
+    };
+  }
+  return {
+    recommended_endpoint: '/api/agent/images/edit',
+    transport: 'agent_json',
+    strength: 'default',
+    reason: 'Normal edit requests can use the Agent JSON response contract.'
+  };
+}
+
+function readMaxImageEdge(size) {
+  if (typeof size !== 'string') return 0;
+  const match = size.match(/^(\d+)x(\d+)$/);
+  if (!match) return 0;
+  return Math.max(Number(match[1]), Number(match[2]));
 }
 
 function enrichImageUrls(result) {

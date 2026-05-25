@@ -139,13 +139,23 @@ describe('image upstream strategy', () => {
         );
     });
 
-    it('recommends streaming only for high quality 4K-class auto strategy requests', () => {
+    it('recommends streaming only for high quality large auto strategy requests', () => {
         assert.equal(
             shouldRecommendImageStreaming({
                 streamingStrategy: 'auto',
                 quality: 'high',
                 width: 3072,
                 height: 2048,
+                streamEnabled: false
+            }),
+            true
+        );
+        assert.equal(
+            shouldRecommendImageStreaming({
+                streamingStrategy: 'auto',
+                quality: 'high',
+                width: 2048,
+                height: 2049,
                 streamEnabled: false
             }),
             true

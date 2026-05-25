@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { FIXTURE_IMAGE_BASE64, createFixtureServer } from './local-image-upstream-fixture.mjs';
+import { FIXTURE_IMAGE_BASE64, MAX_JSON_BODY_BYTES, createFixtureServer } from './local-image-upstream-fixture.mjs';
 
 describe('local image upstream fixture', () => {
     it('serves Images API JSON responses', async () => {
@@ -127,6 +127,26 @@ describe('local image upstream fixture', () => {
                 models.data.map((model) => model.id),
                 ['gpt-image-2', 'gpt-5.4']
             );
+        } finally {
+            await fixture.close();
+        }
+    });
+
+    it('rejects oversized JSON request bodies', async () => {
+        const fixture = await startFixture();
+        try {
+            const response = await fetch(`${fixture.baseUrl}/v1/images/generations`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'gpt-image-2',
+                    prompt: 'x'.repeat(MAX_JSON_BODY_BYTES)
+                })
+            });
+
+            assert.equal(response.status, 413);
+            const body = await response.json();
+            assert.match(body.error.message, /too large/);
         } finally {
             await fixture.close();
         }

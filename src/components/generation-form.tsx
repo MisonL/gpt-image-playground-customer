@@ -13,11 +13,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import type { ImageUpstreamFormBackend, ImageUpstreamFormStreamingStrategy } from '@/lib/image-upstream-form';
 import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
 import {
     shouldRecommendImageStreaming,
-    type ImageGenerationBackend,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
 import {
@@ -55,8 +55,8 @@ export type GenerationFormData = {
     background: 'transparent' | 'opaque' | 'auto';
     moderation: 'low' | 'auto';
     model: GptImageModel;
-    image_backend: ImageGenerationBackend;
-    streaming_strategy: ImageStreamingStrategy;
+    image_backend: ImageUpstreamFormBackend;
+    streaming_strategy: ImageUpstreamFormStreamingStrategy;
     responsesModel: string;
 };
 
@@ -215,14 +215,16 @@ export function GenerationForm({
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
     const streamingDisabledByCount = n[0] > 1 && !allowStreamingBatch;
-    const streamingDisabledByStrategy = streamingStrategy === 'off';
+    const effectiveStreamingStrategy: ImageStreamingStrategy =
+        streamingStrategy === 'server-default' ? 'auto' : streamingStrategy;
+    const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
     const concreteSize = readConcreteSize({ size, model, customWidth, customHeight });
     const recommendStreaming =
         !streamingDisabledByCount &&
         Boolean(
             concreteSize &&
                 shouldRecommendImageStreaming({
-                    streamingStrategy,
+                    streamingStrategy: effectiveStreamingStrategy,
                     quality,
                     width: concreteSize.width,
                     height: concreteSize.height,
@@ -537,6 +539,7 @@ export function GenerationForm({
                                                 <SelectItem value='responses-image-generation'>
                                                     {t('upstream.backendResponses')}
                                                 </SelectItem>
+                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
                                             </SelectContent>
                                         </Select>
                                     </div>
@@ -561,6 +564,7 @@ export function GenerationForm({
                                                 </SelectItem>
                                                 <SelectItem value='responses-sse'>{t('upstream.strategyResponsesSse')}</SelectItem>
                                                 <SelectItem value='force-sse'>{t('upstream.strategyForceSse')}</SelectItem>
+                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
                                             </SelectContent>
                                         </Select>
                                     </div>

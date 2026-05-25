@@ -884,6 +884,48 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
+    it('does not apply Responses-only streaming strategy env defaults to edit streams', async () => {
+        process.env.IMAGE_GENERATION_BACKEND = 'responses';
+        process.env.IMAGE_STREAMING_STRATEGY = 'responses-sse';
+        const { POST } = await import('./route');
+        let upstreamUrl = '';
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream(async (body, url) => {
+            upstreamUrl = url;
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_edit.completed',
+                    data: { type: 'image_edit.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: true
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'done']
+            );
+            assert.equal(upstreamUrl, '/v1/images/edits');
+            assert.match(upstreamBody, /name="stream"/);
+            assert.match(upstreamBody, /name="partial_images"/);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('reports invalid image upstream env configuration as a server error before contacting upstream', async () => {
         process.env.IMAGE_STREAMING_STRATEGY = 'not-a-strategy';
         const { POST } = await import('./route');
@@ -905,6 +947,90 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(response.status, 500);
             const body = (await response.json()) as Record<string, unknown>;
             assert.match(String(body.error), /IMAGE_STREAMING_STRATEGY/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('treats blank APP_PASSWORD as disabled for page SSE auth', async () => {
+        process.env.APP_PASSWORD = '   ';
+        const { POST } = await import('./route');
+        const upstream = await startStreamingImageUpstream(async () => [
+            {
+                event: 'image_generation.completed',
+                data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+            }
+        ]);
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: true
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'done']
+            );
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects overlong page SSE client request ids before contacting upstream', async () => {
+        const { POST } = await import('./route');
+        let upstreamCalls = 0;
+        const upstream = await startImagesJsonUpstream(async () => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    clientRequestId: 'x'.repeat(129)
+                })
+            );
+
+            assert.equal(response.status, 400);
+            const body = (await response.json()) as Record<string, unknown>;
+            assert.match(String(body.error), /clientRequestId/);
+            assert.match(String(body.error), /128/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects invalid gpt-image-2 custom sizes before contacting upstream', async () => {
+        const { POST } = await import('./route');
+        let upstreamCalls = 0;
+        const upstream = await startImagesJsonUpstream(async () => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    size: '2049x2048'
+                })
+            );
+
+            assert.equal(response.status, 400);
+            const body = (await response.json()) as Record<string, unknown>;
+            assert.match(String(body.error), /size 对 gpt-image-2 无效/);
+            assert.match(String(body.error), /16 的倍数/);
             assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();

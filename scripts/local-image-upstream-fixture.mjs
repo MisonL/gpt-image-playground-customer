@@ -5,26 +5,68 @@ import { pathToFileURL } from 'node:url';
 
 export const FIXTURE_IMAGE_BASE64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+export const MAX_JSON_BODY_BYTES = 1024 * 1024;
+
+class PayloadTooLargeError extends Error {
+    constructor() {
+        super('Request body too large');
+        this.name = 'PayloadTooLargeError';
+        this.status = 413;
+    }
+}
 
 function readJsonBody(request) {
     return new Promise((resolve, reject) => {
         let raw = '';
-        request.setEncoding('utf8');
-        request.on('data', (chunk) => {
+        let byteLength = 0;
+        let tooLarge = false;
+        let settled = false;
+        const cleanup = () => {
+            request.off('data', onData);
+            request.off('end', onEnd);
+            request.off('error', onError);
+        };
+        const fail = (error) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(error);
+        };
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(value);
+        };
+        const onData = (chunk) => {
+            byteLength += Buffer.byteLength(chunk, 'utf8');
+            if (byteLength > MAX_JSON_BODY_BYTES) {
+                tooLarge = true;
+                return;
+            }
+            if (tooLarge) return;
             raw += chunk;
-        });
-        request.on('end', () => {
+        };
+        const onEnd = () => {
+            if (tooLarge) {
+                fail(new PayloadTooLargeError());
+                return;
+            }
             if (!raw.trim()) {
-                resolve({});
+                finish({});
                 return;
             }
             try {
-                resolve(JSON.parse(raw));
+                finish(JSON.parse(raw));
             } catch (error) {
-                reject(error);
+                fail(error);
             }
-        });
-        request.on('error', reject);
+        };
+        const onError = (error) => fail(error);
+        request.setEncoding('utf8');
+        request.on('data', onData);
+        request.on('end', onEnd);
+        request.on('error', onError);
     });
 }
 
@@ -164,7 +206,8 @@ async function handleRequest(request, response) {
 export function createFixtureServer() {
     return http.createServer((request, response) => {
         handleRequest(request, response).catch((error) => {
-            sendJson(response, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+            const status = error instanceof PayloadTooLargeError ? error.status : 500;
+            sendJson(response, status, { error: { message: error instanceof Error ? error.message : String(error) } });
         });
     });
 }

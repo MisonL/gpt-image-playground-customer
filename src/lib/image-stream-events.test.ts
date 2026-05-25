@@ -170,6 +170,46 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         );
     });
 
+    it('uses a bounded dedupe key when Responses image call ids are missing', () => {
+        const payload = 'responses-final-base64'.repeat(128);
+        const result = normalizeUpstreamImageStreamEventWithDiagnostics({
+            type: 'response.output_item.done',
+            item: {
+                type: 'image_generation_call',
+                result: payload
+            }
+        });
+
+        assert.equal(result.events.length, 1);
+        const [event] = result.events;
+        assert.equal(event.type, 'completed');
+        if (event.type !== 'completed') return;
+        assert.match(event.dedupeKey || '', /^responses:result:fingerprint:\d+:[a-f0-9]{64}$/);
+        assert.equal(event.dedupeKey?.includes(payload), false);
+        assert.ok((event.dedupeKey || '').length < 256);
+    });
+
+    it('keeps distinct bounded dedupe keys when same-length Responses payloads differ by one byte', () => {
+        const first = 'A'.repeat(1000);
+        const second = `${first.slice(0, 100)}B${first.slice(101)}`;
+        const readDedupeKey = (payload: string) => {
+            const result = normalizeUpstreamImageStreamEventWithDiagnostics({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    result: payload
+                }
+            });
+            const [event] = result.events;
+            assert.equal(event.type, 'completed');
+            if (event.type !== 'completed') return undefined;
+            return event.dedupeKey;
+        };
+
+        assert.equal(first.length, second.length);
+        assert.notEqual(readDedupeKey(first), readDedupeKey(second));
+    });
+
     it('recognizes Responses image generation completed markers without requiring them to carry final images', () => {
         assert.deepEqual(
             normalizeUpstreamImageStreamEvent({
@@ -448,6 +488,24 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                     }
                 }),
             /blocked by upstream policy/
+        );
+    });
+
+    it('limits Responses image traversal depth for deeply nested payloads', () => {
+        let payload: Record<string, unknown> = {
+            type: 'image_generation_call',
+            result: 'deep-final'
+        };
+        for (let index = 0; index < 20000; index += 1) {
+            payload = { item: payload };
+        }
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: payload
+            }),
+            []
         );
     });
 

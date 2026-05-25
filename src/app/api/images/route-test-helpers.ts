@@ -1,7 +1,8 @@
-export { readSseEvents } from '@/lib/sse-test-utils';
 import type { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+
+export { readSseEvents } from '@/lib/sse-test-utils';
 
 export const PNG_BASE64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
@@ -13,19 +14,21 @@ export function imageFormRequest(input: {
     mode?: 'generate' | 'edit';
     imageBackend?: 'images' | 'responses' | 'images-api' | 'responses-image-generation';
     imageStreamingStrategy?: 'off' | 'auto' | 'openai-sse' | 'newapi-keepalive-sse' | 'responses-sse' | 'force-sse';
+    size?: string;
     n?: string;
     responsesModel?: string;
+    clientRequestId?: string;
 }): NextRequest {
     const formData = new FormData();
     formData.append('mode', input.mode || 'generate');
     formData.append('prompt', 'route stream contract');
     formData.append('model', 'gpt-image-2');
     formData.append('n', input.n || '1');
-    formData.append('size', '1024x1024');
+    formData.append('size', input.size || '1024x1024');
     formData.append('output_format', 'png');
     formData.append('apiBaseUrl', input.apiBaseUrl);
     formData.append('apiKey', input.apiKey);
-    formData.append('clientRequestId', 'client-route-stream');
+    formData.append('clientRequestId', input.clientRequestId ?? 'client-route-stream');
     if (input.imageBackend) {
         formData.append('imageBackend', input.imageBackend);
     }

@@ -9,6 +9,8 @@ import { createFixtureServer } from './local-image-upstream-fixture.mjs';
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const REAL_SMOKE_SCRIPT = fileURLToPath(new URL('./smoke-image-upstream-real.mjs', import.meta.url));
 const DEFAULT_TIMEOUT_MS = 30_000;
+const LOCAL_FINAL_GATE_CASE_COUNT = 5;
+const LOCAL_FINAL_GATE_PARENT_TIMEOUT_BUFFER_MS = 15_000;
 
 function parseArgs(argv) {
     const parsed = { help: false, timeoutMs: DEFAULT_TIMEOUT_MS };
@@ -70,7 +72,7 @@ function runLocalFinalGate(baseUrl, timeoutMs) {
         {
             cwd: REPO_ROOT,
             env: buildLocalFinalGateEnv(baseUrl, timeoutMs),
-            timeoutMs: timeoutMs * 5
+            timeoutMs: timeoutMs * LOCAL_FINAL_GATE_CASE_COUNT + LOCAL_FINAL_GATE_PARENT_TIMEOUT_BUFFER_MS
         }
     );
 }

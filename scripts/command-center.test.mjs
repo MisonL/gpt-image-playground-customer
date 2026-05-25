@@ -247,6 +247,39 @@ describe('Command center scripts', () => {
         }
     });
 
+    it('preserves mismatched env quotes in status env files', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'image-upstream-status-'));
+        const envPath = path.join(tempDir, '.env.local');
+        await writeFile(
+            envPath,
+            [
+                'MATCHED_DOUBLE="https://quoted.example/v1"',
+                "MATCHED_SINGLE='single-secret'",
+                'MATCHED_DOUBLE_SPACES="  kept value  "',
+                'MISMATCHED_LEADING="kept-value',
+                'MISMATCHED_TRAILING=kept-value"',
+                'MISMATCHED_PAIR="kept-value\'',
+                'SINGLE_DOUBLE_QUOTE="',
+                "SINGLE_SINGLE_QUOTE='"
+            ].join('\n')
+        );
+
+        try {
+            const statusEnv = readStatusEnvFromFiles({}, [{ path: envPath, override: false }]);
+
+            assert.equal(statusEnv.MATCHED_DOUBLE, 'https://quoted.example/v1');
+            assert.equal(statusEnv.MATCHED_SINGLE, 'single-secret');
+            assert.equal(statusEnv.MATCHED_DOUBLE_SPACES, '  kept value  ');
+            assert.equal(statusEnv.MISMATCHED_LEADING, '"kept-value');
+            assert.equal(statusEnv.MISMATCHED_TRAILING, 'kept-value"');
+            assert.equal(statusEnv.MISMATCHED_PAIR, '"kept-value\'');
+            assert.equal(statusEnv.SINGLE_DOUBLE_QUOTE, '"');
+            assert.equal(statusEnv.SINGLE_SINGLE_QUOTE, "'");
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
     it('builds deterministic local deploy compose arguments', () => {
         assert.deepEqual(buildDockerComposeArgs(), ['compose', '-f', 'docker-compose.yml', 'up', '-d', '--build']);
         assert.deepEqual(buildDockerComposeArgs({ memory: true }), [

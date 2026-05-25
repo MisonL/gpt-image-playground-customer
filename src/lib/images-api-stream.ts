@@ -13,6 +13,7 @@ export class ImagesApiStreamError extends Error {
 type ImagesApiStreamInput = {
     apiBaseUrl?: string;
     apiKey: string;
+    abortSignal?: AbortSignal;
     params: OpenAI.Images.ImageGenerateParamsStreaming;
 };
 
@@ -96,6 +97,7 @@ export async function createImagesApiGenerateStream(input: ImagesApiStreamInput)
             'Content-Type': 'application/json',
             Accept: 'text/event-stream, application/json'
         },
+        signal: input.abortSignal,
         body: JSON.stringify(input.params)
     });
     if (!response.ok) {

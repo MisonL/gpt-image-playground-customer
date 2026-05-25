@@ -1,16 +1,16 @@
+import type { AgentErrorCode } from '@/lib/api-error-response';
+import Database from 'better-sqlite3';
+import type { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import http from 'node:http';
+import type { Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import Database from 'better-sqlite3';
-import type { AgentErrorCode } from '@/lib/api-error-response';
-import type { NextRequest } from 'next/server';
 import { Pool } from 'pg';
 
-const PNG_BASE64 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
 let originalEnv: NodeJS.ProcessEnv;
 let originalCwd = '';
@@ -43,7 +43,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-    const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } = await import('@/lib/agent-state-runtime');
+    const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } = await import(
+        '@/lib/agent-state-runtime'
+    );
     const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
     restoreProcessEnv(originalEnv);
     process.chdir(originalCwd);
@@ -80,6 +82,23 @@ describe('Agent route integration', () => {
         const body = await response.json();
         assert.equal(body.auth.required, false);
         assert.deepEqual(body.auth.schemes, []);
+    });
+
+    it('reports enabled Responses image backend from the deployed runtime environment', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.deepEqual(body.supported.enabled_image_backends, ['images-api', 'responses-image-generation']);
+        assert.equal(body.supported.image_backend_requirements['responses-image-generation'].enabled, true);
+        assert.deepEqual(body.supported.image_backend_requirements['responses-image-generation'].missing_env, []);
+        assert.deepEqual(body.agent_streaming.upstream_sse.enabled_image_backends, [
+            'images-api',
+            'responses-image-generation'
+        ]);
     });
 
     it('generates through a compatible upstream once and replays the cached response for the same idempotency key', async () => {
@@ -398,6 +417,9 @@ describe('Agent route integration', () => {
             const body = await response.json();
             assert.equal(body.error.code, 'upstream_unavailable');
             assert.match(body.error.message, /最终图片 b64_json/);
+            assert.equal(body.error.diagnostics.upstream_event_type, 'response.image_generation_call.partial_image');
+            assert.equal(body.error.diagnostics.partial_image_count, 1);
+            assert.equal(body.error.diagnostics.retry_after_seconds, 15);
             assert.equal(JSON.stringify(body).includes('agent-responses-partial-only'), false);
         } finally {
             await upstream.close();
@@ -470,6 +492,8 @@ describe('Agent route integration', () => {
             const body = await response.json();
             assert.equal(body.error.code, 'upstream_unavailable');
             assert.match(body.error.message, /最终图片 b64_json/);
+            assert.equal(body.error.diagnostics.upstream_event_type, 'image_generation.partial_image');
+            assert.equal(body.error.diagnostics.partial_image_count, 1);
         } finally {
             await upstream.close();
         }
@@ -488,12 +512,16 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const first = await generateImage(agentJsonRequest('route-memory-cache-key', { prompt: 'agent memory route success' }));
+            const first = await generateImage(
+                agentJsonRequest('route-memory-cache-key', { prompt: 'agent memory route success' })
+            );
             assert.equal(first.status, 200);
             const firstBody = await first.json();
             assert.equal(firstBody.cached, false);
 
-            const second = await generateImage(agentJsonRequest('route-memory-cache-key', { prompt: 'agent memory route success' }));
+            const second = await generateImage(
+                agentJsonRequest('route-memory-cache-key', { prompt: 'agent memory route success' })
+            );
             assert.equal(second.status, 200);
             const secondBody = await second.json();
             assert.equal(secondBody.cached, true);
@@ -639,7 +667,9 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const created = await createGenerateJob(agentJobJsonRequest('route-job-key', { prompt: 'agent route job' }));
+            const created = await createGenerateJob(
+                agentJobJsonRequest('route-job-key', { prompt: 'agent route job' })
+            );
             assert.equal(created.status, 202);
             const createdBody = await created.json();
             assert.equal(createdBody.job.state, 'running');
@@ -718,7 +748,10 @@ describe('Agent route integration', () => {
                 { params: Promise.resolve({ id: artifactId }) }
             );
             assert.equal(content.status, 200);
-            assert.equal(Buffer.compare(Buffer.from(await content.arrayBuffer()), Buffer.from(PNG_BASE64, 'base64')), 0);
+            assert.equal(
+                Buffer.compare(Buffer.from(await content.arrayBuffer()), Buffer.from(PNG_BASE64, 'base64')),
+                0
+            );
         } finally {
             await upstream.close();
         }
@@ -751,6 +784,10 @@ describe('Agent route integration', () => {
             const resultBody = await result.json();
             assert.equal(resultBody.error.code, 'upstream_unavailable');
             assert.match(resultBody.error.message, /最终图片 b64_json/);
+            assert.equal(resultBody.error.retryable, false);
+            assert.equal(resultBody.error.diagnostics.upstream_event_type, 'image_generation.partial_image');
+            assert.equal(resultBody.error.diagnostics.partial_image_count, 1);
+            assert.equal(resultBody.error.diagnostics.retry_after_seconds, undefined);
             assert.equal(JSON.stringify(resultBody).includes('job-images-partial-only'), false);
 
             const status = await getJob(new Request(`http://localhost/api/agent/jobs/${createdBody.job.id}`), {
@@ -761,6 +798,10 @@ describe('Agent route integration', () => {
             assert.equal(statusBody.job.state, 'failed');
             assert.equal(statusBody.job.error.code, 'upstream_unavailable');
             assert.match(statusBody.job.error.message, /最终图片 b64_json/);
+            assert.equal(statusBody.job.error.retryable, false);
+            assert.equal(statusBody.job.error.diagnostics.upstream_event_type, 'image_generation.partial_image');
+            assert.equal(statusBody.job.error.diagnostics.partial_image_count, 1);
+            assert.equal(statusBody.job.error.diagnostics.retry_after_seconds, undefined);
             assert.equal(JSON.stringify(statusBody).includes('job-images-partial-only'), false);
         } finally {
             await upstream.close();
@@ -836,7 +877,10 @@ describe('Agent route integration', () => {
                 { params: Promise.resolve({ id: artifactId }) }
             );
             assert.equal(content.status, 200);
-            assert.equal(Buffer.compare(Buffer.from(await content.arrayBuffer()), Buffer.from(PNG_BASE64, 'base64')), 0);
+            assert.equal(
+                Buffer.compare(Buffer.from(await content.arrayBuffer()), Buffer.from(PNG_BASE64, 'base64')),
+                0
+            );
         } finally {
             await upstream.close();
         }
@@ -876,6 +920,13 @@ describe('Agent route integration', () => {
             const resultBody = await result.json();
             assert.equal(resultBody.error.code, 'upstream_unavailable');
             assert.match(resultBody.error.message, /最终图片 b64_json/);
+            assert.equal(resultBody.error.retryable, false);
+            assert.equal(
+                resultBody.error.diagnostics.upstream_event_type,
+                'response.image_generation_call.partial_image'
+            );
+            assert.equal(resultBody.error.diagnostics.partial_image_count, 1);
+            assert.equal(resultBody.error.diagnostics.retry_after_seconds, undefined);
             assert.equal(JSON.stringify(resultBody).includes('job-responses-partial-only'), false);
 
             const status = await getJob(new Request(`http://localhost/api/agent/jobs/${createdBody.job.id}`), {
@@ -886,6 +937,13 @@ describe('Agent route integration', () => {
             assert.equal(statusBody.job.state, 'failed');
             assert.equal(statusBody.job.error.code, 'upstream_unavailable');
             assert.match(statusBody.job.error.message, /最终图片 b64_json/);
+            assert.equal(statusBody.job.error.retryable, false);
+            assert.equal(
+                statusBody.job.error.diagnostics.upstream_event_type,
+                'response.image_generation_call.partial_image'
+            );
+            assert.equal(statusBody.job.error.diagnostics.partial_image_count, 1);
+            assert.equal(statusBody.job.error.diagnostics.retry_after_seconds, undefined);
             assert.equal(JSON.stringify(statusBody).includes('job-responses-partial-only'), false);
         } finally {
             await upstream.close();
@@ -944,12 +1002,16 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const first = await createGenerateJob(agentJobJsonRequest('route-job-conflict-key', { prompt: 'first job body' }));
+            const first = await createGenerateJob(
+                agentJobJsonRequest('route-job-conflict-key', { prompt: 'first job body' })
+            );
             assert.equal(first.status, 202);
             const firstBody = await first.json();
             await waitFor(() => upstreamCalls === 1);
 
-            const conflict = await createGenerateJob(agentJobJsonRequest('route-job-conflict-key', { prompt: 'different job body' }));
+            const conflict = await createGenerateJob(
+                agentJobJsonRequest('route-job-conflict-key', { prompt: 'different job body' })
+            );
             assert.equal(conflict.status, 409);
             assert.equal((await conflict.json()).error.code, 'idempotency_conflict');
             assert.equal(upstreamCalls, 1);
@@ -974,7 +1036,9 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const created = await createGenerateJob(agentJobJsonRequest('route-job-failure-key', { prompt: 'job failure' }));
+            const created = await createGenerateJob(
+                agentJobJsonRequest('route-job-failure-key', { prompt: 'job failure' })
+            );
             assert.equal(created.status, 202);
             const createdBody = await created.json();
 
@@ -1000,7 +1064,9 @@ describe('Agent route integration', () => {
             assert.equal(statusBody.job.error.diagnostics.upstream_status, 500);
             assert.equal(upstreamCalls > 0, true);
 
-            const replay = await createGenerateJob(agentJobJsonRequest('route-job-failure-key', { prompt: 'job failure' }));
+            const replay = await createGenerateJob(
+                agentJobJsonRequest('route-job-failure-key', { prompt: 'job failure' })
+            );
             assert.equal(replay.status, 202);
             assert.equal(replay.headers.get('x-idempotent-replay'), 'true');
             const replayBody = await replay.json();
@@ -1093,7 +1159,9 @@ describe('Agent route integration', () => {
         const originalConsoleError = console.error;
         console.error = () => {};
         try {
-            const created = await createGenerateJob(agentJobJsonRequest('job-completion-failure-key', { prompt: 'job completion persistence failure' }));
+            const created = await createGenerateJob(
+                agentJobJsonRequest('job-completion-failure-key', { prompt: 'job completion persistence failure' })
+            );
             assert.equal(created.status, 202);
             await waitFor(() => failErrorCode === 'unexpected_error');
             assert.equal(saveCalls, 1);
@@ -1129,7 +1197,9 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const created = await createGenerateJob(agentJobJsonRequest('route-job-lease-key', { prompt: 'job lease' }));
+            const created = await createGenerateJob(
+                agentJobJsonRequest('route-job-lease-key', { prompt: 'job lease' })
+            );
             assert.equal(created.status, 202);
             const createdBody = await created.json();
             await waitFor(() => upstreamCalls === 1);
@@ -1153,7 +1223,9 @@ describe('Agent route integration', () => {
 
     it('returns structured errors for missing and expired jobs', async () => {
         const { getJob, getJobResult } = await loadAgentRoutes();
-        const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } = await import('@/lib/agent-state-runtime');
+        const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } = await import(
+            '@/lib/agent-state-runtime'
+        );
 
         const missing = await getJob(new Request('http://localhost/api/agent/jobs/missing-job'), {
             params: Promise.resolve({ id: 'missing-job' })
@@ -1239,13 +1311,45 @@ describe('Agent route integration', () => {
         await upstream.close();
     });
 
+    it('aborts Agent edit upstream calls when the client request signal aborts', async () => {
+        const { editImage } = await loadAgentRoutes();
+        const upstream = await startHangingImageEditUpstream();
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        const abortController = new AbortController();
+
+        try {
+            const responsePromise = editImage(
+                agentEditRequest('route-edit-abort-key', 'agent edit abort', {}, 'path', {
+                    signal: abortController.signal
+                })
+            );
+            await waitFor(() => upstream.requests === 1);
+            abortController.abort();
+
+            const response = await Promise.race([
+                responsePromise,
+                new Promise<Response>((_, reject) =>
+                    setTimeout(() => reject(new Error('Agent edit upstream call did not abort')), 1500)
+                )
+            ]);
+
+            assert.notEqual(response.status, 200);
+        } finally {
+            abortController.abort();
+            await upstream.close();
+        }
+    });
+
     it('returns field-level errors for invalid edit multipart requests', async () => {
         const { editImage } = await loadAgentRoutes();
         const upstream = await startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] }));
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
-        const response = await editImage(agentEditRequest('route-edit-validation-key', 'agent edit invalid', {}, 'url'));
+        const response = await editImage(
+            agentEditRequest('route-edit-validation-key', 'agent edit invalid', {}, 'url')
+        );
 
         assert.equal(response.status, 422);
         const body = await response.json();
@@ -1253,6 +1357,93 @@ describe('Agent route integration', () => {
         assert.match(body.error.details.fields.response_mode, /path/);
 
         await upstream.close();
+    });
+
+    it('rejects high-resolution Agent edit requests before contacting upstream', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await editImage(
+                agentEditRequest('route-edit-high-resolution-key', 'high resolution edit', {}, { size: '3072x2048' })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.message, /\/api\/images/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects high-resolution Agent edit requests before reading files or API credentials', async () => {
+        const { editImage } = await loadAgentRoutes();
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.OPENAI_API_BASE_URL;
+
+        const formData = new FormData();
+        formData.append('prompt', 'high resolution edit without file');
+        formData.append('model', 'gpt-image-2');
+        formData.append('size', '3072x2048');
+        formData.append('response_mode', 'path');
+
+        const response = await editImage(
+            new Request('http://localhost/api/agent/images/edit', {
+                method: 'POST',
+                headers: {
+                    'Idempotency-Key': 'route-edit-high-resolution-no-file-key'
+                },
+                body: formData
+            })
+        );
+
+        assert.equal(response.status, 422);
+        const body = await response.json();
+        assert.equal(body.error.code, 'validation_error');
+        assert.match(body.error.message, /\/api\/images/);
+        assert.equal(body.error.details?.fields?.image_0, undefined);
+        assert.doesNotMatch(body.error.message, /API Key|图片文件/);
+    });
+
+    it('rejects auto-size Agent edit when the uploaded source image is high resolution', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await editImage(
+                agentEditRequest(
+                    'route-edit-auto-high-resolution-source-key',
+                    'auto high resolution source',
+                    {},
+                    {
+                        size: 'auto',
+                        image_0: createPngWithDimensions(3072, 2048)
+                    }
+                )
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.message, /\/api\/images/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
     });
 
     it('returns validation errors for non-multipart edit requests', async () => {
@@ -1400,7 +1591,9 @@ describe('Agent route integration', () => {
         const originalConsoleError = console.error;
         console.error = () => {};
         try {
-            const response = await editImage(agentEditRequest('edit-completion-failure-key', 'state completion failure'));
+            const response = await editImage(
+                agentEditRequest('edit-completion-failure-key', 'state completion failure')
+            );
 
             assert.equal(response.status, 500);
             const body = await response.json();
@@ -1424,14 +1617,21 @@ describe('Agent route integration', () => {
         process.env.AGENT_API_TOKEN = 'artifact-token';
 
         const generated = await generateImage(
-            agentJsonRequest('artifact-auth-key', { prompt: 'artifact auth' }, { Authorization: 'Bearer artifact-token' })
+            agentJsonRequest(
+                'artifact-auth-key',
+                { prompt: 'artifact auth' },
+                { Authorization: 'Bearer artifact-token' }
+            )
         );
         const body = await generated.json();
         const artifactId = body.images[0].id;
 
-        const denied = await getArtifactContent(new Request(`http://localhost/api/agent/artifacts/${artifactId}/content`), {
-            params: Promise.resolve({ id: artifactId })
-        });
+        const denied = await getArtifactContent(
+            new Request(`http://localhost/api/agent/artifacts/${artifactId}/content`),
+            {
+                params: Promise.resolve({ id: artifactId })
+            }
+        );
         assert.equal(denied.status, 401);
         assert.equal((await denied.json()).error.code, 'unauthorized');
 
@@ -1467,7 +1667,11 @@ describe('Agent route integration', () => {
         assert.equal((await deleted.json()).deleted, true);
 
         const replayAfterDelete = await generateImage(
-            agentJsonRequest('artifact-auth-key', { prompt: 'artifact auth' }, { Authorization: 'Bearer artifact-token' })
+            agentJsonRequest(
+                'artifact-auth-key',
+                { prompt: 'artifact auth' },
+                { Authorization: 'Bearer artifact-token' }
+            )
         );
         assert.equal(replayAfterDelete.status, 404);
         assert.equal((await replayAfterDelete.json()).error.code, 'artifact_not_found');
@@ -1482,7 +1686,9 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const generated = await generateImage(agentJsonRequest('artifact-missing-content-key', { prompt: 'missing content' }));
+            const generated = await generateImage(
+                agentJsonRequest('artifact-missing-content-key', { prompt: 'missing content' })
+            );
             const body = await generated.json();
             const image = body.images[0];
             await rm(readStoredArtifactFilepath(image.id), { force: true });
@@ -1565,7 +1771,9 @@ describe('Agent route integration', () => {
         const originalConsoleError = console.error;
         console.error = () => {};
         try {
-            const response = await generateImage(agentJsonRequest('completion-failure-key', { prompt: 'state completion failure' }));
+            const response = await generateImage(
+                agentJsonRequest('completion-failure-key', { prompt: 'state completion failure' })
+            );
 
             assert.equal(response.status, 500);
             const body = await response.json();
@@ -1641,7 +1849,9 @@ describe('Agent route integration', () => {
         const originalConsoleError = console.error;
         console.error = () => {};
         try {
-            const response = await generateImage(agentJsonRequest('artifact-save-failure-key', { prompt: 'artifact save failure' }));
+            const response = await generateImage(
+                agentJsonRequest('artifact-save-failure-key', { prompt: 'artifact save failure' })
+            );
 
             assert.equal(response.status, 500);
             const body = await response.json();
@@ -1658,57 +1868,67 @@ describe('Agent route integration', () => {
 
 const livePostgresUrl = process.env.AGENT_POSTGRES_TEST_DATABASE_URL;
 
-describe('Agent route PostgreSQL integration', { skip: livePostgresUrl ? false : 'AGENT_POSTGRES_TEST_DATABASE_URL is not set' }, () => {
-    it('allows only one upstream winner for concurrent identical idempotency requests', async () => {
-        assert.ok(livePostgresUrl);
-        const { generateImage } = await loadAgentRoutes();
-        const schemaName = `agent_route_${Date.now().toString(36)}`;
-        const pool = new Pool({ connectionString: livePostgresUrl });
-        process.env.AGENT_STATE_BACKEND = 'postgres';
-        process.env.AGENT_DATABASE_URL = `${livePostgresUrl}${livePostgresUrl.includes('?') ? '&' : '?'}options=-c%20search_path%3D${schemaName}`;
-        process.env.AGENT_REQUEST_LEASE_MS = '60000';
-        const admin = await pool.connect();
-        let releaseUpstream: (() => void) | undefined;
-        let upstreamCalls = 0;
-        const upstream = await startImageUpstream(async () => {
-            upstreamCalls += 1;
-            await new Promise<void>((resolve) => {
-                releaseUpstream = resolve;
+describe(
+    'Agent route PostgreSQL integration',
+    { skip: livePostgresUrl ? false : 'AGENT_POSTGRES_TEST_DATABASE_URL is not set' },
+    () => {
+        it('allows only one upstream winner for concurrent identical idempotency requests', async () => {
+            assert.ok(livePostgresUrl);
+            const { generateImage } = await loadAgentRoutes();
+            const schemaName = `agent_route_${Date.now().toString(36)}`;
+            const pool = new Pool({ connectionString: livePostgresUrl });
+            process.env.AGENT_STATE_BACKEND = 'postgres';
+            process.env.AGENT_DATABASE_URL = `${livePostgresUrl}${livePostgresUrl.includes('?') ? '&' : '?'}options=-c%20search_path%3D${schemaName}`;
+            process.env.AGENT_REQUEST_LEASE_MS = '60000';
+            const admin = await pool.connect();
+            let releaseUpstream: (() => void) | undefined;
+            let upstreamCalls = 0;
+            const upstream = await startImageUpstream(async () => {
+                upstreamCalls += 1;
+                await new Promise<void>((resolve) => {
+                    releaseUpstream = resolve;
+                });
+                return { data: [{ b64_json: PNG_BASE64 }] };
             });
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            process.env.OPENAI_API_KEY = 'test-key';
+            process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+            try {
+                await admin.query(`CREATE SCHEMA "${schemaName}"`);
+                const firstRequest = generateImage(
+                    agentJsonRequest('pg-route-concurrent-key', { prompt: 'pg concurrent' })
+                );
+                await waitFor(() => upstreamCalls === 1);
+
+                const second = await generateImage(
+                    agentJsonRequest('pg-route-concurrent-key', { prompt: 'pg concurrent' })
+                );
+                assert.equal(second.status, 409);
+                const secondBody = await second.json();
+                assert.equal(secondBody.error.code, 'request_in_progress');
+                assert.equal(secondBody.error.retryable, true);
+                assert.equal(second.headers.has('retry-after'), true);
+
+                releaseUpstream?.();
+                const first = await firstRequest;
+                assert.equal(first.status, 200);
+
+                const replay = await generateImage(
+                    agentJsonRequest('pg-route-concurrent-key', { prompt: 'pg concurrent' })
+                );
+                assert.equal(replay.status, 200);
+                assert.equal((await replay.json()).cached, true);
+                assert.equal(upstreamCalls, 1);
+            } finally {
+                releaseUpstream?.();
+                await upstream.close();
+                await admin.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
+                admin.release();
+                await pool.end();
+            }
         });
-        process.env.OPENAI_API_KEY = 'test-key';
-        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
-
-        try {
-            await admin.query(`CREATE SCHEMA "${schemaName}"`);
-            const firstRequest = generateImage(agentJsonRequest('pg-route-concurrent-key', { prompt: 'pg concurrent' }));
-            await waitFor(() => upstreamCalls === 1);
-
-            const second = await generateImage(agentJsonRequest('pg-route-concurrent-key', { prompt: 'pg concurrent' }));
-            assert.equal(second.status, 409);
-            const secondBody = await second.json();
-            assert.equal(secondBody.error.code, 'request_in_progress');
-            assert.equal(secondBody.error.retryable, true);
-            assert.equal(second.headers.has('retry-after'), true);
-
-            releaseUpstream?.();
-            const first = await firstRequest;
-            assert.equal(first.status, 200);
-
-            const replay = await generateImage(agentJsonRequest('pg-route-concurrent-key', { prompt: 'pg concurrent' }));
-            assert.equal(replay.status, 200);
-            assert.equal((await replay.json()).cached, true);
-            assert.equal(upstreamCalls, 1);
-        } finally {
-            releaseUpstream?.();
-            await upstream.close();
-            await admin.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
-            admin.release();
-            await pool.end();
-        }
-    });
-});
+    }
+);
 
 async function loadAgentRoutes() {
     const { resetAgentStateStoreForTests } = await import('@/lib/agent-state-runtime');
@@ -1729,8 +1949,10 @@ async function loadAgentRoutes() {
         editImage: (request: Request) => editRoute.POST(asNextRequest(request)),
         createGenerateJob: (request: Request) => createGenerateJobRoute.POST(asNextRequest(request)),
         getJob: (request: Request, context: AgentRouteContext) => jobRoute.GET(asNextRequest(request), context),
-        getJobResult: (request: Request, context: AgentRouteContext) => jobResultRoute.GET(asNextRequest(request), context),
-        getArtifact: (request: Request, context: AgentRouteContext) => artifactRoute.GET(asNextRequest(request), context),
+        getJobResult: (request: Request, context: AgentRouteContext) =>
+            jobResultRoute.GET(asNextRequest(request), context),
+        getArtifact: (request: Request, context: AgentRouteContext) =>
+            artifactRoute.GET(asNextRequest(request), context),
         deleteArtifact: (request: Request, context: AgentRouteContext) =>
             artifactRoute.DELETE(asNextRequest(request), context),
         getArtifactContent: (request: Request, context: AgentRouteContext) =>
@@ -1756,7 +1978,11 @@ function agentJsonRequest(idempotencyKey: string, body: Record<string, unknown>,
     });
 }
 
-function agentJobJsonRequest(idempotencyKey: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
+function agentJobJsonRequest(
+    idempotencyKey: string,
+    body: Record<string, unknown>,
+    headers: Record<string, string> = {}
+) {
     return new Request('http://localhost/api/agent/jobs/images/generate', {
         method: 'POST',
         headers: {
@@ -1768,25 +1994,50 @@ function agentJobJsonRequest(idempotencyKey: string, body: Record<string, unknow
     });
 }
 
+type AgentEditRequestFields = {
+    image_0?: Buffer;
+    [field: string]: string | Buffer | undefined;
+};
+
 function agentEditRequest(
     idempotencyKey: string,
     prompt: string,
     headers: Record<string, string> = {},
-    responseMode = 'path'
+    responseModeOrFields: string | AgentEditRequestFields = 'path',
+    options: { signal?: AbortSignal } = {}
 ) {
+    const fields: AgentEditRequestFields =
+        typeof responseModeOrFields === 'string'
+            ? { response_mode: responseModeOrFields }
+            : { response_mode: 'path', ...responseModeOrFields };
+    const imageBuffer = fields.image_0 ?? Buffer.from(PNG_BASE64, 'base64');
     const formData = new FormData();
     formData.append('prompt', prompt);
     formData.append('model', 'gpt-image-2');
-    formData.append('response_mode', responseMode);
-    formData.append('image_0', new File([Buffer.from(PNG_BASE64, 'base64')], 'input.png', { type: 'image/png' }));
+    for (const [key, value] of Object.entries(fields)) {
+        if (key === 'image_0') continue;
+        if (typeof value !== 'string') {
+            throw new TypeError(`Agent edit test field ${key} must be a string.`);
+        }
+        formData.append(key, value);
+    }
+    formData.append('image_0', new File([imageBuffer], 'input.png', { type: 'image/png' }));
     return new Request('http://localhost/api/agent/images/edit', {
         method: 'POST',
         headers: {
             'Idempotency-Key': idempotencyKey,
             ...headers
         },
-        body: formData
+        body: formData,
+        signal: options.signal
     });
+}
+
+function createPngWithDimensions(width: number, height: number): Buffer {
+    const buffer = Buffer.from(PNG_BASE64, 'base64');
+    buffer.writeUInt32BE(width, 16);
+    buffer.writeUInt32BE(height, 20);
+    return buffer;
 }
 
 async function startImageUpstream(
@@ -1823,8 +2074,47 @@ async function startImageUpstream(
     };
 }
 
+async function startHangingImageEditUpstream(): Promise<{
+    baseUrl: string;
+    readonly requests: number;
+    close: () => Promise<void>;
+}> {
+    let requests = 0;
+    const sockets = new Set<Socket>();
+    const server = http.createServer(async (request, response) => {
+        if (request.method === 'POST' && request.url?.endsWith('/images/edits')) {
+            requests += 1;
+            request.resume();
+            return;
+        }
+        request.resume();
+        response.writeHead(404, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'not found' } }));
+    });
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        get requests() {
+            return requests;
+        },
+        close: () =>
+            new Promise((resolve, reject) => {
+                for (const socket of sockets) socket.destroy();
+                server.close((error) => (error ? reject(error) : resolve()));
+            })
+    };
+}
+
 async function startStreamingImageUpstream(
-    handler: (body: string) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
+    handler: (
+        body: string
+    ) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
@@ -1856,7 +2146,9 @@ async function startStreamingImageUpstream(
 }
 
 async function startStreamingResponsesImageUpstream(
-    handler: (body: string) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
+    handler: (
+        body: string
+    ) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
@@ -1903,7 +2195,9 @@ function readStoredResponseJson(idempotencyKey: string): string {
 function readStoredArtifactFilepath(id: string): string {
     const db = new Database(path.join(tempDir, 'agent.sqlite'), { readonly: true });
     try {
-        const row = db.prepare('SELECT filepath FROM agent_artifacts WHERE id = ?').get(id) as { filepath: string } | undefined;
+        const row = db.prepare('SELECT filepath FROM agent_artifacts WHERE id = ?').get(id) as
+            | { filepath: string }
+            | undefined;
         assert.ok(row);
         return row.filepath;
     } finally {
@@ -1913,7 +2207,9 @@ function readStoredArtifactFilepath(id: string): string {
 
 async function listGeneratedImageFiles(): Promise<string[]> {
     try {
-        return (await readdir(path.join(tempDir, 'generated-images'))).filter((entry) => /\.(png|jpe?g|webp)$/i.test(entry));
+        return (await readdir(path.join(tempDir, 'generated-images'))).filter((entry) =>
+            /\.(png|jpe?g|webp)$/i.test(entry)
+        );
     } catch {
         return [];
     }
@@ -1936,10 +2232,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 async function waitForJobResult(
-    getJobResult: (
-        request: Request,
-        context: { params: Promise<{ id: string }> }
-    ) => Promise<Response>,
+    getJobResult: (request: Request, context: { params: Promise<{ id: string }> }) => Promise<Response>,
     id: string
 ): Promise<Response> {
     for (let attempt = 0; attempt < 200; attempt += 1) {

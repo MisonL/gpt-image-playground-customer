@@ -68,6 +68,7 @@ const SERVER_CHANNEL_CASES = [
 const argv = process.argv.slice(2);
 let options;
 let exitCode = 0;
+let forceExitAfterReport = false;
 try {
     if (!isHelpRequested(argv)) loadDotEnvFiles(argv);
     options = parseArgs(argv);
@@ -76,7 +77,9 @@ try {
     } else {
         configureRouteEnv();
         const availableCases = options.includeServerChannel ? [...CASES, ...SERVER_CHANNEL_CASES] : CASES;
-        const selectedCases = availableCases.filter((testCase) => options.caseId === 'all' || testCase.id === options.caseId);
+        const selectedCases = availableCases.filter(
+            (testCase) => options.caseId === 'all' || testCase.id === options.caseId
+        );
         if (selectedCases.length === 0) throw new Error(`未知真实 smoke 场景：${options.caseId}`);
         const billablePreflight = buildBillablePreflight(selectedCases);
         const results = [];
@@ -94,7 +97,9 @@ try {
         const unselectedRequiredCases = options.requireIndependentTargets
             ? independentTargetSummary?.unselected_required_cases || []
             : [];
-        const invalidRequiredCases = options.requireIndependentTargets ? independentTargetSummary?.invalid_cases || [] : [];
+        const invalidRequiredCases = options.requireIndependentTargets
+            ? independentTargetSummary?.invalid_cases || []
+            : [];
         const blockedCases = results.filter((item) => item.blocked).map((item) => item.id);
         const blockedRequiredCases = options.requireIndependentTargets
             ? blockedCases.filter((id) => CASES.some((testCase) => testCase.id === id))
@@ -103,7 +108,9 @@ try {
             ? results.filter((item) => item.skipped && !item.blocked && !item.server_channel).map((item) => item.id)
             : [];
         const missingRequiredCaseSet = new Set([...unselectedRequiredCases, ...skippedRequiredCases]);
-        const missingRequiredCases = CASES.map((testCase) => testCase.id).filter((id) => missingRequiredCaseSet.has(id));
+        const missingRequiredCases = CASES.map((testCase) => testCase.id).filter((id) =>
+            missingRequiredCaseSet.has(id)
+        );
         const finalGateSatisfied = isFinalGateSatisfied(results, missingRequiredCases);
         const report = {
             ok:
@@ -125,7 +132,8 @@ try {
             ...(missingRequiredCases.length > 0 ? { missing_required_cases: missingRequiredCases } : {}),
             results
         };
-        console.log(JSON.stringify(report, null, 2));
+        forceExitAfterReport = results.some((item) => item.timed_out);
+        await writeStdout(`${JSON.stringify(report, null, 2)}\n`);
         exitCode = report.ok ? 0 : 1;
     }
 } catch (error) {
@@ -134,7 +142,19 @@ try {
 } finally {
     restoreProcessEnv();
 }
+if (forceExitAfterReport) {
+    process.exit(exitCode);
+}
 process.exitCode = exitCode;
+
+function writeStdout(text) {
+    return new Promise((resolve, reject) => {
+        process.stdout.write(text, (error) => {
+            if (error) reject(error);
+            else resolve();
+        });
+    });
+}
 
 function isFinalGateSatisfied(results, missingRequiredCases) {
     if (!options.requireIndependentTargets || !options.allowBillable || missingRequiredCases.length > 0) return false;
@@ -292,10 +312,17 @@ async function runCase(loadRouteHandlersForBillable, testCase, preflight = {}) {
     }
     const startedAt = Date.now();
     const routeHandlers = await loadRouteHandlersForBillable();
-    return withCaseTimeout(runBillableCase(routeHandlers, testCase, target, startedAt), testCase, target, startedAt);
+    const abortController = new AbortController();
+    return withCaseTimeout(
+        runBillableCase(routeHandlers, testCase, target, startedAt, abortController.signal),
+        testCase,
+        target,
+        startedAt,
+        abortController
+    );
 }
 
-async function runBillableCase(routeHandlers, testCase, target, startedAt) {
+async function runBillableCase(routeHandlers, testCase, target, startedAt, signal) {
     const outputFilesBefore = snapshotRealSmokeOutputFiles();
     if (testCase.endpoint === 'agent-generate' && testCase.backend === 'responses-image-generation') {
         process.env.OPENAI_RESPONSES_API_MODEL = target.responsesModel;
@@ -303,25 +330,32 @@ async function runBillableCase(routeHandlers, testCase, target, startedAt) {
     try {
         const response =
             testCase.endpoint === 'agent-generate'
-                ? await routeHandlers.agentGenerate(agentGenerateRequest(testCase, target))
-                : await routeHandlers.images(imageRequest(testCase, target));
+                ? await routeHandlers.agentGenerate(agentGenerateRequest(testCase, target, signal))
+                : await routeHandlers.images(imageRequest(testCase, target, signal));
+        const summary =
+            testCase.endpoint === 'agent-generate'
+                ? await summarizeAgentResponse(response)
+                : await summarizeResponse(response);
         return {
             id: testCase.id,
-            ok: response.ok,
+            ok: isSuccessfulBillableSmokeResponse(response, summary),
             status: response.status,
             elapsed_ms: Date.now() - startedAt,
             upstream_host: readHost(target.baseUrl),
             ...(target.serverChannel ? { server_channel: true } : {}),
-            ...(testCase.endpoint === 'agent-generate' ? await summarizeAgentResponse(response) : await summarizeResponse(response))
+            ...summary
         };
     } finally {
         removeNewRealSmokeOutputFiles(outputFilesBefore);
     }
 }
 
-function withCaseTimeout(promise, testCase, target, startedAt) {
+function withCaseTimeout(promise, testCase, target, startedAt, abortController) {
     return new Promise((resolve, reject) => {
+        let settled = false;
         const timeout = setTimeout(() => {
+            settled = true;
+            abortController.abort();
             resolve({
                 id: testCase.id,
                 ok: false,
@@ -334,10 +368,14 @@ function withCaseTimeout(promise, testCase, target, startedAt) {
         }, options.timeoutMs);
         promise.then(
             (value) => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(timeout);
                 resolve(value);
             },
             (error) => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(timeout);
                 reject(error);
             }
@@ -464,7 +502,8 @@ function buildIndependentTargetSummary(results, requireIndependentTargets = fals
         selected_cases: selectedCases,
         unselected_required_count: unselectedRequiredCases.length,
         unselected_required_cases: unselectedRequiredCases,
-        configuration_complete: unselectedRequiredCases.length === 0 && missingCases.length === 0 && invalidCases.length === 0,
+        configuration_complete:
+            unselectedRequiredCases.length === 0 && missingCases.length === 0 && invalidCases.length === 0,
         selected_count: independentResults.length,
         configured_count: configuredCases.length,
         missing_count: missingCases.length,
@@ -561,7 +600,7 @@ function readFirstNumberedEnvEntry(prefix, suffix) {
     return undefined;
 }
 
-function imageRequest(testCase, target) {
+function imageRequest(testCase, target, signal) {
     const formData = new FormData();
     const fields = {
         mode: 'generate',
@@ -580,17 +619,17 @@ function imageRequest(testCase, target) {
     }
     const pagePasswordHash = readAppPasswordHash();
     if (pagePasswordHash) formData.append('passwordHash', pagePasswordHash);
-    if (testCase.backend) formData.append('imageBackend', testCase.backend);
-    if (testCase.strategy) formData.append('imageStreamingStrategy', testCase.strategy);
+    formData.append('imageBackend', testCase.backend || 'images-api');
+    formData.append('imageStreamingStrategy', testCase.strategy || 'off');
     if (testCase.backend === 'responses-image-generation') formData.append('responsesModel', target.responsesModel);
     if (testCase.stream) {
         formData.append('stream', 'true');
         formData.append('partial_images', '2');
     }
-    return new Request('http://localhost/api/images', { method: 'POST', body: formData });
+    return new Request('http://localhost/api/images', { method: 'POST', body: formData, signal });
 }
 
-function agentGenerateRequest(testCase, target) {
+function agentGenerateRequest(testCase, target, signal) {
     return new Request('http://localhost/api/agent/images/generate', {
         method: 'POST',
         headers: buildAgentRequestHeaders(testCase),
@@ -605,7 +644,8 @@ function agentGenerateRequest(testCase, target) {
             image_backend: testCase.backend || 'images-api',
             streaming_strategy: testCase.strategy || 'off',
             partial_images: 2
-        })
+        }),
+        signal
     });
 }
 
@@ -625,8 +665,8 @@ function readAgentAuthHeaders() {
 }
 
 function readAppPasswordHash() {
-    const password = process.env.APP_PASSWORD;
-    if (typeof password !== 'string' || !password) return undefined;
+    const password = env('APP_PASSWORD');
+    if (!password) return undefined;
     return crypto.createHash('sha256').update(password).digest('hex');
 }
 
@@ -652,6 +692,17 @@ function summarizeSse(text) {
         first_b64_length: readFirstB64Length(done?.images),
         ...(error ? { error: String(error.error || 'stream error') } : {})
     };
+}
+
+function isSuccessfulBillableSmokeResponse(response, summary) {
+    if (!response.ok || summary?.error) return false;
+    if (summary?.content_type === 'text/event-stream') {
+        return summary.done_image_count > 0;
+    }
+    if (typeof summary?.image_count === 'number') {
+        return summary.image_count > 0;
+    }
+    return false;
 }
 
 function summarizeJson(text, contentType) {

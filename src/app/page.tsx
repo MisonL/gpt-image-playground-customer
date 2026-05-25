@@ -19,6 +19,10 @@ import {
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import {
+    IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
+    appendImageUpstreamOverrideFields
+} from '@/lib/image-upstream-form';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
 import { createImageShareFromBlob } from '@/lib/share-client';
 import { sha256Hex } from '@/lib/sha256';
@@ -361,9 +365,10 @@ export default function HomePage() {
     const [genCompression, setGenCompression] = React.useState([100]);
     const [genBackground, setGenBackground] = React.useState<GenerationFormData['background']>('auto');
     const [genModeration, setGenModeration] = React.useState<GenerationFormData['moderation']>('auto');
-    const [genImageBackend, setGenImageBackend] = React.useState<GenerationFormData['image_backend']>('images-api');
+    const [genImageBackend, setGenImageBackend] =
+        React.useState<GenerationFormData['image_backend']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
     const [genStreamingStrategy, setGenStreamingStrategy] =
-        React.useState<GenerationFormData['streaming_strategy']>('auto');
+        React.useState<GenerationFormData['streaming_strategy']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
     const [genResponsesModel, setGenResponsesModel] = React.useState('');
 
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
@@ -889,11 +894,11 @@ export default function HomePage() {
                 }
                 apiFormData.append('background', genData.background);
                 apiFormData.append('moderation', genData.moderation);
-                apiFormData.append('image_backend', genData.image_backend);
-                apiFormData.append('image_streaming_strategy', genData.streaming_strategy);
-                if (genData.image_backend === 'responses-image-generation' && genData.responsesModel.trim()) {
-                    apiFormData.append('responsesModel', genData.responsesModel.trim());
-                }
+                appendImageUpstreamOverrideFields(apiFormData, {
+                    imageBackend: genData.image_backend,
+                    streamingStrategy: genData.streaming_strategy,
+                    responsesModel: genData.responsesModel
+                });
             } else {
                 const editData = formData as EditingFormData;
                 apiFormData.append('model', editData.model);

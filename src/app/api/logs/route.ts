@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 
 function isAuthorized(request: NextRequest): boolean {
-    const appPassword = process.env.APP_PASSWORD;
+    const appPassword = process.env.APP_PASSWORD?.trim();
     if (!appPassword) return false;
 
     const authorization = request.headers.get('authorization') || '';
@@ -23,7 +23,7 @@ function encodeSseComment(encoder: TextEncoder, value: string): Uint8Array {
 }
 
 export async function GET(request: NextRequest) {
-    if (!process.env.APP_PASSWORD) {
+    if (!process.env.APP_PASSWORD?.trim()) {
         return NextResponse.json({ error: '日志查看需要先配置 APP_PASSWORD。' }, { status: 403 });
     }
 

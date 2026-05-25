@@ -65,7 +65,11 @@ function loadStatusEnvFile(statusEnv, baseEnv, options) {
     for (const line of readFileSync(options.path, 'utf8').split(/\r?\n/)) {
         const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
         if (!match || !shouldSetStatusEnv(match[1], baseEnv, statusEnv, options)) continue;
-        statusEnv[match[1]] = match[2].replace(/^['"]|['"]$/g, '').trim();
+        const value = match[2].trim();
+        const quoted =
+            value.length >= 2 &&
+            ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")));
+        statusEnv[match[1]] = quoted ? value.slice(1, -1) : value;
     }
 }
 

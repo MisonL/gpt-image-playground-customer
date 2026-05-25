@@ -1,3 +1,4 @@
+import { PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH } from './agent-api-contracts';
 import { appLogger } from './app-logger';
 import {
     type ChannelCredential,
@@ -5,8 +6,8 @@ import {
     isChannelFailure,
     isCredentialFailure
 } from './channel-router';
-import type { ImageGenerationBackend } from './image-upstream-strategy';
 import { RequestValidationError } from './image-request-utils';
+import type { ImageGenerationBackend } from './image-upstream-strategy';
 import { getServerChannelState } from './server-channel-router';
 import { buildAccessCookie, outputDir, readBooleanEnv, serializeAccessCookie } from './server-runtime';
 import { resolveActualCost, type ActualCostDetails } from './upstream-cost/resolve';
@@ -22,13 +23,15 @@ export function readClientRequestId(formData: FormData): string | undefined {
     if (typeof value !== 'string') return undefined;
     const normalized = value.trim();
     if (!normalized) return undefined;
-    return normalized.slice(0, 128);
+    if (normalized.length > PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH) {
+        throw new RequestValidationError(
+            `clientRequestId 长度不能超过 ${PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH} 个字符。`
+        );
+    }
+    return normalized;
 }
 
-export function assertResponsesImageBackendAllowed(input: {
-    imageBackend: ImageBackend;
-    mode: string;
-}) {
+export function assertResponsesImageBackendAllowed(input: { imageBackend: ImageBackend; mode: string }) {
     if (input.imageBackend !== 'responses-image-generation') return;
     if (!readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND')) {
         throw new RequestValidationError(

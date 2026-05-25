@@ -1,4 +1,5 @@
 import { asRecord, type JsonRecord } from './json-record';
+import { createHash } from 'node:crypto';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
@@ -71,6 +72,7 @@ const RESPONSES_EVENT_TYPES = new Set([
 ]);
 
 const OTOKAPI_EVENT_TYPES = new Set(['image.generation.chunk', 'image.generation.result']);
+const MAX_RESPONSES_IMAGE_TRAVERSAL_DEPTH = 64;
 
 function readString(record: JsonRecord, ...keys: string[]): string | undefined {
     for (const key of keys) {
@@ -229,7 +231,10 @@ function readOutputItems(record: JsonRecord): JsonRecord[] {
 
 function readResponsesImageGenerationItems(record: JsonRecord): JsonRecord[] {
     const items: JsonRecord[] = [];
-    const visit = (current: JsonRecord) => {
+    const visit = (current: JsonRecord, depth: number) => {
+        if (depth > MAX_RESPONSES_IMAGE_TRAVERSAL_DEPTH) {
+            return;
+        }
         const currentType = readString(current, 'type');
         if (currentType === 'image_generation_call') {
             items.push(current);
@@ -243,19 +248,19 @@ function readResponsesImageGenerationItems(record: JsonRecord): JsonRecord[] {
 
         const item = asRecord(current.item);
         if (item) {
-            visit(item);
+            visit(item, depth + 1);
         }
 
         const response = asRecord(current.response);
         if (response) {
-            visit(response);
+            visit(response, depth + 1);
         }
 
         for (const outputItem of readOutputItems(current)) {
-            visit(outputItem);
+            visit(outputItem, depth + 1);
         }
     };
-    visit(record);
+    visit(record, 0);
     return items;
 }
 
@@ -273,14 +278,24 @@ function readResponsesImageDedupeKey(record: JsonRecord, b64Json?: string): stri
     }
     const id = readString(record, 'id', 'item_id', 'itemId', 'call_id', 'callId');
     if (id) return `responses:${id}`;
-    return b64Json ? `responses:result:${b64Json}` : undefined;
+    return b64Json ? `responses:result:${fingerprintImagePayload(b64Json)}` : undefined;
+}
+
+function fingerprintImagePayload(value: string): string {
+    return `fingerprint:${value.length}:${hashImagePayload(value)}`;
+}
+
+function hashImagePayload(value: string): string {
+    return createHash('sha256').update(value).digest('hex');
 }
 
 function hasRemoteOnlyResponsesImageResult(record: JsonRecord): boolean {
     return readResponsesImageGenerationItems(record).some((item) => {
         const result = readString(item, 'result');
         const url = readString(item, 'url');
-        return Boolean(((result && isRemoteHttpUrl(result)) || (url && isRemoteHttpUrl(url))) && !readImageBase64(item));
+        return Boolean(
+            ((result && isRemoteHttpUrl(result)) || (url && isRemoteHttpUrl(url))) && !readImageBase64(item)
+        );
     });
 }
 
@@ -416,7 +431,10 @@ export function normalizeUpstreamImageStreamEventWithDiagnostics(event: unknown)
         events = normalizePartialEvent(record);
     } else if (!eventType && readImageBase64(record)) {
         events = normalizePartialEvent(record);
-    } else if ((eventType && COMPLETED_EVENT_TYPES.has(eventType)) || (!eventType && hasCompletedImagePayload(record))) {
+    } else if (
+        (eventType && COMPLETED_EVENT_TYPES.has(eventType)) ||
+        (!eventType && hasCompletedImagePayload(record))
+    ) {
         events = normalizeCompletedEvent(record, eventType);
     } else {
         events = [];
