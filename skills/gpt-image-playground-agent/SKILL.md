@@ -103,7 +103,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   --image-backend images-api \
   --streaming-strategy newapi-keepalive-sse \
   --partial-images 2 \
-  --size 4096x4096 \
+  --size 3840x2160 \
   --quality high \
   "a product photo of a ceramic mug"
 ```
@@ -118,7 +118,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   "a product photo of a ceramic mug"
 ```
 
-生成脚本会对 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果 capabilities 未声明 `agent_streaming.page_sse.supported=true`，脚本会显式失败，不会静默降级到 Agent JSON。如果页面流式失败，脚本会返回结构化失败结果，先诊断再决定是否用 `--agent` 或 `--job` 重新执行，不会自动发起第二次请求。也可以用 `--page-sse` 强制页面流式，或用 `--agent` 强制非流式 Agent generate，`--job` 仍可显式选择 job 路径。上游流式字段支持 `--image-backend`、`--streaming-strategy`、`--partial-images`；默认不发送这些字段，保持服务端默认非流式基线。
+生成脚本会对 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果 capabilities 未声明 `agent_streaming.page_sse.supported=true`，脚本会显式失败，不会静默降级到 Agent JSON。如果页面流式失败，脚本会返回结构化失败结果，先诊断再决定是否用 `--agent` 或 `--job` 重新执行，不会自动发起第二次请求。也可以用 `--page-sse` 强制页面流式，或用 `--agent` 强制非流式 Agent generate，`--job` 仍可显式选择 job 路径。显式传 `--streaming-strategy off` 时，大图请求保持 Agent JSON 非流式路径，用于和页面 SSE 做诊断对照。上游流式字段支持 `--image-backend`、`--streaming-strategy`、`--partial-images`；默认不发送这些字段，保持服务端默认非流式基线。
 
 编辑脚本支持 `--model`、`--size`、`--quality`、`--response-mode`、`--timeout-ms`、`--idempotency-key`、`--dry-run` 和 `--allow-billable`。
 

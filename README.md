@@ -221,6 +221,7 @@ Authorization: Bearer your-agent-token
 
 Job polling 当前是同一 Next.js 服务实例内的后台任务，结果和错误会写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在 job 结束前重启，客户端应继续按状态端点和结构化错误处理，必要时用相同 `Idempotency-Key` 重建同一业务操作。
 运行中的 job 会定时刷新请求 lease，避免高质量长耗时上游调用仍在执行时被 recovery 误判为孤儿请求。
+`POST /api/agent/images/generate` 对外始终是最终 JSON；`max_edge>2048` 的单次文生图默认建议按 `/api/agent/capabilities` 使用页面端 `/api/images` SSE。显式传 `--agent` 或 `streaming_strategy=off` 时才走 Agent JSON 非流式路径，用于诊断对照。
 
 生成示例：
 
@@ -580,6 +581,7 @@ docker logs -f gpt-image-playground-customer
 `npm run smoke:image-upstream-local` 会临时启动仓库内置 fixture，把 5 个独立场景全部指向本机 `/v1` 兼容服务，并调用同一个 `smoke:image-upstream-real -- --require-independent-targets --allow-billable` 门禁路径。该命令用于验证本项目的 final-gate 脚本、事件归一化和本地可复现环境；输出会标记 `local_fixture=true`。它不证明原版 new-api、gaoren/new-api、sub2api 或 GPT2Image 第三方部署当前可访问，真实验收仍需配置 `.env.real-smoke.local` 后运行真实上游门禁。
 
 若只需要验证当前 `.env.local` 中的 `OPENAI_API_KEY` 或 `OPENAI_CHANNEL_N_*` 服务端渠道，可追加 `-- --include-server-channel`。该模式不会把服务端 API Key 写入表单或输出，真实执行仍需同时追加 `--allow-billable`；可覆盖 Images JSON、Images SSE、Responses JSON、Responses SSE、Agent 内部 Images SSE 和 Agent 内部 Responses SSE 场景。可用 `IMAGE_REAL_SMOKE_SERVER_MODEL`、`IMAGE_REAL_SMOKE_SERVER_SIZE`、`IMAGE_REAL_SMOKE_SERVER_QUALITY`、`IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL` 覆盖模型、尺寸、质量和 Responses 顶层模型。单场景默认超时 `240000ms`，可用 `--timeout-ms` 或 `IMAGE_REAL_SMOKE_TIMEOUT_MS` 调整。
+服务端渠道 smoke 只证明当前配置和上游账号池在请求时可用；如果上游返回 `503` 或 `No available compatible accounts`，应归类为上游渠道当前不可用，不要把它记成本地路由或脚本成功。
 
 dry-run 输出中的 `independent_targets` 会汇总必跑、已选、未选、已配置和缺失的独立真实上游场景，并给出最终门禁命令；`required_count` 和 `unselected_required_count` 用于区分必跑总数和未选择数量，`configuration_complete=true` 只表示 5 个必跑场景都已选中且配置齐全，不代表已经执行计费生图。顶层 `final_gate_satisfied=true` 才表示最终独立真实上游门禁已实际执行并通过。`missing_env_any` 表示每组任选一个环境变量即可补齐该缺失项。例如 `sub2api-responses-json` 的 `BASE_URL` 和 `API_KEY` 可单独配置 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`，也可以复用 `IMAGE_REAL_SMOKE_SUB2API_*`；它的 `/responses` 顶层模型必须使用 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL` 或 `OPENAI_RESPONSES_API_MODEL`，避免和图片模型 `IMAGE_REAL_SMOKE_SUB2API_RESPONSES_MODEL` 混淆。
 

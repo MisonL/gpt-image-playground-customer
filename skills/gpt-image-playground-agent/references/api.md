@@ -32,11 +32,19 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--n`：默认 `1`。
 - `--format`：默认 `png`，`jpg` 会规范化为 `jpeg`。
 - `--response-mode`：默认 `path`。
+- `--image-backend`：可选，显式选择 `images-api`、`images`、`responses` 或 `responses-image-generation`。
+- `--streaming-strategy`：可选，显式选择 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse` 或 `force-sse`。
+- `--partial-images`：可选，显式设置上游 SSE partial image 数量，范围 `1` 到 `3`。
 - `--timeout-ms`：默认 `420000`。
 - `--prompt-file`：从文本文件读取 prompt。
 - `--idempotency-key`：指定稳定幂等键。
+- `--page-sse`：强制使用页面端 `/api/images` form-data SSE。
+- `--agent`：强制使用 `/api/agent/images/generate` 非流式 JSON。
+- `--job`：强制使用 Agent job polling。
 - `--dry-run`：只输出将要发送的 JSON。
 - `--allow-billable`：允许真实调用生图端点。
+
+`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果显式传 `--streaming-strategy off`，即使是大图也保持 `/api/agent/images/generate` 非流式 JSON 路径，用于诊断对照。
 
 编辑脚本参数：
 
