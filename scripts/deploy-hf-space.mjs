@@ -13,6 +13,7 @@ const STATUS_POLL_ATTEMPTS = 40;
 const STATUS_POLL_INTERVAL_MS = 10_000;
 const PUBLIC_ENDPOINT_TIMEOUT_MS = 10_000;
 const HF_CLI_TIMEOUT_MS = 120_000;
+export const GIT_ARCHIVE_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
 function parseArgs(argv) {
     assertKnownOptions(argv, ['--help', '-h']);
@@ -62,6 +63,7 @@ export function parseRepositorySlug(remoteUrl) {
 function runBinary(command, args) {
     const result = spawnSync(command, args, {
         encoding: 'buffer',
+        maxBuffer: GIT_ARCHIVE_MAX_BUFFER_BYTES,
         stdio: ['ignore', 'pipe', 'pipe']
     });
     if (result.error) throw new Error(`${command} ${args.join(' ')} failed: ${result.error.message}`);

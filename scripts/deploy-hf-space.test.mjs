@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildUploadArgs, extractUploadCommitSha, parseRepositorySlug } from './deploy-hf-space.mjs';
+import { GIT_ARCHIVE_MAX_BUFFER_BYTES, buildUploadArgs, extractUploadCommitSha, parseRepositorySlug } from './deploy-hf-space.mjs';
 
 describe('HF Space deploy script', () => {
     it('extracts the Space commit SHA from hf upload JSON output', () => {
@@ -83,5 +83,9 @@ describe('HF Space deploy script', () => {
                 }),
             /REPO_SLUG is required/
         );
+    });
+
+    it('keeps enough buffer for repository archives used by Space uploads', () => {
+        assert.ok(GIT_ARCHIVE_MAX_BUFFER_BYTES >= 128 * 1024 * 1024);
     });
 });
