@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = fileURLToPath(new URL('./smoke-image-upstream-local-final-gate.mjs', import.meta.url));
@@ -32,8 +32,14 @@ describe('local image upstream final gate smoke launcher', () => {
                 'gpt2image-responses-sse'
             ]
         );
-        assert.equal(report.results.every((item) => item.status === 200), true);
-        assert.equal(report.results.every((item) => item.first_b64_length === 92), true);
+        assert.equal(
+            report.results.every((item) => item.status === 200),
+            true
+        );
+        assert.equal(
+            report.results.every((item) => item.first_b64_length === 92),
+            true
+        );
     });
 
     it('prints help without starting the fixture', () => {
@@ -45,5 +51,18 @@ describe('local image upstream final gate smoke launcher', () => {
         assert.equal(result.status, 0);
         assert.match(result.stdout, /smoke:image-upstream-local/);
         assert.match(result.stdout, /local fixture gate/);
+    });
+
+    it('rejects unsafe parent timeout values before starting the fixture', () => {
+        const result = spawnSync(process.execPath, [scriptPath, '--timeout-ms', String(Number.MAX_SAFE_INTEGER)], {
+            cwd: repoRoot,
+            encoding: 'utf8'
+        });
+
+        assert.equal(result.status, 1);
+        assert.equal(result.stderr.trim(), '');
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.ok, false);
+        assert.match(body.error, /父进程超时会超过安全整数上限/);
     });
 });

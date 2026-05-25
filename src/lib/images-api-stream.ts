@@ -26,17 +26,16 @@ function buildImagesGenerateUrl(apiBaseUrl: string | undefined): string {
 
 function readErrorMessage(body: unknown): string | undefined {
     if (!body || typeof body !== 'object') return undefined;
-    const record = body as Record<string, unknown>;
-    const error = record.error;
+    const { error, message: rootMessage } = body as Record<string, unknown>;
     if (error && typeof error === 'object') {
-        const message = (error as Record<string, unknown>).message;
+        const { message } = error as Record<string, unknown>;
         if (typeof message === 'string' && message.trim()) return message.trim();
     }
-    const message = record.message;
-    return typeof message === 'string' && message.trim() ? message.trim() : undefined;
+    return typeof rootMessage === 'string' && rootMessage.trim() ? rootMessage.trim() : undefined;
 }
 
 async function readResponseError(response: Response): Promise<ImagesApiStreamError> {
+    const { status } = response;
     const contentType = response.headers.get('content-type') || '';
     const text = await response.text();
     let message = text.trim();
@@ -47,7 +46,7 @@ async function readResponseError(response: Response): Promise<ImagesApiStreamErr
             // Keep the raw text when an upstream mislabeled a non-JSON error.
         }
     }
-    return new ImagesApiStreamError(message || `Images API stream request failed with HTTP ${response.status}.`, response.status);
+    return new ImagesApiStreamError(message || `Images API stream request failed with HTTP ${status}.`, status);
 }
 
 function parseSseDataPayload(raw: string): unknown | undefined {
@@ -90,15 +89,16 @@ function readSseChunk(chunk: string): unknown | undefined {
 }
 
 export async function createImagesApiGenerateStream(input: ImagesApiStreamInput): Promise<AsyncIterable<unknown>> {
-    const response = await fetch(buildImagesGenerateUrl(input.apiBaseUrl), {
+    const { abortSignal, apiBaseUrl, apiKey, params } = input;
+    const response = await fetch(buildImagesGenerateUrl(apiBaseUrl), {
         method: 'POST',
         headers: {
-            Authorization: `Bearer ${input.apiKey}`,
+            Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             Accept: 'text/event-stream, application/json'
         },
-        signal: input.abortSignal,
-        body: JSON.stringify(input.params)
+        signal: abortSignal,
+        body: JSON.stringify(params)
     });
     if (!response.ok) {
         throw await readResponseError(response);

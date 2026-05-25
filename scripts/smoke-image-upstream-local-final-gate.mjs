@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-
 import { commandFailureMessage, parseJsonPayload, printJson } from './command-center-utils.mjs';
 import { createFixtureServer } from './local-image-upstream-fixture.mjs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const REAL_SMOKE_SCRIPT = fileURLToPath(new URL('./smoke-image-upstream-real.mjs', import.meta.url));
 const DEFAULT_TIMEOUT_MS = 30_000;
 const LOCAL_FINAL_GATE_CASE_COUNT = 5;
 const LOCAL_FINAL_GATE_PARENT_TIMEOUT_BUFFER_MS = 15_000;
+const MAX_LOCAL_FINAL_GATE_CASE_TIMEOUT_MS = Math.floor(
+    (Number.MAX_SAFE_INTEGER - LOCAL_FINAL_GATE_PARENT_TIMEOUT_BUFFER_MS) / LOCAL_FINAL_GATE_CASE_COUNT
+);
 
 function parseArgs(argv) {
     const parsed = { help: false, timeoutMs: DEFAULT_TIMEOUT_MS };
@@ -66,15 +67,33 @@ async function main() {
 }
 
 function runLocalFinalGate(baseUrl, timeoutMs) {
+    const parentTimeoutMs = readLocalFinalGateParentTimeoutMs(timeoutMs);
     return runCommandAsync(
         process.execPath,
-        ['--import', 'tsx', REAL_SMOKE_SCRIPT, '--allow-billable', '--require-independent-targets', '--timeout-ms', String(timeoutMs)],
+        [
+            '--import',
+            'tsx',
+            REAL_SMOKE_SCRIPT,
+            '--allow-billable',
+            '--require-independent-targets',
+            '--timeout-ms',
+            String(timeoutMs)
+        ],
         {
             cwd: REPO_ROOT,
             env: buildLocalFinalGateEnv(baseUrl, timeoutMs),
-            timeoutMs: timeoutMs * LOCAL_FINAL_GATE_CASE_COUNT + LOCAL_FINAL_GATE_PARENT_TIMEOUT_BUFFER_MS
+            timeoutMs: parentTimeoutMs
         }
     );
+}
+
+function readLocalFinalGateParentTimeoutMs(timeoutMs) {
+    if (timeoutMs > MAX_LOCAL_FINAL_GATE_CASE_TIMEOUT_MS) {
+        throw new Error(
+            `--timeout-ms 过大，local final gate 父进程超时会超过安全整数上限；最大允许 ${MAX_LOCAL_FINAL_GATE_CASE_TIMEOUT_MS}。`
+        );
+    }
+    return timeoutMs * LOCAL_FINAL_GATE_CASE_COUNT + LOCAL_FINAL_GATE_PARENT_TIMEOUT_BUFFER_MS;
 }
 
 function runCommandAsync(command, args, options = {}) {
@@ -197,7 +216,8 @@ function closeServer(server) {
 }
 
 function assertFinalGateReport(report) {
-    if (report?.final_gate_satisfied !== true) throw new Error('local final gate did not satisfy final_gate_satisfied=true');
+    if (report?.final_gate_satisfied !== true)
+        throw new Error('local final gate did not satisfy final_gate_satisfied=true');
     if (!Array.isArray(report.results) || report.results.length !== 5) {
         throw new Error('local final gate did not run all five independent upstream cases');
     }
@@ -227,6 +247,11 @@ function readArgValue(argv, index, flag) {
 function readTimeoutMs(value, source) {
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed < 1000) throw new Error(`${source} 必须是不小于 1000 的整数毫秒。`);
+    if (parsed > MAX_LOCAL_FINAL_GATE_CASE_TIMEOUT_MS) {
+        throw new Error(
+            `${source} 过大，local final gate 父进程超时会超过安全整数上限；最大允许 ${MAX_LOCAL_FINAL_GATE_CASE_TIMEOUT_MS}。`
+        );
+    }
     return parsed;
 }
 

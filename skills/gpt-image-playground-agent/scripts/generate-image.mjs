@@ -110,16 +110,7 @@ if (isNonBillableDryRun(options, contractCheck)) {
     process.exit(0);
 }
 
-try {
-    var capabilities = await readCapabilities();
-} catch (error) {
-    if (isScriptError(error)) {
-        console.error(JSON.stringify(buildPageSseFailureOutput(error), null, 2));
-        process.exit(1);
-    }
-    console.error(errorMessage(error));
-    process.exit(1);
-}
+const capabilities = await readCapabilitiesOrExit();
 applyCapabilitiesRuntimeValues(capabilities);
 
 if (contractCheck) {
@@ -364,6 +355,19 @@ async function readCapabilities() {
         throw new Error(`capabilities 请求失败，状态码 ${response.status}：${text}`);
     }
     return result;
+}
+
+async function readCapabilitiesOrExit() {
+    try {
+        return await readCapabilities();
+    } catch (error) {
+        if (isScriptError(error)) {
+            console.error(JSON.stringify(buildPageSseFailureOutput(error), null, 2));
+            process.exit(1);
+        }
+        console.error(errorMessage(error));
+        process.exit(1);
+    }
 }
 
 function applyCapabilitiesRuntimeValues(capabilitiesValue) {
