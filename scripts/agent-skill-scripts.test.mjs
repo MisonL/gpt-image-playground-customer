@@ -1,10 +1,13 @@
+import {
+    parseRetryAfterValue,
+    resolveSameOriginUrl
+} from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { parseRetryAfterValue, resolveSameOriginUrl } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const skillScriptsRoot = join(repoRoot, 'skills/gpt-image-playground-agent/scripts');
@@ -57,7 +60,10 @@ describe('Agent skill script argument validation', () => {
     });
 
     it('rejects upstream probe base URLs with embedded credentials before network checks', () => {
-        const result = runSkillScript('probe-upstream-image.mjs', ['--base-url', 'https://user:secret@example.test/v1']);
+        const result = runSkillScript('probe-upstream-image.mjs', [
+            '--base-url',
+            'https://user:secret@example.test/v1'
+        ]);
 
         assert.equal(result.status, 2);
         assert.match(result.stderr, /base URL/);
@@ -348,7 +354,9 @@ describe('Agent skill script argument validation', () => {
                 requests.push({ method: request.method, url: request.url });
                 if (request.url === '/api/agent/capabilities') {
                     response.writeHead(200, { 'content-type': 'application/json' });
-                    response.end(JSON.stringify({ agent_streaming: {}, agent_jobs: { supported: true, mode: 'job_polling' } }));
+                    response.end(
+                        JSON.stringify({ agent_streaming: {}, agent_jobs: { supported: true, mode: 'job_polling' } })
+                    );
                     return;
                 }
                 if (request.url === '/api/agent/images/generate') {
@@ -371,7 +379,10 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stderr);
                 assert.equal(body.error.code, 'page_sse_unavailable');
                 assert.equal(body.routing.fallback_mode, 'manual_after_diagnosis');
-                assert.deepEqual(requests.map((item) => `${item.method} ${item.url}`), ['GET /api/agent/capabilities']);
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    ['GET /api/agent/capabilities']
+                );
             }
         );
     });
@@ -434,7 +445,11 @@ describe('Agent skill script argument validation', () => {
                                 page_sse: {
                                     supported: true,
                                     endpoint: '/api/images',
-                                    auth: { required: true, schemes: ['form-password-hash'], form_field: 'passwordHash' }
+                                    auth: {
+                                        required: true,
+                                        schemes: ['form-password-hash'],
+                                        form_field: 'passwordHash'
+                                    }
                                 }
                             },
                             agent_jobs: { supported: true, mode: 'job_polling' }
@@ -462,7 +477,10 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stderr);
                 assert.equal(body.error.code, 'page_sse_auth_required');
                 assert.match(body.error.message, /GPT_IMAGE_APP_PASSWORD_HASH/);
-                assert.deepEqual(requests.map((item) => `${item.method} ${item.url}`), ['GET /api/agent/capabilities']);
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    ['GET /api/agent/capabilities']
+                );
             }
         );
     });
@@ -499,15 +517,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    [
-                        '--allow-billable',
-                        '--page-sse',
-                        '--size',
-                        '3072x2048',
-                        '--quality',
-                        'high',
-                        'prompt'
-                    ],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     {
                         GPT_IMAGE_PLAYGROUND_URL: baseUrl,
                         GPT_IMAGE_AGENT_IDEMPOTENCY_KEY: 'x'.repeat(129)
@@ -519,7 +529,70 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stderr);
                 assert.equal(body.error.code, 'page_sse_client_request_id_too_long');
                 assert.match(body.error.message, /不能超过 128 个字符/);
-                assert.deepEqual(requests.map((item) => `${item.method} ${item.url}`), ['GET /api/agent/capabilities']);
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    ['GET /api/agent/capabilities']
+                );
+            }
+        );
+    });
+
+    it('uses page SSE client request id max length declared by capabilities', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            agent_streaming: {
+                                page_sse: {
+                                    supported: true,
+                                    endpoint: '/api/images',
+                                    auth: { required: false, schemes: [], form_field: 'passwordHash' },
+                                    client_request_id: { max_length: 12 }
+                                }
+                            },
+                            agent_jobs: { supported: true, mode: 'job_polling' }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/images') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'unexpected page call' }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--page-sse',
+                        '--size',
+                        '3072x2048',
+                        '--quality',
+                        'high',
+                        '--idempotency-key',
+                        'too-long-page-key',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                const body = JSON.parse(result.stderr);
+                assert.equal(body.error.code, 'page_sse_client_request_id_too_long');
+                assert.match(body.error.message, /不能超过 12 个字符/);
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    ['GET /api/agent/capabilities']
+                );
             }
         );
     });
@@ -619,7 +692,16 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', '--response-mode', 'base64', 'prompt'],
+                    [
+                        '--allow-billable',
+                        '--size',
+                        '3072x2048',
+                        '--quality',
+                        'high',
+                        '--response-mode',
+                        'base64',
+                        'prompt'
+                    ],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -712,7 +794,17 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--page-sse', '--timeout-ms', '250', '--size', '1024x1024', '--quality', 'high', 'prompt'],
+                    [
+                        '--allow-billable',
+                        '--page-sse',
+                        '--timeout-ms',
+                        '250',
+                        '--size',
+                        '1024x1024',
+                        '--quality',
+                        'high',
+                        'prompt'
+                    ],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl },
                     { timeoutMs: 1_200 }
                 );
@@ -739,7 +831,11 @@ describe('Agent skill script argument validation', () => {
                                 page_sse: {
                                     supported: true,
                                     endpoint: '/api/images',
-                                    auth: { required: true, schemes: ['form-password-hash'], form_field: 'passwordHash' }
+                                    auth: {
+                                        required: true,
+                                        schemes: ['form-password-hash'],
+                                        form_field: 'passwordHash'
+                                    }
                                 }
                             },
                             agent_jobs: { supported: true, mode: 'job_polling' }
@@ -887,6 +983,80 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.images[1].path, '/api/image/image-b.png');
                 assert.equal(body.images[1].absolute_path, `${baseUrl}/api/image/image-b.png`);
                 assert.equal(body.images[1].clientRequestId, 'page-request-2');
+            }
+        );
+    });
+
+    it('uses Agent JSON for billable large generate requests when streaming strategy is off', async () => {
+        const requests = [];
+        let agentRequestBody = '';
+        await withServer(
+            async (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            agent_streaming: {
+                                page_sse: { supported: true, endpoint: '/api/images' }
+                            },
+                            agent_jobs: { supported: true, mode: 'job_polling' }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    agentRequestBody = await readRequestText(request);
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            images: [
+                                {
+                                    filename: 'agent-off.png',
+                                    content_url: '/api/agent/artifacts/artifact-off/content',
+                                    metadata_url: '/api/agent/artifacts/artifact-off'
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/images') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'unexpected page SSE call' }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--size',
+                        '3072x2048',
+                        '--quality',
+                        'high',
+                        '--streaming-strategy',
+                        'off',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.images[0].filename, 'agent-off.png');
+                assert.deepEqual(body.routing, { transport: 'agent_json', endpoint: '/api/agent/images/generate' });
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    ['GET /api/agent/capabilities', 'POST /api/agent/images/generate']
+                );
+                const requestBody = JSON.parse(agentRequestBody);
+                assert.equal(requestBody.size, '3072x2048');
+                assert.equal(requestBody.streaming_strategy, 'off');
             }
         );
     });
@@ -1121,7 +1291,12 @@ describe('Agent skill script argument validation', () => {
 
     it('rejects cross-origin job result URLs before sending auth headers', () => {
         assert.throws(
-            () => resolveSameOriginUrl('https://space.example.test', 'https://evil.example.test/result', 'job.result_url'),
+            () =>
+                resolveSameOriginUrl(
+                    'https://space.example.test',
+                    'https://evil.example.test/result',
+                    'job.result_url'
+                ),
             /不同 origin/
         );
         assert.equal(
