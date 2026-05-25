@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { GIT_ARCHIVE_MAX_BUFFER_BYTES, buildUploadArgs, extractUploadCommitSha, parseRepositorySlug } from './deploy-hf-space.mjs';
+import {
+    GIT_ARCHIVE_MAX_BUFFER_BYTES,
+    buildUploadArgs,
+    extractUploadCommitSha,
+    findRemoteDeletePaths,
+    parseRepositorySlug
+} from './deploy-hf-space.mjs';
 
 describe('HF Space deploy script', () => {
     it('extracts the Space commit SHA from hf upload JSON output', () => {
@@ -87,5 +93,36 @@ describe('HF Space deploy script', () => {
 
     it('keeps enough buffer for repository archives used by Space uploads', () => {
         assert.ok(GIT_ARCHIVE_MAX_BUFFER_BYTES >= 128 * 1024 * 1024);
+    });
+
+    it('adds delete args for remote files that are no longer in git HEAD', () => {
+        const args = buildUploadArgs({
+            sourceDir: '/tmp/source',
+            localSha: '1111111111111111111111111111111111111111',
+            repoSlug: 'owner/repo',
+            deletePaths: ['old-file.md', 'scripts/old-script.mjs']
+        });
+
+        assert.deepEqual(args.slice(-4), ['--delete', 'old-file.md', '--delete', 'scripts/old-script.mjs']);
+    });
+
+    it('rejects unsafe delete path values before invoking hf upload', () => {
+        assert.throws(
+            () =>
+                buildUploadArgs({
+                    sourceDir: '/tmp/source',
+                    localSha: '2222222222222222222222222222222222222222',
+                    repoSlug: 'owner/repo',
+                    deletePaths: ['bad\npath']
+                }),
+            /deletePaths must contain/
+        );
+    });
+
+    it('finds stale remote files deterministically', () => {
+        assert.deepEqual(
+            findRemoteDeletePaths(new Set(['README.md', 'src/app.ts']), ['old.md', 'src/app.ts', 'README.md']),
+            ['old.md']
+        );
     });
 });

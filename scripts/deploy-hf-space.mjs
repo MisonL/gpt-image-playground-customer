@@ -100,9 +100,9 @@ export function extractUploadCommitSha(output) {
     return match[1];
 }
 
-export function buildUploadArgs({ sourceDir, localSha, repoSlug }) {
+export function buildUploadArgs({ sourceDir, localSha, repoSlug, deletePaths = [] }) {
     if (!repoSlug?.trim()) throw new Error('REPO_SLUG is required for deploy metadata.');
-    return [
+    const args = [
         'upload',
         HF_SPACE_ID,
         sourceDir,
@@ -115,10 +115,32 @@ export function buildUploadArgs({ sourceDir, localSha, repoSlug }) {
         `Source: ${repoSlug}@${localSha}`,
         '--json'
     ];
+    for (const deletePath of deletePaths) {
+        if (!deletePath?.trim() || deletePath.includes('\n') || deletePath.includes('\r')) {
+            throw new Error('deletePaths must contain non-empty single-line repository paths.');
+        }
+        args.push('--delete', deletePath);
+    }
+    return args;
+}
+
+function readLocalGitFiles() {
+    const output = runText('git', ['-c', 'core.quotePath=false', 'ls-tree', '-r', '-z', '--name-only', 'HEAD']);
+    return new Set(output.split('\0').filter(Boolean));
+}
+
+function readRemoteFilePaths() {
+    const info = readSpaceInfo();
+    return (info.siblings || []).map((sibling) => sibling.rfilename).filter((filename) => typeof filename === 'string' && filename.length > 0);
+}
+
+export function findRemoteDeletePaths(localFiles, remoteFiles) {
+    return [...remoteFiles].filter((filename) => !localFiles.has(filename)).sort();
 }
 
 function uploadSourceTree(sourceDir, localSha) {
-    const output = runText('hf', buildUploadArgs({ sourceDir, localSha, repoSlug: readRepositorySlug() }));
+    const deletePaths = findRemoteDeletePaths(readLocalGitFiles(), readRemoteFilePaths());
+    const output = runText('hf', buildUploadArgs({ sourceDir, localSha, repoSlug: readRepositorySlug(), deletePaths }));
     return extractUploadCommitSha(output);
 }
 
