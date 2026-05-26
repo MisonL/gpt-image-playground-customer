@@ -1,7 +1,7 @@
-import fs from 'fs/promises';
 import { appLogger } from '@/lib/app-logger';
 import { isValidImageFilename } from '@/lib/image-request-utils';
 import { outputDir, verifyPasswordHash } from '@/lib/server-runtime';
+import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     try {
         requestBody = await request.json();
 
-        const appPassword = process.env.APP_PASSWORD;
+        const appPassword = process.env.APP_PASSWORD?.trim();
         if (appPassword) {
             const clientPasswordHash = requestBody.passwordHash;
 

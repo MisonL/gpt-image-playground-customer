@@ -34,6 +34,7 @@ type ImageOutputProps = {
     currentMode: 'generate' | 'edit';
     baseImagePreviewUrl: string | null;
     streamingPreviewImages?: Map<number, string>;
+    isStreamingRequest?: boolean;
     clientPasswordHash: string | null;
     canOpenLogs: boolean;
     openLogsSignal?: number;
@@ -76,6 +77,7 @@ export function ImageOutput({
     currentMode,
     baseImagePreviewUrl,
     streamingPreviewImages,
+    isStreamingRequest = false,
     clientPasswordHash,
     canOpenLogs,
     openLogsSignal,
@@ -264,7 +266,7 @@ export function ImageOutput({
                     ) : (
                         <div className='text-muted-foreground flex flex-col items-center justify-center'>
                             <Loader2 className='mb-2 h-8 w-8 animate-spin' />
-                            <p>{t('output.generating')}</p>
+                            <p>{isStreamingRequest ? t('output.keepalive') : t('output.generating')}</p>
                         </div>
                     )
                 ) : imageBatch && imageBatch.length > 0 ? (

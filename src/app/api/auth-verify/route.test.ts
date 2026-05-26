@@ -16,6 +16,21 @@ afterEach(() => {
 });
 
 describe('POST /api/auth-verify', () => {
+    it('treats blank APP_PASSWORD as disabled', async () => {
+        process.env.APP_PASSWORD = '   ';
+        const request = new NextRequest('http://localhost/api/auth-verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+
+        const response = await POST(request);
+        const result = (await response.json()) as { authenticated?: boolean; passwordRequired?: boolean };
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(result, { authenticated: true, passwordRequired: false });
+    });
+
     it('returns a page access code error code for invalid access-code hashes', async () => {
         process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
         const request = new NextRequest('http://localhost/api/auth-verify', {

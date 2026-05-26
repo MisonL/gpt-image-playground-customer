@@ -1,3 +1,4 @@
+import { validateGptImage2Size } from './size-utils';
 import type OpenAI from 'openai';
 
 export const VALID_IMAGE_FILENAME_PATTERN = /^\d{13}(?:-[a-f0-9]{16})?-\d+\.(png|jpe?g|webp)$/i;
@@ -142,6 +143,13 @@ export function readSize(formData: FormData, field: string, fallback: string, mo
     }
     if (model === 'gpt-image-2' && value !== 'auto' && !/^\d+x\d+$/.test(value)) {
         throw new RequestValidationError(`${field} 必须是 auto 或 WxH 格式的尺寸值。`);
+    }
+    if (model === 'gpt-image-2' && value !== 'auto') {
+        const [width, height] = value.split('x').map(Number);
+        const validation = validateGptImage2Size(width, height);
+        if (!validation.valid) {
+            throw new RequestValidationError(`${field} 对 ${model} 无效：${validation.reason}`);
+        }
     }
     return value;
 }

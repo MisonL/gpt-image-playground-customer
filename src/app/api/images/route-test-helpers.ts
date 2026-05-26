@@ -1,7 +1,8 @@
-export { readSseEvents } from '@/lib/sse-test-utils';
 import type { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+
+export { readSseEvents } from '@/lib/sse-test-utils';
 
 export const PNG_BASE64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
@@ -9,24 +10,30 @@ export const PNG_BASE64 =
 export function imageFormRequest(input: {
     apiBaseUrl: string;
     apiKey: string;
-    stream: boolean;
+    stream?: boolean;
     mode?: 'generate' | 'edit';
-    imageBackend?: 'images' | 'responses';
+    imageBackend?: 'images' | 'responses' | 'images-api' | 'responses-image-generation';
+    imageStreamingStrategy?: 'off' | 'auto' | 'openai-sse' | 'newapi-keepalive-sse' | 'responses-sse' | 'force-sse';
+    size?: string;
     n?: string;
     responsesModel?: string;
+    clientRequestId?: string;
 }): NextRequest {
     const formData = new FormData();
     formData.append('mode', input.mode || 'generate');
     formData.append('prompt', 'route stream contract');
     formData.append('model', 'gpt-image-2');
     formData.append('n', input.n || '1');
-    formData.append('size', '1024x1024');
+    formData.append('size', input.size || '1024x1024');
     formData.append('output_format', 'png');
     formData.append('apiBaseUrl', input.apiBaseUrl);
     formData.append('apiKey', input.apiKey);
-    formData.append('clientRequestId', 'client-route-stream');
+    formData.append('clientRequestId', input.clientRequestId ?? 'client-route-stream');
     if (input.imageBackend) {
         formData.append('imageBackend', input.imageBackend);
+    }
+    if (input.imageStreamingStrategy) {
+        formData.append('imageStreamingStrategy', input.imageStreamingStrategy);
     }
     if (input.responsesModel) {
         formData.append('responsesModel', input.responsesModel);
@@ -77,6 +84,26 @@ export async function startStreamingImageUpstream(
     return listen(server);
 }
 
+export async function startImagesJsonUpstream(
+    handler: (body: string, url: string) => Promise<unknown>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer(async (request, response) => {
+        const isImagePath = request.url?.endsWith('/images/generations') || request.url?.endsWith('/images/edits');
+        if (request.method !== 'POST' || !isImagePath) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const payload = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(payload));
+    });
+    return listen(server);
+}
+
 export async function startResponsesImageUpstream(
     handler: (body: string) => Promise<unknown>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
@@ -92,6 +119,32 @@ export async function startResponsesImageUpstream(
         const payload = await handler(Buffer.concat(chunks).toString('utf8'));
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify(payload));
+    });
+    return listen(server);
+}
+
+export async function startStreamingResponsesImageUpstream(
+    handler: (body: string) => Promise<Array<{ event?: string; data: unknown }>>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const events = await handler(Buffer.concat(chunks).toString('utf8'));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        for (const event of events) {
+            if (event.event) {
+                response.write(`event: ${event.event}\n`);
+            }
+            response.write(`data: ${JSON.stringify(event.data)}\n\n`);
+        }
+        response.write('data: [DONE]\n\n');
+        response.end();
     });
     return listen(server);
 }

@@ -1,19 +1,11 @@
 import {
-    type ChannelCredential,
-    describeChannelFailure,
-    isChannelFailure,
-    isCredentialFailure,
-    resolveEffectiveCredential
-} from './channel-router';
-import {
     type AgentGenerateRequest,
     type AgentImageResponse,
     type AgentImageResponseItem,
     type AgentResponseMode,
     validateAgentGenerateRequest
 } from './agent-api-contracts';
-import { AgentApiError, normalizeAgentError, type AgentErrorBody } from './api-error-response';
-import { assertArtifactFilepathAllowed, deleteArtifactFileIfAllowed } from './agent-file-utils';
+import { assertArtifactFilepathAllowed, deleteArtifactFileIfAllowed, readImageDimensions } from './agent-file-utils';
 import {
     artifactRecordToResponseItem,
     createArtifactId,
@@ -23,13 +15,16 @@ import {
     type AgentArtifactRecord,
     type AgentStateStore
 } from './agent-state-store';
+import { AgentApiError, normalizeAgentError, type AgentErrorBody } from './api-error-response';
+import type { AgentErrorDiagnostics } from './api-error-response';
 import { appLogger } from './app-logger';
-import fs from 'fs/promises';
 import {
-    InvalidOpenAiImagesResponseError,
-    MissingOpenAiImageDataError,
-    persistOpenAiImages as persistSharedOpenAiImages
-} from './image-service';
+    type ChannelCredential,
+    describeChannelFailure,
+    isChannelFailure,
+    isCredentialFailure,
+    resolveEffectiveCredential
+} from './channel-router';
 import {
     RequestValidationError,
     readCount,
@@ -43,11 +38,23 @@ import {
     type GptImageModel,
     type ValidOutputFormat
 } from './image-request-utils';
+import {
+    InvalidOpenAiImagesResponseError,
+    MissingOpenAiImageDataError,
+    persistOpenAiImages as persistSharedOpenAiImages
+} from './image-service';
+import { collectOpenAiImagesFromStream } from './image-stream-collector';
+import { createImagesApiGenerateStream } from './images-api-stream';
+import {
+    createResponsesImageStream,
+    generateImageWithResponsesBackend,
+    type ResponsesImageGenerateInput
+} from './responses-image-backend';
 import { getServerChannelState } from './server-channel-router';
-import { readAffinityKey } from './server-runtime';
+import { readAffinityKey, readBooleanEnv } from './server-runtime';
 import crypto from 'crypto';
+import fs from 'fs/promises';
 import OpenAI from 'openai';
-import type { AgentErrorDiagnostics } from './api-error-response';
 
 export type AgentRequestExecutionResult = {
     response: AgentImageResponse;
@@ -59,6 +66,7 @@ type CredentialContext = {
     openai: OpenAI;
     selectedCredential?: ChannelCredential;
     baseUrl?: string;
+    apiKey: string;
 };
 
 export function readIdempotencyKey(headers: Headers): string {
@@ -109,6 +117,12 @@ export async function snapshotAgentEditFormData(formData: FormData): Promise<Rec
     return { mode: 'edit', fields, files: files.sort((a, b) => a.key.localeCompare(b.key)) };
 }
 
+export async function assertAgentEditRouteAllowedFromFormData(formData: FormData): Promise<void> {
+    const model = readModel(formData);
+    const size = readSize(formData, 'size', 'auto', model);
+    assertAgentEditRouteAllowed(size, await readAgentEditSourceMaxEdge(size, formData));
+}
+
 async function snapshotFileField(
     key: string,
     file: File
@@ -129,24 +143,16 @@ export async function executeAgentGenerate(options: {
     requestId: string;
     idempotencyKey: string;
     cached: boolean;
+    abortSignal?: AbortSignal;
 }): Promise<AgentRequestExecutionResult> {
     const credentialContext = createOpenAiClient(options.headers);
     const startedAtMs = Date.now();
     try {
-        const result = await credentialContext.openai.images.generate({
-            model: options.request.model,
-            prompt: options.request.prompt,
-            n: options.request.n,
-            size: options.request.size as OpenAI.Images.ImageGenerateParams['size'],
-            quality: options.request.quality as OpenAI.Images.ImageGenerateParams['quality'],
-            output_format: options.request.output_format,
-            background: options.request.background as OpenAI.Images.ImageGenerateParams['background'],
-            moderation: options.request.moderation as OpenAI.Images.ImageGenerateParams['moderation'],
-            ...(options.request.output_compression !== undefined
-                ? { output_compression: options.request.output_compression }
-                : {}),
-            stream: false
-        });
+        const result = await executeAgentGenerateUpstream(
+            options.request,
+            credentialContext,
+            options.abortSignal
+        );
         return await persistOpenAiImages({
             result,
             mode: 'generate',
@@ -164,14 +170,114 @@ export async function executeAgentGenerate(options: {
     }
 }
 
+async function executeAgentGenerateUpstream(
+    request: AgentGenerateRequest,
+    credentialContext: CredentialContext,
+    abortSignal?: AbortSignal
+): Promise<OpenAI.Images.ImagesResponse> {
+    const { openai } = credentialContext;
+    if (request.image_backend === 'responses-image-generation') {
+        return executeAgentResponsesGenerate(request, openai, abortSignal);
+    }
+    const baseParams = {
+        model: request.model,
+        prompt: request.prompt,
+        n: request.n,
+        size: request.size as OpenAI.Images.ImageGenerateParams['size'],
+        quality: request.quality as OpenAI.Images.ImageGenerateParams['quality'],
+        output_format: request.output_format,
+        background: request.background as OpenAI.Images.ImageGenerateParams['background'],
+        moderation: request.moderation as OpenAI.Images.ImageGenerateParams['moderation'],
+        ...(request.output_compression !== undefined ? { output_compression: request.output_compression } : {})
+    };
+    if (!shouldUseAgentUpstreamStream(request)) {
+        return openai.images.generate(
+            { ...baseParams, stream: false },
+            abortSignal ? { signal: abortSignal } : undefined
+        );
+    }
+    const stream = await createImagesApiGenerateStream({
+        apiBaseUrl: credentialContext.baseUrl,
+        apiKey: credentialContext.apiKey,
+        abortSignal,
+        params: {
+            ...baseParams,
+            stream: true,
+            partial_images: request.partial_images
+        }
+    });
+    return collectOpenAiImagesFromStream(stream);
+}
+
+async function executeAgentResponsesGenerate(
+    request: AgentGenerateRequest,
+    openai: OpenAI,
+    abortSignal?: AbortSignal
+): Promise<OpenAI.Images.ImagesResponse> {
+    if (!readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND')) {
+        throw new RequestValidationError(
+            'Responses API 图片后端仍是实验能力，必须设置 ENABLE_RESPONSES_IMAGE_BACKEND=true 后才能使用。',
+            400
+        );
+    }
+    if (request.n !== 1) {
+        throw new RequestValidationError('Responses API 图片后端当前只支持单张生成。', 400);
+    }
+    const input: ResponsesImageGenerateInput = {
+        responses: openai.responses,
+        prompt: request.prompt,
+        responsesModel: readAgentResponsesApiModel(),
+        imageModel: request.model,
+        size: readAgentResponsesImageSize(request.size),
+        quality: request.quality,
+        outputFormat: request.output_format,
+        background: request.background,
+        moderation: request.moderation,
+        abortSignal,
+        ...(request.output_compression !== undefined ? { outputCompression: request.output_compression } : {})
+    };
+    if (!shouldUseAgentUpstreamStream(request)) {
+        return generateImageWithResponsesBackend(input);
+    }
+    return collectOpenAiImagesFromStream(
+        await createResponsesImageStream({ ...input, partialImagesCount: request.partial_images })
+    );
+}
+
+function shouldUseAgentUpstreamStream(request: AgentGenerateRequest): boolean {
+    return request.streaming_strategy !== 'off' && request.streaming_strategy !== 'auto';
+}
+
+function readAgentResponsesApiModel(): string {
+    const model = process.env.OPENAI_RESPONSES_API_MODEL?.trim();
+    if (!model) {
+        throw new RequestValidationError(
+            'Responses API 图片后端必须配置 OPENAI_RESPONSES_API_MODEL，作为 /responses 顶层模型。',
+            500
+        );
+    }
+    return model;
+}
+
+function readAgentResponsesImageSize(size: string): ResponsesImageGenerateInput['size'] {
+    if (size === 'auto' || size === '1024x1024' || size === '1024x1536' || size === '1536x1024') {
+        return size;
+    }
+    throw new RequestValidationError(
+        'Responses API 图片后端当前只支持 auto、1024x1024、1024x1536 或 1536x1024 尺寸。',
+        400
+    );
+}
+
 export async function executeAgentEdit(options: {
     formData: FormData;
     headers: Headers;
     requestId: string;
     idempotencyKey: string;
     cached: boolean;
+    abortSignal?: AbortSignal;
 }): Promise<AgentRequestExecutionResult> {
-    const credentialContext = createOpenAiClient(options.headers);
+    let credentialContext: CredentialContext | undefined;
     const startedAtMs = Date.now();
     try {
         const prompt = readRequiredText(options.formData, 'prompt');
@@ -181,17 +287,22 @@ export async function executeAgentEdit(options: {
         const quality = readEditQuality(options.formData) as OpenAI.Images.ImageEditParams['quality'];
         const responseMode = readAgentResponseModeFromForm(options.formData);
         const imageFiles = readImageFiles(options.formData);
+        assertAgentEditRouteAllowed(size, await readImageFileMaxEdge(imageFiles));
         const maskFile = readMaskFile(options.formData);
 
-        const result = await credentialContext.openai.images.edit({
-            model,
-            prompt,
-            image: imageFiles,
-            n,
-            size: size === 'auto' ? undefined : size,
-            quality: quality === 'auto' ? undefined : quality,
-            ...(maskFile ? { mask: maskFile } : {})
-        });
+        credentialContext = createOpenAiClient(options.headers);
+        const result = await credentialContext.openai.images.edit(
+            {
+                model,
+                prompt,
+                image: imageFiles,
+                n,
+                size: size === 'auto' ? undefined : size,
+                quality: quality === 'auto' ? undefined : quality,
+                ...(maskFile ? { mask: maskFile } : {})
+            },
+            options.abortSignal ? { signal: options.abortSignal } : undefined
+        );
 
         return await persistOpenAiImages({
             result,
@@ -205,9 +316,38 @@ export async function executeAgentEdit(options: {
             cached: options.cached
         });
     } catch (error) {
-        reportServerCredentialFailure(credentialContext.selectedCredential, error);
+        reportServerCredentialFailure(credentialContext?.selectedCredential, error);
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs));
     }
+}
+
+function assertAgentEditRouteAllowed(size: string | null | undefined, sourceMaxEdge = 0): void {
+    const maxEdge = Math.max(readMaxImageEdge(size), sourceMaxEdge);
+    if (maxEdge <= 2048) return;
+    throw new RequestValidationError('高分辨率 Agent edit 必须使用页面端 /api/images form-data SSE 路径。', 422);
+}
+
+async function readAgentEditSourceMaxEdge(size: string | null | undefined, formData: FormData): Promise<number> {
+    if (readMaxImageEdge(size) > 2048 || size !== 'auto') return 0;
+    const imageFiles = readImageFiles(formData);
+    return readImageFileMaxEdge(imageFiles);
+}
+
+async function readImageFileMaxEdge(imageFiles: File[]): Promise<number> {
+    const maxEdges = await Promise.all(
+        imageFiles.map(async (file) => {
+            const dimensions = readImageDimensions(Buffer.from(await file.arrayBuffer()));
+            return Math.max(dimensions.width ?? 0, dimensions.height ?? 0);
+        })
+    );
+    return Math.max(0, ...maxEdges);
+}
+
+function readMaxImageEdge(size: string | null | undefined): number {
+    if (typeof size !== 'string') return 0;
+    const match = size.match(/^(\d+)x(\d+)$/);
+    if (!match) return 0;
+    return Math.max(Number(match[1]), Number(match[2]));
 }
 
 export async function parseAgentGenerateRequest(request: Request): Promise<AgentGenerateRequest> {
@@ -345,7 +485,11 @@ export async function hydrateAgentReplayResponse(
 function createOpenAiClient(headers: Headers): CredentialContext {
     const serverChannelRouter = getServerChannelState().router;
     const selectedCredential = serverChannelRouter?.select({ affinityKey: readAffinityKey(headers) });
-    const { apiKey, baseUrl, selectedCredential: effectiveSelectedCredential } = resolveEffectiveCredential({
+    const {
+        apiKey,
+        baseUrl,
+        selectedCredential: effectiveSelectedCredential
+    } = resolveEffectiveCredential({
         requestApiKey: '',
         requestApiBaseUrl: '',
         legacyBaseUrl: process.env.OPENAI_API_BASE_URL,
@@ -366,15 +510,21 @@ function createOpenAiClient(headers: Headers): CredentialContext {
             baseURL: baseUrl || undefined
         }),
         selectedCredential: effectiveSelectedCredential,
-        baseUrl
+        baseUrl,
+        apiKey
     };
 }
 
-function buildAgentExecutionDiagnostics(context: CredentialContext, startedAtMs: number): AgentErrorDiagnostics {
-    const upstreamHost = context.baseUrl ? readUrlHost(context.baseUrl) : undefined;
+function buildAgentExecutionDiagnostics(
+    context: CredentialContext | undefined,
+    startedAtMs: number
+): AgentErrorDiagnostics {
+    const upstreamHost = context?.baseUrl ? readUrlHost(context.baseUrl) : undefined;
     return {
         elapsed_ms: Date.now() - startedAtMs,
-        ...(context.selectedCredential?.channelId ? { selected_channel_id: context.selectedCredential.channelId } : {}),
+        ...(context?.selectedCredential?.channelId
+            ? { selected_channel_id: context.selectedCredential.channelId }
+            : {}),
         ...(upstreamHost ? { upstream_host: upstreamHost } : {})
     };
 }
@@ -399,7 +549,10 @@ function reportServerCredentialFailure(credential: ChannelCredential | undefined
     if (isCredentialFailure(error)) {
         const reason = describeChannelFailure(error, 'credential');
         serverChannelRouter.reportFailure(credential, { reason });
-        appLogger.warn(`Temporarily cooling down API channel credential: ${credential.channelId}/${credential.id}`, reason);
+        appLogger.warn(
+            `Temporarily cooling down API channel credential: ${credential.channelId}/${credential.id}`,
+            reason
+        );
     }
 }
 

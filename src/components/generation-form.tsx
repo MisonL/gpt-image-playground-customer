@@ -13,8 +13,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
-import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
+import type { ImageUpstreamFormBackend, ImageUpstreamFormStreamingStrategy } from '@/lib/image-upstream-form';
+import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
+import {
+    shouldRecommendImageStreaming,
+    type ImageStreamingStrategy
+} from '@/lib/image-upstream-strategy';
 import {
     Square,
     RectangleHorizontal,
@@ -50,6 +55,9 @@ export type GenerationFormData = {
     background: 'transparent' | 'opaque' | 'auto';
     moderation: 'low' | 'auto';
     model: GptImageModel;
+    image_backend: ImageUpstreamFormBackend;
+    streaming_strategy: ImageUpstreamFormStreamingStrategy;
+    responsesModel: string;
 };
 
 type GenerationFormProps = {
@@ -87,6 +95,12 @@ type GenerationFormProps = {
     allowStreamingBatch: boolean;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
+    imageBackend: GenerationFormData['image_backend'];
+    setImageBackend: React.Dispatch<React.SetStateAction<GenerationFormData['image_backend']>>;
+    streamingStrategy: GenerationFormData['streaming_strategy'];
+    setStreamingStrategy: React.Dispatch<React.SetStateAction<GenerationFormData['streaming_strategy']>>;
+    responsesModel: string;
+    setResponsesModel: React.Dispatch<React.SetStateAction<string>>;
 };
 
 const RadioItemWithIcon = ({
@@ -126,6 +140,21 @@ const RadioItemWithIcon = ({
     );
 };
 
+function readConcreteSize(input: {
+    size: SizePreset;
+    model: GptImageModel;
+    customWidth: number;
+    customHeight: number;
+}): { width: number; height: number } | null {
+    if (input.size === 'custom') {
+        return { width: input.customWidth, height: input.customHeight };
+    }
+    const preset = getPresetDimensions(input.size, input.model);
+    if (!preset) return null;
+    const [width, height] = preset.split('x').map(Number);
+    return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null;
+}
+
 export function GenerationForm({
     onSubmit,
     isLoading,
@@ -160,7 +189,13 @@ export function GenerationForm({
     setEnableStreaming,
     allowStreamingBatch,
     partialImages,
-    setPartialImages
+    setPartialImages,
+    imageBackend,
+    setImageBackend,
+    streamingStrategy,
+    setStreamingStrategy,
+    responsesModel,
+    setResponsesModel
 }: GenerationFormProps) {
     const { locale, t } = useI18n();
     const showCompression = outputFormat === 'jpeg' || outputFormat === 'webp';
@@ -180,6 +215,22 @@ export function GenerationForm({
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
     const streamingDisabledByCount = n[0] > 1 && !allowStreamingBatch;
+    const effectiveStreamingStrategy: ImageStreamingStrategy =
+        streamingStrategy === 'server-default' ? 'auto' : streamingStrategy;
+    const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
+    const concreteSize = readConcreteSize({ size, model, customWidth, customHeight });
+    const recommendStreaming =
+        !streamingDisabledByCount &&
+        Boolean(
+            concreteSize &&
+                shouldRecommendImageStreaming({
+                    streamingStrategy: effectiveStreamingStrategy,
+                    quality,
+                    width: concreteSize.width,
+                    height: concreteSize.height,
+                    streamEnabled: enableStreaming
+                })
+        );
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
@@ -190,10 +241,10 @@ export function GenerationForm({
 
     // 未显式开启批量流式分发时，n > 1 会禁用流式输出。
     React.useEffect(() => {
-        if (streamingDisabledByCount && enableStreaming) {
+        if ((streamingDisabledByCount || streamingDisabledByStrategy) && enableStreaming) {
             setEnableStreaming(false);
         }
-    }, [streamingDisabledByCount, enableStreaming, setEnableStreaming]);
+    }, [streamingDisabledByCount, streamingDisabledByStrategy, enableStreaming, setEnableStreaming]);
 
     // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
@@ -223,7 +274,10 @@ export function GenerationForm({
             output_format: outputFormat,
             background,
             moderation,
-            model
+            model,
+            image_backend: imageBackend,
+            streaming_strategy: streamingStrategy,
+            responsesModel
         };
         if (showCompression) {
             formData.output_compression = compression[0];
@@ -288,13 +342,13 @@ export function GenerationForm({
                                             name='enable-streaming'
                                             checked={enableStreaming}
                                             onCheckedChange={(checked) => setEnableStreaming(!!checked)}
-                                            disabled={isLoading || streamingDisabledByCount}
+                                            disabled={isLoading || streamingDisabledByCount || streamingDisabledByStrategy}
                                             className='data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground'
                                         />
                                     </TooltipTrigger>
                                     <Label
                                         htmlFor='enable-streaming'
-                                        className={`text-sm ${streamingDisabledByCount ? 'cursor-not-allowed text-muted-foreground' : 'cursor-pointer text-foreground'}`}>
+                                        className={`text-sm ${streamingDisabledByCount || streamingDisabledByStrategy ? 'cursor-not-allowed text-muted-foreground' : 'cursor-pointer text-foreground'}`}>
                                         {t('streaming.enable')}
                                     </Label>
                                 </div>
@@ -306,6 +360,11 @@ export function GenerationForm({
                                           : t('streaming.description')}
                                 </TooltipContent>
                             </Tooltip>
+                            {recommendStreaming && (
+                                <p className='text-xs text-amber-700 dark:text-amber-300'>
+                                    {t('streaming.highResolutionRecommendation')}
+                                </p>
+                            )}
                         </div>
                     </div>
 
@@ -462,6 +521,71 @@ export function GenerationForm({
                         </button>
                         {isAdvancedOpen && (
                             <div id='generation-advanced-panel' className='space-y-5 border-t border-border p-3'>
+                                <div className='grid gap-3 sm:grid-cols-2'>
+                                    <div className='space-y-1.5'>
+                                        <Label htmlFor='image-backend-select'>{t('upstream.backend')}</Label>
+                                        <Select
+                                            value={imageBackend}
+                                            onValueChange={(value) =>
+                                                setImageBackend(value as GenerationFormData['image_backend'])
+                                            }
+                                            disabled={isLoading}
+                                            name='image_backend'>
+                                            <SelectTrigger id='image-backend-select'>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value='images-api'>{t('upstream.backendImages')}</SelectItem>
+                                                <SelectItem value='responses-image-generation'>
+                                                    {t('upstream.backendResponses')}
+                                                </SelectItem>
+                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className='space-y-1.5'>
+                                        <Label htmlFor='streaming-strategy-select'>{t('upstream.streamingStrategy')}</Label>
+                                        <Select
+                                            value={streamingStrategy}
+                                            onValueChange={(value) =>
+                                                setStreamingStrategy(value as GenerationFormData['streaming_strategy'])
+                                            }
+                                            disabled={isLoading}
+                                            name='image_streaming_strategy'>
+                                            <SelectTrigger id='streaming-strategy-select'>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value='auto'>{t('upstream.strategyAuto')}</SelectItem>
+                                                <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
+                                                <SelectItem value='openai-sse'>{t('upstream.strategyOpenAiSse')}</SelectItem>
+                                                <SelectItem value='newapi-keepalive-sse'>
+                                                    {t('upstream.strategyKeepaliveSse')}
+                                                </SelectItem>
+                                                <SelectItem value='responses-sse'>{t('upstream.strategyResponsesSse')}</SelectItem>
+                                                <SelectItem value='force-sse'>{t('upstream.strategyForceSse')}</SelectItem>
+                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+
+                                {imageBackend === 'responses-image-generation' && (
+                                    <div className='space-y-1.5'>
+                                        <Label htmlFor='responses-model-input'>{t('upstream.responsesModel')}</Label>
+                                        <Input
+                                            id='responses-model-input'
+                                            name='responsesModel'
+                                            value={responsesModel}
+                                            onChange={(event) => setResponsesModel(event.target.value)}
+                                            disabled={isLoading}
+                                            autoComplete='off'
+                                            spellCheck={false}
+                                            placeholder='gpt-5.4'
+                                        />
+                                    </div>
+                                )}
+
                                 {enableStreaming && (
                                     <div className='space-y-3'>
                                         <div className='flex items-center gap-2'>

@@ -7,29 +7,40 @@ description: 当用户需要通过 API 调用已部署的 GPT Image Playground �
 
 通过用户已部署的 GPT Image Playground `/api/agent/*` 接口生成或编辑图片。不要假设服务一定在本机；不要模拟网页表单；直接使用 Agent API 契约、幂等键和产物 URL。
 
+## 路由硬规则
+
+- 先读取 `GET /api/agent/capabilities` 的 `routing_rules`，按机器可读规则选择端点。
+- `edit` 且 `max(width,height)>2048` 时，必须使用页面端 `POST /api/images` form-data SSE 路径，不要走非流式 `/api/agent/images/edit`。
+- 复杂 UI 批量出图优先使用页面端 `POST /api/images` SSE，并记录切换原因、失败清单和续跑锚点。
+- 长图恢复或需要续跑锚点的生产请求优先使用页面端 `POST /api/images` SSE，保留局部进度和缺最终图诊断。
+- 普通小图单次文生图使用 `/api/agent/images/generate`；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE，流式失败后先诊断，再显式选择 Agent JSON 或 job 路径，不自动回退。
+- 同一个已进入终态 `failed` 的 `Idempotency-Key` 只会回放失败；重新尝试必须先诊断原因，再创建新的业务操作和新的 key。
+
 ## 执行流程
 
 1. 先定位服务基础地址。优先使用用户明确提供的 URL；其次使用 `GPT_IMAGE_PLAYGROUND_URL`；都没有时尝试默认地址 `http://localhost:4783`。
 2. 用候选基础地址请求 `GET /api/agent/capabilities`。如果默认地址不可达、404、不是 JSON 或不是 Agent capabilities 响应，向用户询问实际部署地址、端口、域名和是否需要鉴权。
-3. 读取 capabilities 中的认证方式、模型、模型级限制、Agent 流式边界、状态后端和端点路径；不要硬编码假设部署方式。
-4. 为每个业务操作生成稳定的 `Idempotency-Key`。同一操作重试时复用原 key；不同操作不要复用。
-5. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点是非流式端点，当前固定以 `stream: false` 调上游。
+3. 读取 capabilities 中的认证方式、模型、模型级限制、`routing_rules`、Agent 流式边界、页面 SSE 鉴权、后端 runtime enablement、状态后端和端点路径；不要硬编码假设部署方式。
+4. 为每个业务操作生成稳定的 `Idempotency-Key`。网络中断、运行中轮询或非终态重试复用原 key；同一 key 已进入 `failed` 终态后不再用于触发新执行，必须先诊断原因，再创建新的业务操作和新的 key。
+5. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点对外始终返回最终 `AgentImageResponse` JSON；如 capabilities 声明 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`streaming_strategy`、`partial_images` 显式启用内部上游 SSE 消费。
 6. 图片编辑使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段使用 `image_0..image_9`。该 Agent 端点同样是非流式端点。
 7. 默认使用 `response_mode: "path"`，只在用户明确需要图片内联数据时使用 `base64` 或 `both`。
-8. 不要把页面端 `POST /api/images` 当成 Agent 默认路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明。
-9. 读取 `agent_jobs`。若 `supported=true` 且 `mode=job_polling`，4K/high 或长耗时任务优先走 job/polling。
+8. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；仅在 `routing_rules` 命中高分辨率 edit、大图单次文生图、复杂 UI 批量、长图恢复或明确诊断后切换。
+9. 读取 `agent_jobs`。job 路径只在显式选择时使用；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE。
 10. 处理失败时读取结构化 `error.code`、`error.retryable`、`error.diagnostics` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。
 11. 返回结果时优先给出 `content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。
 
 ## 鉴权
 
-如果服务端配置了 `AGENT_API_TOKEN`，发送：
+Agent JSON、Agent edit、job 和 artifact 端点的鉴权以 `auth.schemes` 为准。如果服务端配置了 `AGENT_API_TOKEN`，发送：
 
 ```text
 Authorization: Bearer <token>
 ```
 
-此时服务端只接受 Bearer token，不会回退到访问码哈希。如果未配置 `AGENT_API_TOKEN` 但配置了页面访问码 `APP_PASSWORD`，发送 `X-App-Password-Hash`。下载或删除产物时必须复用 capabilities 声明的同一鉴权方式。
+此时 Agent 端点只接受 Bearer token，不会回退到访问码哈希。如果未配置 `AGENT_API_TOKEN` 但配置了页面访问码 `APP_PASSWORD`，Agent 端点发送 `X-App-Password-Hash`。下载或删除产物时必须复用 capabilities 声明的同一 Agent 鉴权方式。
+
+页面端 `/api/images` SSE 是独立页面契约，读取 `agent_streaming.page_sse.auth`。当该字段声明 `required=true` 时，必须在 form-data 中发送 `passwordHash`；脚本侧对应环境变量是 `GPT_IMAGE_APP_PASSWORD_HASH`。即使 `auth.schemes` 只返回 `bearer`，混合配置下 page SSE 仍可能需要这个表单访问码哈希。页面 SSE 还会把同一业务 key 写入 form-data `clientRequestId`，长度不得超过 `agent_streaming.page_sse.client_request_id.max_length`。
 
 ## 调用约束
 
@@ -39,13 +50,14 @@ Authorization: Bearer <token>
 - 不要把 `error.message` 当成唯一判断依据；稳定分支以 `error.code` 和 HTTP 状态为准。
 - 不要在没有 `Idempotency-Key` 的情况下调用生成或编辑接口。
 - 不要对同一个已进入终态 `failed` 的 `Idempotency-Key` 继续重试。终态失败回放会返回 `retryable=false`；需要重新尝试时，先确认失败原因，再创建新的业务操作和新的 `Idempotency-Key`。
-- 不要把 `agent_streaming.page_sse.supported=true` 解读为 `/api/agent/images/generate` 支持流式；Agent generate/edit 当前以 `non_streaming_only` 声明。
+- 不要把 `agent_streaming.page_sse.supported=true` 解读为 `/api/agent/images/generate` 会对客户端返回 SSE；Agent generate/edit 对外仍是最终 JSON。`agent_streaming.upstream_sse` 仅表示服务端内部可消费上游 SSE 并保存最终 artifact。
 - 不要调用 job endpoints，除非 capabilities 明确返回 `agent_jobs.supported=true` 且 `mode=job_polling`。
-- 不要把一次高分辨率、高质量长耗时失败归纳为全局不可用。优先查看 `error.diagnostics.upstream_status`、`transport_error`、`selected_channel_id`、`channel_cooldown_scope` 和 `retry_after_seconds`。
+- 不要把一次高分辨率、高质量长耗时失败归纳为全局不可用。优先查看 `error.diagnostics.upstream_status`、`upstream_event_type`、`partial_image_count`、`transport_error`、`selected_channel_id`、`channel_cooldown_scope` 和 `retry_after_seconds`。
+- 不要在 `error.retryable=false` 时依据历史 `retry_after_seconds` 继续重试同一个 key；终态失败需要新业务操作和新 key。
 
 ## Job Polling
 
-当 `agent_jobs.supported=true` 时，长耗时文生图可使用：
+当 `agent_jobs.supported=true` 时，显式 job 路径可使用：
 
 1. `POST /api/agent/jobs/images/generate` 创建 job，仍必须提供 `Idempotency-Key`。
 2. `GET /api/agent/jobs/{id}` 轮询状态。
@@ -53,7 +65,7 @@ Authorization: Bearer <token>
 
 `GET /result` 在 job 运行中会返回 `request_in_progress` 和 `Retry-After`；不存在返回 `job_not_found`；过期返回 `job_expired`。同一业务操作重试创建 job 时复用原 `Idempotency-Key`，服务会返回同一个 job。
 
-当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在 job 结束前重启，客户端应按状态和错误码继续轮询或重新创建同一 `Idempotency-Key` 的 job。若 job 已进入 `failed` 终态，`GET /result` 和状态摘要都会返回 `retryable=false`，并保留 `code`、`message`、`upstream_status` 和 `diagnostics` 用于定位原因，但同一个 key 不会触发新执行。需要重新尝试时，先确认失败原因，再以新的业务操作和新的 `Idempotency-Key` 创建 job。
+当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在 job 结束前重启，客户端应按状态和错误码继续轮询或重新创建同一 `Idempotency-Key` 的 job。若 job 已进入 `failed` 终态，`GET /result` 和状态摘要都会返回 `retryable=false`，并保留 `code`、`message`、`upstream_status` 和 `diagnostics` 用于定位原因，但同一个 key 不会触发新执行。需要重新尝试时，先确认失败原因，再以新的业务操作和新的 `Idempotency-Key` 创建 job。默认大图单次文生图已经切到页面端 `/api/images` SSE，job 不是默认路径。
 
 ## 可用脚本
 
@@ -61,9 +73,11 @@ Authorization: Bearer <token>
 - `skills/gpt-image-playground-agent/scripts/edit-image.mjs`：multipart 编辑调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实编辑。
 - `skills/gpt-image-playground-agent/scripts/probe-upstream-image.mjs`：直接探测上游图片接口连通性。默认只检查 DNS、TLS 和 `/models`，必须添加 `--allow-billable` 才会真实调用 `/images/generations`。
 
+生成和编辑脚本的 dry-run 输出会包含 `routing_guidance`，用于在真实计费前检查当前请求应走 Agent JSON、页面 SSE，或在页面流式失败后先诊断再手动选定后续路径。
+
 如果当前上下文位于仓库根目录，管理员侧优先使用顶层命令：
 
-- `npm run status`：只读查看 git、Space 目标、Agent API 和 Skill 入口。
+- `npm run status`：只读查看 git、Space 目标、Agent API、Skill 入口和独立真实图片上游 smoke 配置摘要；会自动读取 `.env.real-smoke.local`，不输出 URL 或 API Key。
 - `npm run doctor`：统一诊断本机与 HF Space 配置，不写 Secret。
 - `npm run verify`：运行提交前基线；需要真实 PostgreSQL gate 时加 `-- --postgres`。
 - `npm run deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。
@@ -81,6 +95,19 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   "a product photo of a ceramic mug"
 ```
 
+启用 Agent 内部上游 SSE 时，必须显式传策略字段；脚本仍只输出最终 JSON：
+
+```bash
+node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
+  --allow-billable \
+  --image-backend images-api \
+  --streaming-strategy newapi-keepalive-sse \
+  --partial-images 2 \
+  --size 3840x2160 \
+  --quality high \
+  "a product photo of a ceramic mug"
+```
+
 真实生图必须显式开启：
 
 ```bash
@@ -91,7 +118,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   "a product photo of a ceramic mug"
 ```
 
-生成脚本会在 capabilities 声明 `agent_jobs.supported=true` 后，对 `quality=high` 且最大边不小于 3072 的请求自动使用 job polling。也可以用 `--job` 强制 job polling，或用 `--no-job` 强制同步 Agent generate。
+生成脚本会对 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果 capabilities 未声明 `agent_streaming.page_sse.supported=true`，脚本会显式失败，不会静默降级到 Agent JSON。如果页面流式失败，脚本会返回结构化失败结果，先诊断再决定是否用 `--agent` 或 `--job` 重新执行，不会自动发起第二次请求。也可以用 `--page-sse` 强制页面流式，或用 `--agent` 强制非流式 Agent generate，`--job` 仍可显式选择 job 路径。显式传 `--streaming-strategy off` 时，大图请求保持 Agent JSON 非流式路径，用于和页面 SSE 做诊断对照。上游流式字段支持 `--image-backend`、`--streaming-strategy`、`--partial-images`；默认不发送这些字段，保持服务端默认非流式基线。
 
 编辑脚本支持 `--model`、`--size`、`--quality`、`--response-mode`、`--timeout-ms`、`--idempotency-key`、`--dry-run` 和 `--allow-billable`。
 
@@ -110,14 +137,14 @@ OPENAI_API_KEY=... node skills/gpt-image-playground-agent/scripts/probe-upstream
 
 - `GPT_IMAGE_PLAYGROUND_URL`：服务基础地址，可指向本机、局域网、云服务器或域名；脚本未设置时默认尝试 `http://localhost:4783`。
 - `GPT_IMAGE_AGENT_TOKEN`：Bearer token。
-- `GPT_IMAGE_APP_PASSWORD_HASH`：使用 `APP_PASSWORD` 访问码部署时发送的 `X-App-Password-Hash`。
+- `GPT_IMAGE_APP_PASSWORD_HASH`：使用 `APP_PASSWORD` 访问码部署时，Agent 端点发送为 `X-App-Password-Hash`，页面 SSE 发送为 form-data `passwordHash`。
 - `GPT_IMAGE_AGENT_IDEMPOTENCY_KEY`：跨脚本进程恢复同一操作时复用的幂等键。
 - `GPT_IMAGE_AGENT_MAX_ATTEMPTS`：最大尝试次数，默认 `3`。
 - `GPT_IMAGE_AGENT_CONTRACT_CHECK=1`：只检查 capabilities 和错误契约，不触发真实生图或编辑。
 
 `GPT_IMAGE_PLAYGROUND_URL` 必须是无凭据、无查询参数、无片段的 `http`/`https` 绝对 base URL。不要把 token、访问码或其他 Secret 放进 URL。生成脚本轮询 job result 时只会携带鉴权头访问同 origin URL，避免异常服务返回外部 `result_url` 后泄露 Bearer token 或访问码哈希。
 
-脚本会把服务返回的相对产物路径补充为绝对 URL，适合调用 Hugging Face Space、云服务器或自定义域名上的公网实例。
+脚本会把服务返回的相对产物路径补充为绝对 URL，页面 SSE 的相对 `path` 会补充 `absolute_path`，适合调用 Hugging Face Space、云服务器或自定义域名上的公网实例。
 
 ## 参考
 

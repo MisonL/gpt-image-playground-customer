@@ -1,3 +1,4 @@
+import { PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH } from './agent-api-contracts';
 import { appLogger } from './app-logger';
 import {
     type ChannelCredential,
@@ -6,6 +7,7 @@ import {
     isCredentialFailure
 } from './channel-router';
 import { RequestValidationError } from './image-request-utils';
+import type { ImageGenerationBackend } from './image-upstream-strategy';
 import { getServerChannelState } from './server-channel-router';
 import { buildAccessCookie, outputDir, readBooleanEnv, serializeAccessCookie } from './server-runtime';
 import { resolveActualCost, type ActualCostDetails } from './upstream-cost/resolve';
@@ -13,7 +15,7 @@ import fs from 'fs/promises';
 import { NextResponse } from 'next/server';
 
 export type AccessCookie = ReturnType<typeof buildAccessCookie>;
-export type ImageBackend = 'images' | 'responses';
+export type ImageBackend = ImageGenerationBackend;
 export type RequestLogContext = { clientRequestId: string };
 
 export function readClientRequestId(formData: FormData): string | undefined {
@@ -21,26 +23,16 @@ export function readClientRequestId(formData: FormData): string | undefined {
     if (typeof value !== 'string') return undefined;
     const normalized = value.trim();
     if (!normalized) return undefined;
-    return normalized.slice(0, 128);
+    if (normalized.length > PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH) {
+        throw new RequestValidationError(
+            `clientRequestId 长度不能超过 ${PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH} 个字符。`
+        );
+    }
+    return normalized;
 }
 
-export function readImageBackend(formData: FormData): ImageBackend {
-    const value = formData.get('imageBackend');
-    if (value === null || value === undefined || value === '' || value === 'images') {
-        return 'images';
-    }
-    if (value === 'responses') {
-        return 'responses';
-    }
-    throw new RequestValidationError('imageBackend 必须是 images 或 responses。', 400);
-}
-
-export function assertResponsesImageBackendAllowed(input: {
-    imageBackend: ImageBackend;
-    mode: string;
-    streamEnabled: boolean;
-}) {
-    if (input.imageBackend !== 'responses') return;
+export function assertResponsesImageBackendAllowed(input: { imageBackend: ImageBackend; mode: string }) {
+    if (input.imageBackend !== 'responses-image-generation') return;
     if (!readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND')) {
         throw new RequestValidationError(
             'Responses API 图片后端仍是实验能力，必须设置 ENABLE_RESPONSES_IMAGE_BACKEND=true 后才能使用。',
@@ -49,9 +41,6 @@ export function assertResponsesImageBackendAllowed(input: {
     }
     if (input.mode !== 'generate') {
         throw new RequestValidationError('Responses API 图片后端当前只支持 generate 模式。', 400);
-    }
-    if (input.streamEnabled) {
-        throw new RequestValidationError('Responses API 图片后端当前不接入现有 Images API 流式预览。', 400);
     }
 }
 

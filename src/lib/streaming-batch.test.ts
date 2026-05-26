@@ -58,7 +58,6 @@ describe('computeStreamingBatchRecommendation', () => {
         assert.equal(
             computeStreamingBatchRecommendation({
                 credentialCount: 5,
-                channelCount: 3,
                 maxStreamsPerCredential: 2,
                 strategy: 'sticky'
             }),

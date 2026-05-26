@@ -104,6 +104,326 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         );
     });
 
+    it('maps Responses image partial events to stable partial image events', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.partial_image',
+                partial_image_b64: 'responses-partial-base64',
+                partial_image_index: 0
+            }),
+            [
+                {
+                    type: 'partial_image',
+                    b64Json: 'responses-partial-base64',
+                    partialImageIndex: 0
+                }
+            ]
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.partial_image',
+                b64_json: 'responses-partial-b64-json',
+                partial_image_index: 1
+            }),
+            [
+                {
+                    type: 'partial_image',
+                    b64Json: 'responses-partial-b64-json',
+                    partialImageIndex: 1
+                }
+            ]
+        );
+    });
+
+    it('maps Responses output item image results to completed events', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    result: 'responses-final-base64'
+                }
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-final-base64'
+                }
+            ]
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    result: 'data:image/png;base64,responses-data-url-final-base64'
+                }
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-data-url-final-base64'
+                }
+            ]
+        );
+    });
+
+    it('uses a bounded dedupe key when Responses image call ids are missing', () => {
+        const payload = 'responses-final-base64'.repeat(128);
+        const result = normalizeUpstreamImageStreamEventWithDiagnostics({
+            type: 'response.output_item.done',
+            item: {
+                type: 'image_generation_call',
+                result: payload
+            }
+        });
+
+        assert.equal(result.events.length, 1);
+        const [event] = result.events;
+        assert.equal(event.type, 'completed');
+        if (event.type !== 'completed') return;
+        assert.match(event.dedupeKey || '', /^responses:result:fingerprint:\d+:[a-f0-9]{64}$/);
+        assert.equal(event.dedupeKey?.includes(payload), false);
+        assert.ok((event.dedupeKey || '').length < 256);
+    });
+
+    it('keeps distinct bounded dedupe keys when same-length Responses payloads differ by one byte', () => {
+        const first = 'A'.repeat(1000);
+        const second = `${first.slice(0, 100)}B${first.slice(101)}`;
+        const readDedupeKey = (payload: string) => {
+            const result = normalizeUpstreamImageStreamEventWithDiagnostics({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    result: payload
+                }
+            });
+            const [event] = result.events;
+            assert.equal(event.type, 'completed');
+            if (event.type !== 'completed') return undefined;
+            return event.dedupeKey;
+        };
+
+        assert.equal(first.length, second.length);
+        assert.notEqual(readDedupeKey(first), readDedupeKey(second));
+    });
+
+    it('recognizes Responses image generation completed markers without requiring them to carry final images', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.completed',
+                item_id: 'ig_123'
+            }),
+            []
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.completed',
+                item: {
+                    type: 'image_generation_call',
+                    result: 'responses-completed-final-base64'
+                }
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-completed-final-base64'
+                }
+            ]
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.completed',
+                result: 'responses-completed-top-level-final-base64'
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-completed-top-level-final-base64'
+                }
+            ]
+        );
+    });
+
+    it('ignores Responses output item done events when they do not carry image results', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'message',
+                    content: [{ type: 'output_text', text: 'done' }]
+                }
+            }),
+            []
+        );
+    });
+
+    it('fails explicitly when Responses output item done reports a failed image result', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        status: 'failed',
+                        error: {
+                            code: 'content_policy_violation',
+                            message: 'blocked by upstream policy'
+                        }
+                    }
+                }),
+            /blocked by upstream policy/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.completed',
+                    response: {
+                        output: [
+                            {
+                                type: 'image_generation_call',
+                                status: 'failed',
+                                error: {
+                                    message: 'responses completed image failed'
+                                }
+                            }
+                        ]
+                    }
+                }),
+            /responses completed image failed/
+        );
+    });
+
+    it('fails explicitly when Responses output item done lacks a final image result', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        status: 'completed'
+                    }
+                }),
+            /image_generation_call\.result/
+        );
+    });
+
+    it('fails explicitly when Responses image results only contain remote URLs', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: 'https://example.test/image.png'
+                    }
+                }),
+            /远程 URL/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        url: 'https://example.test/image.png'
+                    }
+                }),
+            /远程 URL/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.image_generation_call.completed',
+                    url: 'https://example.test/image.png'
+                }),
+            /远程 URL/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.completed',
+                    response: {
+                        output: [
+                            {
+                                type: 'image_generation_call',
+                                status: 'completed',
+                                result: 'https://example.test/image.png'
+                            }
+                        ]
+                    }
+                }),
+            /远程 URL/
+        );
+    });
+
+    it('maps Responses completed output image results and usage to completed events', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.completed',
+                response: {
+                    usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 },
+                    output: [
+                        {
+                            type: 'image_generation_call',
+                            result: 'responses-final-a'
+                        },
+                        {
+                            type: 'message',
+                            content: [{ type: 'output_text', text: 'done' }]
+                        },
+                        {
+                            type: 'image_generation_call',
+                            result: 'data:image/png;base64,responses-final-b'
+                        }
+                    ]
+                }
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-final-a',
+                    usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 }
+                },
+                {
+                    type: 'completed',
+                    b64Json: 'responses-final-b',
+                    usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 }
+                }
+            ]
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.completed',
+                usage: { input_tokens: 3, output_tokens: 5, total_tokens: 8 },
+                output: [
+                    {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: 'responses-top-level-final'
+                    }
+                ]
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: 'responses-top-level-final',
+                    usage: { input_tokens: 3, output_tokens: 5, total_tokens: 8 }
+                }
+            ]
+        );
+    });
+
     it('treats SDK-parsed OtokAPI root image data as a partial chunk when the SSE event name is dropped', () => {
         assert.deepEqual(
             normalizeUpstreamImageStreamEvent({
@@ -144,6 +464,56 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         );
     });
 
+    it('fails explicitly when a completed image event only has a remote URL', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'image_generation.completed',
+                    url: 'https://example.test/image.png'
+                }),
+            /b64_json/
+        );
+    });
+
+    it('fails explicitly when a Responses stream reports response.failed', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.failed',
+                    response: {
+                        error: {
+                            code: 'invalid_prompt',
+                            message: 'blocked by upstream policy'
+                        }
+                    }
+                }),
+            /blocked by upstream policy/
+        );
+    });
+
+    it('limits Responses image traversal depth for deeply nested payloads', () => {
+        let payload: Record<string, unknown> = {
+            type: 'image_generation_call',
+            result: 'deep-final'
+        };
+        for (let index = 0; index < 20000; index += 1) {
+            payload = { item: payload };
+        }
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: payload
+            }),
+            []
+        );
+    });
+
+    it('ignores SSE keepalive comments and non-object events', () => {
+        assert.deepEqual(normalizeUpstreamImageStreamEvent(':'), []);
+        assert.deepEqual(normalizeUpstreamImageStreamEvent(null), []);
+    });
+
     it('reports provider dialect diagnostics without treating unknown completed-like payloads as success', () => {
         assert.equal(
             normalizeUpstreamImageStreamEventWithDiagnostics({
@@ -158,6 +528,16 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                 data: [{ b64_json: 'otokapi-final' }]
             }).providerDialect,
             'otokapi_image_event'
+        );
+        assert.equal(
+            normalizeUpstreamImageStreamEventWithDiagnostics({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    result: 'responses-final'
+                }
+            }).providerDialect,
+            'responses_image_event'
         );
         assert.equal(
             normalizeUpstreamImageStreamEventWithDiagnostics({

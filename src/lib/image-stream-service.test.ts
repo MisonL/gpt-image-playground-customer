@@ -112,4 +112,98 @@ describe('createImageStreamResponse', () => {
         assert.match(logText, /"providerDialect": "unknown_ignored_event"/);
         assert.doesNotMatch(logText, new RegExp(PNG_BASE64));
     });
+
+    it('deduplicates repeated Responses final image items by item id', async () => {
+        const response = createImageStreamResponse({
+            stream: upstreamEvents([
+                {
+                    type: 'response.output_item.done',
+                    item: { id: 'ig_repeat', type: 'image_generation_call', result: PNG_BASE64 }
+                },
+                {
+                    type: 'response.completed',
+                    response: {
+                        output: [{ id: 'ig_repeat', type: 'image_generation_call', result: PNG_BASE64 }]
+                    }
+                }
+            ]),
+            modeLabel: '生成',
+            outputFormat: 'png',
+            storageMode: 'indexeddb',
+            apiKey: 'test-key',
+            model: 'gpt-image-2',
+            startedAtMs: 1000,
+            resolveActualCost
+        });
+
+        const events = await readSseEvents(response);
+
+        assert.deepEqual(
+            events.map((event) => event.type),
+            ['completed', 'done']
+        );
+        assert.equal((events[1].images as Array<Record<string, unknown>>).length, 1);
+    });
+
+    it('keeps separate Responses final items when their base64 payloads match', async () => {
+        const response = createImageStreamResponse({
+            stream: upstreamEvents([
+                {
+                    type: 'response.output_item.done',
+                    item: { id: 'ig_same_payload_a', type: 'image_generation_call', result: PNG_BASE64 }
+                },
+                {
+                    type: 'response.output_item.done',
+                    item: { id: 'ig_same_payload_b', type: 'image_generation_call', result: PNG_BASE64 }
+                }
+            ]),
+            modeLabel: '生成',
+            outputFormat: 'png',
+            storageMode: 'indexeddb',
+            apiKey: 'test-key',
+            model: 'gpt-image-2',
+            startedAtMs: 1000,
+            resolveActualCost
+        });
+
+        const events = await readSseEvents(response);
+
+        assert.deepEqual(
+            events.map((event) => event.type),
+            ['completed', 'completed', 'done']
+        );
+        assert.equal((events[2].images as Array<Record<string, unknown>>).length, 2);
+    });
+
+    it('deduplicates repeated Responses final image items within a single event', async () => {
+        const response = createImageStreamResponse({
+            stream: upstreamEvents([
+                {
+                    type: 'response.completed',
+                    data: [],
+                    response: {
+                        output: [
+                            { id: 'ig_repeat', type: 'image_generation_call', result: PNG_BASE64 },
+                            { id: 'ig_repeat', type: 'image_generation_call', result: PNG_BASE64 }
+                        ]
+                    }
+                }
+            ]),
+            modeLabel: '生成',
+            outputFormat: 'png',
+            storageMode: 'indexeddb',
+            apiKey: 'test-key',
+            model: 'gpt-image-2',
+            startedAtMs: 1000,
+            resolveActualCost
+        });
+
+        const events = await readSseEvents(response);
+
+        assert.deepEqual(
+            events.map((event) => event.type),
+            ['completed', 'done']
+        );
+        assert.equal((events[1].images as Array<Record<string, unknown>>).length, 1);
+    });
 });

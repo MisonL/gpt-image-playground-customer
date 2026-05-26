@@ -1,11 +1,29 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { HF_SPACE_ID, HF_SPACE_URL } from './hf-space-doctor-utils.mjs';
 import { isMainModule, parseJsonPayload, printJson, runCommand, runCommandStrict } from './command-center-utils.mjs';
 
 const REMOTE_STATUS_TIMEOUT_MS = 30_000;
+const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
+    { id: 'original-images-json', prefix: 'IMAGE_REAL_SMOKE_ORIGINAL' },
+    { id: 'gaoren-images-sse', prefix: 'IMAGE_REAL_SMOKE_GAOREN' },
+    { id: 'sub2api-images-sse', prefix: 'IMAGE_REAL_SMOKE_SUB2API' },
+    {
+        id: 'sub2api-responses-json',
+        prefix: 'IMAGE_REAL_SMOKE_SUB2API_RESPONSES',
+        fallbackPrefix: 'IMAGE_REAL_SMOKE_SUB2API',
+        requiresResponsesModel: true
+    },
+    { id: 'gpt2image-responses-sse', prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE', requiresResponsesModel: true }
+];
+const IMAGE_UPSTREAM_FINAL_GATE_COMMAND =
+    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable';
+const STATUS_ENV_FILES = [
+    { path: '.env.local', override: false },
+    { path: '.env.real-smoke.local', override: true }
+];
 
 export function buildAdminCommands() {
     return {
@@ -30,6 +48,127 @@ export function parseGitStatusEntries(output) {
         if (status.includes('R') || status.includes('C')) index += 1;
     }
     return paths;
+}
+
+function readEnv(env, key) {
+    const value = env[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function shouldSetStatusEnv(key, baseEnv, statusEnv, options) {
+    if (baseEnv[key] !== undefined) return false;
+    return options.override || statusEnv[key] === undefined;
+}
+
+function loadStatusEnvFile(statusEnv, baseEnv, options) {
+    if (!existsSync(options.path)) return;
+    for (const line of readFileSync(options.path, 'utf8').split(/\r?\n/)) {
+        const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+        if (!match || !shouldSetStatusEnv(match[1], baseEnv, statusEnv, options)) continue;
+        const value = match[2].trim();
+        const quoted =
+            value.length >= 2 &&
+            ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")));
+        statusEnv[match[1]] = quoted ? value.slice(1, -1) : value;
+    }
+}
+
+export function readStatusEnvFromFiles(baseEnv = process.env, envFiles = STATUS_ENV_FILES) {
+    const statusEnv = { ...baseEnv };
+    for (const envFile of envFiles) {
+        loadStatusEnvFile(statusEnv, baseEnv, envFile);
+    }
+    return statusEnv;
+}
+
+function readSmokeEnvAlternatives(testCase, suffix) {
+    const keys = [`${testCase.prefix}_${suffix}`];
+    if (testCase.fallbackPrefix && testCase.fallbackPrefix !== testCase.prefix) {
+        keys.push(`${testCase.fallbackPrefix}_${suffix}`);
+    }
+    return keys;
+}
+
+function readResponsesModelEnvAlternatives(testCase) {
+    return [`${testCase.prefix}_RESPONSES_MODEL`, 'OPENAI_RESPONSES_API_MODEL'];
+}
+
+function readFirstStatusEnv(env, keys) {
+    for (const key of keys) {
+        const value = readEnv(env, key);
+        if (value) return { key, value };
+    }
+    return undefined;
+}
+
+function readBaseUrlValidationError(value) {
+    let url;
+    try {
+        url = new URL(value);
+    } catch {
+        return 'must_be_http_or_https_absolute_url';
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'must_use_http_or_https';
+    if (url.username || url.password) return 'must_not_include_credentials';
+    if (url.search || url.hash) return 'must_not_include_query_or_fragment';
+    return undefined;
+}
+
+function readTargetConfigured(testCase, env) {
+    const baseUrl = readFirstStatusEnv(env, readSmokeEnvAlternatives(testCase, 'BASE_URL'));
+    const apiKey = readFirstStatusEnv(env, readSmokeEnvAlternatives(testCase, 'API_KEY'));
+    const responsesModel = testCase.requiresResponsesModel
+        ? readFirstStatusEnv(env, readResponsesModelEnvAlternatives(testCase))
+        : undefined;
+    const baseUrlError = baseUrl ? readBaseUrlValidationError(baseUrl.value) : undefined;
+    return {
+        baseUrl: Boolean(baseUrl),
+        apiKey: Boolean(apiKey),
+        responsesModel: Boolean(responsesModel),
+        invalidEnv: baseUrlError ? [{ key: baseUrl.key, reason: baseUrlError }] : []
+    };
+}
+
+function readMissingEnvAny(testCase, target) {
+    const groups = [];
+    if (!target.baseUrl) groups.push(readSmokeEnvAlternatives(testCase, 'BASE_URL'));
+    if (target.baseUrl && !target.apiKey) groups.push(readSmokeEnvAlternatives(testCase, 'API_KEY'));
+    if (target.baseUrl && testCase.requiresResponsesModel && !target.responsesModel) {
+        groups.push(readResponsesModelEnvAlternatives(testCase));
+    }
+    return groups;
+}
+
+export function buildImageUpstreamRealSmokeStatus(env = process.env) {
+    const caseSummaries = IMAGE_UPSTREAM_REAL_SMOKE_CASES.map((testCase) => {
+        const target = readTargetConfigured(testCase, env);
+        const missingEnvAny = readMissingEnvAny(testCase, target);
+        return {
+            id: testCase.id,
+            configured: missingEnvAny.length === 0 && target.invalidEnv.length === 0,
+            ...(missingEnvAny.length > 0 ? { missing_env_any: missingEnvAny } : {}),
+            ...(target.invalidEnv.length > 0 ? { invalid_env: target.invalidEnv } : {})
+        };
+    });
+    const configuredCases = caseSummaries.filter((item) => item.configured).map((item) => item.id);
+    const missingCases = caseSummaries.filter(
+        (item) => Array.isArray(item.missing_env_any) && item.missing_env_any.length > 0
+    );
+    const invalidCases = caseSummaries.filter((item) => Array.isArray(item.invalid_env) && item.invalid_env.length > 0);
+    return {
+        required_count: IMAGE_UPSTREAM_REAL_SMOKE_CASES.length,
+        required_cases: IMAGE_UPSTREAM_REAL_SMOKE_CASES.map((testCase) => testCase.id),
+        configuration_complete: missingCases.length === 0 && invalidCases.length === 0,
+        configured_count: configuredCases.length,
+        configured_cases: configuredCases,
+        missing_count: missingCases.length,
+        missing_cases: missingCases.map((item) => item.id),
+        missing_env_any: Object.fromEntries(missingCases.map((item) => [item.id, item.missing_env_any])),
+        invalid_count: invalidCases.length,
+        invalid_cases: invalidCases.map((item) => item.id),
+        invalid_env: Object.fromEntries(invalidCases.map((item) => [item.id, item.invalid_env])),
+        final_gate_command: IMAGE_UPSTREAM_FINAL_GATE_COMMAND
+    };
 }
 
 function parseArgs(argv) {
@@ -72,7 +211,8 @@ function buildLocalStatus() {
         agent: {
             capabilities: '/api/agent/capabilities',
             skill: 'skills/gpt-image-playground-agent/SKILL.md'
-        }
+        },
+        image_upstream_real_smoke: buildImageUpstreamRealSmokeStatus(readStatusEnvFromFiles(process.env))
     };
 }
 

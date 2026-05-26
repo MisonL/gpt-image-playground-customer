@@ -1,5 +1,6 @@
 import { SQLITE_SCHEMA, SqliteAgentStateStore } from './agent-state-sqlite';
-import { hashAgentPayload, type AgentArtifactRecord, type AgentImageResponse } from './agent-state-store';
+import type { AgentImageResponse } from './agent-api-contracts';
+import { hashAgentPayload, type AgentArtifactRecord } from './agent-state-store';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import Database from 'better-sqlite3';

@@ -19,6 +19,10 @@ import {
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
+import {
+    IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
+    appendImageUpstreamOverrideFields
+} from '@/lib/image-upstream-form';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
 import { createImageShareFromBlob } from '@/lib/share-client';
 import { sha256Hex } from '@/lib/sha256';
@@ -361,12 +365,18 @@ export default function HomePage() {
     const [genCompression, setGenCompression] = React.useState([100]);
     const [genBackground, setGenBackground] = React.useState<GenerationFormData['background']>('auto');
     const [genModeration, setGenModeration] = React.useState<GenerationFormData['moderation']>('auto');
+    const [genImageBackend, setGenImageBackend] =
+        React.useState<GenerationFormData['image_backend']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [genStreamingStrategy, setGenStreamingStrategy] =
+        React.useState<GenerationFormData['streaming_strategy']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [genResponsesModel, setGenResponsesModel] = React.useState('');
 
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
 
     // 流式状态，由生成和编辑模式共用。
-    const [enableStreaming, setEnableStreaming] = React.useState(true);
+    const [enableStreaming, setEnableStreaming] = React.useState(false);
     const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(1);
+    const [activeRequestStreaming, setActiveRequestStreaming] = React.useState(false);
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
@@ -884,6 +894,11 @@ export default function HomePage() {
                 }
                 apiFormData.append('background', genData.background);
                 apiFormData.append('moderation', genData.moderation);
+                appendImageUpstreamOverrideFields(apiFormData, {
+                    imageBackend: genData.image_backend,
+                    streamingStrategy: genData.streaming_strategy,
+                    responsesModel: genData.responsesModel
+                });
             } else {
                 const editData = formData as EditingFormData;
                 apiFormData.append('model', editData.model);
@@ -1058,6 +1073,7 @@ export default function HomePage() {
         let durationMs = 0;
 
         setIsLoading(true);
+        setActiveRequestStreaming(requestStreaming);
         setError(null);
         setLatestImageBatch(null);
         setImageOutputView('grid');
@@ -1172,6 +1188,7 @@ export default function HomePage() {
             await refreshRuntimeCapabilities();
         } finally {
             if (durationMs === 0) durationMs = Date.now() - startTime;
+            setActiveRequestStreaming(false);
             setIsLoading(false);
         }
     }
@@ -1191,7 +1208,10 @@ export default function HomePage() {
                     : {}),
                 background: genBackground,
                 moderation: genModeration,
-                model: genModel
+                model: genModel,
+                image_backend: genImageBackend,
+                streaming_strategy: genStreamingStrategy,
+                responsesModel: genResponsesModel
             });
             return;
         }
@@ -1607,6 +1627,12 @@ export default function HomePage() {
                                         allowStreamingBatch={streamingBatchEnabled}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}
+                                        imageBackend={genImageBackend}
+                                        setImageBackend={setGenImageBackend}
+                                        streamingStrategy={genStreamingStrategy}
+                                        setStreamingStrategy={setGenStreamingStrategy}
+                                        responsesModel={genResponsesModel}
+                                        setResponsesModel={setGenResponsesModel}
                                     />
                                 </div>
                                 <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
@@ -1682,6 +1708,7 @@ export default function HomePage() {
                                     currentMode={mode}
                                     baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
                                     streamingPreviewImages={streamingPreviewImages}
+                                    isStreamingRequest={activeRequestStreaming}
                                     clientPasswordHash={clientPasswordHash}
                                     canOpenLogs={canOpenLogs}
                                     openLogsSignal={openLogsSignal}
