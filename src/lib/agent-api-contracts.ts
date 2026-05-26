@@ -1,3 +1,5 @@
+import { AGENT_ENDPOINTS, AGENT_JOB_ENDPOINTS } from './agent-api-paths.mjs';
+import type { AgentErrorDiagnostics } from './api-error-response';
 import {
     MAX_IMAGE_COUNT,
     MAX_PROMPT_LENGTH,
@@ -8,6 +10,15 @@ import {
     type ValidOutputFormat
 } from './image-request-utils';
 import {
+    parseImageGenerationBackendValue,
+    parseImageStreamingStrategyValue,
+    resolveImageStreamEnabled,
+    type ImageGenerationBackend,
+    type ImageStreamingStrategy
+} from './image-upstream-strategy';
+import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
+import { readBooleanEnv } from './server-runtime';
+import {
     GPT_IMAGE_2_EDGE_MULTIPLE,
     GPT_IMAGE_2_MAX_ASPECT,
     GPT_IMAGE_2_MAX_EDGE,
@@ -15,10 +26,9 @@ import {
     GPT_IMAGE_2_MIN_PIXELS,
     validateGptImage2Size
 } from './size-utils';
-import type { AgentErrorDiagnostics } from './api-error-response';
 
 export const AGENT_API_VERSION = '1.0.0';
-export const AGENT_SCHEMA_VERSION = '2026-05-20';
+export const AGENT_SCHEMA_VERSION = '2026-05-24';
 export const AGENT_DEFAULT_SQLITE_PATH = 'generated-images/.agent-state/agent.sqlite';
 export const AGENT_DEFAULT_LEASE_MS = 10 * 60 * 1000;
 export const AGENT_DEFAULT_REQUEST_TTL_SECONDS = 24 * 60 * 60;
@@ -32,14 +42,39 @@ export const AGENT_BACKGROUNDS = ['transparent', 'opaque', 'auto'] as const;
 export const AGENT_MODERATIONS = ['low', 'auto'] as const;
 export const AGENT_LEGACY_SIZES = ['auto', '1024x1024', '1536x1024', '1024x1536'] as const;
 export const AGENT_JOB_STATES = ['queued', 'running', 'succeeded', 'failed', 'expired'] as const;
+export const AGENT_IMAGE_BACKENDS = ['images-api', 'responses-image-generation'] as const;
+export const PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
+export const AGENT_STREAMING_STRATEGIES = [
+    'off',
+    'auto',
+    'openai-sse',
+    'newapi-keepalive-sse',
+    'responses-sse',
+    'force-sse'
+] as const;
+export const AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES = [
+    'openai-sse',
+    'newapi-keepalive-sse',
+    'responses-sse',
+    'force-sse'
+] as const;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
 export type AgentAuthScheme = 'bearer' | 'x-app-password-hash';
+export type PageSseAuthScheme = 'form-password-hash';
 export type AgentResponseMode = (typeof AGENT_RESPONSE_MODES)[number];
 export type AgentQuality = (typeof AGENT_QUALITIES)[number];
 export type AgentBackground = (typeof AGENT_BACKGROUNDS)[number];
 export type AgentModeration = (typeof AGENT_MODERATIONS)[number];
 export type AgentJobState = (typeof AGENT_JOB_STATES)[number];
+export type AgentRoutingTransport = 'agent_json' | 'agent_job_polling' | 'page_sse';
+export type AgentRoutingStrength = 'default' | 'recommended' | 'must_use';
+export type ImageBackendRuntimeRequirement = {
+    supported: true;
+    enabled: boolean;
+    required_env: string[];
+    missing_env: string[];
+};
 
 export type AgentGenerateRequest = {
     model: GptImageModel;
@@ -52,6 +87,9 @@ export type AgentGenerateRequest = {
     background: AgentBackground;
     moderation: AgentModeration;
     response_mode: AgentResponseMode;
+    image_backend: ImageGenerationBackend;
+    streaming_strategy: ImageStreamingStrategy;
+    partial_images: 1 | 2 | 3;
 };
 
 export type AgentImageResponseItem = {
@@ -111,6 +149,9 @@ export type AgentCapabilities = {
         model: GptImageModel;
         response_mode: AgentResponseMode;
         state_backend: AgentStateBackend;
+        image_backend: ImageGenerationBackend;
+        streaming_strategy: ImageStreamingStrategy;
+        partial_images: 1 | 2 | 3;
     };
     limits: {
         max_prompt_length: number;
@@ -126,7 +167,7 @@ export type AgentCapabilities = {
             max_aspect: number;
             min_pixels: number;
             recommended_presets: Array<{ name: string; size: string; purpose: string }>;
-            high_4k_risk: {
+            large_image_risk: {
                 applies_to: string[];
                 guidance: string;
             };
@@ -143,11 +184,45 @@ export type AgentCapabilities = {
             mode: 'non_streaming_only';
             endpoint: string;
         };
+        upstream_sse: {
+            supported: true;
+            mode: 'internal_upstream_sse';
+            endpoint: string;
+            request_fields: ['image_backend', 'streaming_strategy', 'partial_images'];
+            image_backends: readonly ImageGenerationBackend[];
+            enabled_image_backends: readonly ImageGenerationBackend[];
+            streaming_strategies: readonly ImageStreamingStrategy[];
+            activation_strategies: readonly ImageStreamingStrategy[];
+            final_response_contract: 'AgentImageResponse';
+        };
         page_sse: {
             supported: true;
             mode: 'form_data_sse';
             endpoint: string;
             contract: 'page_ui_only';
+            transport_contract: 'page_form_data_sse';
+            auth: {
+                required: boolean;
+                schemes: PageSseAuthScheme[];
+                form_field: 'passwordHash';
+            };
+            client_request_id: {
+                form_field: 'clientRequestId';
+                source_header: 'Idempotency-Key';
+                max_length: number;
+            };
+            agent_usage: 'recommended_for_high_resolution_generate_edit_and_complex_batch';
+        };
+    };
+    routing_rules: {
+        high_resolution_edit: AgentRoutingRule;
+        complex_ui_batch: AgentRoutingRule;
+        long_image_recovery: AgentRoutingRule;
+        agent_generate_small_smoke: AgentRoutingRule;
+        page_sse_large_generate: AgentRoutingRule;
+        retry_recovery: {
+            reuse_failed_idempotency_key: false;
+            new_attempt_guidance: string;
         };
     };
     agent_jobs: {
@@ -170,6 +245,10 @@ export type AgentCapabilities = {
         backgrounds: readonly string[];
         moderations: readonly string[];
         legacy_sizes: readonly string[];
+        image_backends: readonly ImageGenerationBackend[];
+        enabled_image_backends: readonly ImageGenerationBackend[];
+        image_backend_requirements: Record<ImageGenerationBackend, ImageBackendRuntimeRequirement>;
+        streaming_strategies: readonly ImageStreamingStrategy[];
     };
     storage: {
         image_storage_mode: string;
@@ -180,6 +259,14 @@ export type AgentCapabilities = {
         header: string;
         ttl_seconds: number;
     };
+};
+
+export type AgentRoutingRule = {
+    when: string[];
+    endpoint: string;
+    transport: AgentRoutingTransport;
+    strength: AgentRoutingStrength;
+    reason: string;
 };
 
 type FieldErrors = Record<string, string>;
@@ -204,7 +291,8 @@ function readIntegerField(
 ): number {
     const value = body[field];
     if (value === undefined || value === null || value === '') return fallback;
-    const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+    const parsed =
+        typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
     if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
         fields[field] = `必须是 ${min} 到 ${max} 之间的整数`;
         return fallback;
@@ -275,6 +363,59 @@ function readResponseMode(body: Record<string, unknown>, fields: FieldErrors): A
     return value;
 }
 
+function readAgentImageBackend(body: Record<string, unknown>, fields: FieldErrors): ImageGenerationBackend {
+    const rawValue = body.image_backend;
+    if (rawValue !== undefined && rawValue !== null && typeof rawValue !== 'string') {
+        fields.image_backend = '必须是字符串';
+        return 'images-api';
+    }
+    const value = readStringField(body, 'image_backend', 'images-api');
+    if (!value) return 'images-api';
+    try {
+        return parseImageGenerationBackendValue(value);
+    } catch (error) {
+        fields.image_backend = error instanceof Error ? error.message : 'image_backend 无效';
+        return 'images-api';
+    }
+}
+
+function readAgentStreamingStrategy(body: Record<string, unknown>, fields: FieldErrors): ImageStreamingStrategy {
+    const rawValue = body.streaming_strategy;
+    if (rawValue !== undefined && rawValue !== null && typeof rawValue !== 'string') {
+        fields.streaming_strategy = '必须是字符串';
+        return 'off';
+    }
+    const value = readStringField(body, 'streaming_strategy', 'off');
+    if (!value) return 'off';
+    try {
+        return parseImageStreamingStrategyValue(value);
+    } catch (error) {
+        fields.streaming_strategy = error instanceof Error ? error.message : 'streaming_strategy 无效';
+        return 'off';
+    }
+}
+
+function shouldAgentRequestUpstreamStream(streamingStrategy: ImageStreamingStrategy): boolean {
+    return streamingStrategy !== 'off' && streamingStrategy !== 'auto';
+}
+
+function validateAgentImageUpstreamStrategy(input: {
+    imageBackend: ImageGenerationBackend;
+    streamingStrategy: ImageStreamingStrategy;
+    fields: FieldErrors;
+}) {
+    try {
+        resolveImageStreamEnabled({
+            imageBackend: input.imageBackend,
+            requestedStream: shouldAgentRequestUpstreamStream(input.streamingStrategy),
+            streamingStrategy: input.streamingStrategy
+        });
+    } catch (error) {
+        input.fields.streaming_strategy =
+            error instanceof Error ? error.message : 'streaming_strategy 与 image_backend 不兼容';
+    }
+}
+
 function readQuality(body: Record<string, unknown>, fields: FieldErrors): AgentQuality {
     const value = readStringField(body, 'quality', 'high');
     if (!value || !isOneOf(value, AGENT_QUALITIES)) {
@@ -316,7 +457,8 @@ function readOutputCompression(
         fields.output_compression = '仅适用于 jpeg 或 webp 输出';
         return undefined;
     }
-    const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+    const parsed =
+        typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
     if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
         fields.output_compression = '必须是 0 到 100 之间的整数';
         return undefined;
@@ -340,6 +482,10 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const background = readBackground(objectBody, model, fields);
     const moderation = readModeration(objectBody, fields);
     const responseMode = readResponseMode(objectBody, fields);
+    const imageBackend = readAgentImageBackend(objectBody, fields);
+    const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
+    const partialImages = readIntegerField(objectBody, 'partial_images', 2, 1, 3, fields) as 1 | 2 | 3;
+    validateAgentImageUpstreamStrategy({ imageBackend, streamingStrategy, fields });
 
     if (Object.keys(fields).length > 0) {
         throw new RequestValidationError(JSON.stringify({ fields }), 422);
@@ -355,7 +501,10 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
         ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
         background,
         moderation,
-        response_mode: responseMode
+        response_mode: responseMode,
+        image_backend: imageBackend,
+        streaming_strategy: streamingStrategy,
+        partial_images: partialImages
     };
 }
 
@@ -414,40 +563,80 @@ export function buildAgentAuthCapabilities(env: Record<string, string | undefine
     return { required: false, schemes: [] };
 }
 
+export function buildPageSseAuthCapabilities(
+    env: Record<string, string | undefined>
+): AgentCapabilities['agent_streaming']['page_sse']['auth'] {
+    return {
+        required: Boolean(env.APP_PASSWORD?.trim()),
+        schemes: env.APP_PASSWORD?.trim() ? ['form-password-hash'] : [],
+        form_field: 'passwordHash'
+    };
+}
+
+function readEnabledImageBackends(
+    requirements: Record<ImageGenerationBackend, ImageBackendRuntimeRequirement>
+): ImageGenerationBackend[] {
+    return requirements['responses-image-generation'].enabled
+        ? ['images-api', 'responses-image-generation']
+        : ['images-api'];
+}
+
+function buildImageBackendRequirements(
+    env: Record<string, string | undefined>
+): Record<ImageGenerationBackend, ImageBackendRuntimeRequirement> {
+    const responsesMissingEnv = readResponsesImageBackendMissingEnv(env);
+    return {
+        'images-api': {
+            supported: true,
+            enabled: true,
+            required_env: [],
+            missing_env: []
+        },
+        'responses-image-generation': {
+            supported: true,
+            enabled: responsesMissingEnv.length === 0,
+            required_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL'],
+            missing_env: responsesMissingEnv
+        }
+    };
+}
+
+function readResponsesImageBackendMissingEnv(env: Record<string, string | undefined>): string[] {
+    const missing: string[] = [];
+    if (!readBooleanEnv(env, 'ENABLE_RESPONSES_IMAGE_BACKEND')) {
+        missing.push('ENABLE_RESPONSES_IMAGE_BACKEND');
+    }
+    if (!env.OPENAI_RESPONSES_API_MODEL?.trim()) {
+        missing.push('OPENAI_RESPONSES_API_MODEL');
+    }
+    return missing;
+}
+
 function readPositiveIntegerEnv(env: Record<string, string | undefined>, fieldName: string, fallback: number): number {
-    const value = env[fieldName]?.trim();
-    if (!value) return fallback;
-    if (!/^\d+$/.test(value)) {
-        throw new RequestValidationError(`${fieldName} 必须是正整数。`, 500);
+    try {
+        return readPositiveIntegerFromEnv(env, fieldName, fallback, {
+            messages: CHINESE_POSITIVE_INTEGER_MESSAGES
+        });
+    } catch (error) {
+        throw new RequestValidationError(error instanceof Error ? error.message : `${fieldName} 必须是正整数。`, 500);
     }
-    const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < 1) {
-        throw new RequestValidationError(`${fieldName} 必须是正整数。`, 500);
-    }
-    return parsed;
 }
 
 export function buildAgentCapabilities(env: Record<string, string | undefined>): AgentCapabilities {
+    const imageBackendRequirements = buildImageBackendRequirements(env);
+    const enabledImageBackends = readEnabledImageBackends(imageBackendRequirements);
     return {
         api_version: AGENT_API_VERSION,
         schema_version: AGENT_SCHEMA_VERSION,
         auth: buildAgentAuthCapabilities(env),
-        endpoints: {
-            capabilities: '/api/agent/capabilities',
-            openapi: '/api/agent/openapi.json',
-            generate: '/api/agent/images/generate',
-            edit: '/api/agent/images/edit',
-            create_generate_job: '/api/agent/jobs/images/generate',
-            job: '/api/agent/jobs/{id}',
-            job_result: '/api/agent/jobs/{id}/result',
-            artifact_metadata: '/api/agent/artifacts/{id}',
-            artifact_content: '/api/agent/artifacts/{id}/content',
-            artifact_delete: '/api/agent/artifacts/{id}'
-        },
+        endpoints: { ...AGENT_ENDPOINTS },
         defaults: {
             model: 'gpt-image-2',
             response_mode: 'path',
-            state_backend: readAgentStateBackend(env)
+            state_backend: readAgentStateBackend(env),
+            image_backend: 'images-api',
+            streaming_strategy: 'off',
+            partial_images: 2
         },
         limits: {
             max_prompt_length: MAX_PROMPT_LENGTH,
@@ -467,9 +656,9 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     { name: 'landscape', size: '3072x2048', purpose: '横向宽幅构图' },
                     { name: 'portrait', size: '2048x3072', purpose: '纵向主体构图' }
                 ],
-                high_4k_risk: {
-                    applies_to: ['quality=high', 'max_edge>=3072', 'long_running_upstream'],
-                    guidance: '高质量 4K 级请求可能耗时数分钟；失败应归类为上游长耗时风险，不代表低负载路径不可用。'
+                large_image_risk: {
+                    applies_to: ['max_edge>2048', 'long_running_upstream'],
+                    guidance: '大尺寸请求可能耗时数分钟；失败应归类为上游长耗时风险，不代表低负载路径不可用。'
                 }
             }
         },
@@ -477,32 +666,93 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             generate: {
                 supported: false,
                 mode: 'non_streaming_only',
-                endpoint: '/api/agent/images/generate'
+                endpoint: AGENT_ENDPOINTS.generate
             },
             edit: {
                 supported: false,
                 mode: 'non_streaming_only',
-                endpoint: '/api/agent/images/edit'
+                endpoint: AGENT_ENDPOINTS.edit
+            },
+            upstream_sse: {
+                supported: true,
+                mode: 'internal_upstream_sse',
+                endpoint: AGENT_ENDPOINTS.generate,
+                request_fields: ['image_backend', 'streaming_strategy', 'partial_images'],
+                image_backends: AGENT_IMAGE_BACKENDS,
+                enabled_image_backends: enabledImageBackends,
+                streaming_strategies: AGENT_STREAMING_STRATEGIES,
+                activation_strategies: AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES,
+                final_response_contract: 'AgentImageResponse'
             },
             page_sse: {
                 supported: true,
                 mode: 'form_data_sse',
                 endpoint: '/api/images',
-                contract: 'page_ui_only'
+                contract: 'page_ui_only',
+                transport_contract: 'page_form_data_sse',
+                auth: buildPageSseAuthCapabilities(env),
+                client_request_id: {
+                    form_field: 'clientRequestId',
+                    source_header: 'Idempotency-Key',
+                    max_length: PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
+                },
+                agent_usage: 'recommended_for_high_resolution_generate_edit_and_complex_batch'
+            }
+        },
+        routing_rules: {
+            high_resolution_edit: {
+                when: ['operation=edit', 'max_edge>2048'],
+                endpoint: '/api/images',
+                transport: 'page_sse',
+                strength: 'must_use',
+                reason: 'Agent edit is non-streaming and rejects high-resolution edit requests; use the page form-data SSE endpoint instead.'
+            },
+            complex_ui_batch: {
+                when: ['operation=generate_or_edit', 'complex_ui=true', 'batch=true'],
+                endpoint: '/api/images',
+                transport: 'page_sse',
+                strength: 'recommended',
+                reason: 'Page form-data SSE keeps long-running image production observable and recoverable for complex UI batches.'
+            },
+            long_image_recovery: {
+                when: ['operation=generate_or_edit', 'long_image=true', 'resume_or_recover=true'],
+                endpoint: '/api/images',
+                transport: 'page_sse',
+                strength: 'recommended',
+                reason: 'Page form-data SSE exposes partial progress and final-image diagnostics needed for long-image recovery runs.'
+            },
+            agent_generate_small_smoke: {
+                when: ['operation=generate', 'max_edge<=2048', 'single_request=true'],
+                endpoint: AGENT_ENDPOINTS.generate,
+                transport: 'agent_json',
+                strength: 'default',
+                reason: 'Agent JSON generate remains the stable contract and smoke path for normal single-image requests.'
+            },
+            page_sse_large_generate: {
+                when: ['operation=generate', 'max_edge>2048', 'single_request=true'],
+                endpoint: '/api/images',
+                transport: 'page_sse',
+                strength: 'recommended',
+                reason: 'Page form-data SSE keeps large generate requests observable; if the stream fails, diagnose first and choose any Agent JSON retry explicitly.'
+            },
+            retry_recovery: {
+                reuse_failed_idempotency_key: false,
+                new_attempt_guidance:
+                    'A failed terminal Agent request only replays the stored failure. Diagnose the failure, then create a new business operation with a new Idempotency-Key.'
             }
         },
         agent_jobs: {
             supported: true,
             mode: 'job_polling',
-            intended_for: ['quality=high', 'max_edge>=3072', 'long_running_upstream', 'manual_billable_gate'],
-            endpoints: {
-                create_generate_job: '/api/agent/jobs/images/generate',
-                get_job: '/api/agent/jobs/{id}',
-                get_job_result: '/api/agent/jobs/{id}/result'
-            },
+            intended_for: [
+                'explicit_job_route',
+                'manual_after_diagnosis',
+                'long_running_upstream_when_page_sse_not_selected'
+            ],
+            endpoints: { ...AGENT_JOB_ENDPOINTS },
             states: AGENT_JOB_STATES,
             current_guidance:
-                '对 4K/high 或长耗时请求优先使用 job polling：先创建 generate job，再轮询状态，最后读取 result。运行中 job 会刷新 lease。当前执行模型为同实例后台任务，不是跨实例持久队列。'
+                '对 max_edge>2048 的单次文生图请求优先使用页面端 /api/images SSE；如果页面流式失败，先诊断再显式选择 Agent JSON 或 job 路径，不自动回退。job polling 仅用于显式 job 路径。当前执行模型为同实例后台任务，不是跨实例持久队列。'
         },
         supported: {
             models: AGENT_MODELS,
@@ -511,7 +761,11 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             qualities: AGENT_QUALITIES,
             backgrounds: AGENT_BACKGROUNDS,
             moderations: AGENT_MODERATIONS,
-            legacy_sizes: AGENT_LEGACY_SIZES
+            legacy_sizes: AGENT_LEGACY_SIZES,
+            image_backends: AGENT_IMAGE_BACKENDS,
+            enabled_image_backends: enabledImageBackends,
+            image_backend_requirements: imageBackendRequirements,
+            streaming_strategies: AGENT_STREAMING_STRATEGIES
         },
         storage: {
             image_storage_mode: env.NEXT_PUBLIC_IMAGE_STORAGE_MODE || (env.VERCEL === '1' ? 'indexeddb' : 'fs'),

@@ -1,5 +1,6 @@
 import { MemoryAgentStateStore } from './agent-state-memory';
-import { hashAgentPayload, type AgentArtifactRecord, type AgentImageResponse } from './agent-state-store';
+import type { AgentImageResponse } from './agent-api-contracts';
+import { hashAgentPayload, type AgentArtifactRecord } from './agent-state-store';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { access, mkdir, rm, writeFile } from 'node:fs/promises';

@@ -11,6 +11,7 @@ import {
 } from './agent-image-service';
 import { AgentApiError, toTerminalAgentErrorBody, type AgentErrorBody } from './api-error-response';
 import type { AgentRequestRecord, AgentStateStore } from './agent-state-store';
+import { buildAgentJobResultPath } from './agent-api-paths.mjs';
 import { appLogger } from './app-logger';
 
 const DEFAULT_JOB_RETRY_AFTER_SECONDS = 5;
@@ -31,7 +32,7 @@ export function buildAgentJobStatusResponse(
             created_at: record.createdAt,
             updated_at: record.updatedAt,
             expires_at: record.expiresAt,
-            ...(state !== 'expired' ? { result_url: `/api/agent/jobs/${record.requestId}/result` } : {}),
+            ...(state !== 'expired' ? { result_url: buildAgentJobResultPath(record.requestId) } : {}),
             ...(state === 'running' || state === 'queued'
                 ? { retry_after_seconds: options.retryAfterSeconds ?? DEFAULT_JOB_RETRY_AFTER_SECONDS }
                 : {}),

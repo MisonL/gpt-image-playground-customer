@@ -7,7 +7,7 @@ type AuthVerifyRequestBody = {
 };
 
 export async function POST(request: NextRequest) {
-    const appPassword = process.env.APP_PASSWORD;
+    const appPassword = process.env.APP_PASSWORD?.trim();
     if (!appPassword) {
         return NextResponse.json({ authenticated: true, passwordRequired: false });
     }

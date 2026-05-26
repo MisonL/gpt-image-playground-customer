@@ -10,12 +10,6 @@ import {
     readStorageMode,
     validateApiBaseUrl
 } from '@/lib/image-request-utils';
-import {
-    InvalidOpenAiImagesResponseError,
-    MissingOpenAiImageDataError,
-    persistedImageToLegacyResponse,
-    persistOpenAiImages
-} from '@/lib/image-service';
 import { handleEditImageMode, handleGenerateImageMode } from '@/lib/image-route-mode-handlers';
 import {
     assertResponsesImageBackendAllowed,
@@ -23,12 +17,22 @@ import {
     describeInvalidImagesResponse,
     ensureOutputDirExists,
     readClientRequestId,
-    readImageBackend,
     reportServerCredentialFailure,
     resolveRequestActualCostSafely,
     type AccessCookie,
     type RequestLogContext
 } from '@/lib/image-route-support';
+import {
+    InvalidOpenAiImagesResponseError,
+    MissingOpenAiImageDataError,
+    persistedImageToLegacyResponse,
+    persistOpenAiImages
+} from '@/lib/image-service';
+import {
+    readImageGenerationBackend,
+    readImageStreamingStrategy,
+    resolveImageStreamEnabled
+} from '@/lib/image-upstream-strategy';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { buildAccessCookie, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
@@ -97,7 +101,7 @@ export async function POST(request: NextRequest) {
             await ensureOutputDirExists();
         }
 
-        const appPassword = process.env.APP_PASSWORD;
+        const appPassword = process.env.APP_PASSWORD?.trim();
         if (appPassword) {
             const clientPasswordHash = formData.get('passwordHash');
             if (typeof clientPasswordHash !== 'string' || !clientPasswordHash) {
@@ -128,10 +132,25 @@ export async function POST(request: NextRequest) {
             requestLogContext
         );
 
-        const streamEnabled = formData.get('stream') === 'true';
+        const requestedStream = formData.get('stream') === 'true';
         const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
-        const imageBackend = readImageBackend(formData);
-        assertResponsesImageBackendAllowed({ imageBackend, mode, streamEnabled });
+        const imageBackend = readImageGenerationBackend(formData, process.env, { useEnvDefault: mode === 'generate' });
+        const streamingStrategy = readImageStreamingStrategy(formData, process.env, {
+            useEnvDefault: mode === 'generate'
+        });
+        const streamEnabled = resolveImageStreamEnabled({
+            imageBackend,
+            requestedStream,
+            streamingStrategy
+        });
+        assertResponsesImageBackendAllowed({ imageBackend, mode });
+        appLogger.info('图片上游兼容策略。', {
+            ...requestLogContext,
+            imageBackend,
+            streamingStrategy,
+            requestedStream,
+            streamEnabled
+        });
 
         const modeResult =
             mode === 'generate'
@@ -150,7 +169,8 @@ export async function POST(request: NextRequest) {
                       clientRequestId,
                       requestLogContext,
                       selectedCredential,
-                      accessCookie
+                      accessCookie,
+                      abortSignal: request.signal
                   })
                 : await handleEditImageMode({
                       formData,
@@ -166,7 +186,8 @@ export async function POST(request: NextRequest) {
                       clientRequestId,
                       requestLogContext,
                       selectedCredential,
-                      accessCookie
+                      accessCookie,
+                      abortSignal: request.signal
                   });
         if (modeResult instanceof Response) {
             return modeResult;

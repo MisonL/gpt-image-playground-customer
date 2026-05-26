@@ -6,9 +6,17 @@ const testFiles = ['src/lib/agent-state-postgres.test.ts', 'src/app/api/agent/ag
 const POSTGRES_READY_ATTEMPTS = 30;
 const POSTGRES_READY_INTERVAL_MS = 1000;
 
+class CommandFailedError extends Error {
+  constructor(command, args, status, stderr = '') {
+    super(`${command} ${args.join(' ')} failed with exit code ${status}`);
+    this.status = status;
+    this.stderr = stderr;
+  }
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
-    stdio: options.capture ? ['ignore', 'pipe', 'pipe'] : options.silent ? 'ignore' : 'inherit',
+    stdio: options.capture || options.silent ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: 'utf8',
     env: options.env || process.env
   });
@@ -16,7 +24,7 @@ function run(command, args, options = {}) {
     return result;
   }
   if (result.status !== 0) {
-    process.exit(result.status || 1);
+    throw new CommandFailedError(command, args, result.status || 1, result.stderr || '');
   }
   return result;
 }
@@ -29,6 +37,10 @@ function runTests(databaseUrl) {
       AGENT_POSTGRES_TEST_DATABASE_URL: databaseUrl
     }
   });
+}
+
+function statusFromError(error) {
+  return error instanceof CommandFailedError ? error.status : 1;
 }
 
 async function waitForPostgres(containerName) {
@@ -56,7 +68,11 @@ function readMappedPort(containerName) {
 }
 
 if (process.env.AGENT_POSTGRES_TEST_DATABASE_URL) {
-  runTests(process.env.AGENT_POSTGRES_TEST_DATABASE_URL);
+  try {
+    runTests(process.env.AGENT_POSTGRES_TEST_DATABASE_URL);
+  } catch (error) {
+    process.exit(statusFromError(error));
+  }
   process.exit(0);
 }
 
@@ -81,6 +97,15 @@ try {
   await waitForPostgres(containerName);
   const port = readMappedPort(containerName);
   runTests(`postgres://agent_test:agent_test@127.0.0.1:${port}/agent_test`);
+} catch (error) {
+  process.exitCode = statusFromError(error);
+  if (error instanceof CommandFailedError) {
+    if (error.stderr.trim()) {
+      console.error(error.stderr.trim());
+    }
+  } else {
+    console.error(error instanceof Error ? error.message : String(error));
+  }
 } finally {
   spawnSync('docker', ['rm', '-f', containerName], { stdio: 'ignore' });
 }

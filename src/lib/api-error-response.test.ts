@@ -1,4 +1,10 @@
-import { AgentApiError, createAgentErrorBody, normalizeAgentError } from './api-error-response';
+import {
+    AgentApiError,
+    agentErrorResponse,
+    createAgentErrorBody,
+    normalizeAgentError,
+    toTerminalAgentErrorBody
+} from './api-error-response';
 import { RequestValidationError } from './image-request-utils';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -150,5 +156,63 @@ describe('createAgentErrorBody', () => {
                 request_id: 'request-1'
             }
         });
+    });
+
+    it('removes retry timing from terminal failed replays', () => {
+        const terminal = toTerminalAgentErrorBody({
+            error: {
+                code: 'upstream_unavailable',
+                message: 'Connection error.',
+                retryable: true,
+                diagnostics: {
+                    retry_after_seconds: 15,
+                    transport_error: true,
+                    channel_cooldown_scope: 'channel'
+                },
+                request_id: 'request-terminal'
+            }
+        });
+
+        assert.equal(terminal.error.retryable, false);
+        assert.equal(terminal.error.diagnostics?.retry_after_seconds, undefined);
+        assert.equal(terminal.error.diagnostics?.transport_error, true);
+        assert.equal(terminal.error.diagnostics?.channel_cooldown_scope, 'channel');
+    });
+
+    it('removes retry timing from any non-retryable error body', () => {
+        const body = createAgentErrorBody(
+            new AgentApiError({
+                code: 'unexpected_error',
+                message: 'terminal',
+                status: 500,
+                retryable: false,
+                diagnostics: {
+                    retry_after_seconds: 10,
+                    upstream_event_type: 'image_generation.partial_image',
+                    partial_image_count: 1
+                }
+            }),
+            'request-non-retryable'
+        );
+
+        assert.equal(body.error.retryable, false);
+        assert.equal(body.error.diagnostics?.retry_after_seconds, undefined);
+        assert.equal(body.error.diagnostics?.upstream_event_type, 'image_generation.partial_image');
+        assert.equal(body.error.diagnostics?.partial_image_count, 1);
+    });
+
+    it('does not emit Retry-After headers for non-retryable errors', () => {
+        const response = agentErrorResponse(
+            new AgentApiError({
+                code: 'unexpected_error',
+                message: 'terminal',
+                status: 500,
+                retryable: false,
+                retryAfterSeconds: 10
+            }),
+            'request-non-retryable-header'
+        );
+
+        assert.equal(response.headers.get('Retry-After'), null);
     });
 });
