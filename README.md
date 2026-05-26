@@ -195,6 +195,7 @@ https://your-compatible-api.example.com/v1
 ## Agent API
 
 Agent API 面向自动化调用，不要求 Agent 模拟网页表单。接口统一使用结构化错误、`Idempotency-Key` 和产物 ID。
+自动化客户端应先读取 `GET /api/agent/capabilities`，按其中的 `routing_rules`、`agent_streaming`、`agent_jobs`、`supported.enabled_image_backends` 和 `supported.image_backend_requirements` 选择路径，不要硬编码当前部署默认值。
 
 | 接口 | 用途 |
 | --- | --- |
@@ -217,11 +218,14 @@ Authorization: Bearer your-agent-token
 
 `AGENT_API_TOKEN` 存在时 Agent API 只接受 Bearer token，不会回退到页面访问码哈希。只有未设置 `AGENT_API_TOKEN` 且设置了 `APP_PASSWORD` 时，Agent API 才接受 `X-App-Password-Hash`；实际可用方案以 `/api/agent/capabilities` 的 `auth.schemes` 为准。
 
+页面端 `/api/images` SSE 是独立的 form-data 路径，不属于 `/api/agent/*` JSON 响应契约。`agent_streaming.page_sse.auth.required=true` 时，脚本需要把 `GPT_IMAGE_APP_PASSWORD_HASH` 作为 form-data `passwordHash` 发送；同一个业务 key 会作为 `clientRequestId` 发送，长度不得超过 capabilities 声明的 `agent_streaming.page_sse.client_request_id.max_length`。
+
 同一个 `Idempotency-Key` 如果已进入终态 `failed`，再次请求只会回放该失败，不会重新执行。终态失败回放会返回 `retryable=false`，并保留错误码、上游状态和脱敏诊断字段；需要重新尝试时，应创建新的业务操作和新的 `Idempotency-Key`。
 
 Job polling 当前是同一 Next.js 服务实例内的后台任务，结果和错误会写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在 job 结束前重启，客户端应继续按状态端点和结构化错误处理，必要时用相同 `Idempotency-Key` 重建同一业务操作。
 运行中的 job 会定时刷新请求 lease，避免高质量长耗时上游调用仍在执行时被 recovery 误判为孤儿请求。
 `POST /api/agent/images/generate` 对外始终是最终 JSON；`max_edge>2048` 的单次文生图默认建议按 `/api/agent/capabilities` 使用页面端 `/api/images` SSE。显式传 `--agent` 或 `streaming_strategy=off` 时才走 Agent JSON 非流式路径，用于诊断对照。
+仓库辅助脚本支持 `--page-sse`、`--agent` 和 `--job` 显式选择路径。`--page-sse` 使用页面 SSE，`--agent` 强制 `/api/agent/images/generate` 最终 JSON，`--job` 使用 Agent job polling。页面流式失败后不会自动二次计费回退，需先按结构化错误和诊断字段确认原因，再选择新的业务操作和新的 `Idempotency-Key`。
 
 生成示例：
 
