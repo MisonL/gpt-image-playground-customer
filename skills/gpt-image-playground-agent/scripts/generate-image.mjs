@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { AGENT_ENDPOINTS, buildAgentJobResultPath } from '../../../src/lib/agent-api-paths.mjs';
+import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
 import {
     errorMessage,
     normalizeBaseUrl,

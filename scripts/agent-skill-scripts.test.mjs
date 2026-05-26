@@ -4,12 +4,15 @@ import {
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+const skillRoot = join(repoRoot, 'skills/gpt-image-playground-agent');
 const skillScriptsRoot = join(repoRoot, 'skills/gpt-image-playground-agent/scripts');
 
 describe('Agent skill script argument validation', () => {
@@ -1287,6 +1290,33 @@ describe('Agent skill script argument validation', () => {
         assert.equal(editHelp.status, 0);
         assert.match(editHelp.stderr, /用法：edit-image\.mjs/);
         assert.equal(editHelp.stdout.trim(), '');
+    });
+
+    it('runs from a copied standalone skill directory outside the repository', () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-playground-agent-'));
+        const copiedSkillRoot = join(tempRoot, 'gpt-image-playground-agent');
+        try {
+            cpSync(skillRoot, copiedSkillRoot, { recursive: true });
+            const result = spawnSync(
+                process.execPath,
+                [join(copiedSkillRoot, 'scripts/generate-image.mjs'), '--help'],
+                {
+                    cwd: tmpdir(),
+                    encoding: 'utf8',
+                    env: {
+                        ...process.env,
+                        GPT_IMAGE_PLAYGROUND_URL: 'not a url'
+                    }
+                }
+            );
+
+            assert.equal(result.status, 0);
+            assert.match(result.stderr, /用法：generate-image\.mjs/);
+            assert.equal(result.stdout.trim(), '');
+            assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ERR_MODULE_NOT_FOUND|src\/lib/);
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
     });
 
     it('rejects cross-origin job result URLs before sending auth headers', () => {
