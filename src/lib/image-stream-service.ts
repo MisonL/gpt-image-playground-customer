@@ -29,6 +29,10 @@ type StreamingEvent = {
     clientRequestId?: string;
     actual_cost?: ActualCostDetails;
     actualCost?: ActualCostDetails;
+    fallback_used?: boolean;
+    fallbackUsed?: boolean;
+    streaming_degraded?: boolean;
+    streamingDegraded?: boolean;
     error?: string;
     status?: number;
 };
@@ -55,10 +59,14 @@ export type ImageStreamResponseOptions = {
     apiKey: string;
     model: string;
     startedAtMs: number;
+    abortSignal?: AbortSignal;
     clientRequestId?: string;
     requestLogContext?: { clientRequestId: string };
     resolveActualCost: (input: ResolveStreamCostInput) => Promise<ActualCostDetails>;
     onError?: (error: unknown) => void;
+    onStreamUnavailable?: (error: unknown, reason: string) => void;
+    onStreamingDegraded?: (reason: string) => void;
+    fallbackOnError?: (error: unknown) => Promise<OpenAI.Images.ImagesResponse>;
 };
 
 type StreamState = {
@@ -66,6 +74,8 @@ type StreamState = {
     completedImageDedupeKeys: Set<string>;
     finalUsage?: ImageUsage;
     imageIndex: number;
+    fallbackUsed: boolean;
+    streamingDegraded: boolean;
 };
 
 type StreamRuntime = {
@@ -84,6 +94,13 @@ function readErrorStatus(error: unknown): number | undefined {
 
 function isClosedStreamControllerError(error: unknown): boolean {
     return error instanceof TypeError && /controller is already closed|invalid state/i.test(error.message);
+}
+
+function isAbortLikeError(error: unknown, abortSignal?: AbortSignal): boolean {
+    if (abortSignal?.aborted) return true;
+    if (typeof error !== 'object' || error === null) return false;
+    const name = 'name' in error ? error.name : undefined;
+    return name === 'AbortError' || name === 'CanceledError';
 }
 
 function createSseWriter(controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder) {
@@ -210,6 +227,10 @@ async function emitNormalizedEvent(
 async function consumeUpstreamStream(runtime: StreamRuntime): Promise<boolean> {
     for await (const event of runtime.options.stream) {
         const diagnostics = normalizeUpstreamImageStreamEventWithDiagnostics(event);
+        if (diagnostics.providerDialect === 'sdk_parsed_fallback' && !runtime.state.streamingDegraded) {
+            runtime.state.streamingDegraded = true;
+            runtime.options.onStreamingDegraded?.('json_final_fallback');
+        }
         logProviderDialect({
             modeLabel: runtime.options.modeLabel,
             requestLogContext: runtime.options.requestLogContext,
@@ -239,6 +260,28 @@ async function consumeUpstreamStream(runtime: StreamRuntime): Promise<boolean> {
     return true;
 }
 
+async function emitFallbackImages(runtime: StreamRuntime, result: OpenAI.Images.ImagesResponse): Promise<boolean> {
+    if (!Array.isArray(result.data) || result.data.length === 0) {
+        throw new Error('非流式回退未返回图片数据。');
+    }
+    runtime.state.fallbackUsed = true;
+    for (const [index, image] of result.data.entries()) {
+        if (!image.b64_json) {
+            throw new Error(`非流式回退第 ${index} 个图片缺少 b64_json。`);
+        }
+        const emitted = await emitCompletedImage(runtime, {
+            type: 'completed',
+            b64Json: image.b64_json,
+            usage: index === result.data.length - 1 ? result.usage : undefined
+        });
+        if (!emitted) return false;
+    }
+    if (result.usage) {
+        runtime.state.finalUsage = result.usage;
+    }
+    return true;
+}
+
 async function emitDoneEvent(runtime: StreamRuntime): Promise<boolean> {
     if (runtime.state.completedImages.length === 0) {
         throw new Error('流式图片响应未返回最终图片 b64_json。');
@@ -259,6 +302,8 @@ async function emitDoneEvent(runtime: StreamRuntime): Promise<boolean> {
         usage: runtime.state.finalUsage,
         actual_cost: actualCost,
         actualCost,
+        ...(runtime.state.fallbackUsed ? { fallback_used: true, fallbackUsed: true } : {}),
+        ...(runtime.state.streamingDegraded ? { streaming_degraded: true, streamingDegraded: true } : {}),
         client_request_id: runtime.options.clientRequestId,
         clientRequestId: runtime.options.clientRequestId
     });
@@ -288,13 +333,36 @@ export function createImageStreamResponse(options: ImageStreamResponseOptions): 
                 options,
                 batchId,
                 sse,
-                state: { completedImages: [], completedImageDedupeKeys: new Set(), imageIndex: 0 }
+                state: {
+                    completedImages: [],
+                    completedImageDedupeKeys: new Set(),
+                    imageIndex: 0,
+                    fallbackUsed: false,
+                    streamingDegraded: false
+                }
             };
             try {
                 if (!(await consumeUpstreamStream(runtime))) return;
                 if (!(await emitDoneEvent(runtime))) return;
                 sse.close();
             } catch (error) {
+                if (isAbortLikeError(error, options.abortSignal)) {
+                    sse.close();
+                    return;
+                }
+                if (runtime.state.completedImages.length === 0 && options.fallbackOnError) {
+                    runtime.options.onStreamUnavailable?.(error, 'stream_error_without_final_image');
+                    try {
+                        if (!(await emitFallbackImages(runtime, await options.fallbackOnError(error)))) return;
+                        if (!(await emitDoneEvent(runtime))) return;
+                        sse.close();
+                        return;
+                    } catch (fallbackError) {
+                        if (!emitErrorEvent(runtime, fallbackError)) return;
+                        sse.close();
+                        return;
+                    }
+                }
                 if (!emitErrorEvent(runtime, error)) return;
                 sse.close();
             }

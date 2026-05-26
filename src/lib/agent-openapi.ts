@@ -7,6 +7,7 @@ import {
     AGENT_OUTPUT_FORMATS,
     AGENT_QUALITIES,
     AGENT_RESPONSE_MODES,
+    AGENT_STREAM_MODES,
     AGENT_STREAMING_STRATEGIES,
     AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES,
     type AgentAuthScheme,
@@ -304,6 +305,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'response_mode',
                                 'state_backend',
                                 'image_backend',
+                                'stream_mode',
                                 'streaming_strategy',
                                 'partial_images'
                             ],
@@ -312,6 +314,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES },
                                 state_backend: { type: 'string', enum: ['memory', 'sqlite', 'postgres'] },
                                 image_backend: { type: 'string', enum: AGENT_IMAGE_BACKENDS },
+                                stream_mode: { type: 'string', enum: AGENT_STREAM_MODES },
                                 streaming_strategy: { type: 'string', enum: AGENT_STREAMING_STRATEGIES },
                                 partial_images: { type: 'integer', minimum: 1, maximum: 3 }
                             }
@@ -334,7 +337,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'image_backends',
                                 'enabled_image_backends',
                                 'image_backend_requirements',
-                                'streaming_strategies'
+                                'streaming_strategies',
+                                'stream_modes'
                             ],
                             properties: {
                                 models: { type: 'array', items: { type: 'string', enum: AGENT_MODELS } },
@@ -365,6 +369,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 streaming_strategies: {
                                     type: 'array',
                                     items: { type: 'string', enum: AGENT_STREAMING_STRATEGIES }
+                                },
+                                stream_modes: {
+                                    type: 'array',
+                                    items: { type: 'string', enum: AGENT_STREAM_MODES }
                                 }
                             }
                         },
@@ -450,6 +458,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'image_backends',
                                 'enabled_image_backends',
                                 'streaming_strategies',
+                                'stream_modes',
                                 'activation_strategies',
                                 'final_response_contract'
                             ],
@@ -460,7 +469,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 request_fields: {
                                     type: 'array',
                                     items: { type: 'string' },
-                                    const: ['image_backend', 'streaming_strategy', 'partial_images']
+                                    const: ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images']
                                 },
                                 image_backends: {
                                     type: 'array',
@@ -473,6 +482,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 streaming_strategies: {
                                     type: 'array',
                                     items: { type: 'string', enum: AGENT_STREAMING_STRATEGIES }
+                                },
+                                stream_modes: {
+                                    type: 'array',
+                                    items: { type: 'string', enum: AGENT_STREAM_MODES }
                                 },
                                 activation_strategies: {
                                     type: 'array',
@@ -573,7 +586,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         strength: {
                             type: 'string',
-                            enum: ['default', 'recommended', 'must_use'] satisfies AgentRoutingStrength[]
+                            enum: ['default', 'recommended'] satisfies AgentRoutingStrength[]
                         },
                         reason: { type: 'string' }
                     }
@@ -629,7 +642,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         streaming_strategy: {
                             type: 'string',
                             enum: AGENT_STREAMING_STRATEGIES,
-                            default: 'off'
+                            default: 'auto'
+                        },
+                        stream_mode: {
+                            type: 'string',
+                            enum: AGENT_STREAM_MODES,
+                            default: 'auto'
                         },
                         partial_images: { type: 'integer', minimum: 1, maximum: 3, default: 2 }
                     }
@@ -638,7 +656,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     type: 'object',
                     required: ['prompt', 'image_0'],
                     description:
-                        'Agent edit 仅接受非高分辨率请求。size 最大边大于 2048 时会被服务端拒绝，必须切换到页面端 /api/images form-data SSE 路径。',
+                        'Agent edit 返回最终 JSON。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。',
                     properties: {
                         prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
                         model: { type: 'string', enum: AGENT_MODELS, default: 'gpt-image-2' },
@@ -646,6 +664,13 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         size: { type: 'string', default: 'auto' },
                         quality: { type: 'string', enum: AGENT_QUALITIES, default: 'auto' },
                         response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES, default: 'path' },
+                        stream_mode: { type: 'string', enum: AGENT_STREAM_MODES, default: 'auto' },
+                        streaming_strategy: {
+                            type: 'string',
+                            enum: AGENT_STREAMING_STRATEGIES,
+                            default: 'auto'
+                        },
+                        partial_images: { type: 'integer', minimum: 1, maximum: 3, default: 2 },
                         image_0: { type: 'string', format: 'binary' },
                         mask: { type: 'string', format: 'binary' }
                     }

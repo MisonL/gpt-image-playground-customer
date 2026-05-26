@@ -161,6 +161,38 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('uses Agent auto stream mode as an internal upstream stream by default', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        const { getServerChannelState } = await import('@/lib/server-channel-router');
+        let upstreamBody = '';
+        const upstream = await startImageUpstream((body) => {
+            upstreamBody = body;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-default-auto-stream-key', {
+                    prompt: 'agent default auto stream',
+                    stream_mode: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            const body = await response.json();
+            assert.equal(body.images[0].content_url.startsWith('/api/agent/artifacts/'), true);
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(upstreamJson.partial_images, 2);
+            assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 1);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('consumes upstream image SSE internally while keeping the Agent generate response non-streaming', async () => {
         const { generateImage } = await loadAgentRoutes();
         let upstreamBody = '';
@@ -408,6 +440,7 @@ describe('Agent route integration', () => {
                 agentJsonRequest('agent-responses-upstream-sse-partial-only-key', {
                     prompt: 'agent responses upstream sse partial only',
                     image_backend: 'responses-image-generation',
+                    stream_mode: 'stream',
                     streaming_strategy: 'responses-sse',
                     partial_images: 2
                 })
@@ -454,6 +487,7 @@ describe('Agent route integration', () => {
                 agentJsonRequest('agent-responses-upstream-sse-failed-call-key', {
                     prompt: 'agent responses upstream sse failed call',
                     image_backend: 'responses-image-generation',
+                    stream_mode: 'stream',
                     streaming_strategy: 'responses-sse',
                     partial_images: 2
                 })
@@ -483,6 +517,7 @@ describe('Agent route integration', () => {
             const response = await generateImage(
                 agentJsonRequest('agent-upstream-sse-partial-only-key', {
                     prompt: 'agent upstream sse partial only',
+                    stream_mode: 'stream',
                     streaming_strategy: 'newapi-keepalive-sse',
                     partial_images: 2
                 })
@@ -772,6 +807,7 @@ describe('Agent route integration', () => {
             const created = await createGenerateJob(
                 agentJobJsonRequest('route-job-images-missing-final-key', {
                     prompt: 'agent job images partial only',
+                    stream_mode: 'stream',
                     streaming_strategy: 'newapi-keepalive-sse',
                     partial_images: 2
                 })
@@ -908,6 +944,7 @@ describe('Agent route integration', () => {
                 agentJobJsonRequest('route-job-responses-missing-final-key', {
                     prompt: 'agent job responses partial only',
                     image_backend: 'responses-image-generation',
+                    stream_mode: 'stream',
                     streaming_strategy: 'responses-sse',
                     partial_images: 2
                 })
@@ -1311,8 +1348,44 @@ describe('Agent route integration', () => {
         await upstream.close();
     });
 
+    it('can consume Agent edit upstream SSE internally while returning final JSON', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream((body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_edit.completed',
+                    data: { type: 'image_edit.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await editImage(
+                agentEditRequest('route-edit-upstream-sse-key', 'agent edit stream', {}, {
+                    stream_mode: 'stream',
+                    streaming_strategy: 'openai-sse',
+                    partial_images: '2'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            const body = await response.json();
+            assert.equal(body.images[0].content_url.startsWith('/api/agent/artifacts/'), true);
+            assert.match(upstreamBody, /name="stream"/);
+            assert.match(upstreamBody, /name="partial_images"/);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('aborts Agent edit upstream calls when the client request signal aborts', async () => {
         const { editImage } = await loadAgentRoutes();
+        const { getServerChannelState } = await import('@/lib/server-channel-router');
         const upstream = await startHangingImageEditUpstream();
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -1320,9 +1393,13 @@ describe('Agent route integration', () => {
 
         try {
             const responsePromise = editImage(
-                agentEditRequest('route-edit-abort-key', 'agent edit abort', {}, 'path', {
-                    signal: abortController.signal
-                })
+                agentEditRequest(
+                    'route-edit-abort-key',
+                    'agent edit abort',
+                    {},
+                    { stream_mode: 'auto', streaming_strategy: 'openai-sse' },
+                    { signal: abortController.signal }
+                )
             );
             await waitFor(() => upstream.requests === 1);
             abortController.abort();
@@ -1335,6 +1412,7 @@ describe('Agent route integration', () => {
             ]);
 
             assert.notEqual(response.status, 200);
+            assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 0);
         } finally {
             abortController.abort();
             await upstream.close();
@@ -1359,7 +1437,7 @@ describe('Agent route integration', () => {
         await upstream.close();
     });
 
-    it('rejects high-resolution Agent edit requests before contacting upstream', async () => {
+    it('allows high-resolution Agent edit requests as an explicit fallback path', async () => {
         const { editImage } = await loadAgentRoutes();
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
@@ -1374,17 +1452,16 @@ describe('Agent route integration', () => {
                 agentEditRequest('route-edit-high-resolution-key', 'high resolution edit', {}, { size: '3072x2048' })
             );
 
-            assert.equal(response.status, 422);
+            assert.equal(response.status, 200);
             const body = await response.json();
-            assert.equal(body.error.code, 'validation_error');
-            assert.match(body.error.message, /\/api\/images/);
-            assert.equal(upstreamCalls, 0);
+            assert.equal(body.images[0].output_format, 'png');
+            assert.equal(upstreamCalls, 1);
         } finally {
             await upstream.close();
         }
     });
 
-    it('rejects high-resolution Agent edit requests before reading files or API credentials', async () => {
+    it('reports missing image files for high-resolution Agent edit before API credentials', async () => {
         const { editImage } = await loadAgentRoutes();
         delete process.env.OPENAI_API_KEY;
         delete process.env.OPENAI_API_BASE_URL;
@@ -1408,12 +1485,11 @@ describe('Agent route integration', () => {
         assert.equal(response.status, 422);
         const body = await response.json();
         assert.equal(body.error.code, 'validation_error');
-        assert.match(body.error.message, /\/api\/images/);
-        assert.equal(body.error.details?.fields?.image_0, undefined);
-        assert.doesNotMatch(body.error.message, /API Key|图片文件/);
+        assert.match(body.error.message, /图片文件/);
+        assert.doesNotMatch(body.error.message, /API Key/);
     });
 
-    it('rejects auto-size Agent edit when the uploaded source image is high resolution', async () => {
+    it('allows auto-size Agent edit when the uploaded source image is high resolution', async () => {
         const { editImage } = await loadAgentRoutes();
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
@@ -1436,11 +1512,10 @@ describe('Agent route integration', () => {
                 )
             );
 
-            assert.equal(response.status, 422);
+            assert.equal(response.status, 200);
             const body = await response.json();
-            assert.equal(body.error.code, 'validation_error');
-            assert.match(body.error.message, /\/api\/images/);
-            assert.equal(upstreamCalls, 0);
+            assert.equal(body.images[0].output_format, 'png');
+            assert.equal(upstreamCalls, 1);
         } finally {
             await upstream.close();
         }
@@ -1967,6 +2042,8 @@ function asNextRequest(request: Request): NextRequest {
 }
 
 function agentJsonRequest(idempotencyKey: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
+    const requestBody =
+        'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
     return new Request('http://localhost/api/agent/images/generate', {
         method: 'POST',
         headers: {
@@ -1974,7 +2051,7 @@ function agentJsonRequest(idempotencyKey: string, body: Record<string, unknown>,
             'Idempotency-Key': idempotencyKey,
             ...headers
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(requestBody)
     });
 }
 
@@ -1983,6 +2060,8 @@ function agentJobJsonRequest(
     body: Record<string, unknown>,
     headers: Record<string, string> = {}
 ) {
+    const requestBody =
+        'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
     return new Request('http://localhost/api/agent/jobs/images/generate', {
         method: 'POST',
         headers: {
@@ -1990,7 +2069,7 @@ function agentJobJsonRequest(
             'Idempotency-Key': idempotencyKey,
             ...headers
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(requestBody)
     });
 }
 
@@ -2010,6 +2089,9 @@ function agentEditRequest(
         typeof responseModeOrFields === 'string'
             ? { response_mode: responseModeOrFields }
             : { response_mode: 'path', ...responseModeOrFields };
+    if (!('stream_mode' in fields) && !('streaming_strategy' in fields)) {
+        fields.stream_mode = 'non_stream';
+    }
     const imageBuffer = fields.image_0 ?? Buffer.from(PNG_BASE64, 'base64');
     const formData = new FormData();
     formData.append('prompt', prompt);
@@ -2117,7 +2199,9 @@ async function startStreamingImageUpstream(
     ) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
-        if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
+        const isImageStreamPath =
+            request.url?.endsWith('/images/generations') || request.url?.endsWith('/images/edits');
+        if (request.method !== 'POST' || !isImageStreamPath) {
             response.writeHead(404, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({ error: { message: 'not found' } }));
             return;

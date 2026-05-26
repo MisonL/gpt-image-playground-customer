@@ -3,7 +3,6 @@
 import { ModeToggle } from '@/components/mode-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -13,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
 import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
 import {
@@ -100,8 +100,8 @@ type EditingFormProps = {
     setEditDrawnPoints: React.Dispatch<React.SetStateAction<DrawnPoint[]>>;
     editMaskPreviewUrl: string | null;
     setEditMaskPreviewUrl: React.Dispatch<React.SetStateAction<string | null>>;
-    enableStreaming: boolean;
-    setEnableStreaming: React.Dispatch<React.SetStateAction<boolean>>;
+    streamMode: ImageStreamMode;
+    setStreamMode: React.Dispatch<React.SetStateAction<ImageStreamMode>>;
     allowStreamingBatch: boolean;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
@@ -185,8 +185,8 @@ export function EditingForm({
     setEditDrawnPoints,
     editMaskPreviewUrl,
     setEditMaskPreviewUrl,
-    enableStreaming,
-    setEnableStreaming,
+    streamMode,
+    setStreamMode,
     allowStreamingBatch,
     partialImages,
     setPartialImages
@@ -211,7 +211,6 @@ export function EditingForm({
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
-    const streamingDisabledByCount = editN[0] > 1 && !allowStreamingBatch;
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
@@ -233,13 +232,6 @@ export function EditingForm({
         isLoading,
         t
     ]);
-
-    // 未显式开启批量流式分发时，editN > 1 会禁用流式输出。
-    React.useEffect(() => {
-        if (streamingDisabledByCount && enableStreaming) {
-            setEnableStreaming(false);
-        }
-    }, [streamingDisabledByCount, enableStreaming, setEnableStreaming]);
 
     // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
@@ -630,32 +622,36 @@ export function EditingForm({
                                     <TooltipContent className='max-w-[280px]'>{t('edit.fidelityHint')}</TooltipContent>
                                 </Tooltip>
                             )}
-                            <Tooltip>
-                                <div className='flex items-center gap-2'>
+                            <div className='space-y-1.5'>
+                                <Label htmlFor='edit-stream-mode-select'>{t('streaming.mode')}</Label>
+                                <Tooltip>
                                     <TooltipTrigger asChild>
-                                        <Checkbox
-                                            id='edit-enable-streaming'
-                                            name='edit-enable-streaming'
-                                            checked={enableStreaming}
-                                            onCheckedChange={(checked) => setEnableStreaming(!!checked)}
-                                            disabled={isLoading || streamingDisabledByCount}
-                                            className='data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground'
-                                        />
+                                        <div>
+                                            <Select
+                                                value={streamMode}
+                                                onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
+                                                disabled={isLoading}
+                                                name='edit-stream_mode'>
+                                                <SelectTrigger id='edit-stream-mode-select' className='w-[170px]'>
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
+                                                    <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
+                                                    <SelectItem value='non_stream'>
+                                                        {t('streaming.modeNonStream')}
+                                                    </SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
                                     </TooltipTrigger>
-                                    <Label
-                                        htmlFor='edit-enable-streaming'
-                                        className={`text-sm ${streamingDisabledByCount ? 'cursor-not-allowed text-muted-foreground' : 'cursor-pointer text-foreground'}`}>
-                                        {t('streaming.enable')}
-                                    </Label>
-                                </div>
-                                <TooltipContent className='max-w-[250px]'>
-                                    {streamingDisabledByCount
-                                        ? t('streaming.disabledByCount')
-                                        : allowStreamingBatch && editN[0] > 1
-                                          ? t('streaming.batchDescription')
-                                          : t('streaming.description')}
-                                </TooltipContent>
-                            </Tooltip>
+                                    <TooltipContent className='max-w-[250px]'>
+                                        {allowStreamingBatch && editN[0] > 1 && streamMode !== 'non_stream'
+                                            ? t('streaming.batchDescription')
+                                            : t('streaming.description')}
+                                    </TooltipContent>
+                                </Tooltip>
+                            </div>
                         </div>
                     </div>
 
@@ -988,7 +984,7 @@ export function EditingForm({
                         </button>
                         {isAdvancedOpen && (
                             <div id='editing-advanced-panel' className='space-y-5 border-t border-border p-3'>
-                                {enableStreaming && (
+                                {streamMode !== 'non_stream' && (
                                     <div className='space-y-3'>
                                         <div className='flex items-center gap-2'>
                                             <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>

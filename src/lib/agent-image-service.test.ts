@@ -1,9 +1,4 @@
-import {
-    assertAgentEditRouteAllowedFromFormData,
-    buildEditRequestHash,
-    completeAgentExecutionState,
-    hydrateAgentReplayResponse
-} from './agent-image-service';
+import { buildEditRequestHash, completeAgentExecutionState, hydrateAgentReplayResponse } from './agent-image-service';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { AgentArtifactRecord, AgentStateStore } from './agent-state-store';
@@ -21,15 +16,6 @@ describe('buildEditRequestHash', () => {
         const second = await buildEditRequestHash(makeEditForm([1, 2, 3, 4]));
 
         assert.equal(first, second);
-    });
-});
-
-describe('assertAgentEditRouteAllowedFromFormData', () => {
-    it('rejects auto-size edits when the source image dimensions are high resolution', async () => {
-        await assert.rejects(
-            () => assertAgentEditRouteAllowedFromFormData(makeEditFormWithImage(createPngWithDimensions(3072, 2048))),
-            /\/api\/images/
-        );
     });
 });
 
@@ -133,26 +119,12 @@ describe('completeAgentExecutionState', () => {
 });
 
 function makeEditForm(bytes: number[]): FormData {
-    return makeEditFormWithImage(Buffer.from(bytes));
-}
-
-function makeEditFormWithImage(buffer: Buffer): FormData {
     const formData = new FormData();
     formData.append('prompt', 'same prompt');
     formData.append('model', 'gpt-image-2');
     formData.append('response_mode', 'path');
-    formData.append('image_0', new File([buffer], 'input.png', { type: 'image/png' }));
+    formData.append('image_0', new File([Buffer.from(bytes)], 'input.png', { type: 'image/png' }));
     return formData;
-}
-
-function createPngWithDimensions(width: number, height: number): Buffer {
-    const buffer = Buffer.alloc(24);
-    buffer[0] = 0x89;
-    buffer.write('PNG', 1, 'ascii');
-    buffer.write('IHDR', 12, 'ascii');
-    buffer.writeUInt32BE(width, 16);
-    buffer.writeUInt32BE(height, 20);
-    return buffer;
 }
 
 function createReplayStore(artifacts: AgentArtifactRecord[]): AgentStateStore {

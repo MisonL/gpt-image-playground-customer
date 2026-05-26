@@ -1,5 +1,6 @@
 import {
     readImageGenerationBackend,
+    readImageStreamMode,
     readImageStreamingStrategy,
     resolveImageStreamEnabled,
     shouldRecommendImageStreaming
@@ -26,6 +27,7 @@ describe('image upstream strategy', () => {
     it('uses Images API and auto streaming strategy by default', () => {
         assert.equal(readImageGenerationBackend(formData()), 'images-api');
         assert.equal(readImageStreamingStrategy(formData(), {}), 'auto');
+        assert.equal(readImageStreamMode(formData(), {}), 'auto');
         assert.equal(
             resolveImageStreamEnabled({
                 imageBackend: 'images-api',
@@ -33,6 +35,32 @@ describe('image upstream strategy', () => {
                 streamingStrategy: 'auto'
             }),
             false
+        );
+    });
+
+    it('resolves request stream mode with legacy stream and strategy fields', () => {
+        assert.equal(readImageStreamMode(formData({ stream_mode: 'stream' }), {}), 'stream');
+        assert.equal(readImageStreamMode(formData({ streamMode: 'non_stream' }), {}), 'non_stream');
+        assert.equal(readImageStreamMode(formData({ stream: 'true' }), {}), 'stream');
+        assert.equal(readImageStreamMode(formData({ image_streaming_strategy: 'off' }), {}), 'non_stream');
+    });
+
+    it('uses IMAGE_DEFAULT_STREAM_MODE and keeps off strategy as a non-stream fallback', () => {
+        assert.equal(readImageStreamMode(formData(), { IMAGE_DEFAULT_STREAM_MODE: 'non_stream' }), 'non_stream');
+        assert.equal(
+            readImageStreamMode(formData(), {
+                IMAGE_DEFAULT_STREAM_MODE: 'stream',
+                IMAGE_STREAMING_STRATEGY: 'off'
+            }),
+            'non_stream'
+        );
+    });
+
+    it('rejects invalid stream mode values', () => {
+        assert.throws(() => readImageStreamMode(formData({ stream_mode: 'sometimes' }), {}), /stream_mode/);
+        assert.throws(
+            () => readImageStreamMode(formData(), { IMAGE_DEFAULT_STREAM_MODE: 'sometimes' }),
+            (error) => error instanceof Error && readErrorStatus(error) === 500 && /IMAGE_DEFAULT_STREAM_MODE/.test(error.message)
         );
     });
 

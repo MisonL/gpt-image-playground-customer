@@ -14,10 +14,12 @@ export function imageFormRequest(input: {
     mode?: 'generate' | 'edit';
     imageBackend?: 'images' | 'responses' | 'images-api' | 'responses-image-generation';
     imageStreamingStrategy?: 'off' | 'auto' | 'openai-sse' | 'newapi-keepalive-sse' | 'responses-sse' | 'force-sse';
+    streamMode?: 'auto' | 'stream' | 'non_stream';
     size?: string;
     n?: string;
     responsesModel?: string;
     clientRequestId?: string;
+    signal?: AbortSignal;
 }): NextRequest {
     const formData = new FormData();
     formData.append('mode', input.mode || 'generate');
@@ -35,6 +37,9 @@ export function imageFormRequest(input: {
     if (input.imageStreamingStrategy) {
         formData.append('imageStreamingStrategy', input.imageStreamingStrategy);
     }
+    if (input.streamMode) {
+        formData.append('stream_mode', input.streamMode);
+    }
     if (input.responsesModel) {
         formData.append('responsesModel', input.responsesModel);
     }
@@ -47,7 +52,8 @@ export function imageFormRequest(input: {
     }
     return new Request('http://localhost/api/images', {
         method: 'POST',
-        body: formData
+        body: formData,
+        signal: input.signal
     }) as NextRequest;
 }
 
@@ -102,6 +108,101 @@ export async function startImagesJsonUpstream(
         response.end(JSON.stringify(payload));
     });
     return listen(server);
+}
+
+export async function startImagesStreamFallbackUpstream(): Promise<{
+    baseUrl: string;
+    calls: Array<{ stream?: boolean; partial_images?: number }>;
+    close: () => Promise<void>;
+}> {
+    const calls: Array<{ stream?: boolean; partial_images?: number }> = [];
+    const server = http.createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+            stream?: boolean;
+            partial_images?: number;
+        };
+        calls.push({ stream: payload.stream, partial_images: payload.partial_images });
+        if (payload.stream) {
+            response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            response.write(
+                `event: image_generation.partial_image\ndata: ${JSON.stringify({
+                    type: 'image_generation.partial_image',
+                    b64_json: 'partial-before-fallback'
+                })}\n\n`
+            );
+            response.write('data: [DONE]\n\n');
+            response.end();
+            return;
+        }
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ data: [{ b64_json: PNG_BASE64 }] }));
+    });
+    const result = await listen(server);
+    return { ...result, calls };
+}
+
+export async function startHangingImagesStreamUpstream(): Promise<{
+    baseUrl: string;
+    calls: Array<{ stream?: boolean; partial_images?: number }>;
+    waitForStreamRequest: () => Promise<void>;
+    close: () => Promise<void>;
+}> {
+    const calls: Array<{ stream?: boolean; partial_images?: number }> = [];
+    const activeResponses = new Set<http.ServerResponse>();
+    let resolveStreamRequest: () => void = () => {};
+    const streamRequest = new Promise<void>((resolve) => {
+        resolveStreamRequest = resolve;
+    });
+    const server = http.createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+            stream?: boolean;
+            partial_images?: number;
+        };
+        calls.push({ stream: payload.stream, partial_images: payload.partial_images });
+        if (!payload.stream) {
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ data: [{ b64_json: PNG_BASE64 }] }));
+            return;
+        }
+        activeResponses.add(response);
+        response.on('close', () => activeResponses.delete(response));
+        response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        response.write(
+            `event: image_generation.partial_image\ndata: ${JSON.stringify({
+                type: 'image_generation.partial_image',
+                b64_json: 'partial-before-abort'
+            })}\n\n`
+        );
+        resolveStreamRequest();
+    });
+    const result = await listen(server);
+    return {
+        ...result,
+        calls,
+        waitForStreamRequest: () => streamRequest,
+        close: async () => {
+            for (const response of activeResponses) {
+                response.destroy();
+            }
+            await result.close();
+        }
+    };
 }
 
 export async function startResponsesImageUpstream(

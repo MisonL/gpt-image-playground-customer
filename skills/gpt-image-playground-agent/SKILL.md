@@ -1,16 +1,26 @@
 ---
 name: gpt-image-playground-agent
-description: 当用户需要通过 API 调用已部署的 GPT Image Playground 批量请求图片生成时使用；支持文字生成图片、文字加图片生成图片，并返回可下载图片产物、metadata、base64 或 job 结果。
+description: 当用户需要通过已部署的 GPT Image Playground 生成、编辑、批量生成或诊断图片接口时使用；必须优先运行本 Skill 内置 scripts/generate-image.mjs、edit-image.mjs、batch-images.mjs 或 probe-upstream-image.mjs，而不是临时编写 API 调用脚本。
 ---
 
 # GPT Image Playground Agent
 
-通过用户已部署的 GPT Image Playground `/api/agent/*` 接口生成或编辑图片。不要假设服务一定在本机；不要模拟网页表单；直接使用 Agent API 契约、幂等键和产物 URL。
+通过用户已部署的 GPT Image Playground 生成、编辑、批量处理或诊断图片接口。不要假设服务一定在本机；不要模拟网页表单；优先运行本 Skill 内置脚本，让脚本处理 Agent API 契约、capabilities、幂等键、路由选择和产物 URL。
 
-## 路由硬规则
+## 脚本优先规则
+
+- 生成单张或少量图片：优先运行 `scripts/generate-image.mjs`。
+- 编辑图片：优先运行 `scripts/edit-image.mjs`。
+- 批量 generate/edit：优先运行 `scripts/batch-images.mjs`，用 JSONL 输入和 append-only manifest 管理续跑。
+- 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。
+- 不要临时编写 Node/Python/shell 脚本、curl 命令或手写 fetch/FormData 来重复实现这些脚本已经覆盖的 API 调用。
+- 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下 ad hoc 调用脚本。
+- 先用 dry-run 或 `--contract-check` 检查请求、路由和鉴权；只有用户明确允许真实计费时才加 `--allow-billable`。
+
+## 路由规则
 
 - 先读取 `GET /api/agent/capabilities` 的 `routing_rules`，按机器可读规则选择端点。
-- `edit` 且 `max(width,height)>2048` 时，必须使用页面端 `POST /api/images` form-data SSE 路径，不要走非流式 `/api/agent/images/edit`。
+- `edit` 且 `max(width,height)>2048` 时，默认优先使用页面端 `POST /api/images` form-data SSE 路径；如果页面流式不可用或失败，先诊断结构化错误，再显式回退到 Agent edit。
 - 复杂 UI 批量出图优先使用页面端 `POST /api/images` SSE，并记录切换原因、失败清单和续跑锚点。
 - 长图恢复或需要续跑锚点的生产请求优先使用页面端 `POST /api/images` SSE，保留局部进度和缺最终图诊断。
 - 普通小图单次文生图使用 `/api/agent/images/generate`；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE，流式失败后先诊断，再显式选择 Agent JSON 或 job 路径，不自动回退。
@@ -18,17 +28,18 @@ description: 当用户需要通过 API 调用已部署的 GPT Image Playground �
 
 ## 执行流程
 
-1. 先定位服务基础地址。优先使用用户明确提供的 URL；其次使用 `GPT_IMAGE_PLAYGROUND_URL`；都没有时尝试默认地址 `http://localhost:4783`。
-2. 用候选基础地址请求 `GET /api/agent/capabilities`。如果默认地址不可达、404、不是 JSON 或不是 Agent capabilities 响应，向用户询问实际部署地址、端口、域名和是否需要鉴权。
-3. 读取 capabilities 中的认证方式、模型、模型级限制、`routing_rules`、Agent 流式边界、页面 SSE 鉴权、后端 runtime enablement、状态后端和端点路径；不要硬编码假设部署方式。
-4. 为每个业务操作生成稳定的 `Idempotency-Key`。网络中断、运行中轮询或非终态重试复用原 key；同一 key 已进入 `failed` 终态后不再用于触发新执行，必须先诊断原因，再创建新的业务操作和新的 key。
-5. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点对外始终返回最终 `AgentImageResponse` JSON；如 capabilities 声明 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`streaming_strategy`、`partial_images` 显式启用内部上游 SSE 消费。
-6. 图片编辑使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段使用 `image_0..image_9`。该 Agent 端点同样是非流式端点。
-7. 默认使用 `response_mode: "path"`，只在用户明确需要图片内联数据时使用 `base64` 或 `both`。
-8. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；仅在 `routing_rules` 命中高分辨率 edit、大图单次文生图、复杂 UI 批量、长图恢复或明确诊断后切换。
-9. 读取 `agent_jobs`。job 路径只在显式选择时使用；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE。
-10. 处理失败时读取结构化 `error.code`、`error.retryable`、`error.diagnostics` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。
-11. 返回结果时优先给出 `content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。
+1. 先按任务类型选择内置脚本，不要从零写 API 调用代码。
+2. 定位服务基础地址。优先使用用户明确提供的 URL；其次使用 `GPT_IMAGE_PLAYGROUND_URL`；都没有时尝试默认地址 `http://localhost:4783`。
+3. 让脚本请求 `GET /api/agent/capabilities`。如果默认地址不可达、404、不是 JSON 或不是 Agent capabilities 响应，向用户询问实际部署地址、端口、域名和是否需要鉴权。
+4. 读取 capabilities 中的认证方式、模型、模型级限制、`routing_rules`、Agent 流式边界、页面 SSE 鉴权、后端 runtime enablement、状态后端和端点路径；不要硬编码假设部署方式。
+5. 为每个业务操作生成稳定的 `Idempotency-Key`。网络中断、运行中轮询或非终态重试复用原 key；同一 key 已进入 `failed` 终态后不再用于触发新执行，必须先诊断原因，再创建新的业务操作和新的 key。
+6. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点对外始终返回最终 `AgentImageResponse` JSON；如 capabilities 声明 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制内部上游 SSE 消费。
+7. 图片编辑使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段使用 `image_0..image_9`。该 Agent 端点同样是非流式端点。
+8. 默认使用 `response_mode: "path"`，只在用户明确需要图片内联数据时使用 `base64` 或 `both`。
+9. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；仅在 `routing_rules` 命中高分辨率 edit、大图单次文生图、复杂 UI 批量、长图恢复或明确诊断后切换。
+10. 读取 `agent_jobs`。job 路径只在显式选择时使用；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE。
+11. 处理失败时读取结构化 `error.code`、`error.retryable`、`error.diagnostics` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。
+12. 返回结果时优先给出 `content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。
 
 ## 鉴权
 
@@ -45,6 +56,8 @@ Authorization: Bearer <token>
 ## 调用约束
 
 - 不要把 API Key、token 或访问码写入源码、文档示例、日志或测试快照。
+- Skill 必须保持自包含和可迁移：脚本、示例和说明不得写入本机绝对路径或仓库绝对路径；运行脚本时以当前已安装 Skill 目录为根解析 `scripts/`，不要依赖某台机器上的 checkout 位置。
+- Skill 必须兼容 Windows、Linux 和 macOS：脚本只用 Node.js 20+ 与跨平台 `node:` 标准库；文档示例用 `node "<skill-root>/scripts/..."`，不依赖 bash、sh、chmod、可执行位、POSIX inline env 或反斜杠续行。
 - 不要把 `localhost:4783` 当作唯一部署位置；它只是无明确地址时的探测默认值。
 - 不要在模型上下文中展开大体积 base64，除非用户明确要求。
 - 不要把 `error.message` 当成唯一判断依据；稳定分支以 `error.code` 和 HTTP 状态为准。
@@ -69,11 +82,15 @@ Authorization: Bearer <token>
 
 ## 可用脚本
 
-- `skills/gpt-image-playground-agent/scripts/generate-image.mjs`：JSON 文生图调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实生图。
-- `skills/gpt-image-playground-agent/scripts/edit-image.mjs`：multipart 编辑调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实编辑。
-- `skills/gpt-image-playground-agent/scripts/probe-upstream-image.mjs`：直接探测上游图片接口连通性。默认只检查 DNS、TLS 和 `/models`，必须添加 `--allow-billable` 才会真实调用 `/images/generations`。
+以下脚本都位于当前 Skill 目录的 `scripts/` 下。不要硬编码本机安装路径；由运行环境按当前 `SKILL.md` 所在目录解析脚本路径。
+
+- `scripts/generate-image.mjs`：JSON 文生图调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实生图。
+- `scripts/edit-image.mjs`：multipart 编辑调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实编辑。
+- `scripts/batch-images.mjs`：JSONL 批量 generate/edit 调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实逐行执行，支持 append-only manifest、`--resume`、`--ordered-prefix` 和 `--dimension-check`。
+- `scripts/probe-upstream-image.mjs`：直接探测上游图片接口连通性。默认只检查 DNS、TLS 和 `/models`，必须添加 `--allow-billable` 才会真实调用 `/images/generations`。
 
 生成和编辑脚本的 dry-run 输出会包含 `routing_guidance`，用于在真实计费前检查当前请求应走 Agent JSON、页面 SSE，或在页面流式失败后先诊断再手动选定后续路径。
+所有脚本在 dry-run 或真实请求前都会校验尺寸参数。`gpt-image-2` 支持 `auto` 或 `WIDTHxHEIGHT`，且宽高必须为 `16` 的倍数、单边不超过 `3840`、宽高比不超过 `3:1`。最低分辨率按总像素 `min_pixels=655360` 判断，最高分辨率同时受 `max_pixels=8294400` 和 `max_edge=3840` 约束。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。
 
 如果当前上下文位于仓库根目录，管理员侧优先使用顶层命令：
 
@@ -86,48 +103,54 @@ Authorization: Bearer <token>
 
 生成脚本常用参数：
 
-```bash
-node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
-  --size 2048x2048 \
-  --quality high \
-  --response-mode path \
-  --idempotency-key stable-operation-key \
-  "a product photo of a ceramic mug"
+```text
+node "<skill-root>/scripts/generate-image.mjs" --size 2048x2048 --quality high --response-mode path --idempotency-key stable-operation-key "a product photo of a ceramic mug"
 ```
 
 启用 Agent 内部上游 SSE 时，必须显式传策略字段；脚本仍只输出最终 JSON：
 
-```bash
-node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
-  --allow-billable \
-  --image-backend images-api \
-  --streaming-strategy newapi-keepalive-sse \
-  --partial-images 2 \
-  --size 3840x2160 \
-  --quality high \
-  "a product photo of a ceramic mug"
+```text
+node "<skill-root>/scripts/generate-image.mjs" --allow-billable --image-backend images-api --stream-mode auto --streaming-strategy newapi-keepalive-sse --partial-images 2 --size 3840x2160 --quality high "a product photo of a ceramic mug"
 ```
 
 真实生图必须显式开启：
 
-```bash
-node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
-  --allow-billable \
-  --timeout-ms 420000 \
-  --size 2048x2048 \
-  "a product photo of a ceramic mug"
+```text
+node "<skill-root>/scripts/generate-image.mjs" --allow-billable --timeout-ms 420000 --size 2048x2048 "a product photo of a ceramic mug"
 ```
 
-生成脚本会对 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果 capabilities 未声明 `agent_streaming.page_sse.supported=true`，脚本会显式失败，不会静默降级到 Agent JSON。如果页面流式失败，脚本会返回结构化失败结果，先诊断再决定是否用 `--agent` 或 `--job` 重新执行，不会自动发起第二次请求。也可以用 `--page-sse` 强制页面流式，或用 `--agent` 强制非流式 Agent generate，`--job` 仍可显式选择 job 路径。显式传 `--streaming-strategy off` 时，大图请求保持 Agent JSON 非流式路径，用于和页面 SSE 做诊断对照。上游流式字段支持 `--image-backend`、`--streaming-strategy`、`--partial-images`；默认不发送这些字段，保持服务端默认非流式基线。
+生成脚本会对 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果 capabilities 未声明 `agent_streaming.page_sse.supported=true`，脚本会显式失败，不会静默降级到 Agent JSON。如果页面流式失败，脚本会返回结构化失败结果，先诊断再决定是否用 `--agent` 或 `--job` 重新执行，不会自动发起第二次请求。编辑脚本对高分辨率 edit 也采用同样口径：默认页面流式，有问题再显式回退到 Agent edit 诊断或执行。也可以用 `--page-sse` 强制页面流式，或用 `--agent` 强制 Agent generate/edit 最终 JSON，`--job` 仍可显式选择 generate job 路径。显式传 `--streaming-strategy off` 或 `--stream-mode non_stream` 时，大图请求保持 Agent JSON 非流式路径，用于和页面 SSE 做诊断对照。上游流式字段支持 `--image-backend`、`--stream-mode`、`--streaming-strategy`、`--partial-images`；不发送时使用服务端 capabilities 声明的默认值。
 
-编辑脚本支持 `--model`、`--size`、`--quality`、`--response-mode`、`--timeout-ms`、`--idempotency-key`、`--dry-run` 和 `--allow-billable`。
+批量脚本 JSONL 每行是一个 generate 或 edit 任务。示例：
+
+```jsonl
+{"id":"hero-01","mode":"generate","prompt":"a product photo of a ceramic mug","size":"1024x1024","response_mode":"path"}
+{"id":"edit-01","mode":"edit","prompt":"replace the background","image_path":"./source.png","size":"1024x1024","response_mode":"path"}
+```
+
+默认 dry-run 只解析 JSONL、生成稳定幂等键并输出计划，不请求服务：
+
+```text
+node "<skill-root>/scripts/batch-images.mjs" --input tasks.jsonl --ordered-prefix product-set
+```
+
+真实批量执行必须显式允许计费：
+
+```text
+node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check
+```
+
+`--manifest` 使用 JSONL append-only 记录每条任务的 `index`、`id`、`idempotency_key`、`status`、响应或错误；`--resume` 会读取已成功记录并跳过同一 `id` 或 `idempotency_key`。`--dimension-check` 会读取响应里的 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸是否等于任务 `size`。
+
+编辑脚本支持 `--model`、`--size`、`--quality`、`--response-mode`、`--stream-mode`、`--streaming-strategy`、`--partial-images`、`--timeout-ms`、`--idempotency-key`、`--page-sse`、`--agent`、`--dry-run` 和 `--allow-billable`。
 
 直连上游诊断：
 
-```bash
-OPENAI_API_KEY=... node skills/gpt-image-playground-agent/scripts/probe-upstream-image.mjs \
-  --base-url https://api.openai.com/v1
+```text
+node "<skill-root>/scripts/probe-upstream-image.mjs" --base-url https://api.openai.com/v1
 ```
+
+调用前按当前系统和 shell 设置 `OPENAI_API_KEY` 或 `GPT_IMAGE_UPSTREAM_API_KEY`，不要把 key 写进命令历史或文档。
 
 诊断脚本只输出状态、耗时、脱敏错误摘要、白名单响应头和 base64 长度，不输出 API key 或完整图片数据。
 

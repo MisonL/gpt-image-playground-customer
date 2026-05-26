@@ -11,9 +11,11 @@ import {
 } from './image-request-utils';
 import {
     parseImageGenerationBackendValue,
+    parseImageStreamModeValue,
     parseImageStreamingStrategyValue,
     resolveImageStreamEnabled,
     type ImageGenerationBackend,
+    type ImageStreamMode,
     type ImageStreamingStrategy
 } from './image-upstream-strategy';
 import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
@@ -52,7 +54,9 @@ export const AGENT_STREAMING_STRATEGIES = [
     'responses-sse',
     'force-sse'
 ] as const;
+export const AGENT_STREAM_MODES = ['auto', 'stream', 'non_stream'] as const;
 export const AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES = [
+    'auto',
     'openai-sse',
     'newapi-keepalive-sse',
     'responses-sse',
@@ -68,7 +72,7 @@ export type AgentBackground = (typeof AGENT_BACKGROUNDS)[number];
 export type AgentModeration = (typeof AGENT_MODERATIONS)[number];
 export type AgentJobState = (typeof AGENT_JOB_STATES)[number];
 export type AgentRoutingTransport = 'agent_json' | 'agent_job_polling' | 'page_sse';
-export type AgentRoutingStrength = 'default' | 'recommended' | 'must_use';
+export type AgentRoutingStrength = 'default' | 'recommended';
 export type ImageBackendRuntimeRequirement = {
     supported: true;
     enabled: boolean;
@@ -88,6 +92,7 @@ export type AgentGenerateRequest = {
     moderation: AgentModeration;
     response_mode: AgentResponseMode;
     image_backend: ImageGenerationBackend;
+    stream_mode: ImageStreamMode;
     streaming_strategy: ImageStreamingStrategy;
     partial_images: 1 | 2 | 3;
 };
@@ -150,6 +155,7 @@ export type AgentCapabilities = {
         response_mode: AgentResponseMode;
         state_backend: AgentStateBackend;
         image_backend: ImageGenerationBackend;
+        stream_mode: ImageStreamMode;
         streaming_strategy: ImageStreamingStrategy;
         partial_images: 1 | 2 | 3;
     };
@@ -188,10 +194,11 @@ export type AgentCapabilities = {
             supported: true;
             mode: 'internal_upstream_sse';
             endpoint: string;
-            request_fields: ['image_backend', 'streaming_strategy', 'partial_images'];
+            request_fields: ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images'];
             image_backends: readonly ImageGenerationBackend[];
             enabled_image_backends: readonly ImageGenerationBackend[];
             streaming_strategies: readonly ImageStreamingStrategy[];
+            stream_modes: readonly ImageStreamMode[];
             activation_strategies: readonly ImageStreamingStrategy[];
             final_response_contract: 'AgentImageResponse';
         };
@@ -249,6 +256,7 @@ export type AgentCapabilities = {
         enabled_image_backends: readonly ImageGenerationBackend[];
         image_backend_requirements: Record<ImageGenerationBackend, ImageBackendRuntimeRequirement>;
         streaming_strategies: readonly ImageStreamingStrategy[];
+        stream_modes: readonly ImageStreamMode[];
     };
     storage: {
         image_storage_mode: string;
@@ -383,31 +391,48 @@ function readAgentStreamingStrategy(body: Record<string, unknown>, fields: Field
     const rawValue = body.streaming_strategy;
     if (rawValue !== undefined && rawValue !== null && typeof rawValue !== 'string') {
         fields.streaming_strategy = '必须是字符串';
-        return 'off';
+        return 'auto';
     }
-    const value = readStringField(body, 'streaming_strategy', 'off');
-    if (!value) return 'off';
+    const value = readStringField(body, 'streaming_strategy', 'auto');
+    if (!value) return 'auto';
     try {
         return parseImageStreamingStrategyValue(value);
     } catch (error) {
         fields.streaming_strategy = error instanceof Error ? error.message : 'streaming_strategy 无效';
-        return 'off';
+        return 'auto';
     }
 }
 
-function shouldAgentRequestUpstreamStream(streamingStrategy: ImageStreamingStrategy): boolean {
-    return streamingStrategy !== 'off' && streamingStrategy !== 'auto';
+function readAgentStreamMode(body: Record<string, unknown>, fields: FieldErrors): ImageStreamMode {
+    const rawValue = body.stream_mode;
+    if (rawValue !== undefined && rawValue !== null && typeof rawValue !== 'string') {
+        fields.stream_mode = '必须是字符串';
+        return 'auto';
+    }
+    if ((rawValue === undefined || rawValue === null || rawValue === '') && body.streaming_strategy === 'off') {
+        return 'non_stream';
+    }
+    const value = readStringField(body, 'stream_mode', 'auto');
+    if (!value) return 'auto';
+    try {
+        return parseImageStreamModeValue(value);
+    } catch (error) {
+        fields.stream_mode = error instanceof Error ? error.message : 'stream_mode 无效';
+        return 'auto';
+    }
 }
 
 function validateAgentImageUpstreamStrategy(input: {
     imageBackend: ImageGenerationBackend;
+    streamMode: ImageStreamMode;
     streamingStrategy: ImageStreamingStrategy;
     fields: FieldErrors;
 }) {
+    if (input.streamMode === 'non_stream') return;
     try {
         resolveImageStreamEnabled({
             imageBackend: input.imageBackend,
-            requestedStream: shouldAgentRequestUpstreamStream(input.streamingStrategy),
+            requestedStream: true,
             streamingStrategy: input.streamingStrategy
         });
     } catch (error) {
@@ -483,9 +508,10 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const moderation = readModeration(objectBody, fields);
     const responseMode = readResponseMode(objectBody, fields);
     const imageBackend = readAgentImageBackend(objectBody, fields);
+    const streamMode = readAgentStreamMode(objectBody, fields);
     const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
     const partialImages = readIntegerField(objectBody, 'partial_images', 2, 1, 3, fields) as 1 | 2 | 3;
-    validateAgentImageUpstreamStrategy({ imageBackend, streamingStrategy, fields });
+    validateAgentImageUpstreamStrategy({ imageBackend, streamMode, streamingStrategy, fields });
 
     if (Object.keys(fields).length > 0) {
         throw new RequestValidationError(JSON.stringify({ fields }), 422);
@@ -503,6 +529,7 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
         moderation,
         response_mode: responseMode,
         image_backend: imageBackend,
+        stream_mode: streamMode,
         streaming_strategy: streamingStrategy,
         partial_images: partialImages
     };
@@ -635,7 +662,8 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             response_mode: 'path',
             state_backend: readAgentStateBackend(env),
             image_backend: 'images-api',
-            streaming_strategy: 'off',
+            stream_mode: 'auto',
+            streaming_strategy: 'auto',
             partial_images: 2
         },
         limits: {
@@ -677,10 +705,11 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 supported: true,
                 mode: 'internal_upstream_sse',
                 endpoint: AGENT_ENDPOINTS.generate,
-                request_fields: ['image_backend', 'streaming_strategy', 'partial_images'],
+                request_fields: ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images'],
                 image_backends: AGENT_IMAGE_BACKENDS,
                 enabled_image_backends: enabledImageBackends,
                 streaming_strategies: AGENT_STREAMING_STRATEGIES,
+                stream_modes: AGENT_STREAM_MODES,
                 activation_strategies: AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES,
                 final_response_contract: 'AgentImageResponse'
             },
@@ -704,8 +733,8 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 when: ['operation=edit', 'max_edge>2048'],
                 endpoint: '/api/images',
                 transport: 'page_sse',
-                strength: 'must_use',
-                reason: 'Agent edit is non-streaming and rejects high-resolution edit requests; use the page form-data SSE endpoint instead.'
+                strength: 'default',
+                reason: 'High-resolution edit defaults to the page form-data SSE endpoint; if streaming has issues, diagnose first and explicitly fall back to Agent edit.'
             },
             complex_ui_batch: {
                 when: ['operation=generate_or_edit', 'complex_ui=true', 'batch=true'],
@@ -765,7 +794,8 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             image_backends: AGENT_IMAGE_BACKENDS,
             enabled_image_backends: enabledImageBackends,
             image_backend_requirements: imageBackendRequirements,
-            streaming_strategies: AGENT_STREAMING_STRATEGIES
+            streaming_strategies: AGENT_STREAMING_STRATEGIES,
+            stream_modes: AGENT_STREAM_MODES
         },
         storage: {
             image_storage_mode: env.NEXT_PUBLIC_IMAGE_STORAGE_MODE || (env.VERCEL === '1' ? 'indexeddb' : 'fs'),

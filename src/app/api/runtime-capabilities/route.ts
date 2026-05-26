@@ -1,4 +1,5 @@
 import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
+import { readImageStreamMode } from '@/lib/image-upstream-strategy';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { computeStreamingBatchRecommendation } from '@/lib/streaming-batch';
 import { readBooleanEnv, readPositiveIntegerEnv } from '@/lib/server-runtime';
@@ -19,6 +20,11 @@ export async function GET() {
         });
 
         return NextResponse.json({
+            streaming: {
+                defaultMode: readImageStreamMode(new FormData(), process.env),
+                unavailableMarkScope: 'channel+backend+strategy+operation',
+                availability: serverChannelState.streamingAvailability.summary()
+            },
             streamingBatch: {
                 enabled: streamingBatchEnabled,
                 recommendedConcurrency: recommendedStreamingConcurrency,
