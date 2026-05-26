@@ -1,9 +1,5 @@
-import {
-  CHINESE_POSITIVE_INTEGER_MESSAGES,
-  parsePositiveIntegerConfig
-} from '../../../../src/lib/positive-integer-config.mjs';
-
 const MAX_RETRY_AFTER_SECONDS = 60;
+const DIGITS_PATTERN = /^\d+$/;
 
 export function readOptionValue(argv, index, name) {
   const value = argv[index];
@@ -14,9 +10,16 @@ export function readOptionValue(argv, index, name) {
 }
 
 export function readConfiguredPositiveInteger(value, name, fallback) {
-  return parsePositiveIntegerConfig(value, name, fallback, {
-    messages: CHINESE_POSITIVE_INTEGER_MESSAGES
-  });
+  const rawValue = value === undefined || value === null ? '' : String(value).trim();
+  if (!rawValue) return fallback;
+  if (!DIGITS_PATTERN.test(rawValue)) {
+    throw new Error(`${name} 必须是正整数。`);
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} 必须是正整数。`);
+  }
+  return parsed;
 }
 
 export function normalizeBaseUrl(value) {
