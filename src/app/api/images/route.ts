@@ -30,14 +30,138 @@ import {
 } from '@/lib/image-service';
 import {
     readImageGenerationBackend,
+    readImageStreamMode,
     readImageStreamingStrategy,
-    resolveImageStreamEnabled
+    resolveImageStreamEnabled,
+    type ImageGenerationBackend,
+    type ImageStreamMode,
+    type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { getServerChannelState } from '@/lib/server-channel-router';
+import type { StreamingAvailabilityKey, StreamingOperation } from '@/lib/streaming-availability';
 import { buildAccessCookie, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
+import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+
+type StreamResolutionInput = {
+    streamMode: ImageStreamMode;
+    imageBackend: ImageGenerationBackend;
+    streamingStrategy: ImageStreamingStrategy;
+    operation: StreamingOperation;
+    selectedCredential?: ChannelCredential;
+    sourceId?: string;
+};
+
+type StreamResolution = {
+    availabilityKey: StreamingAvailabilityKey;
+    streamEnabled: boolean;
+    streamFallbackEnabled: boolean;
+    streamingMarkedUnavailable: boolean;
+};
+
+function readErrorStatus(error: unknown): number | undefined {
+    if (typeof error !== 'object' || error === null) return undefined;
+    if ('status' in error && typeof error.status === 'number') return error.status;
+    if ('statusCode' in error && typeof error.statusCode === 'number') return error.statusCode;
+    return undefined;
+}
+
+function readErrorCode(error: unknown): string | undefined {
+    if (typeof error !== 'object' || error === null) return undefined;
+    if ('code' in error && typeof error.code === 'string') return error.code;
+    if ('error' in error && typeof error.error === 'object' && error.error !== null) {
+        const nested = error.error as Record<string, unknown>;
+        return typeof nested.code === 'string' ? nested.code : undefined;
+    }
+    return undefined;
+}
+
+function createAvailabilityKey(input: StreamResolutionInput): StreamingAvailabilityKey {
+    return {
+        channelId: input.selectedCredential?.channelId,
+        sourceId: input.selectedCredential ? undefined : input.sourceId,
+        imageBackend: input.imageBackend,
+        streamingStrategy: input.streamingStrategy,
+        operation: input.operation
+    };
+}
+
+function createAvailabilitySourceId(input: { selectedCredential?: ChannelCredential; baseUrl?: string }): string | undefined {
+    if (input.selectedCredential) return undefined;
+    const normalized = normalizeAvailabilityBaseUrl(input.baseUrl);
+    const digest = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
+    return `upstream:${digest}`;
+}
+
+function normalizeAvailabilityBaseUrl(baseUrl: string | undefined): string {
+    const rawValue = baseUrl && baseUrl.trim() ? baseUrl.trim() : 'https://api.openai.com/v1';
+    try {
+        const parsed = new URL(rawValue);
+        const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+        return `${parsed.protocol}//${parsed.host}${pathname}`.toLowerCase();
+    } catch {
+        return 'invalid-upstream';
+    }
+}
+
+function resolvePageStream(input: StreamResolutionInput): StreamResolution {
+    const availabilityKey = createAvailabilityKey(input);
+    const streamingAvailability = getServerChannelState().streamingAvailability;
+    if (input.streamMode === 'non_stream') {
+        return {
+            availabilityKey,
+            streamEnabled: false,
+            streamFallbackEnabled: false,
+            streamingMarkedUnavailable: streamingAvailability.isUnavailable(availabilityKey)
+        };
+    }
+
+    if (input.streamMode === 'auto' && input.streamingStrategy === 'off') {
+        return {
+            availabilityKey,
+            streamEnabled: false,
+            streamFallbackEnabled: false,
+            streamingMarkedUnavailable: streamingAvailability.isUnavailable(availabilityKey)
+        };
+    }
+
+    if (input.streamMode === 'auto' && streamingAvailability.isUnavailable(availabilityKey)) {
+        return {
+            availabilityKey,
+            streamEnabled: false,
+            streamFallbackEnabled: false,
+            streamingMarkedUnavailable: true
+        };
+    }
+
+    return {
+        availabilityKey,
+        streamEnabled: resolveImageStreamEnabled({
+            imageBackend: input.imageBackend,
+            requestedStream: true,
+            streamingStrategy: input.streamingStrategy
+        }),
+        streamFallbackEnabled: input.streamMode === 'auto',
+        streamingMarkedUnavailable: false
+    };
+}
+
+function markStreamingUnavailable(input: {
+    key: StreamingAvailabilityKey;
+    error?: unknown;
+    reason: string;
+    status?: number;
+}) {
+    const status = input.status ?? readErrorStatus(input.error);
+    getServerChannelState().streamingAvailability.markUnavailable({
+        ...input.key,
+        reason: input.reason,
+        ...(status !== undefined ? { status } : {}),
+        ...(readErrorCode(input.error) ? { code: readErrorCode(input.error) } : {})
+    });
+}
 
 export async function POST(request: NextRequest) {
     let selectedServerCredential: ChannelCredential | undefined;
@@ -45,7 +169,8 @@ export async function POST(request: NextRequest) {
     let requestLogContext: RequestLogContext | undefined;
     let accessCookie: AccessCookie | undefined;
     try {
-        const serverChannelRouter = getServerChannelState().router;
+        const serverChannelState = getServerChannelState();
+        const serverChannelRouter = serverChannelState.router;
         const contentType = request.headers.get('content-type') || '';
         if (
             !contentType.includes('multipart/form-data') &&
@@ -132,24 +257,32 @@ export async function POST(request: NextRequest) {
             requestLogContext
         );
 
-        const requestedStream = formData.get('stream') === 'true';
+        const streamMode = readImageStreamMode(formData, process.env);
         const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
         const imageBackend = readImageGenerationBackend(formData, process.env, { useEnvDefault: mode === 'generate' });
         const streamingStrategy = readImageStreamingStrategy(formData, process.env, {
             useEnvDefault: mode === 'generate'
         });
-        const streamEnabled = resolveImageStreamEnabled({
+        const streamResolution = resolvePageStream({
+            streamMode,
             imageBackend,
-            requestedStream,
-            streamingStrategy
+            streamingStrategy,
+            operation: mode,
+            selectedCredential,
+            sourceId: createAvailabilitySourceId({
+                selectedCredential,
+                baseUrl: effectiveApiBaseUrl
+            })
         });
         assertResponsesImageBackendAllowed({ imageBackend, mode });
         appLogger.info('图片上游兼容策略。', {
             ...requestLogContext,
             imageBackend,
             streamingStrategy,
-            requestedStream,
-            streamEnabled
+            streamMode,
+            streamEnabled: streamResolution.streamEnabled,
+            streamFallbackEnabled: streamResolution.streamFallbackEnabled,
+            streamingMarkedUnavailable: streamResolution.streamingMarkedUnavailable
         });
 
         const modeResult =
@@ -159,7 +292,7 @@ export async function POST(request: NextRequest) {
                       openai,
                       model,
                       prompt,
-                      streamEnabled,
+                      streamEnabled: streamResolution.streamEnabled,
                       partialImagesCount,
                       imageBackend,
                       storageMode: effectiveStorageMode,
@@ -170,14 +303,23 @@ export async function POST(request: NextRequest) {
                       requestLogContext,
                       selectedCredential,
                       accessCookie,
-                      abortSignal: request.signal
+                      abortSignal: request.signal,
+                      streamFallbackEnabled: streamResolution.streamFallbackEnabled,
+                      onStreamUnavailable: (error, reason) =>
+                          markStreamingUnavailable({ key: streamResolution.availabilityKey, error, reason }),
+                      onStreamingDegraded: (reason) =>
+                          markStreamingUnavailable({
+                              key: streamResolution.availabilityKey,
+                              reason,
+                              status: 200
+                          })
                   })
                 : await handleEditImageMode({
                       formData,
                       openai,
                       model,
                       prompt,
-                      streamEnabled,
+                      streamEnabled: streamResolution.streamEnabled,
                       partialImagesCount,
                       storageMode: effectiveStorageMode,
                       apiBaseUrl: effectiveApiBaseUrl,
@@ -187,7 +329,16 @@ export async function POST(request: NextRequest) {
                       requestLogContext,
                       selectedCredential,
                       accessCookie,
-                      abortSignal: request.signal
+                      abortSignal: request.signal,
+                      streamFallbackEnabled: streamResolution.streamFallbackEnabled,
+                      onStreamUnavailable: (error, reason) =>
+                          markStreamingUnavailable({ key: streamResolution.availabilityKey, error, reason }),
+                      onStreamingDegraded: (reason) =>
+                          markStreamingUnavailable({
+                              key: streamResolution.availabilityKey,
+                              reason,
+                              status: 200
+                          })
                   });
         if (modeResult instanceof Response) {
             return modeResult;

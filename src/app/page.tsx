@@ -23,6 +23,7 @@ import {
     IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
     appendImageUpstreamOverrideFields
 } from '@/lib/image-upstream-form';
+import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
 import { createImageShareFromBlob } from '@/lib/share-client';
 import { sha256Hex } from '@/lib/sha256';
@@ -78,7 +79,7 @@ const apiSettingsLocalStorageKey = 'openaiImageApiSettings';
 const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
 type RequestMode = 'generate' | 'edit';
-type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, boolean, 1 | 2 | 3];
+type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, 1 | 2 | 3];
 type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
 
 function createClientRequestId(): string {
@@ -374,7 +375,7 @@ export default function HomePage() {
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
 
     // 流式状态，由生成和编辑模式共用。
-    const [enableStreaming, setEnableStreaming] = React.useState(false);
+    const [streamMode, setStreamMode] = React.useState<ImageStreamMode>('auto');
     const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(1);
     const [activeRequestStreaming, setActiveRequestStreaming] = React.useState(false);
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
@@ -848,7 +849,7 @@ export default function HomePage() {
             requestMode: RequestMode,
             options: {
                 forceSingleImage?: boolean;
-                streaming: boolean;
+                streamMode: ImageStreamMode;
                 partialImages: 1 | 2 | 3;
                 passwordHash?: string | null;
             }
@@ -868,8 +869,8 @@ export default function HomePage() {
                 apiFormData.append('apiBaseUrl', apiSettings.baseUrl);
             }
 
-            if (options.streaming) {
-                apiFormData.append('stream', 'true');
+            apiFormData.append('stream_mode', options.streamMode);
+            if (options.streamMode !== 'non_stream') {
                 apiFormData.append('partial_images', options.partialImages.toString());
             }
             apiFormData.append('clientRequestId', createClientRequestId());
@@ -937,7 +938,7 @@ export default function HomePage() {
                 previewIndexOffset?: number;
                 retryFormData?: GenerationFormData | EditingFormData;
                 retryMode?: RequestMode;
-                retryStreaming?: boolean;
+                retryStreamMode?: ImageStreamMode;
                 retryPartialImages?: 1 | 2 | 3;
             } = {}
         ): Promise<{ images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails }> => {
@@ -1032,13 +1033,13 @@ export default function HomePage() {
                     if (
                         options.retryFormData &&
                         options.retryMode &&
-                        options.retryStreaming !== undefined &&
+                        options.retryStreamMode !== undefined &&
                         options.retryPartialImages !== undefined
                     ) {
                         setLastApiCallArgs([
                             options.retryFormData,
                             options.retryMode,
-                            options.retryStreaming,
+                            options.retryStreamMode,
                             options.retryPartialImages
                         ]);
                     }
@@ -1065,7 +1066,7 @@ export default function HomePage() {
     async function handleApiCall(
         formData: GenerationFormData | EditingFormData,
         requestMode: RequestMode = mode,
-        requestStreaming: boolean = enableStreaming,
+        requestStreamMode: ImageStreamMode = streamMode,
         requestPartialImages: 1 | 2 | 3 = partialImages,
         requestPasswordHash: string | null = clientPasswordHash
     ) {
@@ -1073,7 +1074,7 @@ export default function HomePage() {
         let durationMs = 0;
 
         setIsLoading(true);
-        setActiveRequestStreaming(requestStreaming);
+        setActiveRequestStreaming(requestStreamMode !== 'non_stream');
         setError(null);
         setLatestImageBatch(null);
         setImageOutputView('grid');
@@ -1106,7 +1107,7 @@ export default function HomePage() {
                 requestMode === 'generate' ? (formData as GenerationFormData).n : (formData as EditingFormData).n;
             const useStreamingBatch = shouldUseStreamingBatch({
                 enabled: currentStreamingBatchCapacity.enabled,
-                streaming: requestStreaming,
+                streaming: requestStreamMode !== 'non_stream',
                 imageCount
             });
             const executeImageRequestForCurrentOptions = async (
@@ -1115,7 +1116,7 @@ export default function HomePage() {
                 return executeImageRequest(
                     buildApiFormData(formData, requestMode, {
                         forceSingleImage: options.forceSingleImage,
-                        streaming: requestStreaming,
+                        streamMode: requestStreamMode,
                         partialImages: requestPartialImages,
                         passwordHash: requestPasswordHash
                     }),
@@ -1123,7 +1124,7 @@ export default function HomePage() {
                         previewIndexOffset: options.previewIndexOffset,
                         retryFormData: formData,
                         retryMode: requestMode,
-                        retryStreaming: requestStreaming,
+                        retryStreamMode: requestStreamMode,
                         retryPartialImages: requestPartialImages
                     }
                 );
@@ -1622,8 +1623,8 @@ export default function HomePage() {
                                         setBackground={setGenBackground}
                                         moderation={genModeration}
                                         setModeration={setGenModeration}
-                                        enableStreaming={enableStreaming}
-                                        setEnableStreaming={setEnableStreaming}
+                                        streamMode={streamMode}
+                                        setStreamMode={setStreamMode}
                                         allowStreamingBatch={streamingBatchEnabled}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}
@@ -1677,8 +1678,8 @@ export default function HomePage() {
                                         setEditDrawnPoints={setEditDrawnPoints}
                                         editMaskPreviewUrl={editMaskPreviewUrl}
                                         setEditMaskPreviewUrl={setEditMaskPreviewUrl}
-                                        enableStreaming={enableStreaming}
-                                        setEnableStreaming={setEnableStreaming}
+                                        streamMode={streamMode}
+                                        setStreamMode={setStreamMode}
                                         allowStreamingBatch={streamingBatchEnabled}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}

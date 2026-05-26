@@ -3,6 +3,7 @@ import dns from 'node:dns/promises';
 import tls from 'node:tls';
 import {
   errorMessage,
+  assertValidImageSizeForModel,
   normalizeBaseUrl,
   normalizeOutputFormat,
   readConfiguredPositiveInteger,
@@ -36,6 +37,7 @@ const apiKey = process.env.GPT_IMAGE_UPSTREAM_API_KEY || process.env.OPENAI_API_
 let timeoutMs;
 try {
   timeoutMs = readConfiguredPositiveInteger(options.timeoutMs, '--timeout-ms', 30000);
+  options.size = assertValidImageSizeForModel(options.size, options.model, '--size');
 } catch (error) {
   console.error(errorMessage(error));
   printUsage();

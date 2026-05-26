@@ -17,7 +17,8 @@ export class MissingFinalImageStreamResultError extends Error {
 }
 
 export async function collectOpenAiImagesFromStream(
-    stream: AsyncIterable<unknown>
+    stream: AsyncIterable<unknown>,
+    options: { onStreamingDegraded?: (reason: string) => void } = {}
 ): Promise<OpenAI.Images.ImagesResponse> {
     const data: Array<{ b64_json: string }> = [];
     const seenCompletedKeys = new Set<string>();
@@ -27,6 +28,9 @@ export async function collectOpenAiImagesFromStream(
 
     for await (const event of stream) {
         const diagnostics = normalizeUpstreamImageStreamEventWithDiagnostics(event);
+        if (diagnostics.providerDialect === 'sdk_parsed_fallback') {
+            options.onStreamingDegraded?.('json_final_fallback');
+        }
         upstreamEventType = diagnostics.upstreamEventType ?? upstreamEventType;
         for (const normalizedEvent of diagnostics.events) {
             if (normalizedEvent.type === 'partial_image') {

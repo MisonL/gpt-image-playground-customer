@@ -9,7 +9,7 @@
 ## 审计结论
 
 - `/api/agent/capabilities` 现在暴露机器可读 `routing_rules`，`schema_version=2026-05-22`。
-- 高分辨率 Agent edit 请求在 route 层 `snapshotAgentEditFormData` 前被拒绝，服务层也在读取服务端 API 凭据前保留二道校验。
+- 当前路由口径已更新：高分辨率 edit 默认优先走页面端 `/api/images` SSE；页面流式失败或不可用时，先诊断结构化错误，再显式回退到 Agent edit。
 - partial-only 上游 SSE 失败会保留 `upstream_event_type` 与 `partial_image_count`，但不会泄漏 partial base64。
 - 已进入终态 `failed` 的 Agent/job 回放会移除 `retry_after_seconds` 并返回 `retryable=false`。
 - 本地 final gate 启动仓库 fixture 后复用真实 smoke 脚本，跑满 5 个独立场景并要求 `final_gate_satisfied=true`。

@@ -10,6 +10,8 @@ export type ImageStreamingStrategy =
     | 'responses-sse'
     | 'force-sse';
 
+export type ImageStreamMode = 'auto' | 'stream' | 'non_stream';
+
 type ImageUpstreamEnv = Partial<NodeJS.ProcessEnv>;
 
 const IMAGE_BACKEND_ALIASES: Record<string, ImageGenerationBackend> = {
@@ -27,6 +29,8 @@ const VALID_STREAMING_STRATEGIES = new Set<ImageStreamingStrategy>([
     'responses-sse',
     'force-sse'
 ]);
+
+const VALID_STREAM_MODES = new Set<ImageStreamMode>(['auto', 'stream', 'non_stream']);
 
 export class ImageUpstreamConfigurationError extends Error {
     readonly status = 500;
@@ -47,7 +51,10 @@ function readStringField(formData: FormData, ...fields: string[]): string | unde
     return undefined;
 }
 
-function readStringEnv(env: ImageUpstreamEnv, key: 'IMAGE_GENERATION_BACKEND' | 'IMAGE_STREAMING_STRATEGY'): string | undefined {
+function readStringEnv(
+    env: ImageUpstreamEnv,
+    key: 'IMAGE_GENERATION_BACKEND' | 'IMAGE_STREAMING_STRATEGY' | 'IMAGE_DEFAULT_STREAM_MODE'
+): string | undefined {
     const value = env[key];
     if (typeof value === 'string' && value.trim()) {
         return value.trim();
@@ -86,6 +93,21 @@ export function parseImageStreamingStrategyValue(value: string): ImageStreamingS
     return readStreamingStrategyValue(value.trim(), 'request');
 }
 
+function readStreamModeValue(value: string, source: 'request' | 'env'): ImageStreamMode {
+    if (VALID_STREAM_MODES.has(value as ImageStreamMode)) {
+        return value as ImageStreamMode;
+    }
+    const message = 'stream_mode 必须是 auto、stream 或 non_stream。';
+    if (source === 'env') {
+        throw new ImageUpstreamConfigurationError(`服务端 IMAGE_DEFAULT_STREAM_MODE 配置无效：${message}`);
+    }
+    throw new RequestValidationError(message, 400);
+}
+
+export function parseImageStreamModeValue(value: string): ImageStreamMode {
+    return readStreamModeValue(value.trim(), 'request');
+}
+
 export function readImageGenerationBackend(
     formData: FormData,
     env: ImageUpstreamEnv = process.env,
@@ -116,6 +138,38 @@ export function readImageStreamingStrategy(
     }
     const envValue = readStringEnv(env, 'IMAGE_STREAMING_STRATEGY');
     return envValue ? readStreamingStrategyValue(envValue, 'env') : 'auto';
+}
+
+export function readImageStreamMode(
+    formData: FormData,
+    env: ImageUpstreamEnv = process.env,
+    options: { useEnvDefault?: boolean } = {}
+): ImageStreamMode {
+    const requestValue = readStringField(formData, 'stream_mode', 'streamMode');
+    if (requestValue) {
+        return readStreamModeValue(requestValue, 'request');
+    }
+
+    const requestStreamingStrategy = readStringField(formData, 'image_streaming_strategy', 'imageStreamingStrategy');
+    if (requestStreamingStrategy === 'off') {
+        return 'non_stream';
+    }
+
+    if (formData.get('stream') === 'true') {
+        return 'stream';
+    }
+
+    if (options.useEnvDefault === false) {
+        return 'auto';
+    }
+
+    const envStreamingStrategy = readStringEnv(env, 'IMAGE_STREAMING_STRATEGY');
+    if (envStreamingStrategy === 'off') {
+        return 'non_stream';
+    }
+
+    const envValue = readStringEnv(env, 'IMAGE_DEFAULT_STREAM_MODE');
+    return envValue ? readStreamModeValue(envValue, 'env') : 'auto';
 }
 
 export function resolveImageStreamEnabled(input: {

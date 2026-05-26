@@ -139,20 +139,20 @@ http://localhost:4783
 ## 默认行为
 
 - 图片生成默认使用 `quality=high`。如需降低成本或让上游自行选择质量，可在页面或 Agent 请求中显式改为 `auto`、`medium` 或 `low`。
-- 页面默认不发送流式请求；用户显式开启流式预览后，才会走 SSE 路径。并发流式批处理仍默认关闭，只有设置 `ENABLE_STREAMING_BATCH=true` 后才会把 `n>1` 拆成多个流式任务。
+- 页面默认使用 `stream_mode=auto`。auto 会优先尝试 SSE；如果上游流式没有最终图，会在同一响应里显式回退到非流式并暴露 `fallback_used`。`stream` 强制流式，`non_stream` 直接走非流式 JSON。并发流式批处理仍默认关闭，只有设置 `ENABLE_STREAMING_BATCH=true` 后才会把 `n>1` 拆成多个流式任务。
 - 服务端会把官方 OpenAI Images 流式事件、gaoren002/new-api 与 sub2api 图片 SSE、OtokAPI `image.generation.*`、Responses `image_generation_call` 事件统一映射为前端稳定的 `partial_image`、`completed`、`done`、`error` 事件。
-- 流式请求失败时会显示原始错误状态和排查建议，不会自动改用非流式请求，以避免隐藏网关、限流或上游故障。
+- `stream` 模式失败时会显示原始错误状态和排查建议，不会自动改用非流式请求。`auto` 模式只在可观测回退路径中降级，并通过响应字段和 runtime capabilities 暴露状态。
 
 ## 图片后端路径
 
 - 默认路径是服务端中继 OpenAI Images API：`/api/images` 调用上游 `/images/generations` 或 `/images/edits`，再返回本项目稳定的 JSON 或 SSE 协议。原版 new-api 和 sub2api 普通 JSON 能力保持这个基线。
-- 流式能力由请求字段或环境变量显式控制：`off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。`auto` 不会凭仓库名假设上游能力；Agent 辅助脚本对 `max_edge>2048` 的单次文生图默认优先使用页面端 `/api/images` SSE，失败后先诊断，再显式选择 Agent JSON 或 job 路径。
+- 流式策略由请求字段或环境变量控制：`off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。请求级 `stream_mode` 支持 `auto`、`stream`、`non_stream`；`IMAGE_STREAMING_STRATEGY=off` 时页面会切到 `non_stream`。Agent 辅助脚本对 `max_edge>2048` 的单次文生图默认优先使用页面端 `/api/images` SSE，失败后先诊断，再显式选择 Agent JSON 或 job 路径。
 - 流式请求在没有 partial image 前只显示连接保持状态，不会把 keepalive 当成图片预览或成功结果。
 - gaoren002/new-api、sub2api、OtokAPI 与 GPT2Image 风格 Responses 兼容仅发生在事件适配层：partial image 只作为预览，只有最终 completed base64 才会保存为 artifact；缺最终 base64 或仅返回远程 URL 会显式失败。
 - Responses API image generation 是实验路径，默认关闭。只有同时设置 `ENABLE_RESPONSES_IMAGE_BACKEND=true`、配置 `OPENAI_RESPONSES_API_MODEL`，并在请求中显式传入 `image_backend=responses-image-generation` 或兼容别名 `imageBackend=responses` 时，服务端才会调用 `/responses` 并读取 `image_generation_call.result`。
 - Agent capabilities 会同时暴露 `supported.image_backends` 枚举和 `supported.enabled_image_backends` 当前启用后端；自动化脚本应以后者和 `image_backend_requirements` 判断 runtime 是否已准备好。
 - Responses API 的顶层模型由 `OPENAI_RESPONSES_API_MODEL` 或请求字段 `responsesModel` 指定；页面表单里的图片模型只传给 `image_generation` 工具。
-- Responses API 实验路径支持单张 `generate` 的非流式和上游 SSE 消费，不替换默认 Images API，不接入编辑表单。Agent generate 对外仍返回最终 JSON，可通过 `image_backend`、`streaming_strategy`、`partial_images` 显式启用服务端内部上游 SSE 消费。
+- Responses API 实验路径支持单张 `generate` 的非流式和上游 SSE 消费，不替换默认 Images API，不接入编辑表单。Agent generate/edit 对外仍返回最终 JSON，可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制服务端内部上游 SSE 消费。
 
 ## 编辑与遮罩
 
@@ -225,7 +225,18 @@ Authorization: Bearer your-agent-token
 Job polling 当前是同一 Next.js 服务实例内的后台任务，结果和错误会写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在 job 结束前重启，客户端应继续按状态端点和结构化错误处理，必要时用相同 `Idempotency-Key` 重建同一业务操作。
 运行中的 job 会定时刷新请求 lease，避免高质量长耗时上游调用仍在执行时被 recovery 误判为孤儿请求。
 `POST /api/agent/images/generate` 对外始终是最终 JSON；`max_edge>2048` 的单次文生图默认建议按 `/api/agent/capabilities` 使用页面端 `/api/images` SSE。显式传 `--agent` 或 `streaming_strategy=off` 时才走 Agent JSON 非流式路径，用于诊断对照。
-仓库辅助脚本支持 `--page-sse`、`--agent` 和 `--job` 显式选择路径。`--page-sse` 使用页面 SSE，`--agent` 强制 `/api/agent/images/generate` 最终 JSON，`--job` 使用 Agent job polling。页面流式失败后不会自动二次计费回退，需先按结构化错误和诊断字段确认原因，再选择新的业务操作和新的 `Idempotency-Key`。
+仓库辅助脚本支持 `--page-sse`、`--agent` 和 `--job` 显式选择路径。`--page-sse` 使用页面 SSE，`--agent` 强制 Agent generate/edit 最终 JSON，`--job` 使用 Agent generate job polling。页面流式失败后不会自动二次计费回退，需先按结构化错误和诊断字段确认原因，再选择新的业务操作和新的 `Idempotency-Key`。
+Agent 请求字段 `stream_mode=auto|stream|non_stream` 用于控制服务端内部上游流式消费：`auto` 是默认值并允许显式可观测回退，`stream` 强制上游流式并直接暴露失败，`non_stream` 直接非流式。`GET /api/runtime-capabilities` 会返回当前默认 stream mode、流式不可用标记 scope 和 availability summary。
+
+批量自动化可使用仓库 skill 脚本：
+
+```bash
+node skills/gpt-image-playground-agent/scripts/batch-images.mjs \
+  --input tasks.jsonl \
+  --ordered-prefix product-set
+```
+
+默认 dry-run 只解析 JSONL 和输出计划，不联网、不计费。真实执行必须加 `--allow-billable`，并可配合 `--manifest`、`--resume` 和 `--dimension-check` 做 append-only 续跑和 PNG/JPEG/WebP 尺寸校验。
 
 生成示例：
 

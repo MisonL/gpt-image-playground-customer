@@ -2,7 +2,9 @@ import {
     PNG_BASE64,
     imageFormRequest,
     readSseEvents,
+    startHangingImagesStreamUpstream,
     startImagesJsonUpstream,
+    startImagesStreamFallbackUpstream,
     startResponsesImageUpstream,
     startStreamingResponsesImageUpstream,
     startStreamingImageUpstream
@@ -165,6 +167,113 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(upstreamJson.stream, true);
             assert.equal(upstreamJson.partial_images, 2);
         } finally {
+            await upstream.close();
+        }
+    });
+
+    it('falls back from auto streaming without a final image and skips streaming for the same mark', async () => {
+        const { POST } = await import('./route');
+        const { getServerChannelState } = await import('@/lib/server-channel-router');
+        const upstream = await startImagesStreamFallbackUpstream();
+        const otherUpstream = await startImagesStreamFallbackUpstream();
+
+        try {
+            const first = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    streamMode: 'auto',
+                    clientRequestId: 'client-route-auto-fallback-1'
+                })
+            );
+
+            assert.equal(first.status, 200);
+            assert.equal(first.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(first);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['partial_image', 'completed', 'done']
+            );
+            assert.equal(events[2].fallback_used, true);
+            assert.deepEqual(
+                upstream.calls.map((call) => call.stream),
+                [true, false]
+            );
+            assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 1);
+
+            const second = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    streamMode: 'auto',
+                    clientRequestId: 'client-route-auto-fallback-2'
+                })
+            );
+
+            assert.equal(second.status, 200);
+            assert.notEqual(second.headers.get('content-type'), 'text/event-stream');
+            const body = (await second.json()) as { images?: Array<Record<string, unknown>> };
+            assert.equal(body.images?.[0]?.b64_json, PNG_BASE64);
+            assert.deepEqual(
+                upstream.calls.map((call) => call.stream),
+                [true, false, false]
+            );
+
+            const third = await POST(
+                imageFormRequest({
+                    apiBaseUrl: otherUpstream.baseUrl,
+                    apiKey: 'test-key',
+                    streamMode: 'auto',
+                    clientRequestId: 'client-route-auto-fallback-3'
+                })
+            );
+
+            assert.equal(third.status, 200);
+            assert.equal(third.headers.get('content-type'), 'text/event-stream');
+            await readSseEvents(third);
+            assert.deepEqual(
+                otherUpstream.calls.map((call) => call.stream),
+                [true, false]
+            );
+        } finally {
+            await upstream.close();
+            await otherUpstream.close();
+        }
+    });
+
+    it('does not mark auto streaming unavailable when the page SSE request is aborted', async () => {
+        const { POST } = await import('./route');
+        const { getServerChannelState } = await import('@/lib/server-channel-router');
+        const upstream = await startHangingImagesStreamUpstream();
+        const abortController = new AbortController();
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    streamMode: 'auto',
+                    clientRequestId: 'client-route-auto-abort',
+                    signal: abortController.signal
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const reader = response.body?.getReader();
+            assert.ok(reader);
+            await upstream.waitForStreamRequest();
+            abortController.abort();
+            await reader.cancel();
+            await new Promise((resolve) => setTimeout(resolve, 25));
+
+            assert.deepEqual(
+                upstream.calls.map((call) => call.stream),
+                [true]
+            );
+            assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 0);
+        } finally {
+            abortController.abort();
             await upstream.close();
         }
     });
@@ -435,12 +544,13 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
     it('rejects the experimental Responses API backend when the feature flag is disabled', async () => {
         const { POST } = await import('./route');
         const response = await POST(
-            imageFormRequest({
-                apiBaseUrl: 'http://127.0.0.1:1/v1',
-                apiKey: 'test-key',
-                stream: false,
-                imageBackend: 'responses'
-            })
+                imageFormRequest({
+                    apiBaseUrl: 'http://127.0.0.1:1/v1',
+                    apiKey: 'test-key',
+                    stream: false,
+                    streamMode: 'non_stream',
+                    imageBackend: 'responses'
+                })
         );
 
         assert.equal(response.status, 400);
@@ -452,12 +562,13 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
         const { POST } = await import('./route');
         const response = await POST(
-            imageFormRequest({
-                apiBaseUrl: 'http://127.0.0.1:1/v1',
-                apiKey: 'test-key',
-                stream: false,
-                imageBackend: 'responses'
-            })
+                imageFormRequest({
+                    apiBaseUrl: 'http://127.0.0.1:1/v1',
+                    apiKey: 'test-key',
+                    stream: false,
+                    streamMode: 'non_stream',
+                    imageBackend: 'responses'
+                })
         );
 
         assert.equal(response.status, 400);
@@ -471,25 +582,27 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         const { POST } = await import('./route');
 
         const multiImage = await POST(
-            imageFormRequest({
-                apiBaseUrl: 'http://127.0.0.1:1/v1',
-                apiKey: 'test-key',
-                stream: false,
-                imageBackend: 'responses',
-                n: '2'
-            })
+                imageFormRequest({
+                    apiBaseUrl: 'http://127.0.0.1:1/v1',
+                    apiKey: 'test-key',
+                    stream: false,
+                    streamMode: 'non_stream',
+                    imageBackend: 'responses',
+                    n: '2'
+                })
         );
         assert.equal(multiImage.status, 400);
         assert.match(String(((await multiImage.json()) as Record<string, unknown>).error), /单张生成/);
 
         const edit = await POST(
-            imageFormRequest({
-                apiBaseUrl: 'http://127.0.0.1:1/v1',
-                apiKey: 'test-key',
-                stream: false,
-                imageBackend: 'responses',
-                mode: 'edit'
-            })
+                imageFormRequest({
+                    apiBaseUrl: 'http://127.0.0.1:1/v1',
+                    apiKey: 'test-key',
+                    stream: false,
+                    streamMode: 'non_stream',
+                    imageBackend: 'responses',
+                    mode: 'edit'
+                })
         );
         assert.equal(edit.status, 400);
         assert.match(String(((await edit.json()) as Record<string, unknown>).error), /只支持 generate/);
@@ -520,6 +633,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     stream: false,
+                    streamMode: 'non_stream',
                     imageBackend: 'responses-image-generation'
                 })
             );
@@ -565,6 +679,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     stream: false,
+                    streamMode: 'non_stream',
                     imageBackend: 'responses-image-generation'
                 })
             );
@@ -588,7 +703,8 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                 imageFormRequest({
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
-                    stream: false
+                    stream: false,
+                    streamMode: 'non_stream'
                 })
             );
 
@@ -841,7 +957,8 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                 imageFormRequest({
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
-                    stream: false
+                    stream: false,
+                    streamMode: 'non_stream'
                 })
             );
 
@@ -871,7 +988,8 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     mode: 'edit',
-                    stream: false
+                    stream: false,
+                    streamMode: 'non_stream'
                 })
             );
 
@@ -1010,7 +1128,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
-    it('rejects invalid gpt-image-2 custom sizes before contacting upstream', async () => {
+    it('rejects invalid gpt-image-2 custom size boundaries before contacting upstream', async () => {
         const { POST } = await import('./route');
         let upstreamCalls = 0;
         const upstream = await startImagesJsonUpstream(async () => {
@@ -1019,18 +1137,24 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         });
 
         try {
-            const response = await POST(
-                imageFormRequest({
-                    apiBaseUrl: upstream.baseUrl,
-                    apiKey: 'test-key',
-                    size: '2049x2048'
-                })
-            );
+            for (const { size, pattern } of [
+                { size: '512x512', pattern: /至少/ },
+                { size: '3840x3840', pattern: /不能超过/ },
+                { size: '2049x2048', pattern: /16 的倍数/ }
+            ]) {
+                const response = await POST(
+                    imageFormRequest({
+                        apiBaseUrl: upstream.baseUrl,
+                        apiKey: 'test-key',
+                        size
+                    })
+                );
 
-            assert.equal(response.status, 400);
-            const body = (await response.json()) as Record<string, unknown>;
-            assert.match(String(body.error), /size 对 gpt-image-2 无效/);
-            assert.match(String(body.error), /16 的倍数/);
+                assert.equal(response.status, 400);
+                const body = (await response.json()) as Record<string, unknown>;
+                assert.match(String(body.error), /size 对 gpt-image-2 无效/);
+                assert.match(String(body.error), pattern);
+            }
             assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();
@@ -1061,6 +1185,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     stream: false,
+                    streamMode: 'non_stream',
                     imageBackend: 'responses',
                     responsesModel: 'gpt-4.1-request'
                 })

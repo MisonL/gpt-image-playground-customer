@@ -1,7 +1,6 @@
 import { readAgentLeaseMs, readAgentRequestTtlSeconds } from '@/lib/agent-api-contracts';
 import { assertAgentAuthorized } from '@/lib/agent-auth';
 import {
-    assertAgentEditRouteAllowedFromFormData,
     buildEditRequestHashFromSnapshot,
     completeAgentExecutionState,
     createArtifactPersistenceError,
@@ -31,7 +30,6 @@ export async function POST(request: NextRequest) {
     try {
         assertAgentAuthorized(request.headers);
         const formData = await parseAgentEditFormData(request);
-        await assertAgentEditRouteAllowedFromFormData(formData);
         const idempotencyKey = readIdempotencyKey(request.headers);
         const requestSnapshot = await snapshotAgentEditFormData(formData);
         const store = await ensureAgentStateStoreReady();

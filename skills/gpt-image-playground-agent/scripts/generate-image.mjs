@@ -2,10 +2,12 @@
 import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
 import {
     errorMessage,
+    assertValidImageSizeForModel,
     normalizeBaseUrl,
     normalizeOutputFormat,
     parseRetryAfterValue,
     readConfiguredPositiveInteger,
+    readMaxImageEdge,
     readOptionValue,
     resolveSameOriginUrl,
     sleep
@@ -23,6 +25,7 @@ const STREAMING_STRATEGIES = new Set([
     'responses-sse',
     'force-sse'
 ]);
+const STREAM_MODES = new Set(['auto', 'stream', 'non_stream']);
 const MIN_PARTIAL_IMAGES = 1;
 const MAX_PARTIAL_IMAGES = 3;
 const DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
@@ -160,6 +163,7 @@ function parseArgs(argv) {
         format: 'png',
         responseMode: 'path',
         imageBackend: undefined,
+        streamMode: undefined,
         streamingStrategy: undefined,
         partialImages: undefined,
         timeoutMs: undefined,
@@ -187,6 +191,7 @@ function parseArgs(argv) {
         else if (arg === '--format') parsed.format = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--response-mode') parsed.responseMode = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--image-backend') parsed.imageBackend = readOptionValue(argv, (index += 1), arg);
+        else if (arg === '--stream-mode') parsed.streamMode = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--streaming-strategy') parsed.streamingStrategy = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--partial-images') parsed.partialImages = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
@@ -214,7 +219,7 @@ function buildRequestBody(promptValue, parsed) {
             prompt: promptValue || 'contract check',
             model: parsed.model,
             n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
-            size: parsed.size,
+            size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size'),
             quality: parsed.quality,
             output_format: normalizeOutputFormat(parsed.format),
             response_mode: parsed.responseMode
@@ -228,7 +233,7 @@ function buildDryRunRequestBody(parsed) {
         {
             model: parsed.model,
             n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
-            size: parsed.size,
+            size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size'),
             quality: parsed.quality,
             output_format: normalizeOutputFormat(parsed.format),
             response_mode: parsed.responseMode
@@ -246,6 +251,7 @@ function addUpstreamStrategyFields(body, parsed) {
     return {
         ...body,
         ...(parsed.imageBackend ? { image_backend: parsed.imageBackend } : {}),
+        ...(parsed.streamMode ? { stream_mode: parsed.streamMode } : {}),
         ...(parsed.streamingStrategy ? { streaming_strategy: parsed.streamingStrategy } : {}),
         ...(parsed.partialImages ? { partial_images: readPartialImages(parsed.partialImages) } : {})
     };
@@ -258,13 +264,16 @@ function validateUpstreamStrategyOptions(parsed) {
     if (parsed.imageBackend && !IMAGE_BACKENDS.has(parsed.imageBackend)) {
         throw new Error('--image-backend 必须是 images-api、images、responses 或 responses-image-generation。');
     }
+    if (parsed.streamMode && !STREAM_MODES.has(parsed.streamMode)) {
+        throw new Error('--stream-mode 必须是 auto、stream 或 non_stream。');
+    }
     if (parsed.streamingStrategy && !STREAMING_STRATEGIES.has(parsed.streamingStrategy)) {
         throw new Error(
             '--streaming-strategy 必须是 off、auto、openai-sse、newapi-keepalive-sse、responses-sse 或 force-sse。'
         );
     }
-    if (parsed.routeMode === 'page_sse' && parsed.streamingStrategy === 'off') {
-        throw new Error('streaming_strategy=off 时不能强制使用页面 SSE。');
+    if (parsed.routeMode === 'page_sse' && (parsed.streamingStrategy === 'off' || parsed.streamMode === 'non_stream')) {
+        throw new Error('stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。');
     }
 }
 
@@ -326,7 +335,7 @@ function buildGenerateRoutingGuidance(body, routeMode) {
         };
     }
     if (routeMode === 'page_sse' && !isPageSseAllowed(body)) {
-        throw new Error('streaming_strategy=off 时不能强制使用页面 SSE。');
+        throw new Error('stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。');
     }
     if ((routeMode === 'page_sse' || (routeMode !== 'agent' && isLargeGenerate(body))) && isPageSseAllowed(body)) {
         return {
@@ -475,6 +484,7 @@ function buildPageSseFormData() {
     formData.append('response_mode', requestBody.response_mode);
     formData.append('clientRequestId', idempotencyKey);
     formData.append('stream', 'true');
+    if (requestBody.stream_mode) formData.append('stream_mode', requestBody.stream_mode);
     formData.append('partial_images', String(requestBody.partial_images || 2));
     if (requestBody.image_backend)
         formData.append('image_backend', normalizeImageBackendForPage(requestBody.image_backend));
@@ -934,7 +944,7 @@ function shouldUsePageSse(capabilitiesValue, request, routeMode) {
     if (routeMode === 'agent' || routeMode === 'job') return false;
     if (!isPageSseAllowed(request)) {
         if (routeMode === 'page_sse') {
-            throw new Error('streaming_strategy=off 时不能强制使用页面 SSE。');
+            throw new Error('stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。');
         }
         return false;
     }
@@ -950,14 +960,7 @@ function isLargeGenerate(request) {
 }
 
 function isPageSseAllowed(request) {
-    return request.streaming_strategy !== 'off';
-}
-
-function readMaxImageEdge(size) {
-    if (typeof size !== 'string') return 0;
-    const match = size.match(/^(\d+)x(\d+)$/);
-    if (!match) return 0;
-    return Math.max(Number(match[1]), Number(match[2]));
+    return request.streaming_strategy !== 'off' && request.stream_mode !== 'non_stream';
 }
 
 function createScriptError(code, message) {
@@ -991,7 +994,7 @@ function printUsage() {
     console.error('用法：generate-image.mjs [options] <prompt>');
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
     console.error(
-        '常用参数：--model --size --quality --n --format --response-mode --image-backend --streaming-strategy --partial-images --timeout-ms --prompt-file --idempotency-key --page-sse --agent --job --no-job(兼容别名)'
+        '常用参数：--model --size --quality --n --format --response-mode --image-backend --stream-mode --streaming-strategy --partial-images --timeout-ms --prompt-file --idempotency-key --page-sse --agent --job --no-job(兼容别名)'
     );
     console.error(
         '契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check'

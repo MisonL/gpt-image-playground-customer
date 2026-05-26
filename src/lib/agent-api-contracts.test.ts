@@ -28,7 +28,8 @@ describe('validateAgentGenerateRequest', () => {
             moderation: 'auto',
             response_mode: 'path',
             image_backend: 'images-api',
-            streaming_strategy: 'off',
+            stream_mode: 'auto',
+            streaming_strategy: 'auto',
             partial_images: 2
         });
     });
@@ -52,6 +53,7 @@ describe('validateAgentGenerateRequest', () => {
                 moderation: 'auto',
                 response_mode: 'path',
                 image_backend: 'images-api',
+                stream_mode: 'auto',
                 streaming_strategy: 'newapi-keepalive-sse',
                 partial_images: 3
             }
@@ -130,21 +132,26 @@ describe('validateAgentGenerateRequest', () => {
     });
 
     it('rejects gpt-image-2 sizes outside the image size contract', () => {
-        assert.throws(
-            () =>
-                validateAgentGenerateRequest({
-                    prompt: 'tiny image',
-                    model: 'gpt-image-2',
-                    size: '1x1'
-                }),
-            (error) => {
-                assert.ok(error instanceof RequestValidationError);
-                assert.equal(error.status, 422);
-                const details = JSON.parse(error.message) as { fields: Record<string, string> };
-                assert.match(details.fields.size, /像素|倍数|宽高比|正数/);
-                return true;
-            }
-        );
+        for (const { size, pattern } of [
+            { size: '512x512', pattern: /至少/ },
+            { size: '3840x3840', pattern: /不能超过/ }
+        ]) {
+            assert.throws(
+                () =>
+                    validateAgentGenerateRequest({
+                        prompt: 'out of range image',
+                        model: 'gpt-image-2',
+                        size
+                    }),
+                (error) => {
+                    assert.ok(error instanceof RequestValidationError);
+                    assert.equal(error.status, 422);
+                    const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                    assert.match(details.fields.size, pattern);
+                    return true;
+                }
+            );
+        }
     });
 });
 
@@ -205,7 +212,8 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.defaults.state_backend, 'postgres');
         assert.equal(capabilities.schema_version, AGENT_SCHEMA_VERSION);
         assert.equal(capabilities.defaults.image_backend, 'images-api');
-        assert.equal(capabilities.defaults.streaming_strategy, 'off');
+        assert.equal(capabilities.defaults.stream_mode, 'auto');
+        assert.equal(capabilities.defaults.streaming_strategy, 'auto');
         assert.equal(capabilities.defaults.partial_images, 2);
         assert.equal(capabilities.auth.required, true);
         assert.deepEqual(capabilities.auth.schemes, ['bearer']);
@@ -216,6 +224,8 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.model_limits['gpt-image-2'].max_edge, 3840);
         assert.equal(capabilities.model_limits['gpt-image-2'].edge_multiple, 16);
         assert.equal(capabilities.model_limits['gpt-image-2'].max_pixels, 8294400);
+        assert.equal(capabilities.model_limits['gpt-image-2'].min_pixels, 655360);
+        assert.equal(capabilities.model_limits['gpt-image-2'].max_aspect, 3);
         assert.deepEqual(capabilities.model_limits['gpt-image-2'].large_image_risk.applies_to, [
             'max_edge>2048',
             'long_running_upstream'
@@ -227,6 +237,7 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.agent_streaming.upstream_sse.mode, 'internal_upstream_sse');
         assert.deepEqual(capabilities.agent_streaming.upstream_sse.request_fields, [
             'image_backend',
+            'stream_mode',
             'streaming_strategy',
             'partial_images'
         ]);
@@ -244,11 +255,13 @@ describe('buildAgentCapabilities', () => {
             'force-sse'
         ]);
         assert.deepEqual(capabilities.agent_streaming.upstream_sse.activation_strategies, [
+            'auto',
             'openai-sse',
             'newapi-keepalive-sse',
             'responses-sse',
             'force-sse'
         ]);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.stream_modes, ['auto', 'stream', 'non_stream']);
         assert.equal(capabilities.agent_streaming.upstream_sse.final_response_contract, 'AgentImageResponse');
         assert.equal(capabilities.agent_streaming.page_sse.endpoint, '/api/images');
         assert.equal(capabilities.agent_streaming.page_sse.contract, 'page_ui_only');
@@ -271,8 +284,8 @@ describe('buildAgentCapabilities', () => {
             when: ['operation=edit', 'max_edge>2048'],
             endpoint: '/api/images',
             transport: 'page_sse',
-            strength: 'must_use',
-            reason: 'Agent edit is non-streaming and rejects high-resolution edit requests; use the page form-data SSE endpoint instead.'
+            strength: 'default',
+            reason: 'High-resolution edit defaults to the page form-data SSE endpoint; if streaming has issues, diagnose first and explicitly fall back to Agent edit.'
         });
         assert.equal(capabilities.routing_rules.complex_ui_batch.endpoint, '/api/images');
         assert.equal(capabilities.routing_rules.complex_ui_batch.strength, 'recommended');
@@ -306,6 +319,7 @@ describe('buildAgentCapabilities', () => {
             'responses-sse',
             'force-sse'
         ]);
+        assert.deepEqual(capabilities.supported.stream_modes, ['auto', 'stream', 'non_stream']);
         assert.equal(capabilities.endpoints.create_generate_job, AGENT_ENDPOINTS.create_generate_job);
         assert.equal(capabilities.agent_jobs.supported, true);
         assert.equal(capabilities.agent_jobs.mode, 'job_polling');
@@ -439,6 +453,7 @@ describe('buildAgentCapabilities', () => {
             'responses-sse',
             'force-sse'
         ]);
+        assert.deepEqual(generateProperties.stream_mode.enum, ['auto', 'stream', 'non_stream']);
         assert.ok('partial_images' in generateProperties);
         const capabilityProperties = document.components.schemas.AgentCapabilities.properties;
         assert.equal(capabilityProperties.routing_rules.$ref, '#/components/schemas/AgentRoutingRules');
@@ -468,7 +483,12 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(
             document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
                 .activation_strategies.items.enum,
-            ['openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
+            ['auto', 'openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
+        );
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
+                .stream_modes.items.enum,
+            ['auto', 'stream', 'non_stream']
         );
         assert.equal(
             document.components.schemas.AgentStreamingCapabilities.properties.page_sse.properties.contract.enum[0],

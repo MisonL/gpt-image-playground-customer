@@ -53,6 +53,9 @@ type CommonModeInput = {
     selectedCredential?: ChannelCredential;
     accessCookie?: AccessCookie;
     abortSignal?: AbortSignal;
+    streamFallbackEnabled?: boolean;
+    onStreamUnavailable?: (error: unknown, reason: string) => void;
+    onStreamingDegraded?: (reason: string) => void;
 };
 
 export type ImageModeResult =
@@ -165,11 +168,36 @@ async function createResponsesImageResult(input: CommonModeInput, options: Gener
     };
 }
 
-async function createResponsesImageStreamResponse(input: CommonModeInput, options: GenerateOptions): Promise<Response> {
+async function createResponsesImageResultOnly(
+    input: CommonModeInput,
+    options: GenerateOptions
+): Promise<OpenAI.Images.ImagesResponse> {
     if (options.n !== 1) {
         throw new RequestValidationError('Responses API 图片后端当前只支持单张生成。', 400);
     }
-    const stream = await createResponsesImageStream({
+    return generateImageWithResponsesBackend({
+        responses: input.openai.responses,
+        prompt: input.prompt,
+        responsesModel: readResponsesApiModel(input.formData),
+        imageModel: input.model,
+        size: readResponsesImageSize(options.size),
+        quality: options.quality,
+        outputFormat: options.outputFormat,
+        background: options.background,
+        moderation: options.moderation,
+        abortSignal: input.abortSignal,
+        ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {})
+    });
+}
+
+async function createResponsesImageStreamResponse(
+    input: CommonModeInput,
+    options: GenerateOptions
+): Promise<ImageModeResult> {
+    if (options.n !== 1) {
+        throw new RequestValidationError('Responses API 图片后端当前只支持单张生成。', 400);
+    }
+    const streamInput = {
         responses: input.openai.responses,
         prompt: input.prompt,
         responsesModel: readResponsesApiModel(input.formData),
@@ -182,7 +210,15 @@ async function createResponsesImageStreamResponse(input: CommonModeInput, option
         partialImagesCount: input.partialImagesCount,
         abortSignal: input.abortSignal,
         ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {})
-    });
+    };
+    let stream;
+    try {
+        stream = await createResponsesImageStream(streamInput);
+    } catch (error) {
+        if (!input.streamFallbackEnabled) throw error;
+        input.onStreamUnavailable?.(error, 'stream_request_failed');
+        return { outputFormat: options.outputFormat, result: await createResponsesImageResultOnly(input, options) };
+    }
     const response = createImageStreamResponse({
         stream,
         modeLabel: '生成',
@@ -192,26 +228,49 @@ async function createResponsesImageStreamResponse(input: CommonModeInput, option
         apiKey: input.apiKey,
         model: input.model,
         startedAtMs: input.startedAtMs,
+        abortSignal: input.abortSignal,
         clientRequestId: input.clientRequestId,
         requestLogContext: input.requestLogContext,
         resolveActualCost: resolveRequestActualCostSafely,
-        onError: (error) => reportServerCredentialFailure(input.selectedCredential, error)
+        onError: (error) => reportServerCredentialFailure(input.selectedCredential, error),
+        onStreamUnavailable: input.onStreamUnavailable,
+        onStreamingDegraded: input.onStreamingDegraded,
+        fallbackOnError: input.streamFallbackEnabled
+            ? () => createResponsesImageResultOnly(input, options)
+            : undefined
     });
     return appendAccessCookie(response, input.accessCookie);
 }
 
-async function createGenerateStreamResponse(input: CommonModeInput, options: GenerateOptions): Promise<Response> {
+async function createImagesGenerateResultOnly(
+    input: CommonModeInput,
+    options: GenerateOptions
+): Promise<OpenAI.Images.ImagesResponse> {
+    const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...options.baseParams, stream: false };
+    appLogger.info('调用 OpenAI generate。', input.requestLogContext);
+    appLogger.debug('调用 OpenAI generate，参数：', { ...params, ...input.requestLogContext });
+    return input.openai.images.generate(params, openAiRequestOptions(input));
+}
+
+async function createGenerateStreamResponse(input: CommonModeInput, options: GenerateOptions): Promise<ImageModeResult> {
     const streamParams = {
         ...options.baseParams,
         stream: true as const,
         partial_images: input.partialImagesCount
     } satisfies OpenAI.Images.ImageGenerateParamsStreaming;
-    const stream = await createImagesApiGenerateStream({
-        apiBaseUrl: input.apiBaseUrl,
-        apiKey: input.apiKey,
-        abortSignal: input.abortSignal,
-        params: streamParams
-    });
+    let stream;
+    try {
+        stream = await createImagesApiGenerateStream({
+            apiBaseUrl: input.apiBaseUrl,
+            apiKey: input.apiKey,
+            abortSignal: input.abortSignal,
+            params: streamParams
+        });
+    } catch (error) {
+        if (!input.streamFallbackEnabled) throw error;
+        input.onStreamUnavailable?.(error, 'stream_request_failed');
+        return { outputFormat: options.outputFormat, result: await createImagesGenerateResultOnly(input, options) };
+    }
     const response = createImageStreamResponse({
         stream,
         modeLabel: '生成',
@@ -221,10 +280,16 @@ async function createGenerateStreamResponse(input: CommonModeInput, options: Gen
         apiKey: input.apiKey,
         model: input.model,
         startedAtMs: input.startedAtMs,
+        abortSignal: input.abortSignal,
         clientRequestId: input.clientRequestId,
         requestLogContext: input.requestLogContext,
         resolveActualCost: resolveRequestActualCostSafely,
-        onError: (error) => reportServerCredentialFailure(input.selectedCredential, error)
+        onError: (error) => reportServerCredentialFailure(input.selectedCredential, error),
+        onStreamUnavailable: input.onStreamUnavailable,
+        onStreamingDegraded: input.onStreamingDegraded,
+        fallbackOnError: input.streamFallbackEnabled
+            ? () => createImagesGenerateResultOnly(input, options)
+            : undefined
     });
     return appendAccessCookie(response, input.accessCookie);
 }
@@ -240,12 +305,9 @@ export async function handleGenerateImageMode(
         return createResponsesImageResult(input, options);
     }
     if (!input.streamEnabled) {
-        const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...options.baseParams, stream: false };
-        appLogger.info('调用 OpenAI generate。', input.requestLogContext);
-        appLogger.debug('调用 OpenAI generate，参数：', { ...params, ...input.requestLogContext });
         return {
             outputFormat: options.outputFormat,
-            result: await input.openai.images.generate(params, openAiRequestOptions(input))
+            result: await createImagesGenerateResultOnly(input, options)
         };
     }
     return createGenerateStreamResponse(input, options);
@@ -277,7 +339,20 @@ function logEditParams(input: CommonModeInput, options: EditOptions, params: obj
     });
 }
 
-async function createEditStreamResponse(input: CommonModeInput, options: EditOptions): Promise<Response> {
+async function createEditResultOnly(
+    input: CommonModeInput,
+    options: EditOptions
+): Promise<OpenAI.Images.ImagesResponse> {
+    const params: OpenAI.Images.ImageEditParams = {
+        ...options.baseEditParams,
+        ...(options.maskFile ? { mask: options.maskFile } : {})
+    };
+    appLogger.info('调用 OpenAI edit。', input.requestLogContext);
+    logEditParams(input, options, params);
+    return input.openai.images.edit(params, openAiRequestOptions(input));
+}
+
+async function createEditStreamResponse(input: CommonModeInput, options: EditOptions): Promise<ImageModeResult> {
     appLogger.info('调用 OpenAI edit 流式接口。', input.requestLogContext);
     appLogger.debug('调用 OpenAI edit 流式接口，参数：', {
         ...options.baseEditParams,
@@ -293,7 +368,14 @@ async function createEditStreamResponse(input: CommonModeInput, options: EditOpt
         partial_images: input.partialImagesCount,
         ...(options.maskFile ? { mask: options.maskFile } : {})
     };
-    const stream = await input.openai.images.edit(streamEditParams, openAiRequestOptions(input));
+    let stream;
+    try {
+        stream = await input.openai.images.edit(streamEditParams, openAiRequestOptions(input));
+    } catch (error) {
+        if (!input.streamFallbackEnabled) throw error;
+        input.onStreamUnavailable?.(error, 'stream_request_failed');
+        return { outputFormat: 'png', result: await createEditResultOnly(input, options) };
+    }
     const response = createImageStreamResponse({
         stream,
         modeLabel: '编辑',
@@ -303,10 +385,14 @@ async function createEditStreamResponse(input: CommonModeInput, options: EditOpt
         apiKey: input.apiKey,
         model: input.model,
         startedAtMs: input.startedAtMs,
+        abortSignal: input.abortSignal,
         clientRequestId: input.clientRequestId,
         requestLogContext: input.requestLogContext,
         resolveActualCost: resolveRequestActualCostSafely,
-        onError: (error) => reportServerCredentialFailure(input.selectedCredential, error)
+        onError: (error) => reportServerCredentialFailure(input.selectedCredential, error),
+        onStreamUnavailable: input.onStreamUnavailable,
+        onStreamingDegraded: input.onStreamingDegraded,
+        fallbackOnError: input.streamFallbackEnabled ? () => createEditResultOnly(input, options) : undefined
     });
     return appendAccessCookie(response, input.accessCookie);
 }
@@ -314,13 +400,7 @@ async function createEditStreamResponse(input: CommonModeInput, options: EditOpt
 export async function handleEditImageMode(input: CommonModeInput): Promise<ImageModeResult> {
     const options = readEditOptions(input);
     if (!input.streamEnabled) {
-        const params: OpenAI.Images.ImageEditParams = {
-            ...options.baseEditParams,
-            ...(options.maskFile ? { mask: options.maskFile } : {})
-        };
-        appLogger.info('调用 OpenAI edit。', input.requestLogContext);
-        logEditParams(input, options, params);
-        return { outputFormat: 'png', result: await input.openai.images.edit(params, openAiRequestOptions(input)) };
+        return { outputFormat: 'png', result: await createEditResultOnly(input, options) };
     }
     return createEditStreamResponse(input, options);
 }

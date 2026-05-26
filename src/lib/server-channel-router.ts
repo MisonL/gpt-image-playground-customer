@@ -1,5 +1,6 @@
 import { createChannelRouter, parseChannelPoolConfig } from './channel-router';
 import { readPositiveIntegerEnv } from './server-runtime';
+import { createStreamingAvailabilityRegistry } from './streaming-availability';
 
 const DEFAULT_CHANNEL_FAILURE_COOLDOWN_MS = 60_000;
 
@@ -32,5 +33,5 @@ function createServerChannelState() {
               })
             : undefined;
 
-    return { config, router };
+    return { config, router, streamingAvailability: createStreamingAvailabilityRegistry() };
 }
