@@ -13,11 +13,12 @@
 - 增加上游图片流事件适配层，兼容官方 OpenAI Images 流式事件和 OtokAPI `image.generation.*` 事件。
 - 增加 `/api/images` 流式路由契约测试，覆盖兼容上游 SSE 到前端稳定事件的映射、多图结果、缺图错误和上游断流。
 - 增加受 `ENABLE_RESPONSES_IMAGE_BACKEND` 保护的实验 Responses API 图片后端，显式请求 `imageBackend=responses` 且配置独立 Responses 顶层模型时读取 `image_generation_call.result`。
+- Agent capabilities 和 OpenAPI 增加机器可读 `routing_rules`、页面 SSE metadata、运行态启用后端和 job polling 语义，辅助脚本支持 `--page-sse`、`--agent`、`--job` 显式路由。
 
 ### 变更
 
 - 图片生成默认质量从 `auto` 调整为 `high`，前端、Agent API 默认值和 OpenAPI 描述保持一致。
-- 页面默认开启流式预览；单图流式失败会显式展示原始错误和建议，不再自动改用非流式请求。
+- 页面默认不发送流式请求；用户显式开启流式预览后，单图流式失败会显式展示原始错误和建议，不再自动改用非流式请求。
 - 抽取服务端流式图片响应处理，生成和编辑共用同一套 SSE 输出、图片保存、provider dialect 诊断和扣费解析逻辑。
 - 运行时能力接口增加实验 Responses API 图片后端开关状态，默认关闭且不影响现有 Images API 路径。
 - Agent API、图片接口、脚本和文档中的用户可见错误文案统一为中文。

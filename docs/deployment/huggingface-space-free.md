@@ -194,6 +194,10 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 
 脚本会先读取 `GET /api/agent/capabilities`，再调用 Agent API。成功响应会保留相对 `content_url`，同时补充 `absolute_content_url` 和 `absolute_metadata_url`，便于在桌面环境直接下载产物。
 
+远端 Agent 调用不要硬编码路径。脚本会按 capabilities 中的 `routing_rules`、`agent_streaming` 和 `agent_jobs` 判断默认路径：普通小图走 Agent JSON，`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE，高分辨率 edit 必须走页面 SSE，job polling 只在显式选择时使用。需要诊断对照时可用 `--agent` 或 `--streaming-strategy off` 强制 Agent JSON，也可用 `--page-sse` 或 `--job` 显式选择路径。
+
+如果 Space 同时配置了 `APP_PASSWORD` 和 `AGENT_API_TOKEN`，Agent JSON 端点用 `GPT_IMAGE_AGENT_TOKEN` 发送 Bearer token；页面端 `/api/images` SSE 仍按 capabilities 的 `agent_streaming.page_sse.auth` 判断，可能需要额外设置 `GPT_IMAGE_APP_PASSWORD_HASH`，并通过 form-data `passwordHash` 发送页面访问码哈希。页面 SSE 会把业务 key 写入 `clientRequestId`，长度上限以 capabilities 中的 `agent_streaming.page_sse.client_request_id.max_length` 为准。
+
 ## 本地 HF 近似 smoke
 
 提交前运行：
