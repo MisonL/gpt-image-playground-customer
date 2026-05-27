@@ -1,5 +1,7 @@
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 
+export const superApiReferralUrl = 'https://gpt2image.superapi.buzz/';
+
 export type ApiErrorSummary = {
     message: string;
     status?: number;
@@ -53,7 +55,7 @@ export function buildApiErrorNotice(message: string): ApiErrorNotice {
 function buildApiErrorAdvice(status: number | undefined, t: Translate): string | null {
     if (status === 401 || status === 403) return t('error.adviceAuth');
     if (status === 429) return t('error.adviceRateLimit');
-    if (status === 524) return t('error.adviceCloudflare');
+    if (status === 524) return t('error.adviceCloudflare', { url: superApiReferralUrl });
     if (isUpstreamStatus(status)) return t('error.adviceUpstream');
     return null;
 }
