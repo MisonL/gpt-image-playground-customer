@@ -23,7 +23,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const IMAGE_BACKENDS = new Set(['images-api', 'images', 'responses', 'responses-image-generation']);
+const MODELS = new Set(['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2']);
 const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
+const QUALITIES = new Set(['low', 'medium', 'high', 'auto']);
+const BACKGROUNDS = new Set(['transparent', 'opaque', 'auto']);
+const MODERATIONS = new Set(['low', 'auto']);
 const RESPONSE_MODES = new Set(['path', 'base64', 'both']);
 const STREAM_MODES = new Set(['auto', 'stream', 'non_stream']);
 const STREAMING_STRATEGIES = new Set([
@@ -37,6 +41,38 @@ const STREAMING_STRATEGIES = new Set([
 const MAX_EDIT_IMAGES = 10;
 const MIN_PARTIAL_IMAGES = 1;
 const MAX_PARTIAL_IMAGES = 3;
+const GENERATE_ONLY_FIELDS = [
+  'output_format',
+  'format',
+  'output_compression',
+  'background',
+  'moderation',
+  'image_backend',
+  'responsesModel'
+];
+const EDIT_ONLY_FIELDS = ['image_path', 'image_paths', 'mask_path'];
+const BOOLEAN_ROUTING_FIELDS = ['page_sse', 'complex_ui', 'long_image', 'resume_or_recover'];
+const TASK_FIELDS = new Set([
+  'id',
+  'mode',
+  'prompt',
+  'idempotency_key',
+  'model',
+  'n',
+  'size',
+  'quality',
+  'response_mode',
+  'stream_mode',
+  'streaming_strategy',
+  'partial_images',
+  'page_sse',
+  'transport',
+  'complex_ui',
+  'long_image',
+  'resume_or_recover',
+  ...GENERATE_ONLY_FIELDS,
+  ...EDIT_ONLY_FIELDS
+]);
 
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
@@ -87,15 +123,18 @@ if (!options.allowBillable || options.dryRun) {
         input: options.input,
         manifest: manifestPath,
         total: planned.length,
-        tasks: planned.map((task) => ({
-          index: task.index,
-          id: task.id,
-          mode: task.mode,
-          idempotency_key: task.idempotencyKey,
-          endpoint: buildTaskRouting(task).endpoint,
-          routing: buildTaskRouting(task),
-          request: sanitizeTaskForOutput(task.raw)
-        })),
+        tasks: planned.map((task) => {
+          const routing = buildTaskRouting(task);
+          return {
+            index: task.index,
+            id: task.id,
+            mode: task.mode,
+            idempotency_key: task.idempotencyKey,
+            endpoint: routing.endpoint,
+            routing,
+            request: buildDryRunRequestPreview(task, routing)
+          };
+        }),
         next_step: '重新执行并添加 --allow-billable 才会发起真实批量请求。'
       },
       null,
@@ -180,8 +219,8 @@ function normalizeTask(raw, index, parsedOptions) {
   if (typeof raw.prompt !== 'string' || !raw.prompt.trim()) {
     throw new Error(`${id} 缺少 prompt。`);
   }
+  validateTaskFields(raw, id, mode);
   validateTaskSize(raw, id, mode, parsedOptions.dimensionCheck);
-  validateTaskFields(raw, id);
   validateTaskRoutingFields(raw, id);
   if (mode === 'edit') validateEditImages(raw, id);
   return {
@@ -222,28 +261,133 @@ function validateTaskSize(raw, id, mode, dimensionCheck) {
 }
 
 function validateEditImages(raw, id) {
-  const imagePaths = readEditImagePaths(raw);
+  const imagePaths = readEditImagePaths(raw, id);
   if (imagePaths.length === 0) throw new Error(`${id} edit 任务必须提供 image_path 或 image_paths。`);
   if (imagePaths.length > MAX_EDIT_IMAGES) throw new Error(`${id} edit 任务最多支持 ${MAX_EDIT_IMAGES} 张源图。`);
+  if (hasOwn(raw, 'mask_path')) readNonEmptyString(raw.mask_path, `${id}.mask_path`);
 }
 
-function validateTaskFields(raw, id) {
+function validateTaskFields(raw, id, mode) {
+  validateKnownTaskFields(raw, id);
+  validateModeSpecificFields(raw, id, mode);
+  validateRoutingControlFields(raw, id);
+  validateAmbiguousAliasFields(raw, id);
+  if (hasOwn(raw, 'model')) normalizeEnumValue(raw.model, MODELS, `${id}.model`);
   if (raw.n !== undefined) readConfiguredPositiveInteger(raw.n, `${id}.n`, 1);
+  if (hasOwn(raw, 'quality')) normalizeEnumValue(raw.quality, QUALITIES, `${id}.quality`);
   if (hasOwn(raw, 'response_mode')) normalizeEnumValue(raw.response_mode, RESPONSE_MODES, `${id}.response_mode`);
   if (hasOwn(raw, 'image_backend')) normalizeEnumValue(raw.image_backend, IMAGE_BACKENDS, `${id}.image_backend`);
+  if (hasOwn(raw, 'background')) normalizeEnumValue(raw.background, BACKGROUNDS, `${id}.background`);
+  if (hasOwn(raw, 'moderation')) normalizeEnumValue(raw.moderation, MODERATIONS, `${id}.moderation`);
+  validateResponsesModelField(raw, id);
   if (hasOwn(raw, 'stream_mode')) normalizeEnumValue(raw.stream_mode, STREAM_MODES, `${id}.stream_mode`);
   if (hasOwn(raw, 'streaming_strategy')) {
     normalizeEnumValue(raw.streaming_strategy, STREAMING_STRATEGIES, `${id}.streaming_strategy`);
   }
   if (hasOwn(raw, 'partial_images')) readPartialImages(raw.partial_images, `${id}.partial_images`);
   if (hasOwn(raw, 'output_format') || hasOwn(raw, 'format')) {
-    normalizeEnumValue(normalizeOutputFormat(raw.output_format ?? raw.format), OUTPUT_FORMATS, `${id}.output_format`);
+    normalizeEnumValue(readOutputFormatField(raw, id), OUTPUT_FORMATS, `${id}.output_format`);
   }
+  validateBackgroundForModel(raw, id);
+  validateOutputCompression(raw, id);
+}
+
+function validateAmbiguousAliasFields(raw, id) {
+  if (hasOwn(raw, 'output_format') && hasOwn(raw, 'format')) {
+    throw new Error(`${id}.output_format 与 format 不能同时设置。`);
+  }
+  if (hasOwn(raw, 'image_path') && hasOwn(raw, 'image_paths')) {
+    throw new Error(`${id}.image_path 与 image_paths 不能同时设置。`);
+  }
+}
+
+function validateKnownTaskFields(raw, id) {
+  for (const field of Object.keys(raw)) {
+    if (!TASK_FIELDS.has(field)) {
+      throw new Error(`${id}.${field} 不是支持的 batch JSONL 字段。`);
+    }
+  }
+}
+
+function validateModeSpecificFields(raw, id, mode) {
+  const fields = mode === 'edit' ? GENERATE_ONLY_FIELDS : EDIT_ONLY_FIELDS;
+  const expectedMode = mode === 'edit' ? 'generate' : 'edit';
+  for (const field of fields) {
+    if (hasOwn(raw, field)) {
+      throw new Error(`${id}.${modeSpecificFieldLabel(field)} 仅适用于 ${expectedMode} 任务。`);
+    }
+  }
+}
+
+function modeSpecificFieldLabel(field) {
+  return field === 'format' ? 'output_format' : field;
+}
+
+function validateRoutingControlFields(raw, id) {
+  for (const field of BOOLEAN_ROUTING_FIELDS) {
+    if (hasOwn(raw, field) && typeof raw[field] !== 'boolean') {
+      throw new Error(`${id}.${field} 必须是布尔值。`);
+    }
+  }
+  if (hasOwn(raw, 'transport') && raw.transport !== 'page_sse') {
+    throw new Error(`${id}.transport 必须是 page_sse。`);
+  }
+}
+
+function validateBackgroundForModel(raw, id) {
+  if (!hasOwn(raw, 'background')) return;
+  const model = hasOwn(raw, 'model') ? String(raw.model) : 'gpt-image-2';
+  if (model === 'gpt-image-2' && String(raw.background) === 'transparent') {
+    throw new Error(`${id}.background 对 gpt-image-2 无效：gpt-image-2 不支持 transparent 背景。`);
+  }
+}
+
+function validateOutputCompression(raw, id) {
+  readOutputCompression(raw, id);
+}
+
+function validateResponsesModelField(raw, id) {
+  if (!hasOwn(raw, 'responsesModel')) return;
+  readNonEmptyString(raw.responsesModel, `${id}.responsesModel`);
+  if (!hasOwn(raw, 'image_backend')) {
+    throw new Error(`${id}.responsesModel 必须同时设置 image_backend=responses-image-generation。`);
+  }
+  const imageBackend = normalizeEnumValue(raw.image_backend, IMAGE_BACKENDS, `${id}.image_backend`);
+  if (imageBackend !== 'responses-image-generation' && imageBackend !== 'responses') {
+    throw new Error(`${id}.responsesModel 仅适用于 image_backend=responses-image-generation。`);
+  }
+}
+
+function readOutputCompression(raw, id) {
+  if (!hasOwn(raw, 'output_compression')) return undefined;
+  const outputFormat = hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
+    ? readOutputFormatField(raw, id)
+    : 'png';
+  if (outputFormat === 'png') {
+    throw new Error(`${id}.output_compression 仅适用于 jpeg 或 webp 输出。`);
+  }
+  const value = raw.output_compression;
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+    throw new Error(`${id}.output_compression 必须是 0 到 100 之间的整数。`);
+  }
+  return parsed;
+}
+
+function readOutputFormatField(raw, id) {
+  const value = raw.output_format ?? raw.format;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${id}.output_format 必须是字符串。`);
+  }
+  return normalizeOutputFormat(value);
 }
 
 function validateTaskRoutingFields(raw, id) {
   if ((raw.page_sse === true || raw.transport === 'page_sse') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
     throw new Error(`${id} stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。`);
+  }
+  if (hasOwn(raw, 'responsesModel') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
+    throw new Error(`${id}.responsesModel 需要页面 SSE 路径，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`);
   }
 }
 
@@ -251,11 +395,21 @@ function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function readEditImagePaths(raw) {
+function readEditImagePaths(raw, id = 'edit') {
   if (Array.isArray(raw.image_paths)) {
-    return raw.image_paths.map((value) => String(value || '')).filter(Boolean);
+    if (raw.image_paths.length === 0) throw new Error(`${id}.image_paths 必须是非空字符串数组。`);
+    return raw.image_paths.map((value, index) => readNonEmptyString(value, `${id}.image_paths[${index}]`));
   }
-  return typeof raw.image_path === 'string' && raw.image_path ? [raw.image_path] : [];
+  if (hasOwn(raw, 'image_paths')) throw new Error(`${id}.image_paths 必须是非空字符串数组。`);
+  if (hasOwn(raw, 'image_path')) return [readNonEmptyString(raw.image_path, `${id}.image_path`)];
+  return [];
+}
+
+function readNonEmptyString(value, name) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${name} 必须是非空字符串。`);
+  }
+  return value;
 }
 
 function buildOrderedKey(prefix, index, id) {
@@ -343,6 +497,56 @@ function buildTaskRouting(task) {
   };
 }
 
+function buildDryRunRequestPreview(task, routing) {
+  if (routing.transport === 'page_sse') return buildPageSseRequestPreview(task);
+  if (task.mode === 'edit') return buildAgentEditRequestPreview(task.raw);
+  return buildGenerateBody(task.raw);
+}
+
+function buildAgentEditRequestPreview(raw) {
+  validateEditStrategyFields(raw);
+  const preview = {};
+  const fields = ['prompt', 'model', 'n', 'size', 'quality', 'response_mode', 'stream_mode', 'streaming_strategy', 'partial_images'];
+  for (const field of fields) {
+    if (raw[field] !== undefined) preview[field] = raw[field];
+  }
+  if (!raw.model) preview.model = 'gpt-image-2';
+  if (!raw.response_mode) preview.response_mode = 'path';
+  preview.image_fields = readEditImagePaths(raw, String(raw.id || 'edit')).map((_, index) => `image_${index}`);
+  if (raw.mask_path) preview.mask = 'provided';
+  return preview;
+}
+
+function buildPageSseRequestPreview(task) {
+  const raw = task.raw;
+  const preview = {
+    mode: task.mode,
+    prompt: raw.prompt,
+    model: raw.model || 'gpt-image-2',
+    size: raw.size || (task.mode === 'generate' ? '1024x1024' : 'auto'),
+    quality: raw.quality || (task.mode === 'generate' ? 'high' : 'auto'),
+    response_mode: readResponseMode(raw),
+    clientRequestId: task.idempotencyKey,
+    stream: 'true'
+  };
+  if (raw.n !== undefined) preview.n = readConfiguredPositiveInteger(raw.n, `${task.id}.n`, 1);
+  if (raw.stream_mode) preview.stream_mode = String(raw.stream_mode);
+  if (raw.streaming_strategy) preview.image_streaming_strategy = String(raw.streaming_strategy);
+  if (raw.partial_images !== undefined) preview.partial_images = readPartialImages(raw.partial_images, `${task.id}.partial_images`);
+  if (raw.image_backend) preview.image_backend = normalizeImageBackendForPage(String(raw.image_backend));
+  if (raw.responsesModel) preview.responsesModel = readNonEmptyString(raw.responsesModel, `${task.id}.responsesModel`);
+  if (raw.background) preview.background = String(raw.background);
+  if (raw.moderation) preview.moderation = String(raw.moderation);
+  if (raw.output_compression !== undefined) preview.output_compression = readOutputCompression(raw, task.id);
+  if (task.mode === 'edit') {
+    preview.image_fields = readEditImagePaths(raw, task.id).map((_, index) => `image_${index}`);
+    if (raw.mask_path) preview.mask = 'provided';
+  } else {
+    preview.output_format = readOutputFormat(raw);
+  }
+  return preview;
+}
+
 function shouldUsePageSseForTask(task) {
   const pageSseAllowed = isPageSseAllowedForTask(task);
   if (task.raw.page_sse === true || task.raw.transport === 'page_sse') {
@@ -353,6 +557,7 @@ function shouldUsePageSseForTask(task) {
   }
   if (!pageSseAllowed) return false;
   if (task.raw.complex_ui === true || task.raw.long_image === true || task.raw.resume_or_recover === true) return true;
+  if (hasOwn(task.raw, 'responsesModel')) return true;
   if (task.mode === 'edit' && readTaskMaxEdge(task) > 2048) return true;
   if (task.mode === 'generate' && readTaskMaxEdge(task) > 2048) {
     return true;
@@ -389,13 +594,13 @@ async function postEditTask(task) {
 
 async function postPageSseTask(task, routing) {
   const pageSseCapabilities = await ensureCapabilities();
-  assertPageSseReady({
-    capabilities: pageSseCapabilities,
-    passwordHash,
-    idempotencyKey: task.idempotencyKey
-  });
-  const formData = buildPageSseTaskFormData(task);
   try {
+    assertPageSseReady({
+      capabilities: pageSseCapabilities,
+      passwordHash,
+      idempotencyKey: task.idempotencyKey
+    });
+    const formData = buildPageSseTaskFormData(task);
     const result = await postPageSse({
       url: `${baseUrl}${PAGE_SSE_ENDPOINT}`,
       formData,
@@ -424,6 +629,7 @@ function buildGenerateBody(raw) {
   const outputFormat = hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
     ? normalizeOutputFormat(raw.output_format ?? raw.format)
     : 'png';
+  const outputCompression = readOutputCompression(raw, String(raw.id || 'generate'));
   return {
     prompt: raw.prompt,
     model: raw.model || 'gpt-image-2',
@@ -432,7 +638,7 @@ function buildGenerateBody(raw) {
     quality: raw.quality || 'high',
     output_format: normalizeEnumValue(outputFormat, OUTPUT_FORMATS, 'output_format'),
     response_mode: normalizeEnumValue(hasOwn(raw, 'response_mode') ? raw.response_mode : 'path', RESPONSE_MODES, 'response_mode'),
-    ...(raw.output_compression !== undefined ? { output_compression: raw.output_compression } : {}),
+    ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
     ...(raw.background ? { background: raw.background } : {}),
     ...(raw.moderation ? { moderation: raw.moderation } : {}),
     ...(hasOwn(raw, 'image_backend') ? { image_backend: normalizeEnumValue(raw.image_backend, IMAGE_BACKENDS, 'image_backend') } : {}),
@@ -460,12 +666,13 @@ function buildPageSseTaskFormData(task) {
   if (raw.streaming_strategy) formData.append('image_streaming_strategy', String(raw.streaming_strategy));
   if (raw.partial_images !== undefined) formData.append('partial_images', String(readPartialImages(raw.partial_images, `${task.id}.partial_images`)));
   if (raw.image_backend) formData.append('image_backend', normalizeImageBackendForPage(String(raw.image_backend)));
+  if (raw.responsesModel) formData.append('responsesModel', readNonEmptyString(raw.responsesModel, `${task.id}.responsesModel`));
   if (raw.background) formData.append('background', String(raw.background));
   if (raw.moderation) formData.append('moderation', String(raw.moderation));
-  if (raw.output_compression !== undefined) formData.append('output_compression', String(raw.output_compression));
+  if (raw.output_compression !== undefined) formData.append('output_compression', String(readOutputCompression(raw, task.id)));
   if (passwordHash) formData.append('passwordHash', passwordHash);
   if (task.mode === 'edit') {
-    readEditImagePaths(raw).forEach((filePath, index) => appendFile(formData, `image_${index}`, filePath));
+    readEditImagePaths(raw, task.id).forEach((filePath, index) => appendFile(formData, `image_${index}`, filePath));
     if (raw.mask_path) appendFile(formData, 'mask', raw.mask_path);
   } else {
     formData.append('output_format', readOutputFormat(raw));
@@ -492,7 +699,7 @@ function appendEditFields(formData, raw) {
   }
   if (!raw.model) formData.append('model', 'gpt-image-2');
   if (!raw.response_mode) formData.append('response_mode', 'path');
-  readEditImagePaths(raw).forEach((filePath, index) => appendFile(formData, `image_${index}`, filePath));
+  readEditImagePaths(raw, String(raw.id || 'edit')).forEach((filePath, index) => appendFile(formData, `image_${index}`, filePath));
   if (raw.mask_path) appendFile(formData, 'mask', raw.mask_path);
 }
 
@@ -669,14 +876,6 @@ function appendManifest(filePath, entry) {
 
 function baseManifestEntry(task) {
   return { at: new Date().toISOString(), index: task.index, id: task.id, mode: task.mode, idempotency_key: task.idempotencyKey };
-}
-
-function sanitizeTaskForOutput(raw) {
-  const copy = { ...raw };
-  delete copy.image_path;
-  delete copy.image_paths;
-  delete copy.mask_path;
-  return copy;
 }
 
 function sanitizeResponse(response) {

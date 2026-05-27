@@ -347,7 +347,7 @@ function stripRetryDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): 
 export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagnostics = {}): AgentApiError {
     if (error instanceof AgentApiError) return error;
     if (error instanceof RequestValidationError) {
-        const details = parseValidationDetails(error.message) ?? inferValidationDetails(error.message);
+        const details = error.details ?? parseValidationDetails(error.message) ?? inferValidationDetails(error.message);
         return new AgentApiError({
             code: error.status >= 500 ? 'configuration_error' : 'validation_error',
             message: details ? '请求校验失败。' : error.message,

@@ -30,7 +30,7 @@ import {
 } from './size-utils';
 
 export const AGENT_API_VERSION = '1.0.0';
-export const AGENT_SCHEMA_VERSION = '2026-05-24';
+export const AGENT_SCHEMA_VERSION = '2026-05-27';
 export const AGENT_DEFAULT_SQLITE_PATH = 'generated-images/.agent-state/agent.sqlite';
 export const AGENT_DEFAULT_LEASE_MS = 10 * 60 * 1000;
 export const AGENT_DEFAULT_REQUEST_TTL_SECONDS = 24 * 60 * 60;
@@ -61,6 +61,17 @@ export const AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES = [
     'newapi-keepalive-sse',
     'responses-sse',
     'force-sse'
+] as const;
+export const AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS = [
+    'image_backend',
+    'stream_mode',
+    'streaming_strategy',
+    'partial_images'
+] as const;
+export const AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS = [
+    'stream_mode',
+    'streaming_strategy',
+    'partial_images'
 ] as const;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
@@ -194,7 +205,11 @@ export type AgentCapabilities = {
             supported: true;
             mode: 'internal_upstream_sse';
             endpoint: string;
-            request_fields: ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images'];
+            request_fields: typeof AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS;
+            request_fields_by_mode: {
+                generate: typeof AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS;
+                edit: typeof AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS;
+            };
             image_backends: readonly ImageGenerationBackend[];
             enabled_image_backends: readonly ImageGenerationBackend[];
             streaming_strategies: readonly ImageStreamingStrategy[];
@@ -705,7 +720,11 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 supported: true,
                 mode: 'internal_upstream_sse',
                 endpoint: AGENT_ENDPOINTS.generate,
-                request_fields: ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images'],
+                request_fields: AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS,
+                request_fields_by_mode: {
+                    generate: AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS,
+                    edit: AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS
+                },
                 image_backends: AGENT_IMAGE_BACKENDS,
                 enabled_image_backends: enabledImageBackends,
                 streaming_strategies: AGENT_STREAMING_STRATEGIES,

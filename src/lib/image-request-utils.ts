@@ -14,6 +14,7 @@ const VALID_EDIT_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
 const VALID_BACKGROUND_VALUES = ['transparent', 'opaque', 'auto'] as const;
 const VALID_MODERATION_VALUES = ['low', 'auto'] as const;
 const VALID_LEGACY_SIZE_VALUES = ['auto', '1024x1024', '1536x1024', '1024x1536'] as const;
+const IMAGE_UPLOAD_CONTROL_FIELDS = new Set(['image_streaming_strategy']);
 
 export type ImageMode = (typeof VALID_MODE_VALUES)[number];
 export type GptImageModel = (typeof VALID_MODEL_VALUES)[number];
@@ -26,11 +27,13 @@ export type StorageMode = 'fs' | 'indexeddb';
 
 export class RequestValidationError extends Error {
     readonly status: number;
+    readonly details?: Record<string, unknown>;
 
-    constructor(message: string, status = 400) {
+    constructor(message: string, status = 400, details?: Record<string, unknown>) {
         super(message);
         this.name = 'RequestValidationError';
         this.status = status;
+        this.details = details;
     }
 }
 
@@ -210,12 +213,25 @@ export function safeImagePath(baseDir: string, filename: string): string {
 }
 
 export function readImageFiles(formData: FormData): File[] {
-    const imageFiles: File[] = [];
+    const imageFilesByIndex = new Map<number, File>();
     for (const [key, value] of formData.entries()) {
-        if (key.startsWith('image_') && value instanceof File) {
-            imageFiles.push(value);
+        if (!key.startsWith('image_')) continue;
+        if (IMAGE_UPLOAD_CONTROL_FIELDS.has(key)) continue;
+        const imageIndex = readImageFileIndex(key);
+        if (imageIndex === undefined) {
+            throw new RequestValidationError(`图片字段 ${key} 无效，必须使用 image_0 到 image_9。`);
         }
+        if (imageFilesByIndex.has(imageIndex)) {
+            throw new RequestValidationError(`图片字段 ${key} 重复。`);
+        }
+        if (!(value instanceof File)) {
+            throw new RequestValidationError(`${key} 必须是图片文件。`);
+        }
+        imageFilesByIndex.set(imageIndex, value);
     }
+    const imageFiles = Array.from(imageFilesByIndex.entries())
+        .sort(([left], [right]) => left - right)
+        .map(([, file]) => file);
     if (imageFiles.length === 0) {
         throw new RequestValidationError('编辑时必须提供图片文件。');
     }
@@ -224,6 +240,14 @@ export function readImageFiles(formData: FormData): File[] {
     }
     imageFiles.forEach((file) => validateUploadFile(file));
     return imageFiles;
+}
+
+function readImageFileIndex(key: string): number | undefined {
+    if (!key.startsWith('image_')) return undefined;
+    const suffix = key.slice('image_'.length);
+    if (!/^(?:0|[1-9]\d*)$/.test(suffix)) return undefined;
+    const index = Number(suffix);
+    return Number.isInteger(index) && index >= 0 && index < MAX_IMAGE_COUNT ? index : undefined;
 }
 
 export function readMaskFile(formData: FormData): File | undefined {

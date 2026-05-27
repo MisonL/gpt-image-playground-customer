@@ -99,6 +99,10 @@ describe('Agent route integration', () => {
             'images-api',
             'responses-image-generation'
         ]);
+        assert.deepEqual(body.agent_streaming.upstream_sse.request_fields_by_mode, {
+            generate: ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images'],
+            edit: ['stream_mode', 'streaming_strategy', 'partial_images']
+        });
     });
 
     it('generates through a compatible upstream once and replays the cached response for the same idempotency key', async () => {
@@ -1435,6 +1439,82 @@ describe('Agent route integration', () => {
         assert.match(body.error.details.fields.response_mode, /path/);
 
         await upstream.close();
+    });
+
+    it('rejects unsupported fields on Agent edit requests before calling upstream', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await editImage(
+                agentEditRequest('route-edit-generate-only-fields-key', 'agent edit invalid fields', {}, {
+                    imageBackend: 'responses-image-generation',
+                    image_backend: 'responses-image-generation',
+                    format: 'webp',
+                    outputFormat: 'jpeg',
+                    output_format: 'jpeg',
+                    outputCompression: '80',
+                    output_compression: '80',
+                    responsesModel: 'gpt-4.1',
+                    responses_model: 'gpt-4.1',
+                    background: 'opaque',
+                    moderation: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.details.fields.imageBackend, /不接受该字段/);
+            assert.match(body.error.details.fields.image_backend, /不接受该字段/);
+            assert.match(body.error.details.fields.format, /不接受该字段/);
+            assert.match(body.error.details.fields.outputFormat, /不接受该字段/);
+            assert.match(body.error.details.fields.output_format, /不接受该字段/);
+            assert.match(body.error.details.fields.outputCompression, /不接受该字段/);
+            assert.match(body.error.details.fields.output_compression, /不接受该字段/);
+            assert.match(body.error.details.fields.responsesModel, /不接受该字段/);
+            assert.match(body.error.details.fields.responses_model, /不接受该字段/);
+            assert.match(body.error.details.fields.background, /不接受该字段/);
+            assert.match(body.error.details.fields.moderation, /不接受该字段/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects page-only streaming strategy fields on Agent edit requests before calling upstream', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await editImage(
+                agentEditRequest('route-edit-page-streaming-field-key', 'agent edit invalid page streaming field', {}, {
+                    image_streaming_strategy: 'force-sse',
+                    imageStreamingStrategy: 'force-sse'
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.details.fields.image_streaming_strategy, /streaming_strategy/);
+            assert.match(body.error.details.fields.imageStreamingStrategy, /streaming_strategy/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
     });
 
     it('allows high-resolution Agent edit requests as an explicit fallback path', async () => {
