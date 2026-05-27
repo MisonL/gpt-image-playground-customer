@@ -13,6 +13,8 @@ type ResponsesPayload = {
     usage?: unknown;
 };
 
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+
 function createResponsesClient(
     handler: (
         params: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming
@@ -37,7 +39,7 @@ describe('generateImageWithResponsesBackend', () => {
                         {
                             type: 'image_generation_call',
                             status: 'completed',
-                            result: 'responses-final-base64'
+                            result: PNG_BASE64
                         }
                     ],
                     usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 }
@@ -53,7 +55,7 @@ describe('generateImageWithResponsesBackend', () => {
             moderation: 'auto'
         });
 
-        assert.deepEqual(result.data, [{ b64_json: 'responses-final-base64' }]);
+        assert.deepEqual(result.data, [{ b64_json: PNG_BASE64 }]);
         assert.deepEqual(result.usage, { input_tokens: 1, output_tokens: 2, total_tokens: 3 });
         assert.deepEqual(capturedParams, {
             model: 'gpt-4.1',
@@ -187,7 +189,7 @@ describe('generateImageWithResponsesBackend', () => {
                     {
                         type: 'image_generation_call',
                         status: 'completed',
-                        result: 'data:image/png;base64,responses-final-base64'
+                        result: `data:image/png;base64,${PNG_BASE64}`
                     }
                 ]
             })),
@@ -201,7 +203,33 @@ describe('generateImageWithResponsesBackend', () => {
             moderation: 'auto'
         });
 
-        assert.deepEqual(result.data, [{ b64_json: 'responses-final-base64' }]);
+        assert.deepEqual(result.data, [{ b64_json: PNG_BASE64 }]);
+    });
+
+    it('rejects non-image data URLs and non-base64 Responses image results', async () => {
+        const makeInput = (result: string) =>
+            generateImageWithResponsesBackend({
+                responses: createResponsesClient(async () => ({
+                    output: [
+                        {
+                            type: 'image_generation_call',
+                            status: 'completed',
+                            result
+                        }
+                    ]
+                })),
+                prompt: 'draw a test image',
+                responsesModel: 'gpt-4.1',
+                imageModel: 'gpt-image-2',
+                size: '1024x1024',
+                quality: 'high',
+                outputFormat: 'png',
+                background: 'auto',
+                moderation: 'auto'
+            });
+
+        await assert.rejects(() => makeInput('data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='), /image_generation_call.result/);
+        await assert.rejects(() => makeInput('<script>alert(1)</script>'), /image_generation_call.result/);
     });
 
     it('accepts completed Responses image results even when status is omitted', async () => {
@@ -210,7 +238,7 @@ describe('generateImageWithResponsesBackend', () => {
                 output: [
                     {
                         type: 'image_generation_call',
-                        result: 'responses-final-without-status'
+                        result: PNG_BASE64
                     }
                 ]
             })),
@@ -224,7 +252,7 @@ describe('generateImageWithResponsesBackend', () => {
             moderation: 'auto'
         });
 
-        assert.deepEqual(result.data, [{ b64_json: 'responses-final-without-status' }]);
+        assert.deepEqual(result.data, [{ b64_json: PNG_BASE64 }]);
     });
 
     it('calls the Responses API image_generation tool in streaming mode with partial images enabled', async () => {

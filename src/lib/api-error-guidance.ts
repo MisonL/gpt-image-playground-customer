@@ -1,5 +1,3 @@
-export const superApiReferralUrl = 'https://superapi.buzz/register?aff=W0rz';
-
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 
 export type ApiErrorSummary = {
@@ -48,37 +46,14 @@ export function buildBatchPartialFailureMessage(options: {
     });
 }
 
-export function buildApiErrorNotice(message: string, superApiLabel: string): ApiErrorNotice {
-    if (!message.includes(superApiReferralUrl)) {
-        return { message, links: [] };
-    }
-
-    return {
-        message: message.replace(
-            new RegExp(`(SuperAPI)?(：|:\\s*)?${escapeRegExp(superApiReferralUrl)}`, 'g'),
-            (_match, existingLabel: string | undefined, punctuation: string | undefined) => {
-                if (existingLabel) return 'SuperAPI';
-                if (!punctuation) return 'SuperAPI';
-                return `${punctuation.startsWith(':') ? ': ' : '：'}SuperAPI`;
-            }
-        ),
-        links: [
-            {
-                label: superApiLabel,
-                url: superApiReferralUrl
-            }
-        ]
-    };
-}
-
-function escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export function buildApiErrorNotice(message: string): ApiErrorNotice {
+    return { message, links: [] };
 }
 
 function buildApiErrorAdvice(status: number | undefined, t: Translate): string | null {
     if (status === 401 || status === 403) return t('error.adviceAuth');
     if (status === 429) return t('error.adviceRateLimit');
-    if (status === 524) return t('error.adviceCloudflare', { url: superApiReferralUrl });
+    if (status === 524) return t('error.adviceCloudflare');
     if (isUpstreamStatus(status)) return t('error.adviceUpstream');
     return null;
 }

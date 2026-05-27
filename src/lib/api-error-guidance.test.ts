@@ -1,8 +1,7 @@
 import {
     buildApiErrorNotice,
     buildBatchPartialFailureMessage,
-    buildUserFacingApiErrorMessage,
-    superApiReferralUrl
+    buildUserFacingApiErrorMessage
 } from './api-error-guidance';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -14,7 +13,7 @@ const translate = (key: string, values?: Record<string, string | number>) => {
         'error.adviceRateLimit': '请求被限流。请稍后重试，或降低并发和图片数量。',
         'error.adviceUpstream': '上游或 API 中转站异常。请稍后重试，或切换可用渠道。',
         'error.adviceCloudflare':
-            '4K 或高分辨率出图可能超过 Cloudflare 100 秒限制。请降低分辨率，或改用支持 4K 流式出图的 API 中转站，例如 SuperAPI：{url}',
+            '4K 或高分辨率出图可能超过 Cloudflare 100 秒限制。请降低分辨率，或改用支持 4K 流式出图的 API 中转站。',
         'error.batchPartialFailureDetailed': '批量生成部分失败：{failed}/{total} 个任务失败。失败明细：{reasons}'
     };
     return (messages[key] || key).replace(/\{(\w+)\}/g, (match, valueKey) => String(values?.[valueKey] ?? match));
@@ -42,7 +41,7 @@ describe('buildUserFacingApiErrorMessage', () => {
         assert.match(message, /降低并发和图片数量/);
     });
 
-    it('adds Cloudflare and SuperAPI advice for 524 failures', () => {
+    it('adds Cloudflare advice for 524 failures without a vendor link', () => {
         const message = buildUserFacingApiErrorMessage({
             message: 'API 请求失败，状态码 524',
             status: 524,
@@ -50,7 +49,7 @@ describe('buildUserFacingApiErrorMessage', () => {
         });
 
         assert.match(message, /Cloudflare 100 秒限制/);
-        assert.match(message, new RegExp(superApiReferralUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        assert.doesNotMatch(message, /https?:\/\//);
     });
 
     it('adds upstream advice for non-524 gateway failures', () => {
@@ -85,19 +84,10 @@ describe('buildBatchPartialFailureMessage', () => {
 });
 
 describe('buildApiErrorNotice', () => {
-    it('turns the SuperAPI referral URL into a structured link', () => {
-        const notice = buildApiErrorNotice(`建议使用 ${superApiReferralUrl}`, '打开 SuperAPI');
+    it('keeps API error messages as text without injecting vendor links', () => {
+        const notice = buildApiErrorNotice('建议降低分辨率或切换渠道。');
 
-        assert.equal(notice.message.includes(superApiReferralUrl), false);
-        assert.equal(notice.links.length, 1);
-        assert.equal(notice.links[0].label, '打开 SuperAPI');
-        assert.equal(notice.links[0].url, superApiReferralUrl);
-    });
-
-    it('preserves the SuperAPI label when the referral URL follows punctuation', () => {
-        const notice = buildApiErrorNotice(`例如 SuperAPI：${superApiReferralUrl}`, '打开 SuperAPI');
-
-        assert.equal(notice.message, '例如 SuperAPI');
-        assert.equal(notice.links[0].url, superApiReferralUrl);
+        assert.equal(notice.message, '建议降低分辨率或切换渠道。');
+        assert.deepEqual(notice.links, []);
     });
 });

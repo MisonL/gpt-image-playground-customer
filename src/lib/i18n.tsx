@@ -272,8 +272,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'error.adviceRateLimit': '请求被限流。请稍后重试，或降低并发和图片数量。',
         'error.adviceUpstream': '上游或 API 中转站异常。请稍后重试，或切换可用渠道。',
         'error.adviceCloudflare':
-            '4K 或高分辨率出图可能超过 Cloudflare 100 秒限制。请降低分辨率，或改用支持 4K 流式出图的 API 中转站，例如 SuperAPI：{url}',
-        'error.openSuperApi': '打开 SuperAPI',
+            '4K 或高分辨率出图可能超过 Cloudflare 100 秒限制。请降低分辨率，或改用支持 4K 流式出图的 API 中转站。',
         'error.batchPartialFailure': '批量生成部分失败：{failed}/{total} 个任务失败。',
         'error.batchPartialFailureDetailed': '批量生成部分失败：{failed}/{total} 个任务失败。失败明细：{reasons}',
         'error.apiFailed': 'API 请求失败，状态码 {status}',
@@ -571,8 +570,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'error.adviceRateLimit': 'The request was rate limited. Retry later, or lower concurrency and image count.',
         'error.adviceUpstream': 'The upstream service or API relay is failing. Retry later, or switch to another channel.',
         'error.adviceCloudflare':
-            '4K or high-resolution generation may exceed the Cloudflare 100-second limit. Lower the resolution, or use an API relay that supports 4K streaming output, such as SuperAPI: {url}',
-        'error.openSuperApi': 'Open SuperAPI',
+            '4K or high-resolution generation may exceed the Cloudflare 100-second limit. Lower the resolution, or use an API relay that supports 4K streaming output.',
         'error.batchPartialFailure': 'Batch generation partially failed: {failed}/{total} job(s) failed.',
         'error.batchPartialFailureDetailed':
             'Batch generation partially failed: {failed}/{total} job(s) failed. Details: {reasons}',

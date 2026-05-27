@@ -5,6 +5,9 @@ import {
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const GIF_BASE64 = 'R0lGODlhAQABAAAAACw=';
+
 describe('normalizeUpstreamImageStreamEvent', () => {
     it('keeps official image generation partial and completed events', () => {
         assert.deepEqual(
@@ -142,13 +145,13 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                 type: 'response.output_item.done',
                 item: {
                     type: 'image_generation_call',
-                    result: 'responses-final-base64'
+                    result: PNG_BASE64
                 }
             }),
             [
                 {
                     type: 'completed',
-                    b64Json: 'responses-final-base64'
+                    b64Json: PNG_BASE64
                 }
             ]
         );
@@ -158,20 +161,20 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                 type: 'response.output_item.done',
                 item: {
                     type: 'image_generation_call',
-                    result: 'data:image/png;base64,responses-data-url-final-base64'
+                    result: `data:image/png;base64,${PNG_BASE64}`
                 }
             }),
             [
                 {
                     type: 'completed',
-                    b64Json: 'responses-data-url-final-base64'
+                    b64Json: PNG_BASE64
                 }
             ]
         );
     });
 
     it('uses a bounded dedupe key when Responses image call ids are missing', () => {
-        const payload = 'responses-final-base64'.repeat(128);
+        const payload = 'A'.repeat(1024);
         const result = normalizeUpstreamImageStreamEventWithDiagnostics({
             type: 'response.output_item.done',
             item: {
@@ -224,13 +227,13 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                 type: 'response.image_generation_call.completed',
                 item: {
                     type: 'image_generation_call',
-                    result: 'responses-completed-final-base64'
+                    result: PNG_BASE64
                 }
             }),
             [
                 {
                     type: 'completed',
-                    b64Json: 'responses-completed-final-base64'
+                    b64Json: PNG_BASE64
                 }
             ]
         );
@@ -238,12 +241,12 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         assert.deepEqual(
             normalizeUpstreamImageStreamEvent({
                 type: 'response.image_generation_call.completed',
-                result: 'responses-completed-top-level-final-base64'
+                result: PNG_BASE64
             }),
             [
                 {
                     type: 'completed',
-                    b64Json: 'responses-completed-top-level-final-base64'
+                    b64Json: PNG_BASE64
                 }
             ]
         );
@@ -375,7 +378,7 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                     output: [
                         {
                             type: 'image_generation_call',
-                            result: 'responses-final-a'
+                            result: PNG_BASE64
                         },
                         {
                             type: 'message',
@@ -383,7 +386,7 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                         },
                         {
                             type: 'image_generation_call',
-                            result: 'data:image/png;base64,responses-final-b'
+                            result: `data:image/gif;base64,${GIF_BASE64}`
                         }
                     ]
                 }
@@ -391,12 +394,12 @@ describe('normalizeUpstreamImageStreamEvent', () => {
             [
                 {
                     type: 'completed',
-                    b64Json: 'responses-final-a',
+                    b64Json: PNG_BASE64,
                     usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 }
                 },
                 {
                     type: 'completed',
-                    b64Json: 'responses-final-b',
+                    b64Json: GIF_BASE64,
                     usage: { input_tokens: 7, output_tokens: 11, total_tokens: 18 }
                 }
             ]
@@ -410,14 +413,14 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                     {
                         type: 'image_generation_call',
                         status: 'completed',
-                        result: 'responses-top-level-final'
+                        result: PNG_BASE64
                     }
                 ]
             }),
             [
                 {
                     type: 'completed',
-                    b64Json: 'responses-top-level-final',
+                    b64Json: PNG_BASE64,
                     usage: { input_tokens: 3, output_tokens: 5, total_tokens: 8 }
                 }
             ]
@@ -442,14 +445,40 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         assert.deepEqual(
             normalizeUpstreamImageStreamEvent({
                 type: 'image.generation.result',
-                data: [{ url: 'data:image/png;base64,final-base64' }]
+                data: [{ url: `data:image/png;base64,${PNG_BASE64}` }]
             }),
             [
                 {
                     type: 'completed',
-                    b64Json: 'final-base64'
+                    b64Json: PNG_BASE64
                 }
             ]
+        );
+    });
+
+    it('rejects non-image data URLs and non-base64 Responses image results', () => {
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        result: 'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='
+                    }
+                }),
+            /image_generation_call\.result/
+        );
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'response.output_item.done',
+                    item: {
+                        type: 'image_generation_call',
+                        result: '<script>alert(1)</script>'
+                    }
+                }),
+            /image_generation_call\.result/
         );
     });
 
@@ -534,7 +563,7 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                 type: 'response.output_item.done',
                 item: {
                     type: 'image_generation_call',
-                    result: 'responses-final'
+                    result: PNG_BASE64
                 }
             }).providerDialect,
             'responses_image_event'
