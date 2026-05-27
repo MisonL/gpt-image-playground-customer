@@ -1,4 +1,5 @@
 import { asRecord } from './json-record';
+import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
@@ -44,39 +45,13 @@ class ResponsesImageGenerationError extends Error {
     }
 }
 
-function extractBase64FromDataUrl(value: string): string | undefined {
-    if (!value.startsWith('data:')) return undefined;
-    const separator = value.indexOf(',');
-    if (separator < 0) return undefined;
-    const payload = value.slice(separator + 1).trim();
-    return payload || undefined;
-}
-
-function isRemoteHttpUrl(value: string): boolean {
-    try {
-        const url = new URL(value);
-        return url.protocol === 'http:' || url.protocol === 'https:';
-    } catch {
-        return false;
-    }
-}
-
-function readImageGenerationResultBase64(value: string): string | undefined {
-    const normalized = value.trim();
-    if (!normalized) return undefined;
-    const dataUrlPayload = extractBase64FromDataUrl(normalized);
-    if (dataUrlPayload) return dataUrlPayload;
-    if (isRemoteHttpUrl(normalized)) return undefined;
-    return normalized;
-}
-
 function readCompletedImageRecordBase64(record: Record<string, unknown>): string | undefined {
     if (typeof record.result === 'string') {
-        const resultBase64 = readImageGenerationResultBase64(record.result);
+        const resultBase64 = readResponsesImageResultBase64(record.result);
         if (resultBase64) return resultBase64;
     }
     if (typeof record.url === 'string') {
-        return extractBase64FromDataUrl(record.url);
+        return extractImageBase64FromDataUrl(record.url);
     }
     return undefined;
 }

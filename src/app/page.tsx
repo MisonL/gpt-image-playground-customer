@@ -302,10 +302,7 @@ function mergeActualCostValues(costs: Array<ActualCostDetails | undefined>): Act
 
 export default function HomePage() {
     const { t } = useI18n();
-    const createErrorNotice = React.useCallback(
-        (message: string) => buildApiErrorNotice(message, t('error.openSuperApi')),
-        [t]
-    );
+    const createErrorNotice = React.useCallback((message: string) => buildApiErrorNotice(message), []);
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);

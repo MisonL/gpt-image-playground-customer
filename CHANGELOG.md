@@ -6,6 +6,8 @@
 
 ## [未发布]
 
+## [1.4.0] - 2026-05-27
+
 ### 新增
 
 - 增加 API 错误排查建议，针对鉴权失败、限流、上游 5xx 和 Cloudflare 524 返回更明确的用户提示。
@@ -23,6 +25,11 @@
 - 运行时能力接口增加实验 Responses API 图片后端开关状态，默认关闭且不影响现有 Images API 路径。
 - Agent API、图片接口、脚本和文档中的用户可见错误文案统一为中文。
 - Agent skill 文档改为先定位服务地址，再按 `/api/agent/*` 契约调用，避免默认假设服务只在 `localhost:4783`。
+
+### 修复
+
+- 移除用户错误提示中的固定第三方推广链接，保留中性的 Cloudflare 524 排查建议。
+- 收紧 Responses `image_generation` 结果解析，只有标准 base64 或常见位图 `data:image/...;base64,` payload 会被当作可保存图片。
 
 ## [1.3.0] - 2026-05-12
 
@@ -94,7 +101,8 @@
 - 支持基于 OpenAI 兼容 Images API 的本地图片生成和编辑流程。
 - 增加 Docker 部署支持和多平台启动脚本。
 
-[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.3.0...HEAD
+[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/dc7c8f5855e80cb9507517b5748c718e7155df52...v1.1.0

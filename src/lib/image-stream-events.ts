@@ -1,4 +1,5 @@
 import { asRecord, type JsonRecord } from './json-record';
+import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
 import { createHash } from 'node:crypto';
 import type OpenAI from 'openai';
 
@@ -102,39 +103,10 @@ function readUsage(record: JsonRecord): ImageUsage | undefined {
     return undefined;
 }
 
-function extractBase64FromDataUrl(value: string | undefined): string | undefined {
-    if (!value || !value.startsWith('data:')) {
-        return undefined;
-    }
-    const separator = value.indexOf(',');
-    if (separator < 0) {
-        return undefined;
-    }
-    const payload = value.slice(separator + 1).trim();
-    return payload || undefined;
-}
-
-function isRemoteHttpUrl(value: string): boolean {
-    try {
-        const url = new URL(value);
-        return url.protocol === 'http:' || url.protocol === 'https:';
-    } catch {
-        return false;
-    }
-}
-
-function readImageGenerationResultBase64(value: string | undefined): string | undefined {
-    if (!value) return undefined;
-    const dataUrlPayload = extractBase64FromDataUrl(value);
-    if (dataUrlPayload) return dataUrlPayload;
-    if (isRemoteHttpUrl(value)) return undefined;
-    return value;
-}
-
 function readImageBase64(record: JsonRecord): string | undefined {
     return (
         readString(record, 'b64_json', 'b64Json', 'partial_image_b64', 'partialImageB64') ||
-        extractBase64FromDataUrl(readString(record, 'url'))
+        extractImageBase64FromDataUrl(readString(record, 'url'))
     );
 }
 
@@ -269,7 +241,7 @@ function readResponsesImageBase64(record: JsonRecord): string | undefined {
         return undefined;
     }
     const result = readString(record, 'result');
-    return readImageGenerationResultBase64(result) || readImageBase64(record);
+    return readResponsesImageResultBase64(result) || readImageBase64(record);
 }
 
 function readResponsesImageDedupeKey(record: JsonRecord, b64Json?: string): string | undefined {
