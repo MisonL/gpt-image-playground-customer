@@ -394,6 +394,48 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
+    it('accepts snake_case image streaming strategy on page SSE edit requests', async () => {
+        const { POST } = await import('./route');
+        let upstreamUrl = '';
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream(async (body, url) => {
+            upstreamUrl = url;
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_edit.completed',
+                    data: { type: 'image_edit.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: true,
+                    imageStreamingStrategy: 'force-sse',
+                    imageStreamingStrategyField: 'image_streaming_strategy'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'done']
+            );
+            assert.equal(upstreamUrl, '/v1/images/edits');
+            assert.match(upstreamBody, /name="stream"/);
+            assert.match(upstreamBody, /name="partial_images"/);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('rejects explicit image stream requests when the server strategy disables streaming', async () => {
         process.env.IMAGE_STREAMING_STRATEGY = 'off';
         const { POST } = await import('./route');

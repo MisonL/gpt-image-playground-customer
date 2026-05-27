@@ -1776,12 +1776,17 @@ describe('Agent skill script argument validation', () => {
             writeFileSync(
                 inputPath,
                 [
-                    JSON.stringify({ id: 'first item', prompt: 'first prompt', size: '1024x1024' }),
+                    JSON.stringify({
+                        id: 'first item',
+                        prompt: 'first prompt',
+                        size: '1024x1024',
+                        output_format: 'jpg',
+                        output_compression: '80'
+                    }),
                     JSON.stringify({
                         mode: 'edit',
                         id: 'edit item',
                         prompt: 'edit prompt',
-                        image_path: '/tmp/source.png',
                         image_paths: ['/tmp/source-a.png', '/tmp/source-b.png'],
                         mask_path: '/tmp/mask.png'
                     })
@@ -1798,8 +1803,13 @@ describe('Agent skill script argument validation', () => {
             assert.equal(body.total, 2);
             assert.equal(body.tasks[0].endpoint, '/api/agent/images/generate');
             assert.equal(body.tasks[0].idempotency_key, 'demo-0001-first-item');
+            assert.equal(body.tasks[0].request.model, 'gpt-image-2');
+            assert.equal(body.tasks[0].request.output_format, 'jpeg');
+            assert.equal(body.tasks[0].request.output_compression, 80);
             assert.equal(body.tasks[1].endpoint, '/api/agent/images/edit');
             assert.equal(body.tasks[1].idempotency_key, 'demo-0002-edit-item');
+            assert.deepEqual(body.tasks[1].request.image_fields, ['image_0', 'image_1']);
+            assert.equal(body.tasks[1].request.mask, 'provided');
             assert.equal('image_path' in body.tasks[1].request, false);
             assert.equal('image_paths' in body.tasks[1].request, false);
             assert.equal('mask_path' in body.tasks[1].request, false);
@@ -1837,6 +1847,54 @@ describe('Agent skill script argument validation', () => {
             const body = JSON.parse(result.stdout);
             assert.equal(body.tasks[0].id, '0');
             assert.equal(body.tasks[0].idempotency_key, 'demo-0001-0');
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('normalizes batch output compression before sending Agent JSON', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-compression-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    id: 'compressed',
+                    prompt: 'prompt',
+                    output_format: 'jpeg',
+                    output_compression: '80'
+                })
+            );
+
+            let agentRequestBody = '';
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ ok: true }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        agentRequestBody = await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ images: [{ id: 'compressed-image', filename: 'compressed.jpg' }] }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
+                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                    });
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    const requestBody = JSON.parse(agentRequestBody);
+                    assert.equal(requestBody.output_format, 'jpeg');
+                    assert.equal(requestBody.output_compression, 80);
+                }
+            );
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
@@ -2106,6 +2164,136 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('routes batch generate requests with responsesModel through page SSE', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-responses-model-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    id: 'responses-generate',
+                    prompt: 'prompt',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    responsesModel: 'gpt-4.1-responses',
+                    idempotency_key: 'batch-responses-model-key'
+                })
+            );
+
+            let pageSseRequestBody = '';
+            const requests = [];
+            await withServer(
+                async (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: {
+                                    page_sse: { supported: true, endpoint: '/api/images' }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        pageSseRequestBody = await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"responses.png","path":"/generated/responses.png"}',
+                                '',
+                                'data: {"type":"done","images":[{"filename":"responses.png","path":"/generated/responses.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: 'unexpected Agent generate call' }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
+                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                    });
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.results[0].routing.transport, 'page_sse');
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        ['GET /api/agent/capabilities', 'POST /api/images']
+                    );
+                    assert.match(pageSseRequestBody, /name="image_backend"\r?\n\r?\nresponses/);
+                    assert.match(pageSseRequestBody, /name="responsesModel"\r?\n\r?\ngpt-4\.1-responses/);
+                    assert.match(pageSseRequestBody, /name="image_streaming_strategy"\r?\n\r?\nresponses-sse/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('fails batch responsesModel routing when page SSE capability is unavailable', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-responses-model-no-sse-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    id: 'responses-no-page-sse',
+                    prompt: 'prompt',
+                    image_backend: 'responses-image-generation',
+                    responsesModel: 'gpt-4.1-responses'
+                })
+            );
+
+            const requests = [];
+            await withServer(
+                async (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ agent_streaming: {} }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: 'unexpected Agent generate call' }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
+                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                    });
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.results[0].ok, false);
+                    assert.equal(body.results[0].error.code, 'page_sse_unavailable');
+                    assert.equal(body.results[0].routing.transport, 'page_sse');
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        ['GET /api/agent/capabilities']
+                    );
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('does not route batch tasks through page SSE when streaming is explicitly disabled', () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-disabled-page-sse-'));
         try {
@@ -2300,6 +2488,378 @@ describe('Agent skill script argument validation', () => {
             assert.equal(maxPixelsResult.status, 2);
             assert.match(maxPixelsResult.stderr, /too-many-pixels\.size 的总像素不能超过 8,294,400/);
             assert.equal(maxPixelsResult.stdout.trim(), '');
+
+            const invalidModelInputPath = join(tempRoot, 'invalid-model.jsonl');
+            writeFileSync(
+                invalidModelInputPath,
+                JSON.stringify({
+                    id: 'invalid-model',
+                    prompt: 'prompt',
+                    model: 'bad-model',
+                    size: '2048x2048'
+                })
+            );
+            const invalidModelResult = runSkillScript('batch-images.mjs', ['--input', invalidModelInputPath]);
+            assert.equal(invalidModelResult.status, 2);
+            assert.match(invalidModelResult.stderr, /invalid-model\.model 的值无效：bad-model/);
+            assert.equal(invalidModelResult.stdout.trim(), '');
+
+            const pngCompressionInputPath = join(tempRoot, 'png-compression.jsonl');
+            writeFileSync(
+                pngCompressionInputPath,
+                JSON.stringify({
+                    id: 'png-compression',
+                    prompt: 'prompt',
+                    output_format: 'png',
+                    output_compression: 80
+                })
+            );
+            const pngCompressionResult = runSkillScript('batch-images.mjs', ['--input', pngCompressionInputPath]);
+            assert.equal(pngCompressionResult.status, 2);
+            assert.match(pngCompressionResult.stderr, /png-compression\.output_compression 仅适用于 jpeg 或 webp 输出/);
+            assert.equal(pngCompressionResult.stdout.trim(), '');
+
+            const conflictingFormatInputPath = join(tempRoot, 'conflicting-format.jsonl');
+            writeFileSync(
+                conflictingFormatInputPath,
+                JSON.stringify({
+                    id: 'conflicting-format',
+                    prompt: 'prompt',
+                    output_format: 'png',
+                    format: 'webp'
+                })
+            );
+            const conflictingFormatResult = runSkillScript('batch-images.mjs', ['--input', conflictingFormatInputPath]);
+            assert.equal(conflictingFormatResult.status, 2);
+            assert.match(conflictingFormatResult.stderr, /conflicting-format\.output_format 与 format 不能同时设置/);
+            assert.equal(conflictingFormatResult.stdout.trim(), '');
+
+            const editFormatInputPath = join(tempRoot, 'edit-format.jsonl');
+            writeFileSync(
+                editFormatInputPath,
+                JSON.stringify({
+                    id: 'edit-format',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: 'source.png',
+                    size: '1024x1024',
+                    output_format: 'jpeg'
+                })
+            );
+            const editFormatResult = runSkillScript('batch-images.mjs', ['--input', editFormatInputPath]);
+            assert.equal(editFormatResult.status, 2);
+            assert.match(editFormatResult.stderr, /edit-format\.output_format 仅适用于 generate 任务/);
+            assert.equal(editFormatResult.stdout.trim(), '');
+
+            const editBackendInputPath = join(tempRoot, 'edit-backend.jsonl');
+            writeFileSync(
+                editBackendInputPath,
+                JSON.stringify({
+                    id: 'edit-backend',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: 'source.png',
+                    image_backend: 'responses-image-generation'
+                })
+            );
+            const editBackendResult = runSkillScript('batch-images.mjs', ['--input', editBackendInputPath]);
+            assert.equal(editBackendResult.status, 2);
+            assert.match(editBackendResult.stderr, /edit-backend\.image_backend 仅适用于 generate 任务/);
+            assert.equal(editBackendResult.stdout.trim(), '');
+
+            const editBackgroundInputPath = join(tempRoot, 'edit-background.jsonl');
+            writeFileSync(
+                editBackgroundInputPath,
+                JSON.stringify({
+                    id: 'edit-background',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: 'source.png',
+                    background: 'opaque'
+                })
+            );
+            const editBackgroundResult = runSkillScript('batch-images.mjs', ['--input', editBackgroundInputPath]);
+            assert.equal(editBackgroundResult.status, 2);
+            assert.match(editBackgroundResult.stderr, /edit-background\.background 仅适用于 generate 任务/);
+            assert.equal(editBackgroundResult.stdout.trim(), '');
+
+            const editResponsesModelInputPath = join(tempRoot, 'edit-responses-model.jsonl');
+            writeFileSync(
+                editResponsesModelInputPath,
+                JSON.stringify({
+                    id: 'edit-responses-model',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: 'source.png',
+                    responsesModel: 'gpt-4.1'
+                })
+            );
+            const editResponsesModelResult = runSkillScript('batch-images.mjs', ['--input', editResponsesModelInputPath]);
+            assert.equal(editResponsesModelResult.status, 2);
+            assert.match(editResponsesModelResult.stderr, /edit-responses-model\.responsesModel 仅适用于 generate 任务/);
+            assert.equal(editResponsesModelResult.stdout.trim(), '');
+
+            const generateImagePathInputPath = join(tempRoot, 'generate-image-path.jsonl');
+            writeFileSync(
+                generateImagePathInputPath,
+                JSON.stringify({
+                    id: 'generate-image-path',
+                    mode: 'generate',
+                    prompt: 'prompt',
+                    image_path: 'source.png'
+                })
+            );
+            const generateImagePathResult = runSkillScript('batch-images.mjs', ['--input', generateImagePathInputPath]);
+            assert.equal(generateImagePathResult.status, 2);
+            assert.match(generateImagePathResult.stderr, /generate-image-path\.image_path 仅适用于 edit 任务/);
+            assert.equal(generateImagePathResult.stdout.trim(), '');
+
+            const camelCaseBackendInputPath = join(tempRoot, 'camel-case-backend.jsonl');
+            writeFileSync(
+                camelCaseBackendInputPath,
+                JSON.stringify({
+                    id: 'camel-case-backend',
+                    prompt: 'prompt',
+                    imageBackend: 'responses'
+                })
+            );
+            const camelCaseBackendResult = runSkillScript('batch-images.mjs', ['--input', camelCaseBackendInputPath]);
+            assert.equal(camelCaseBackendResult.status, 2);
+            assert.match(camelCaseBackendResult.stderr, /camel-case-backend\.imageBackend 不是支持的 batch JSONL 字段/);
+            assert.equal(camelCaseBackendResult.stdout.trim(), '');
+
+            const camelCaseResponseModeInputPath = join(tempRoot, 'camel-case-response-mode.jsonl');
+            writeFileSync(
+                camelCaseResponseModeInputPath,
+                JSON.stringify({
+                    id: 'camel-case-response-mode',
+                    prompt: 'prompt',
+                    responseMode: 'both'
+                })
+            );
+            const camelCaseResponseModeResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                camelCaseResponseModeInputPath
+            ]);
+            assert.equal(camelCaseResponseModeResult.status, 2);
+            assert.match(
+                camelCaseResponseModeResult.stderr,
+                /camel-case-response-mode\.responseMode 不是支持的 batch JSONL 字段/
+            );
+            assert.equal(camelCaseResponseModeResult.stdout.trim(), '');
+
+            const numericImagePathInputPath = join(tempRoot, 'numeric-image-path.jsonl');
+            writeFileSync(
+                numericImagePathInputPath,
+                JSON.stringify({
+                    id: 'numeric-image-path',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: 123
+                })
+            );
+            const numericImagePathResult = runSkillScript('batch-images.mjs', ['--input', numericImagePathInputPath]);
+            assert.equal(numericImagePathResult.status, 2);
+            assert.match(numericImagePathResult.stderr, /numeric-image-path\.image_path 必须是非空字符串/);
+            assert.equal(numericImagePathResult.stdout.trim(), '');
+
+            const emptyImagePathsInputPath = join(tempRoot, 'empty-image-paths.jsonl');
+            writeFileSync(
+                emptyImagePathsInputPath,
+                JSON.stringify({
+                    id: 'empty-image-paths',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_paths: []
+                })
+            );
+            const emptyImagePathsResult = runSkillScript('batch-images.mjs', ['--input', emptyImagePathsInputPath]);
+            assert.equal(emptyImagePathsResult.status, 2);
+            assert.match(emptyImagePathsResult.stderr, /empty-image-paths\.image_paths 必须是非空字符串数组/);
+            assert.equal(emptyImagePathsResult.stdout.trim(), '');
+
+            const invalidImagePathsInputPath = join(tempRoot, 'invalid-image-paths.jsonl');
+            writeFileSync(
+                invalidImagePathsInputPath,
+                JSON.stringify({
+                    id: 'invalid-image-paths',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_paths: ['source.png', 123]
+                })
+            );
+            const invalidImagePathsResult = runSkillScript('batch-images.mjs', ['--input', invalidImagePathsInputPath]);
+            assert.equal(invalidImagePathsResult.status, 2);
+            assert.match(invalidImagePathsResult.stderr, /invalid-image-paths\.image_paths\[1\] 必须是非空字符串/);
+            assert.equal(invalidImagePathsResult.stdout.trim(), '');
+
+            const conflictingImagePathsInputPath = join(tempRoot, 'conflicting-image-paths.jsonl');
+            writeFileSync(
+                conflictingImagePathsInputPath,
+                JSON.stringify({
+                    id: 'conflicting-image-paths',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: 'source.png',
+                    image_paths: ['source-a.png']
+                })
+            );
+            const conflictingImagePathsResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                conflictingImagePathsInputPath
+            ]);
+            assert.equal(conflictingImagePathsResult.status, 2);
+            assert.match(
+                conflictingImagePathsResult.stderr,
+                /conflicting-image-paths\.image_path 与 image_paths 不能同时设置/
+            );
+            assert.equal(conflictingImagePathsResult.stdout.trim(), '');
+
+            const invalidMaskInputPath = join(tempRoot, 'invalid-mask.jsonl');
+            writeFileSync(
+                invalidMaskInputPath,
+                JSON.stringify({
+                    id: 'invalid-mask',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: 'source.png',
+                    mask_path: {}
+                })
+            );
+            const invalidMaskResult = runSkillScript('batch-images.mjs', ['--input', invalidMaskInputPath]);
+            assert.equal(invalidMaskResult.status, 2);
+            assert.match(invalidMaskResult.stderr, /invalid-mask\.mask_path 必须是非空字符串/);
+            assert.equal(invalidMaskResult.stdout.trim(), '');
+
+            const transparentInputPath = join(tempRoot, 'transparent.jsonl');
+            writeFileSync(
+                transparentInputPath,
+                JSON.stringify({
+                    id: 'transparent-background',
+                    prompt: 'prompt',
+                    background: 'transparent'
+                })
+            );
+            const transparentResult = runSkillScript('batch-images.mjs', ['--input', transparentInputPath]);
+            assert.equal(transparentResult.status, 2);
+            assert.match(transparentResult.stderr, /transparent-background\.background 对 gpt-image-2 无效/);
+            assert.equal(transparentResult.stdout.trim(), '');
+
+            const stringPageSseInputPath = join(tempRoot, 'string-page-sse.jsonl');
+            writeFileSync(
+                stringPageSseInputPath,
+                JSON.stringify({
+                    id: 'string-page-sse',
+                    prompt: 'prompt',
+                    page_sse: 'true'
+                })
+            );
+            const stringPageSseResult = runSkillScript('batch-images.mjs', ['--input', stringPageSseInputPath]);
+            assert.equal(stringPageSseResult.status, 2);
+            assert.match(stringPageSseResult.stderr, /string-page-sse\.page_sse 必须是布尔值/);
+            assert.equal(stringPageSseResult.stdout.trim(), '');
+
+            const stringComplexUiInputPath = join(tempRoot, 'string-complex-ui.jsonl');
+            writeFileSync(
+                stringComplexUiInputPath,
+                JSON.stringify({
+                    id: 'string-complex-ui',
+                    prompt: 'prompt',
+                    complex_ui: 'true'
+                })
+            );
+            const stringComplexUiResult = runSkillScript('batch-images.mjs', ['--input', stringComplexUiInputPath]);
+            assert.equal(stringComplexUiResult.status, 2);
+            assert.match(stringComplexUiResult.stderr, /string-complex-ui\.complex_ui 必须是布尔值/);
+            assert.equal(stringComplexUiResult.stdout.trim(), '');
+
+            const numericResumeInputPath = join(tempRoot, 'numeric-resume.jsonl');
+            writeFileSync(
+                numericResumeInputPath,
+                JSON.stringify({
+                    id: 'numeric-resume',
+                    prompt: 'prompt',
+                    resume_or_recover: 1
+                })
+            );
+            const numericResumeResult = runSkillScript('batch-images.mjs', ['--input', numericResumeInputPath]);
+            assert.equal(numericResumeResult.status, 2);
+            assert.match(numericResumeResult.stderr, /numeric-resume\.resume_or_recover 必须是布尔值/);
+            assert.equal(numericResumeResult.stdout.trim(), '');
+
+            const unsupportedTransportInputPath = join(tempRoot, 'unsupported-transport.jsonl');
+            writeFileSync(
+                unsupportedTransportInputPath,
+                JSON.stringify({
+                    id: 'unsupported-transport',
+                    prompt: 'prompt',
+                    transport: 'agent_json'
+                })
+            );
+            const unsupportedTransportResult = runSkillScript('batch-images.mjs', ['--input', unsupportedTransportInputPath]);
+            assert.equal(unsupportedTransportResult.status, 2);
+            assert.match(unsupportedTransportResult.stderr, /unsupported-transport\.transport 必须是 page_sse/);
+            assert.equal(unsupportedTransportResult.stdout.trim(), '');
+
+            const responsesModelNonStreamInputPath = join(tempRoot, 'responses-model-non-stream.jsonl');
+            writeFileSync(
+                responsesModelNonStreamInputPath,
+                JSON.stringify({
+                    id: 'responses-model-non-stream',
+                    prompt: 'prompt',
+                    image_backend: 'responses-image-generation',
+                    responsesModel: 'gpt-4.1',
+                    stream_mode: 'non_stream'
+                })
+            );
+            const responsesModelNonStreamResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                responsesModelNonStreamInputPath
+            ]);
+            assert.equal(responsesModelNonStreamResult.status, 2);
+            assert.match(responsesModelNonStreamResult.stderr, /responses-model-non-stream\.responsesModel 需要页面 SSE 路径/);
+            assert.equal(responsesModelNonStreamResult.stdout.trim(), '');
+
+            const responsesModelWithoutBackendInputPath = join(tempRoot, 'responses-model-without-backend.jsonl');
+            writeFileSync(
+                responsesModelWithoutBackendInputPath,
+                JSON.stringify({
+                    id: 'responses-model-without-backend',
+                    prompt: 'prompt',
+                    responsesModel: 'gpt-4.1'
+                })
+            );
+            const responsesModelWithoutBackendResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                responsesModelWithoutBackendInputPath
+            ]);
+            assert.equal(responsesModelWithoutBackendResult.status, 2);
+            assert.match(
+                responsesModelWithoutBackendResult.stderr,
+                /responses-model-without-backend\.responsesModel 必须同时设置 image_backend=responses-image-generation/
+            );
+            assert.equal(responsesModelWithoutBackendResult.stdout.trim(), '');
+
+            const responsesModelImagesBackendInputPath = join(tempRoot, 'responses-model-images-backend.jsonl');
+            writeFileSync(
+                responsesModelImagesBackendInputPath,
+                JSON.stringify({
+                    id: 'responses-model-images-backend',
+                    prompt: 'prompt',
+                    image_backend: 'images-api',
+                    responsesModel: 'gpt-4.1'
+                })
+            );
+            const responsesModelImagesBackendResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                responsesModelImagesBackendInputPath
+            ]);
+            assert.equal(responsesModelImagesBackendResult.status, 2);
+            assert.match(
+                responsesModelImagesBackendResult.stderr,
+                /responses-model-images-backend\.responsesModel 仅适用于 image_backend=responses-image-generation/
+            );
+            assert.equal(responsesModelImagesBackendResult.stdout.trim(), '');
 
             const mismatchInputPath = join(tempRoot, 'mismatch.jsonl');
             writeFileSync(mismatchInputPath, JSON.stringify({ id: 'dim-bad', prompt: 'prompt', size: '1024x1024' }));

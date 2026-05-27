@@ -241,6 +241,10 @@ describe('buildAgentCapabilities', () => {
             'streaming_strategy',
             'partial_images'
         ]);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.request_fields_by_mode, {
+            generate: ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images'],
+            edit: ['stream_mode', 'streaming_strategy', 'partial_images']
+        });
         assert.deepEqual(capabilities.agent_streaming.upstream_sse.image_backends, [
             'images-api',
             'responses-image-generation'
@@ -455,6 +459,21 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.deepEqual(generateProperties.stream_mode.enum, ['auto', 'stream', 'non_stream']);
         assert.ok('partial_images' in generateProperties);
+        const editProperties = document.components.schemas.EditRequest.properties;
+        assert.equal('image_backend' in editProperties, false);
+        assert.equal('output_format' in editProperties, false);
+        assert.equal('output_compression' in editProperties, false);
+        assert.equal('background' in editProperties, false);
+        assert.equal('moderation' in editProperties, false);
+        assert.deepEqual(document.components.schemas.EditRequest.required, ['prompt']);
+        assert.match(document.components.schemas.EditRequest.description, /至少提供一个 image_0\.\.image_9/);
+        assert.deepEqual(
+            document.components.schemas.EditRequest.anyOf,
+            Array.from({ length: 10 }, (_, index) => ({ required: [`image_${index}`] }))
+        );
+        for (let index = 0; index < 10; index += 1) {
+            assert.deepEqual(editProperties[`image_${index}`], { type: 'string', format: 'binary' });
+        }
         const capabilityProperties = document.components.schemas.AgentCapabilities.properties;
         assert.equal(capabilityProperties.routing_rules.$ref, '#/components/schemas/AgentRoutingRules');
         assert.deepEqual(capabilityProperties.defaults.properties.image_backend.enum, [
@@ -470,6 +489,21 @@ describe('buildAgentCapabilities', () => {
             'responses-image-generation'
         ]);
         assert.ok(capabilityProperties.supported.properties.image_backend_requirements);
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.request_fields
+                .const,
+            ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images']
+        );
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
+                .request_fields_by_mode.properties.generate.const,
+            ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images']
+        );
+        assert.deepEqual(
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
+                .request_fields_by_mode.properties.edit.const,
+            ['stream_mode', 'streaming_strategy', 'partial_images']
+        );
         assert.deepEqual(
             document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
                 .enabled_image_backends.items.enum,

@@ -9,6 +9,8 @@ import {
     AGENT_RESPONSE_MODES,
     AGENT_STREAM_MODES,
     AGENT_STREAMING_STRATEGIES,
+    AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS,
+    AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS,
     AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES,
     type AgentAuthScheme,
     type AgentRoutingStrength,
@@ -455,6 +457,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'mode',
                                 'endpoint',
                                 'request_fields',
+                                'request_fields_by_mode',
                                 'image_backends',
                                 'enabled_image_backends',
                                 'streaming_strategies',
@@ -469,7 +472,23 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 request_fields: {
                                     type: 'array',
                                     items: { type: 'string' },
-                                    const: ['image_backend', 'stream_mode', 'streaming_strategy', 'partial_images']
+                                    const: AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS
+                                },
+                                request_fields_by_mode: {
+                                    type: 'object',
+                                    required: ['generate', 'edit'],
+                                    properties: {
+                                        generate: {
+                                            type: 'array',
+                                            items: { type: 'string' },
+                                            const: AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS
+                                        },
+                                        edit: {
+                                            type: 'array',
+                                            items: { type: 'string' },
+                                            const: AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS
+                                        }
+                                    }
                                 },
                                 image_backends: {
                                     type: 'array',
@@ -654,9 +673,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 EditRequest: {
                     type: 'object',
-                    required: ['prompt', 'image_0'],
+                    required: ['prompt'],
+                    anyOf: Array.from({ length: MAX_IMAGE_COUNT }, (_, index) => ({
+                        required: [`image_${index}`]
+                    })),
                     description:
-                        'Agent edit 返回最终 JSON。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。',
+                        'Agent edit 返回最终 JSON。请求必须至少提供一个 image_0..image_9 源图字段。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。',
                     properties: {
                         prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
                         model: { type: 'string', enum: AGENT_MODELS, default: 'gpt-image-2' },
@@ -672,6 +694,15 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         partial_images: { type: 'integer', minimum: 1, maximum: 3, default: 2 },
                         image_0: { type: 'string', format: 'binary' },
+                        image_1: { type: 'string', format: 'binary' },
+                        image_2: { type: 'string', format: 'binary' },
+                        image_3: { type: 'string', format: 'binary' },
+                        image_4: { type: 'string', format: 'binary' },
+                        image_5: { type: 'string', format: 'binary' },
+                        image_6: { type: 'string', format: 'binary' },
+                        image_7: { type: 'string', format: 'binary' },
+                        image_8: { type: 'string', format: 'binary' },
+                        image_9: { type: 'string', format: 'binary' },
                         mask: { type: 'string', format: 'binary' }
                     }
                 },

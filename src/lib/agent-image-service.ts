@@ -92,6 +92,22 @@ type AgentEditStreamRequest = {
     partialImages: 1 | 2 | 3;
 };
 
+const AGENT_EDIT_UNSUPPORTED_FIELDS = [
+    'image_backend',
+    'imageBackend',
+    'output_format',
+    'outputFormat',
+    'format',
+    'output_compression',
+    'outputCompression',
+    'responses_model',
+    'responsesModel',
+    'image_streaming_strategy',
+    'imageStreamingStrategy',
+    'background',
+    'moderation'
+] as const;
+
 export function readIdempotencyKey(headers: Headers): string {
     const value = headers.get('idempotency-key')?.trim();
     if (!value) {
@@ -486,10 +502,28 @@ export async function parseAgentEditFormData(request: Request): Promise<FormData
     if (!contentType.includes('multipart/form-data')) {
         throw new RequestValidationError('Agent 编辑端点要求使用 multipart/form-data。', 415);
     }
+    let formData: FormData;
     try {
-        return await request.formData();
+        formData = await request.formData();
     } catch {
         throw new RequestValidationError('请求正文必须是有效的 multipart/form-data。', 422);
+    }
+    validateAgentEditUnsupportedFields(formData);
+    return formData;
+}
+
+function validateAgentEditUnsupportedFields(formData: FormData): void {
+    const fields: Record<string, string> = {};
+    for (const field of AGENT_EDIT_UNSUPPORTED_FIELDS) {
+        if (formData.has(field)) {
+            fields[field] =
+                field === 'image_streaming_strategy' || field === 'imageStreamingStrategy'
+                    ? 'Agent edit 不接受页面专用字段，请使用 streaming_strategy。'
+                    : 'Agent edit 不接受该字段。';
+        }
+    }
+    if (Object.keys(fields).length > 0) {
+        throw new RequestValidationError('Agent edit 请求包含不支持的字段。', 422, { fields });
     }
 }
 

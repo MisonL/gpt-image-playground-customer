@@ -152,11 +152,11 @@ http://localhost:4783
 - Responses API image generation 是实验路径，默认关闭。只有同时设置 `ENABLE_RESPONSES_IMAGE_BACKEND=true`、配置 `OPENAI_RESPONSES_API_MODEL`，并在请求中显式传入 `image_backend=responses-image-generation` 或兼容别名 `imageBackend=responses` 时，服务端才会调用 `/responses` 并读取 `image_generation_call.result`。
 - Agent capabilities 会同时暴露 `supported.image_backends` 枚举和 `supported.enabled_image_backends` 当前启用后端；自动化脚本应以后者和 `image_backend_requirements` 判断 runtime 是否已准备好。
 - Responses API 的顶层模型由 `OPENAI_RESPONSES_API_MODEL` 或请求字段 `responsesModel` 指定；页面表单里的图片模型只传给 `image_generation` 工具。
-- Responses API 实验路径支持单张 `generate` 的非流式和上游 SSE 消费，不替换默认 Images API，不接入编辑表单。Agent generate/edit 对外仍返回最终 JSON，可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制服务端内部上游 SSE 消费。
+- Responses API 实验路径支持单张 `generate` 的非流式和上游 SSE 消费，不替换默认 Images API，不接入编辑表单。Agent generate/edit 对外仍返回最终 JSON；generate 可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制服务端内部上游 SSE 消费，edit 仅支持 `stream_mode`、`streaming_strategy`、`partial_images`。
 
 ## 编辑与遮罩
 
-编辑模式支持最多 10 张源图。遮罩必须与源图尺寸一致，绘制或上传后会随编辑请求一起提交。
+编辑模式支持最多 10 张源图，上传字段必须使用 `image_0` 到 `image_9`。遮罩必须与源图尺寸一致，绘制或上传后会随编辑请求一起提交。
 
 <p align="center">
   <img src="./readme-images/mask-creation.jpg" alt="遮罩创建" width="460"/>
@@ -227,6 +227,7 @@ Job polling 当前是同一 Next.js 服务实例内的后台任务，结果和�
 `POST /api/agent/images/generate` 对外始终是最终 JSON；`max_edge>2048` 的单次文生图默认建议按 `/api/agent/capabilities` 使用页面端 `/api/images` SSE。显式传 `--agent` 或 `streaming_strategy=off` 时才走 Agent JSON 非流式路径，用于诊断对照。
 仓库辅助脚本支持 `--page-sse`、`--agent` 和 `--job` 显式选择路径。`--page-sse` 使用页面 SSE，`--agent` 强制 Agent generate/edit 最终 JSON，`--job` 使用 Agent generate job polling。页面流式失败后不会自动二次计费回退，需先按结构化错误和诊断字段确认原因，再选择新的业务操作和新的 `Idempotency-Key`。
 Agent 请求字段 `stream_mode=auto|stream|non_stream` 用于控制服务端内部上游流式消费：`auto` 是默认值并允许显式可观测回退，`stream` 强制上游流式并直接暴露失败，`non_stream` 直接非流式。`GET /api/runtime-capabilities` 会返回当前默认 stream mode、流式不可用标记 scope 和 availability summary。
+上游 SSE 字段边界以 `agent_streaming.upstream_sse.request_fields_by_mode` 为准：`generate` 可发送 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images`；`edit` 只可发送 `stream_mode`、`streaming_strategy`、`partial_images`。
 
 批量自动化可使用仓库 skill 脚本：
 
@@ -237,6 +238,8 @@ node skills/gpt-image-playground-agent/scripts/batch-images.mjs \
 ```
 
 默认 dry-run 只解析 JSONL 和输出计划，不联网、不计费。真实执行必须加 `--allow-billable`，并可配合 `--manifest`、`--resume` 和 `--dimension-check` 做 append-only 续跑和 PNG/JPEG/WebP 尺寸校验。
+
+批量 JSONL 中，`output_format`、`format`、`output_compression`、`background`、`moderation`、`image_backend`、`responsesModel` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
 生成示例：
 

@@ -83,6 +83,8 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--dry-run`
 - `--allow-billable`
 
+批量 JSONL 每行字段按 `mode` 区分。`output_format`、`format`、`output_compression`、`background`、`moderation`、`image_backend`、`responsesModel` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
+
 上游探针脚本参数：
 
 - `--base-url`
@@ -119,7 +121,9 @@ GET /api/agent/capabilities
 - `agent_streaming.edit.mode`：当前为 `non_streaming_only`。
 - `agent_streaming.upstream_sse`：Agent generate/edit 内部消费上游 SSE 的能力，客户端响应仍是最终 `AgentImageResponse` JSON。
 - `agent_streaming.upstream_sse.supported`：布尔值；当服务端支持 Agent 内部上游 SSE 消费时为 `true`，否则为 `false`。客户端只在为 `true` 时发送上游流式控制字段。
-- `agent_streaming.upstream_sse.request_fields`：当前为 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images`。
+- `agent_streaming.upstream_sse.request_fields`：兼容旧客户端的字段合集，当前为 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images`。
+- `agent_streaming.upstream_sse.request_fields_by_mode.generate`：generate 可发送的上游 SSE 控制字段，当前为 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images`。
+- `agent_streaming.upstream_sse.request_fields_by_mode.edit`：edit 可发送的上游 SSE 控制字段，当前为 `stream_mode`、`streaming_strategy`、`partial_images`。
 - `agent_streaming.upstream_sse.image_backends`：支持 `images-api`、`responses-image-generation`。
 - `agent_streaming.upstream_sse.enabled_image_backends`：当前运行时可直接使用的 Agent 上游 SSE 后端；`responses-image-generation` 只有在所需环境变量齐备时才出现。
 - `agent_streaming.upstream_sse.streaming_strategies`：支持 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。
@@ -134,6 +138,7 @@ GET /api/agent/capabilities
 - `routing_rules.agent_generate_small_smoke`：普通小图单次文生图默认使用 `/api/agent/images/generate`。
 - `routing_rules.page_sse_large_generate`：`max_edge>2048` 的单次文生图推荐优先使用 `/api/images` SSE，失败后先诊断，再显式选择 `/api/agent/images/generate` 或 job 路径。
 - `routing_rules.retry_recovery`：终态失败不会用同一 `Idempotency-Key` 重新执行，必须诊断后创建新的业务操作和新的 key。
+- 批量 JSONL 路由控制字段：`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`；脚本会在 dry-run 阶段拒绝字符串布尔值和未知 transport。
 - `defaults.image_backend`：Agent generate 默认 `images-api`。
 - `defaults.stream_mode`：Agent generate 默认 `auto`。auto 会先尝试内部上游 SSE；无法产出最终图时显式回退并暴露可观测标记。
 - `defaults.streaming_strategy`：Agent generate 默认 `auto`。
@@ -228,7 +233,7 @@ Content-Type: application/json
 Agent 生成端点对外始终返回最终 JSON，不会对客户端返回 SSE。不要向该端点发送 `stream: true`。
 
 - 页面 SSE 使用独立的 `POST /api/images` form-data 路径。
-- 若 capabilities 中 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制服务端内部上游 SSE 消费。
+- 若 capabilities 中 `agent_streaming.upstream_sse.supported=true`，generate 可通过 `request_fields_by_mode.generate` 声明的字段控制服务端内部上游 SSE 消费。`image_backend=responses-image-generation` 当前只支持 generate。
 - Agent 生成端点最终响应仍是 `AgentImageResponse`。
 - `stream_mode=stream` 强制流式并直接暴露失败。
 - `stream_mode=non_stream` 直接非流式。
@@ -276,8 +281,13 @@ Content-Type: multipart/form-data
 - `size`：`auto` 或支持的尺寸。
 - `quality`：`low`、`medium`、`high` 或 `auto`。
 - `response_mode`：`path`、`base64` 或 `both`。
-- `image_0..image_9`：源图片。
+- `stream_mode`：可选，`auto`、`stream` 或 `non_stream`。
+- `streaming_strategy`：可选，`off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse` 或 `force-sse`。
+- `partial_images`：可选，`1..3`。
+- `image_0..image_9`：源图片。类似 `image_10`、`image_01` 或 `image_foo` 的图片字段会被显式拒绝。
 - `mask`：可选 PNG 遮罩。
+
+Agent edit 不接受 `image_backend`/`imageBackend`、`output_format`/`outputFormat`/`format`、`output_compression`/`outputCompression`、`responses_model`/`responsesModel`、`background` 或 `moderation`。编辑输出格式固定为 PNG；Responses image_generation 后端当前只支持 generate。
 
 当 `size` 的最大边大于 `2048` 时，默认按 `routing_rules.high_resolution_edit` 使用页面端 `/api/images` form-data SSE 路径；如果页面流式不可用或失败，可显式回退到 Agent edit 最终 JSON 路径进行诊断或执行。
 

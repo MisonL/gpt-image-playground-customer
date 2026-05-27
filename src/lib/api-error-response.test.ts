@@ -19,6 +19,20 @@ describe('normalizeAgentError', () => {
         assert.deepEqual(error.details, { fields: { n: 'bad' } });
     });
 
+    it('uses explicit RequestValidationError details without encoding them in the message', () => {
+        const error = normalizeAgentError(
+            new RequestValidationError('Agent edit 请求包含不支持的字段。', 422, {
+                fields: { imageBackend: 'Agent edit 不接受该字段。' }
+            })
+        );
+
+        assert.equal(error.code, 'validation_error');
+        assert.equal(error.message, '请求校验失败。');
+        assert.deepEqual(error.details, {
+            fields: { imageBackend: 'Agent edit 不接受该字段。' }
+        });
+    });
+
     it('marks rate limits as retryable with upstream status', () => {
         const error = normalizeAgentError({ status: 429, message: 'rate limit' });
 

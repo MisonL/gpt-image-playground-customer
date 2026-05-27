@@ -34,7 +34,7 @@ description: 当用户需要通过已部署的 GPT Image Playground 生成、编
 4. 读取 capabilities 中的认证方式、模型、模型级限制、`routing_rules`、Agent 流式边界、页面 SSE 鉴权、后端 runtime enablement、状态后端和端点路径；不要硬编码假设部署方式。
 5. 为每个业务操作生成稳定的 `Idempotency-Key`。网络中断、运行中轮询或非终态重试复用原 key；同一 key 已进入 `failed` 终态后不再用于触发新执行，必须先诊断原因，再创建新的业务操作和新的 key。
 6. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点对外始终返回最终 `AgentImageResponse` JSON；如 capabilities 声明 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制内部上游 SSE 消费。
-7. 图片编辑使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段使用 `image_0..image_9`。该 Agent 端点同样是非流式端点。
+7. 图片编辑使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段必须使用 `image_0..image_9`，类似 `image_10`、`image_01` 或 `image_foo` 的字段会被显式拒绝。该 Agent 端点同样是非流式端点；上游 SSE 字段按 `agent_streaming.upstream_sse.request_fields_by_mode.edit` 发送，不要给 edit 传 `image_backend`。
 8. 默认使用 `response_mode: "path"`，只在用户明确需要图片内联数据时使用 `base64` 或 `both`。
 9. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；仅在 `routing_rules` 命中高分辨率 edit、大图单次文生图、复杂 UI 批量、长图恢复或明确诊断后切换。
 10. 读取 `agent_jobs`。job 路径只在显式选择时使用；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE。
@@ -119,7 +119,7 @@ node "<skill-root>/scripts/generate-image.mjs" --allow-billable --image-backend 
 node "<skill-root>/scripts/generate-image.mjs" --allow-billable --timeout-ms 420000 --size 2048x2048 "a product photo of a ceramic mug"
 ```
 
-生成脚本会对 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果 capabilities 未声明 `agent_streaming.page_sse.supported=true`，脚本会显式失败，不会静默降级到 Agent JSON。如果页面流式失败，脚本会返回结构化失败结果，先诊断再决定是否用 `--agent` 或 `--job` 重新执行，不会自动发起第二次请求。编辑脚本对高分辨率 edit 也采用同样口径：默认页面流式，有问题再显式回退到 Agent edit 诊断或执行。也可以用 `--page-sse` 强制页面流式，或用 `--agent` 强制 Agent generate/edit 最终 JSON，`--job` 仍可显式选择 generate job 路径。显式传 `--streaming-strategy off` 或 `--stream-mode non_stream` 时，大图请求保持 Agent JSON 非流式路径，用于和页面 SSE 做诊断对照。上游流式字段支持 `--image-backend`、`--stream-mode`、`--streaming-strategy`、`--partial-images`；不发送时使用服务端 capabilities 声明的默认值。
+生成脚本会对 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果 capabilities 未声明 `agent_streaming.page_sse.supported=true`，脚本会显式失败，不会静默降级到 Agent JSON。如果页面流式失败，脚本会返回结构化失败结果，先诊断再决定是否用 `--agent` 或 `--job` 重新执行，不会自动发起第二次请求。编辑脚本对高分辨率 edit 也采用同样口径：默认页面流式，有问题再显式回退到 Agent edit 诊断或执行。也可以用 `--page-sse` 强制页面流式，或用 `--agent` 强制 Agent generate/edit 最终 JSON，`--job` 仍可显式选择 generate job 路径。显式传 `--streaming-strategy off` 或 `--stream-mode non_stream` 时，大图请求保持 Agent JSON 非流式路径，用于和页面 SSE 做诊断对照。上游流式字段优先读取 `agent_streaming.upstream_sse.request_fields_by_mode`：generate 支持 `--image-backend`、`--stream-mode`、`--streaming-strategy`、`--partial-images`；edit 只支持 `--stream-mode`、`--streaming-strategy`、`--partial-images`。不发送时使用服务端 capabilities 声明的默认值。
 
 批量脚本 JSONL 每行是一个 generate 或 edit 任务。示例：
 
@@ -141,6 +141,8 @@ node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.json
 ```
 
 `--manifest` 使用 JSONL append-only 记录每条任务的 `index`、`id`、`idempotency_key`、`status`、响应或错误；`--resume` 会读取已成功记录并跳过同一 `id` 或 `idempotency_key`。`--dimension-check` 会读取响应里的 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸是否等于任务 `size`。
+
+批量 JSONL 字段按模式区分：`output_format`、`format`、`output_compression`、`background`、`moderation`、`image_backend`、`responsesModel` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段。
 
 编辑脚本支持 `--model`、`--size`、`--quality`、`--response-mode`、`--stream-mode`、`--streaming-strategy`、`--partial-images`、`--timeout-ms`、`--idempotency-key`、`--page-sse`、`--agent`、`--dry-run` 和 `--allow-billable`。
 
