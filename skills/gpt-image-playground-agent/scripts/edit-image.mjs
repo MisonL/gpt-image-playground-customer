@@ -6,6 +6,7 @@ import {
   errorMessage,
   assertValidImageSizeForModel,
   normalizeBaseUrl,
+  normalizeOutputFormat,
   parseRetryAfterValue,
   readConfiguredPositiveInteger,
   readMaxImageEdge,
@@ -31,6 +32,10 @@ const STREAMING_STRATEGIES = new Set([
   'responses-sse',
   'force-sse'
 ]);
+const IMAGE_BACKENDS = new Set(['images-api', 'images', 'responses', 'responses-image-generation']);
+const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
+const MODERATIONS = new Set(['low', 'auto']);
+const THINKING_VALUES = new Set(['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
 const MIN_PARTIAL_IMAGES = 1;
 const MAX_PARTIAL_IMAGES = 3;
 
@@ -106,7 +111,18 @@ if (options.dryRun || (!contractCheck && !options.allowBillable)) {
           response_mode: options.responseMode,
           ...(options.streamMode ? { stream_mode: options.streamMode } : {}),
           ...(options.streamingStrategy ? { streaming_strategy: options.streamingStrategy } : {}),
-          ...(options.partialImages ? { partial_images: readPartialImages(options.partialImages) } : {})
+          ...(options.partialImages ? { partial_images: readPartialImages(options.partialImages) } : {}),
+          ...(options.format ? { output_format: readOutputFormat(options) } : {}),
+          ...(readOutputCompression(options) !== undefined ? { output_compression: readOutputCompression(options) } : {}),
+          ...(options.moderation ? { moderation: options.moderation } : {}),
+          ...(options.imageBackend ? { image_backend: normalizeImageBackendForPage(options.imageBackend) } : {}),
+          ...(options.responsesModel ? { responsesModel: readNonEmptyString(options.responsesModel, '--responses-model') } : {}),
+          ...(options.thinking ? { thinking: options.thinking } : {}),
+          ...(options.promptOptimization !== undefined
+            ? { promptOptimization: readBooleanOption(options.promptOptimization, '--prompt-optimization') }
+            : {}),
+          ...(options.forceWeb !== undefined ? { force_web: true } : {}),
+          ...(readEditNormalizations(options) ? { normalizations: readEditNormalizations(options) } : {})
         },
         next_step: '重新执行并添加 --allow-billable 才会发起真实图片编辑请求。'
       },
@@ -137,6 +153,15 @@ function parseArgs(argv) {
     streamMode: undefined,
     streamingStrategy: undefined,
     partialImages: undefined,
+    format: undefined,
+    outputCompression: undefined,
+    moderation: undefined,
+    imageBackend: undefined,
+    responsesModel: undefined,
+    thinking: undefined,
+    promptOptimization: undefined,
+    forceWeb: undefined,
+    sseLogPath: undefined,
     timeoutMs: undefined,
     idempotencyKey: undefined,
     imagePath: undefined,
@@ -160,6 +185,15 @@ function parseArgs(argv) {
     else if (arg === '--stream-mode') parsed.streamMode = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--streaming-strategy') parsed.streamingStrategy = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--partial-images') parsed.partialImages = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--format' || arg === '--output-format') parsed.format = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--output-compression') parsed.outputCompression = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--moderation') parsed.moderation = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--image-backend') parsed.imageBackend = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--responses-model' || arg === '--gpt-model') parsed.responsesModel = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--thinking') parsed.thinking = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--prompt-optimization') parsed.promptOptimization = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--force-web') parsed.forceWeb = true;
+    else if (arg === '--sse-log') parsed.sseLogPath = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(argv, (index += 1), arg);
     else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
@@ -182,6 +216,7 @@ function absoluteUrl(value) {
 
 function buildEditRoutingGuidance(parsed) {
   if (parsed.routeMode === 'agent') {
+    assertNoPageOnlyEditOptions(parsed, 'Agent edit');
     return {
       recommended_endpoint: '/api/agent/images/edit',
       transport: 'agent_json',
@@ -195,6 +230,14 @@ function buildEditRoutingGuidance(parsed) {
       transport: 'page_sse',
       strength: 'default',
       reason: 'Explicit --page-sse requests use the page form-data SSE endpoint.'
+    };
+  }
+  if (hasPageOnlyEditOptions(parsed) && isPageSseAllowed(parsed)) {
+    return {
+      recommended_endpoint: '/api/images',
+      transport: 'page_sse',
+      strength: 'default',
+      reason: 'GPT2Image-compatible edit options require the page form-data SSE endpoint; Agent JSON edit does not accept those fields.'
     };
   }
   if (readMaxImageEdge(parsed.size) > 2048 && isPageSseAllowed(parsed)) {
@@ -266,7 +309,79 @@ function validateUpstreamStreamingOptions(parsed) {
   if (parsed.routeMode === 'page_sse') {
     assertPageSseStreamingAllowed(parsed);
   }
+  if (hasPageOnlyEditOptions(parsed) && !isPageSseAllowed(parsed)) {
+    throw new Error('图生图高级参数需要页面 SSE，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。');
+  }
+  if (parsed.routeMode === 'agent') {
+    assertNoPageOnlyEditOptions(parsed, 'Agent edit');
+  }
+  if (parsed.format && !OUTPUT_FORMATS.has(readOutputFormat(parsed))) {
+    throw new Error('--format 必须是 png、jpeg 或 webp。');
+  }
+  if (parsed.outputCompression !== undefined) readOutputCompression(parsed);
+  if (parsed.moderation && !MODERATIONS.has(parsed.moderation)) {
+    throw new Error('--moderation 必须是 low 或 auto。');
+  }
+  if (parsed.imageBackend && !IMAGE_BACKENDS.has(parsed.imageBackend)) {
+    throw new Error('--image-backend 必须是 images-api、images、responses 或 responses-image-generation。');
+  }
+  if (parsed.responsesModel !== undefined) readNonEmptyString(parsed.responsesModel, '--responses-model');
+  if (parsed.thinking && !THINKING_VALUES.has(parsed.thinking)) {
+    throw new Error('--thinking 必须是 minimal、none、low、medium、high 或 xhigh。');
+  }
+  if (parsed.promptOptimization !== undefined) readBooleanOption(parsed.promptOptimization, '--prompt-optimization');
   if (parsed.partialImages) readPartialImages(parsed.partialImages);
+}
+
+function hasPageOnlyEditOptions(parsed) {
+  return Boolean(
+    parsed.format ||
+      parsed.outputCompression !== undefined ||
+      parsed.moderation ||
+      parsed.imageBackend ||
+      parsed.responsesModel ||
+      parsed.thinking ||
+      parsed.promptOptimization !== undefined ||
+      parsed.forceWeb !== undefined
+  );
+}
+
+function assertNoPageOnlyEditOptions(parsed, context) {
+  if (!hasPageOnlyEditOptions(parsed)) return;
+  throw new Error(`${context} 不接受图生图高级页面字段；请去掉这些字段或使用 --page-sse。`);
+}
+
+function readOutputFormat(parsed) {
+  return parsed.format ? normalizeOutputFormat(parsed.format) : 'png';
+}
+
+function readOutputCompression(parsed) {
+  if (parsed.outputCompression === undefined) return undefined;
+  const outputFormat = readOutputFormat(parsed);
+  if (outputFormat === 'png') return undefined;
+  const value = String(parsed.outputCompression);
+  if (!/^\d+$/.test(value)) throw new Error('--output-compression 必须是 0 到 100 之间的整数。');
+  const parsedValue = Number(value);
+  if (!Number.isInteger(parsedValue) || parsedValue < 0 || parsedValue > 100) {
+    throw new Error('--output-compression 必须是 0 到 100 之间的整数。');
+  }
+  return parsedValue;
+}
+
+function readEditNormalizations(parsed) {
+  if (parsed.outputCompression === undefined || readOutputFormat(parsed) !== 'png') return undefined;
+  return { output_compression_ignored_for_png: true };
+}
+
+function readBooleanOption(value, name) {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  throw new Error(`${name} 必须是 true 或 false。`);
+}
+
+function readNonEmptyString(value, name) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} 必须是非空字符串。`);
+  return value.trim();
 }
 
 function isPageSseAllowed(parsed) {
@@ -294,7 +409,7 @@ async function fetchWithTimeout(url, init) {
 function printUsage() {
   console.error('用法：edit-image.mjs [options] <image-path> <prompt>');
   console.error('默认只输出 dry-run；添加 --allow-billable 才会真实编辑图片。');
-  console.error('常用参数：--model --size --quality --response-mode --stream-mode --streaming-strategy --partial-images --timeout-ms --idempotency-key --page-sse --agent --dry-run --allow-billable');
+  console.error('常用参数：--model --size --quality --response-mode --format --output-compression --moderation --image-backend --responses-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --idempotency-key --page-sse --agent --dry-run --allow-billable');
   console.error('契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 edit-image.mjs 或 edit-image.mjs --contract-check');
 }
 
@@ -364,6 +479,18 @@ function buildPageSseFormData() {
   formData.append('response_mode', options.responseMode);
   formData.append('clientRequestId', idempotencyKey);
   formData.append('stream', 'true');
+  if (options.format) formData.append('output_format', readOutputFormat(options));
+  if (readOutputCompression(options) !== undefined) {
+    formData.append('output_compression', String(readOutputCompression(options)));
+  }
+  if (options.moderation) formData.append('moderation', options.moderation);
+  if (options.imageBackend) formData.append('image_backend', normalizeImageBackendForPage(options.imageBackend));
+  if (options.responsesModel) formData.append('responsesModel', readNonEmptyString(options.responsesModel, '--responses-model'));
+  if (options.thinking) formData.append('thinking', options.thinking);
+  if (options.promptOptimization !== undefined) {
+    formData.append('promptOptimization', String(readBooleanOption(options.promptOptimization, '--prompt-optimization')));
+  }
+  if (options.forceWeb !== undefined) formData.append('force_web', 'true');
   if (options.streamMode) formData.append('stream_mode', options.streamMode);
   if (options.streamingStrategy) formData.append('image_streaming_strategy', options.streamingStrategy);
   if (options.partialImages) formData.append('partial_images', String(readPartialImages(options.partialImages)));
@@ -378,6 +505,7 @@ async function runPageSseEdit() {
     url: `${baseUrl}${PAGE_SSE_ENDPOINT}`,
     formData: buildPageSseFormData(),
     timeoutMs,
+    sseLogPath: options.sseLogPath,
     errorMessage
   });
   console.log(

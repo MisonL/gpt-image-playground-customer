@@ -195,7 +195,10 @@ export async function executeAgentGenerate(options: {
             responseMode: options.request.response_mode,
             requestId: options.requestId,
             idempotencyKey: options.idempotencyKey,
-            cached: options.cached
+            cached: options.cached,
+            apiBaseUrl: credentialContext.baseUrl,
+            apiKey: credentialContext.apiKey,
+            abortSignal: options.abortSignal
         });
     } catch (error) {
         reportServerCredentialFailure(credentialContext.selectedCredential, error);
@@ -251,6 +254,9 @@ async function executeAgentGenerateUpstream(
             }
         });
         return await collectOpenAiImagesFromStream(stream, {
+            apiBaseUrl: credentialContext.baseUrl,
+            apiKey: credentialContext.apiKey,
+            abortSignal,
             onStreamingDegraded: (reason) => markAgentStreamingUnavailable(streamOptions, reason, 200)
         });
     } catch (error) {
@@ -302,7 +308,12 @@ async function executeAgentResponsesGenerate(
     try {
         return await collectOpenAiImagesFromStream(
             await createResponsesImageStream({ ...input, partialImagesCount: request.partial_images }),
-            { onStreamingDegraded: (reason) => markAgentStreamingUnavailable(streamOptions, reason, 200) }
+            {
+                apiBaseUrl: credentialContext.baseUrl,
+                apiKey: credentialContext.apiKey,
+                abortSignal,
+                onStreamingDegraded: (reason) => markAgentStreamingUnavailable(streamOptions, reason, 200)
+            }
         );
     } catch (error) {
         if (request.stream_mode === 'stream' || isAbortLikeError(error, abortSignal)) throw error;
@@ -379,13 +390,7 @@ function readAgentResponsesApiModel(): string {
 }
 
 function readAgentResponsesImageSize(size: string): ResponsesImageGenerateInput['size'] {
-    if (size === 'auto' || size === '1024x1024' || size === '1024x1536' || size === '1536x1024') {
-        return size;
-    }
-    throw new RequestValidationError(
-        'Responses API 图片后端当前只支持 auto、1024x1024、1024x1536 或 1536x1024 尺寸。',
-        400
-    );
+    return size;
 }
 
 export async function executeAgentEdit(options: {
@@ -448,7 +453,10 @@ export async function executeAgentEdit(options: {
             responseMode,
             requestId: options.requestId,
             idempotencyKey: options.idempotencyKey,
-            cached: options.cached
+            cached: options.cached,
+            apiBaseUrl: credentialContext.baseUrl,
+            apiKey: credentialContext.apiKey,
+            abortSignal: options.abortSignal
         });
     } catch (error) {
         reportServerCredentialFailure(credentialContext?.selectedCredential, error);
@@ -474,6 +482,9 @@ async function executeAgentEditStream(input: {
             requestOptions
         );
         return await collectOpenAiImagesFromStream(stream, {
+            apiBaseUrl: input.credentialContext.baseUrl,
+            apiKey: input.credentialContext.apiKey,
+            abortSignal: input.abortSignal,
             onStreamingDegraded: (reason) => markAgentStreamingUnavailable(input.streamOptions, reason, 200)
         });
     } catch (error) {
@@ -717,6 +728,9 @@ async function persistOpenAiImages(options: {
     requestId: string;
     idempotencyKey: string;
     cached: boolean;
+    apiBaseUrl?: string;
+    apiKey?: string;
+    abortSignal?: AbortSignal;
 }): Promise<AgentRequestExecutionResult> {
     let persistedImages;
     try {
@@ -724,7 +738,10 @@ async function persistOpenAiImages(options: {
             result: options.result,
             outputFormat: options.outputFormat,
             storageMode: 'fs',
-            includeBase64: shouldIncludeBase64(options.responseMode)
+            includeBase64: shouldIncludeBase64(options.responseMode),
+            apiBaseUrl: options.apiBaseUrl,
+            apiKey: options.apiKey,
+            abortSignal: options.abortSignal
         });
     } catch (error) {
         if (!(error instanceof InvalidOpenAiImagesResponseError) && !(error instanceof MissingOpenAiImageDataError)) {

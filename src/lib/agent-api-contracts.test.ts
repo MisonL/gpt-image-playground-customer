@@ -284,21 +284,53 @@ describe('buildAgentCapabilities', () => {
             capabilities.agent_streaming.page_sse.agent_usage,
             'recommended_for_high_resolution_generate_edit_and_complex_batch'
         );
-        assert.deepEqual(capabilities.routing_rules.high_resolution_edit, {
-            when: ['operation=edit', 'max_edge>2048'],
+        assert.deepEqual(capabilities.routing_rules.high_resolution_edit.when, ['operation=edit', 'max_edge>2048']);
+        assert.deepEqual(capabilities.routing_rules.high_resolution_edit.conditions, {
+            operation: 'edit',
+            max_edge: { operator: 'gt', value: 2048 }
+        });
+        assert.equal(capabilities.routing_rules.high_resolution_edit.endpoint, '/api/images');
+        assert.equal(capabilities.routing_rules.high_resolution_edit.transport, 'page_sse');
+        assert.equal(capabilities.routing_rules.high_resolution_edit.strength, 'default');
+        assert.deepEqual(capabilities.routing_rules.high_resolution_edit.action, {
             endpoint: '/api/images',
             transport: 'page_sse',
             strength: 'default',
-            reason: 'High-resolution edit defaults to the page form-data SSE endpoint; if streaming has issues, diagnose first and explicitly fall back to Agent edit.'
+            fallback_endpoint: AGENT_ENDPOINTS.edit,
+            fallback_mode: 'manual_after_diagnosis',
+            requires_new_idempotency_key_on_retry: true,
+            no_automatic_fallback: true
         });
         assert.equal(capabilities.routing_rules.complex_ui_batch.endpoint, '/api/images');
+        assert.deepEqual(capabilities.routing_rules.complex_ui_batch.conditions, {
+            operation: 'generate_or_edit',
+            complex_ui: true,
+            batch: true
+        });
         assert.equal(capabilities.routing_rules.complex_ui_batch.strength, 'recommended');
         assert.equal(capabilities.routing_rules.long_image_recovery.endpoint, '/api/images');
         assert.equal(capabilities.routing_rules.long_image_recovery.transport, 'page_sse');
+        assert.deepEqual(capabilities.routing_rules.long_image_recovery.conditions, {
+            operation: 'generate_or_edit',
+            long_image: true,
+            resume_or_recover: true
+        });
         assert.equal(capabilities.routing_rules.agent_generate_small_smoke.endpoint, AGENT_ENDPOINTS.generate);
+        assert.deepEqual(capabilities.routing_rules.agent_generate_small_smoke.action, {
+            endpoint: AGENT_ENDPOINTS.generate,
+            transport: 'agent_json',
+            strength: 'default',
+            requires_new_idempotency_key_on_retry: true,
+            no_automatic_fallback: true
+        });
         assert.equal(capabilities.routing_rules.page_sse_large_generate.endpoint, '/api/images');
         assert.equal(capabilities.routing_rules.page_sse_large_generate.transport, 'page_sse');
         assert.equal(capabilities.routing_rules.page_sse_large_generate.strength, 'recommended');
+        assert.deepEqual(capabilities.routing_rules.page_sse_large_generate.conditions, {
+            operation: 'generate',
+            max_edge: { operator: 'gt', value: 2048 },
+            single_request: true
+        });
         assert.equal(capabilities.routing_rules.retry_recovery.reuse_failed_idempotency_key, false);
         assert.match(capabilities.routing_rules.retry_recovery.new_attempt_guidance, /new Idempotency-Key/);
         assert.deepEqual(capabilities.supported.image_backends, ['images-api', 'responses-image-generation']);
@@ -476,6 +508,23 @@ describe('buildAgentCapabilities', () => {
         }
         const capabilityProperties = document.components.schemas.AgentCapabilities.properties;
         assert.equal(capabilityProperties.routing_rules.$ref, '#/components/schemas/AgentRoutingRules');
+        const routingRuleProperties = document.components.schemas.AgentRoutingRule.properties;
+        assert.equal(routingRuleProperties.conditions.$ref, '#/components/schemas/AgentRoutingCondition');
+        assert.equal(routingRuleProperties.action.$ref, '#/components/schemas/AgentRoutingAction');
+        assert.deepEqual(document.components.schemas.AgentRoutingCondition.properties.operation.enum, [
+            'generate',
+            'edit',
+            'generate_or_edit'
+        ]);
+        assert.deepEqual(document.components.schemas.AgentRoutingCondition.properties.max_edge.properties.operator.enum, [
+            'gt',
+            'lte'
+        ]);
+        assert.equal(
+            document.components.schemas.AgentRoutingAction.properties.requires_new_idempotency_key_on_retry.type,
+            'boolean'
+        );
+        assert.equal(document.components.schemas.AgentRoutingAction.properties.no_automatic_fallback.type, 'boolean');
         assert.deepEqual(capabilityProperties.defaults.properties.image_backend.enum, [
             'images-api',
             'responses-image-generation'

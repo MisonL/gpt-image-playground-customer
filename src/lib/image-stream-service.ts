@@ -2,6 +2,7 @@ import { appLogger } from './app-logger';
 import { writeFileAtomic } from './agent-file-utils';
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
+import { downloadSameOriginImageAsBase64 } from './image-url-result';
 import { createBatchId, createImageFilename, outputDir } from './server-runtime';
 import type { ActualCostDetails } from './upstream-cost/types';
 import type OpenAI from 'openai';
@@ -63,6 +64,7 @@ export type ImageStreamResponseOptions = {
     clientRequestId?: string;
     requestLogContext?: { clientRequestId: string };
     resolveActualCost: (input: ResolveStreamCostInput) => Promise<ActualCostDetails>;
+    logProviderDiagnostics?: boolean;
     onError?: (error: unknown) => void;
     onStreamUnavailable?: (error: unknown, reason: string) => void;
     onStreamingDegraded?: (reason: string) => void;
@@ -136,11 +138,13 @@ function createSseWriter(controller: ReadableStreamDefaultController<Uint8Array>
 
 function logProviderDialect(input: {
     modeLabel: ImageStreamResponseOptions['modeLabel'];
+    enabled: boolean;
     requestLogContext?: { clientRequestId: string };
     providerDialect: string;
     upstreamEventType?: string;
     normalizedEventCount: number;
 }) {
+    if (!input.enabled) return;
     appLogger.info(`流式${input.modeLabel}上游事件诊断。`, {
         ...input.requestLogContext,
         providerDialect: input.providerDialect,
@@ -149,20 +153,46 @@ function logProviderDialect(input: {
     });
 }
 
-function createPartialStreamingEvent(input: {
+async function createPartialStreamingEvent(input: {
+    runtime: StreamRuntime;
     normalizedEvent: Extract<
         ReturnType<typeof normalizeUpstreamImageStreamEventWithDiagnostics>['events'][number],
         { type: 'partial_image' }
     >;
     imageIndex: number;
-}): StreamingEvent {
+}): Promise<StreamingEvent | undefined> {
+    const b64Json =
+        input.normalizedEvent.b64Json ||
+        (input.normalizedEvent.imageUrl
+            ? await downloadOptionalPartialImage(input.runtime, input.normalizedEvent.imageUrl)
+            : undefined);
+    if (!b64Json) return undefined;
     return {
         type: 'partial_image',
         index: input.imageIndex,
         partial_image_index: input.normalizedEvent.partialImageIndex,
         partialImageIndex: input.normalizedEvent.partialImageIndex,
-        b64_json: input.normalizedEvent.b64Json
+        b64_json: b64Json
     };
+}
+
+async function downloadOptionalPartialImage(runtime: StreamRuntime, imageUrl: string): Promise<string | undefined> {
+    try {
+        return await downloadSameOriginImageAsBase64({
+            imageUrl,
+            apiBaseUrl: runtime.options.apiBaseUrl,
+            apiKey: runtime.options.apiKey,
+            abortSignal: runtime.options.abortSignal
+        });
+    } catch (error) {
+        if (runtime.options.logProviderDiagnostics ?? process.env.NODE_ENV !== 'test') {
+            appLogger.warn(`流式${runtime.options.modeLabel}：跳过无法物化的预览图 URL。`, {
+                ...runtime.options.requestLogContext,
+                error: error instanceof Error ? error.message : String(error)
+            });
+        }
+        return undefined;
+    }
 }
 
 async function persistStreamedImage(input: { options: ImageStreamResponseOptions; filename: string; b64Json: string }) {
@@ -183,13 +213,26 @@ async function emitCompletedImage(
         { type: 'completed' }
     >
 ): Promise<boolean> {
+    const b64Json =
+        normalizedEvent.b64Json ||
+        (normalizedEvent.imageUrl
+            ? await downloadSameOriginImageAsBase64({
+                  imageUrl: normalizedEvent.imageUrl,
+                  apiBaseUrl: runtime.options.apiBaseUrl,
+                  apiKey: runtime.options.apiKey,
+                  abortSignal: runtime.options.abortSignal
+              })
+            : undefined);
+    if (!b64Json) {
+        throw new Error('流式图片完成事件缺少 b64_json。');
+    }
     const currentIndex = runtime.state.imageIndex;
     const filename = createImageFilename(runtime.batchId, currentIndex, runtime.options.outputFormat);
-    await persistStreamedImage({ options: runtime.options, filename, b64Json: normalizedEvent.b64Json });
+    await persistStreamedImage({ options: runtime.options, filename, b64Json });
 
     const imageData = createImageResult(
         filename,
-        normalizedEvent.b64Json,
+        b64Json,
         runtime.options.outputFormat,
         runtime.options.storageMode
     );
@@ -199,7 +242,7 @@ async function emitCompletedImage(
         type: 'completed',
         index: currentIndex,
         filename,
-        b64_json: normalizedEvent.b64Json,
+        b64_json: b64Json,
         path: runtime.options.storageMode === 'fs' ? `/api/image/${filename}` : undefined,
         output_format: runtime.options.outputFormat,
         outputFormat: runtime.options.outputFormat,
@@ -219,7 +262,12 @@ async function emitNormalizedEvent(
     normalizedEvent: ReturnType<typeof normalizeUpstreamImageStreamEventWithDiagnostics>['events'][number]
 ): Promise<boolean> {
     if (normalizedEvent.type === 'partial_image') {
-        return runtime.sse.send(createPartialStreamingEvent({ normalizedEvent, imageIndex: runtime.state.imageIndex }));
+        const partialEvent = await createPartialStreamingEvent({
+            runtime,
+            normalizedEvent,
+            imageIndex: runtime.state.imageIndex
+        });
+        return partialEvent ? runtime.sse.send(partialEvent) : true;
     }
     return emitCompletedImage(runtime, normalizedEvent);
 }
@@ -233,6 +281,7 @@ async function consumeUpstreamStream(runtime: StreamRuntime): Promise<boolean> {
         }
         logProviderDialect({
             modeLabel: runtime.options.modeLabel,
+            enabled: runtime.options.logProviderDiagnostics ?? process.env.NODE_ENV !== 'test',
             requestLogContext: runtime.options.requestLogContext,
             providerDialect: diagnostics.providerDialect,
             upstreamEventType: diagnostics.upstreamEventType,

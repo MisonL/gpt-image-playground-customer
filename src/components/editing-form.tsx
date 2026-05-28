@@ -12,6 +12,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import type {
+    ImageUpstreamFormBackend,
+    ImageUpstreamFormPromptOptimization,
+    ImageUpstreamFormStreamingStrategy,
+    ImageUpstreamFormThinking
+} from '@/lib/image-upstream-form';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
 import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
@@ -36,7 +42,12 @@ import {
     LockOpen,
     HelpCircle,
     SquareDashed,
-    Info
+    Info,
+    FileImage,
+    WandSparkles,
+    Globe2,
+    ShieldCheck,
+    ShieldAlert
 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
@@ -54,9 +65,18 @@ export type EditingFormData = {
     customWidth: number;
     customHeight: number;
     quality: 'low' | 'medium' | 'high' | 'auto';
+    output_format: 'png' | 'jpeg' | 'webp';
+    output_compression?: number;
+    moderation: 'low' | 'auto';
     imageFiles: File[];
     maskFile: File | null;
     model: GptImageModel;
+    image_backend: ImageUpstreamFormBackend;
+    streaming_strategy: ImageUpstreamFormStreamingStrategy;
+    responsesModel: string;
+    thinking: ImageUpstreamFormThinking;
+    promptOptimization: ImageUpstreamFormPromptOptimization;
+    forceWeb: boolean;
 };
 
 type EditingFormProps = {
@@ -86,6 +106,12 @@ type EditingFormProps = {
     setEditCustomHeight: React.Dispatch<React.SetStateAction<number>>;
     editQuality: EditingFormData['quality'];
     setEditQuality: React.Dispatch<React.SetStateAction<EditingFormData['quality']>>;
+    editOutputFormat: EditingFormData['output_format'];
+    setEditOutputFormat: React.Dispatch<React.SetStateAction<EditingFormData['output_format']>>;
+    editCompression: number[];
+    setEditCompression: React.Dispatch<React.SetStateAction<number[]>>;
+    editModeration: EditingFormData['moderation'];
+    setEditModeration: React.Dispatch<React.SetStateAction<EditingFormData['moderation']>>;
     editBrushSize: number[];
     setEditBrushSize: React.Dispatch<React.SetStateAction<number[]>>;
     editShowMaskEditor: boolean;
@@ -105,6 +131,19 @@ type EditingFormProps = {
     allowStreamingBatch: boolean;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
+    editImageBackend: EditingFormData['image_backend'];
+    setEditImageBackend: React.Dispatch<React.SetStateAction<EditingFormData['image_backend']>>;
+    editStreamingStrategy: EditingFormData['streaming_strategy'];
+    setEditStreamingStrategy: React.Dispatch<React.SetStateAction<EditingFormData['streaming_strategy']>>;
+    editResponsesModel: string;
+    setEditResponsesModel: React.Dispatch<React.SetStateAction<string>>;
+    editThinking: EditingFormData['thinking'];
+    setEditThinking: React.Dispatch<React.SetStateAction<EditingFormData['thinking']>>;
+    editPromptOptimization: EditingFormData['promptOptimization'];
+    setEditPromptOptimization: React.Dispatch<React.SetStateAction<EditingFormData['promptOptimization']>>;
+    editForceWeb: boolean;
+    setEditForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
+    initialAdvancedOpen?: boolean;
 };
 
 const RadioItemWithIcon = ({
@@ -171,6 +210,12 @@ export function EditingForm({
     setEditCustomHeight,
     editQuality,
     setEditQuality,
+    editOutputFormat,
+    setEditOutputFormat,
+    editCompression,
+    setEditCompression,
+    editModeration,
+    setEditModeration,
     editBrushSize,
     setEditBrushSize,
     editShowMaskEditor,
@@ -189,7 +234,20 @@ export function EditingForm({
     setStreamMode,
     allowStreamingBatch,
     partialImages,
-    setPartialImages
+    setPartialImages,
+    editImageBackend,
+    setEditImageBackend,
+    editStreamingStrategy,
+    setEditStreamingStrategy,
+    editResponsesModel,
+    setEditResponsesModel,
+    editThinking,
+    setEditThinking,
+    editPromptOptimization,
+    setEditPromptOptimization,
+    editForceWeb,
+    setEditForceWeb,
+    initialAdvancedOpen = false
 }: EditingFormProps) {
     const { locale, t } = useI18n();
     const [firstImagePreviewUrl, setFirstImagePreviewUrl] = React.useState<string | null>(null);
@@ -210,8 +268,9 @@ export function EditingForm({
     const editCustomSizeError = customSizeValidation.valid
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
+    const showCompression = editOutputFormat === 'jpeg' || editOutputFormat === 'webp';
 
-    const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
+    const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(initialAdvancedOpen);
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (!editPrompt.trim()) return t('ux.disabledPrompt');
@@ -547,9 +606,18 @@ export function EditingForm({
             customWidth: editCustomWidth,
             customHeight: editCustomHeight,
             quality: editQuality,
+            output_format: editOutputFormat,
+            ...(showCompression ? { output_compression: editCompression[0] } : {}),
+            moderation: editModeration,
             imageFiles: imageFiles,
             maskFile: editGeneratedMaskFile,
-            model: editModel
+            model: editModel,
+            image_backend: editImageBackend,
+            streaming_strategy: editStreamingStrategy,
+            responsesModel: editResponsesModel,
+            thinking: editThinking,
+            promptOptimization: editPromptOptimization,
+            forceWeb: editForceWeb
         };
         onSubmit(formData);
     };
@@ -984,6 +1052,169 @@ export function EditingForm({
                         </button>
                         {isAdvancedOpen && (
                             <div id='editing-advanced-panel' className='space-y-5 border-t border-border p-3'>
+                                <div className='grid gap-3 sm:grid-cols-2'>
+                                    <div className='space-y-1.5'>
+                                        <Label htmlFor='edit-image-backend-select'>{t('upstream.backend')}</Label>
+                                        <Select
+                                            value={editImageBackend}
+                                            onValueChange={(value) =>
+                                                setEditImageBackend(value as EditingFormData['image_backend'])
+                                            }
+                                            disabled={isLoading}
+                                            name='edit-image_backend'>
+                                            <SelectTrigger id='edit-image-backend-select'>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value='images-api'>{t('upstream.backendImages')}</SelectItem>
+                                                <SelectItem value='responses-image-generation'>
+                                                    {t('upstream.backendResponses')}
+                                                </SelectItem>
+                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className='space-y-1.5'>
+                                        <Label htmlFor='edit-streaming-strategy-select'>
+                                            {t('upstream.streamingStrategy')}
+                                        </Label>
+                                        <Select
+                                            value={editStreamingStrategy}
+                                            onValueChange={(value) =>
+                                                setEditStreamingStrategy(
+                                                    value as EditingFormData['streaming_strategy']
+                                                )
+                                            }
+                                            disabled={isLoading}
+                                            name='edit-image_streaming_strategy'>
+                                            <SelectTrigger id='edit-streaming-strategy-select'>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value='auto'>{t('upstream.strategyAuto')}</SelectItem>
+                                                <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
+                                                <SelectItem value='openai-sse'>{t('upstream.strategyOpenAiSse')}</SelectItem>
+                                                <SelectItem value='newapi-keepalive-sse'>
+                                                    {t('upstream.strategyKeepaliveSse')}
+                                                </SelectItem>
+                                                <SelectItem value='responses-sse'>
+                                                    {t('upstream.strategyResponsesSse')}
+                                                </SelectItem>
+                                                <SelectItem value='force-sse'>{t('upstream.strategyForceSse')}</SelectItem>
+                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+
+                                {editImageBackend === 'responses-image-generation' && (
+                                    <div className='space-y-3 rounded-md border border-border bg-muted/20 p-3'>
+                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                            <WandSparkles className='h-4 w-4 text-muted-foreground' />
+                                            {t('upstream.compatibilityParams')}
+                                        </div>
+                                        <div className='grid gap-3 sm:grid-cols-2'>
+                                            <div className='space-y-1.5 sm:col-span-2'>
+                                                <Label htmlFor='edit-responses-model-input'>
+                                                    {t('upstream.gptModel')}
+                                                </Label>
+                                                <Input
+                                                    id='edit-responses-model-input'
+                                                    name='editResponsesModel'
+                                                    value={editResponsesModel}
+                                                    onChange={(event) => setEditResponsesModel(event.target.value)}
+                                                    disabled={isLoading}
+                                                    autoComplete='off'
+                                                    spellCheck={false}
+                                                    placeholder='gpt-5.4'
+                                                />
+                                            </div>
+                                            <div className='space-y-1.5'>
+                                                <Label htmlFor='edit-thinking-select'>{t('upstream.thinking')}</Label>
+                                                <Select
+                                                    value={editThinking}
+                                                    onValueChange={(value) =>
+                                                        setEditThinking(value as EditingFormData['thinking'])
+                                                    }
+                                                    disabled={isLoading}
+                                                    name='edit-thinking'>
+                                                    <SelectTrigger id='edit-thinking-select'>
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value='server-default'>
+                                                            {t('upstream.serverDefault')}
+                                                        </SelectItem>
+                                                        <SelectItem value='none'>none</SelectItem>
+                                                        <SelectItem value='minimal'>minimal</SelectItem>
+                                                        <SelectItem value='low'>low</SelectItem>
+                                                        <SelectItem value='medium'>medium</SelectItem>
+                                                        <SelectItem value='high'>high</SelectItem>
+                                                        <SelectItem value='xhigh'>xhigh</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className='space-y-1.5'>
+                                                <Label htmlFor='edit-prompt-optimization-select'>
+                                                    {t('upstream.promptOptimization')}
+                                                </Label>
+                                                <Select
+                                                    value={editPromptOptimization}
+                                                    onValueChange={(value) =>
+                                                        setEditPromptOptimization(
+                                                            value as EditingFormData['promptOptimization']
+                                                        )
+                                                    }
+                                                    disabled={isLoading}
+                                                    name='edit-promptOptimization'>
+                                                    <SelectTrigger id='edit-prompt-optimization-select'>
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value='server-default'>
+                                                            {t('upstream.serverDefault')}
+                                                        </SelectItem>
+                                                        <SelectItem value='on'>{t('common.enabled')}</SelectItem>
+                                                        <SelectItem value='off'>{t('common.disabled')}</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {editImageBackend === 'images-api' && (
+                                    <div className='space-y-3 rounded-md border border-border bg-muted/20 p-3'>
+                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                            <Globe2 className='h-4 w-4 text-muted-foreground' />
+                                            {t('upstream.compatibilityParams')}
+                                        </div>
+                                        <RadioGroup
+                                            value={editForceWeb ? 'true' : 'false'}
+                                            onValueChange={(value) => setEditForceWeb(value === 'true')}
+                                            disabled={isLoading}
+                                            name='edit-force_web'
+                                            aria-label={t('upstream.forceWeb')}
+                                            className='grid grid-cols-2 gap-2'>
+                                            <RadioItemWithIcon
+                                                value='false'
+                                                id='edit-force-web-false'
+                                                label={t('upstream.serverDefault')}
+                                                Icon={Sparkles}
+                                                disabled={isLoading}
+                                            />
+                                            <RadioItemWithIcon
+                                                value='true'
+                                                id='edit-force-web-true'
+                                                label={t('upstream.forceWeb')}
+                                                Icon={Globe2}
+                                                disabled={isLoading}
+                                                tooltip={t('upstream.forceWebHint')}
+                                            />
+                                        </RadioGroup>
+                                    </div>
+                                )}
+
                                 {streamMode !== 'non_stream' && (
                                     <div className='space-y-3'>
                                         <div className='flex items-center gap-2'>
@@ -1062,6 +1293,93 @@ export function EditingForm({
                                             id='edit-quality-high'
                                             label={t('common.high')}
                                             Icon={Tally3}
+                                            disabled={isLoading}
+                                        />
+                                    </RadioGroup>
+                                </div>
+
+                                <div className='space-y-3'>
+                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                        {t('form.outputFormat')}
+                                    </div>
+                                    <RadioGroup
+                                        value={editOutputFormat}
+                                        onValueChange={(value) =>
+                                            setEditOutputFormat(value as EditingFormData['output_format'])
+                                        }
+                                        disabled={isLoading}
+                                        name='edit-output_format'
+                                        aria-label={t('form.outputFormat')}
+                                        className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
+                                        <RadioItemWithIcon
+                                            value='png'
+                                            id='edit-format-png'
+                                            label='PNG'
+                                            Icon={FileImage}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='jpeg'
+                                            id='edit-format-jpeg'
+                                            label='JPEG'
+                                            Icon={FileImage}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='webp'
+                                            id='edit-format-webp'
+                                            label='WebP'
+                                            Icon={FileImage}
+                                            disabled={isLoading}
+                                        />
+                                    </RadioGroup>
+                                </div>
+
+                                {showCompression && (
+                                    <div className='space-y-2 pt-2 transition-opacity duration-300'>
+                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                            {t('form.compression', { value: editCompression[0] })}
+                                        </div>
+                                        <Slider
+                                            id='edit-compression-slider'
+                                            name='edit-output_compression'
+                                            thumbLabel={t('form.compression', { value: editCompression[0] })}
+                                            min={0}
+                                            max={100}
+                                            step={1}
+                                            value={editCompression}
+                                            onValueChange={setEditCompression}
+                                            disabled={isLoading}
+                                            className='mt-3'
+                                        />
+                                    </div>
+                                )}
+
+                                <div className='space-y-3'>
+                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                        {t('form.moderation')}
+                                    </div>
+                                    <RadioGroup
+                                        value={editModeration}
+                                        onValueChange={(value) =>
+                                            setEditModeration(value as EditingFormData['moderation'])
+                                        }
+                                        disabled={isLoading}
+                                        name='edit-moderation'
+                                        aria-label={t('form.moderation')}
+                                        className='grid grid-cols-2 gap-2'>
+                                        <RadioItemWithIcon
+                                            value='auto'
+                                            id='edit-mod-auto'
+                                            label={t('common.auto')}
+                                            Icon={ShieldCheck}
+                                            disabled={isLoading}
+                                        />
+                                        <RadioItemWithIcon
+                                            value='low'
+                                            id='edit-mod-low'
+                                            label={t('common.low')}
+                                            Icon={ShieldAlert}
                                             disabled={isLoading}
                                         />
                                     </RadioGroup>

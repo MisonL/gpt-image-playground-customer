@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -318,6 +319,101 @@ describe('Command center scripts', () => {
         assert.deepEqual(args.slice(1), ['--contract-check', '--timeout-ms', '60000', 'contract check']);
     });
 
+    it('reports layered agent:doctor diagnostics without billable smoke by default', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            defaults: { state_backend: 'memory' },
+                            storage: { image_storage_mode: 'indexeddb', postgres_configured: false },
+                            agent_streaming: {
+                                page_sse: { supported: true }
+                            },
+                            agent_jobs: { supported: true },
+                            routing_rules: {
+                                high_resolution_edit: {
+                                    conditions: { operation: 'edit', max_edge: { operator: 'gt', value: 2048 } }
+                                }
+                            },
+                            supported: {
+                                image_backend_requirements: {
+                                    'responses-image-generation': {
+                                        supported: true,
+                                        enabled: true,
+                                        missing_env: []
+                                    }
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/runtime-capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            streaming: {
+                                defaultMode: 'auto',
+                                unavailableMarkScope: 'channel+backend+strategy+operation'
+                            },
+                            streamingBatch: { enabled: true },
+                            responsesImageBackend: { enabled: true, mode: 'experimental' }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/images/generate') {
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runNodeCommandAsync(['scripts/agent-doctor.mjs'], {
+                    env: { ...process.env, GPT_IMAGE_PLAYGROUND_URL: baseUrl },
+                    timeoutMs: 15_000
+                });
+
+                assert.equal(result.ok, true);
+                const body = parseJsonPayload(result.stdout, 'agent doctor');
+                assert.equal(body.ok, true);
+                assert.equal(body.billable, false);
+                assert.equal(body.summary.capabilities, 'ok');
+                assert.equal(body.summary.runtime, 'ok');
+                assert.equal(body.summary.state_backend, 'memory');
+                assert.equal(body.summary.responses_gpt2image_ready, true);
+                assert.equal(body.summary.billable_smoke, 'skipped');
+                assert.equal(body.layers.find((layer) => layer.name === 'billable_smoke').skipped, true);
+                assert.equal(body.layers.find((layer) => layer.name === 'capabilities').executable_routing_rules, true);
+            }
+        );
+    });
+
     it('preserves raw child output for command consumers', () => {
         const result = runCommand(process.execPath, ['-e', 'process.stdout.write(" M README.md\\n")']);
 
@@ -427,3 +523,53 @@ describe('Command center scripts', () => {
         });
     });
 });
+
+async function withServer(handler, run) {
+    const server = createServer(handler);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    try {
+        assert.equal(typeof address, 'object');
+        assert.ok(address);
+        await run(`http://127.0.0.1:${address.port}`);
+    } finally {
+        await new Promise((resolve) => server.close(resolve));
+    }
+}
+
+function runNodeCommandAsync(args, options = {}) {
+    return new Promise((resolve) => {
+        const child = spawn(process.execPath, args, {
+            cwd: process.cwd(),
+            env: options.env,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+        let stdout = '';
+        let stderr = '';
+        const startedAt = Date.now();
+        const timeout = options.timeoutMs
+            ? setTimeout(() => {
+                  child.kill('SIGTERM');
+              }, options.timeoutMs)
+            : undefined;
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        child.stdout.on('data', (chunk) => {
+            stdout += chunk;
+        });
+        child.stderr.on('data', (chunk) => {
+            stderr += chunk;
+        });
+        child.on('close', (status, signal) => {
+            if (timeout) clearTimeout(timeout);
+            resolve({
+                ok: status === 0,
+                status,
+                signal,
+                stdout,
+                stderr,
+                elapsed_ms: Date.now() - startedAt
+            });
+        });
+    });
+}

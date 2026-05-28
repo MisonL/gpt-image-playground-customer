@@ -316,56 +316,52 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         );
     });
 
-    it('fails explicitly when Responses image results only contain remote URLs', () => {
-        assert.throws(
-            () =>
-                normalizeUpstreamImageStreamEvent({
-                    type: 'response.output_item.done',
-                    item: {
-                        type: 'image_generation_call',
-                        status: 'completed',
-                        result: 'https://example.test/image.png'
-                    }
-                }),
-            /远程 URL/
+    it('maps GPT2Image Responses URL results to completed image URL events', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    status: 'completed',
+                    result: 'https://example.test/image.png'
+                }
+            }),
+            [{ type: 'completed', imageUrl: 'https://example.test/image.png' }]
         );
 
-        assert.throws(
-            () =>
-                normalizeUpstreamImageStreamEvent({
-                    type: 'response.output_item.done',
-                    item: {
-                        type: 'image_generation_call',
-                        url: 'https://example.test/image.png'
-                    }
-                }),
-            /远程 URL/
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.output_item.done',
+                item: {
+                    type: 'image_generation_call',
+                    url: '/api/storage/generations/image.png'
+                }
+            }),
+            [{ type: 'completed', imageUrl: '/api/storage/generations/image.png' }]
         );
 
-        assert.throws(
-            () =>
-                normalizeUpstreamImageStreamEvent({
-                    type: 'response.image_generation_call.completed',
-                    url: 'https://example.test/image.png'
-                }),
-            /远程 URL/
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.image_generation_call.completed',
+                url: 'https://example.test/image.png'
+            }),
+            [{ type: 'completed', imageUrl: 'https://example.test/image.png' }]
         );
 
-        assert.throws(
-            () =>
-                normalizeUpstreamImageStreamEvent({
-                    type: 'response.completed',
-                    response: {
-                        output: [
-                            {
-                                type: 'image_generation_call',
-                                status: 'completed',
-                                result: 'https://example.test/image.png'
-                            }
-                        ]
-                    }
-                }),
-            /远程 URL/
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'response.completed',
+                response: {
+                    output: [
+                        {
+                            type: 'image_generation_call',
+                            status: 'completed',
+                            result: 'https://example.test/image.png'
+                        }
+                    ]
+                }
+            }),
+            [{ type: 'completed', imageUrl: 'https://example.test/image.png' }]
         );
     });
 
@@ -493,14 +489,55 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         );
     });
 
-    it('fails explicitly when a completed image event only has a remote URL', () => {
-        assert.throws(
-            () =>
-                normalizeUpstreamImageStreamEvent({
-                    type: 'image_generation.completed',
-                    url: 'https://example.test/image.png'
-                }),
-            /b64_json/
+    it('maps completed image events with URL results to completed image URL events', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'image_generation.completed',
+                url: 'https://example.test/image.png'
+            }),
+            [{ type: 'completed', imageUrl: 'https://example.test/image.png' }]
+        );
+    });
+
+    it('ignores GPT2Image Agent SSE task events and keeps the final Agent image result', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'agent.event',
+                event: {
+                    kind: 'web_search',
+                    status: 'completed',
+                    title: 'search done'
+                }
+            }),
+            []
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'agent.partial_image',
+                partial_image_index: 0,
+                b64_json: 'agent-partial-base64'
+            }),
+            [
+                {
+                    type: 'partial_image',
+                    partialImageIndex: 0,
+                    b64Json: 'agent-partial-base64'
+                }
+            ]
+        );
+
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'agent.completed',
+                data: [{ b64_json: PNG_BASE64, output_role: 'final' }]
+            }),
+            [
+                {
+                    type: 'completed',
+                    b64Json: PNG_BASE64
+                }
+            ]
         );
     });
 

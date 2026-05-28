@@ -595,9 +595,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 AgentRoutingRule: {
                     type: 'object',
-                    required: ['when', 'endpoint', 'transport', 'strength', 'reason'],
+                    required: ['when', 'conditions', 'endpoint', 'transport', 'strength', 'action', 'reason'],
                     properties: {
                         when: { type: 'array', items: { type: 'string' } },
+                        conditions: { $ref: '#/components/schemas/AgentRoutingCondition' },
                         endpoint: { type: 'string' },
                         transport: {
                             type: 'string',
@@ -607,8 +608,62 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             type: 'string',
                             enum: ['default', 'recommended'] satisfies AgentRoutingStrength[]
                         },
+                        action: { $ref: '#/components/schemas/AgentRoutingAction' },
                         reason: { type: 'string' }
                     }
+                },
+                AgentRoutingCondition: {
+                    type: 'object',
+                    required: ['operation'],
+                    properties: {
+                        operation: {
+                            type: 'string',
+                            enum: ['generate', 'edit', 'generate_or_edit']
+                        },
+                        max_edge: {
+                            type: 'object',
+                            required: ['operator', 'value'],
+                            properties: {
+                                operator: { type: 'string', enum: ['gt', 'lte'] },
+                                value: { type: 'integer', minimum: 1 }
+                            }
+                        },
+                        batch: { type: 'boolean' },
+                        single_request: { type: 'boolean' },
+                        complex_ui: { type: 'boolean' },
+                        long_image: { type: 'boolean' },
+                        resume_or_recover: { type: 'boolean' }
+                    },
+                    additionalProperties: false
+                },
+                AgentRoutingAction: {
+                    type: 'object',
+                    required: [
+                        'endpoint',
+                        'transport',
+                        'strength',
+                        'requires_new_idempotency_key_on_retry',
+                        'no_automatic_fallback'
+                    ],
+                    properties: {
+                        endpoint: { type: 'string' },
+                        transport: {
+                            type: 'string',
+                            enum: ['agent_json', 'agent_job_polling', 'page_sse'] satisfies AgentRoutingTransport[]
+                        },
+                        strength: {
+                            type: 'string',
+                            enum: ['default', 'recommended'] satisfies AgentRoutingStrength[]
+                        },
+                        fallback_endpoint: { type: 'string' },
+                        fallback_mode: {
+                            type: 'string',
+                            enum: ['manual_after_diagnosis', 'fix_request_before_retry']
+                        },
+                        requires_new_idempotency_key_on_retry: { type: 'boolean' },
+                        no_automatic_fallback: { type: 'boolean' }
+                    },
+                    additionalProperties: false
                 },
                 AgentEndpointStreamingCapability: {
                     type: 'object',

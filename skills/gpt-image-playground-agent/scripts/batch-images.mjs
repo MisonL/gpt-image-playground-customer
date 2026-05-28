@@ -41,17 +41,30 @@ const STREAMING_STRATEGIES = new Set([
 const MAX_EDIT_IMAGES = 10;
 const MIN_PARTIAL_IMAGES = 1;
 const MAX_PARTIAL_IMAGES = 3;
+const DEFAULT_BATCH_MAX_ATTEMPTS = 1;
+const DEFAULT_MAX_CONSECUTIVE_FAILURES = 0;
 const GENERATE_ONLY_FIELDS = [
+  'background'
+];
+const PAGE_ADVANCED_FIELDS = [
   'output_format',
   'format',
   'output_compression',
-  'background',
   'moderation',
   'image_backend',
-  'responsesModel'
+  'responsesModel',
+  'gptModel',
+  'gpt_model',
+  'thinking',
+  'promptOptimization',
+  'prompt_optimization',
+  'force_web',
+  'forceWeb',
+  'sse_log_path'
 ];
 const EDIT_ONLY_FIELDS = ['image_path', 'image_paths', 'mask_path'];
 const BOOLEAN_ROUTING_FIELDS = ['page_sse', 'complex_ui', 'long_image', 'resume_or_recover'];
+const THINKING_VALUES = new Set(['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
 const TASK_FIELDS = new Set([
   'id',
   'mode',
@@ -71,6 +84,7 @@ const TASK_FIELDS = new Set([
   'long_image',
   'resume_or_recover',
   ...GENERATE_ONLY_FIELDS,
+  ...PAGE_ADVANCED_FIELDS,
   ...EDIT_ONLY_FIELDS
 ]);
 
@@ -98,6 +112,15 @@ try {
   if (!options.input) throw new Error('--input 需要 JSONL 文件路径。');
   baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
   timeoutMs = readConfiguredPositiveInteger(options.timeoutMs, '--timeout-ms', 420000);
+  options.maxAttempts = readConfiguredPositiveInteger(
+    options.maxAttempts ?? DEFAULT_BATCH_MAX_ATTEMPTS,
+    '--max-attempts',
+    DEFAULT_BATCH_MAX_ATTEMPTS
+  );
+  options.maxConsecutiveFailures = readNonNegativeInteger(
+    options.maxConsecutiveFailures ?? DEFAULT_MAX_CONSECUTIVE_FAILURES,
+    '--max-consecutive-failures'
+  );
   tasks = readJsonlTasks(options.input);
 } catch (error) {
   console.error(errorMessage(error));
@@ -123,6 +146,8 @@ if (!options.allowBillable || options.dryRun) {
         input: options.input,
         manifest: manifestPath,
         total: planned.length,
+        max_attempts: options.maxAttempts,
+        max_consecutive_failures: options.maxConsecutiveFailures,
         tasks: planned.map((task) => {
           const routing = buildTaskRouting(task);
           return {
@@ -147,18 +172,60 @@ if (!options.allowBillable || options.dryRun) {
 try {
   const completed = options.resume ? readCompletedManifestKeys(manifestPath) : new Set();
   const results = [];
+  const failedTasks = [];
+  let consecutiveFailures = 0;
   for (const task of planned) {
     if (completed.has(task.idempotencyKey) || completed.has(task.id)) {
-      const skipped = { ok: true, status: 'skipped', id: task.id, idempotency_key: task.idempotencyKey };
-      appendManifest(manifestPath, { ...baseManifestEntry(task), status: 'skipped', skipped_reason: 'resume' });
+      const skipped = {
+        ok: true,
+        status: 'skipped',
+        id: task.id,
+        idempotency_key: task.idempotencyKey,
+        billable: false,
+        skipped_reason: 'resume'
+      };
+      appendManifest(manifestPath, {
+        ...baseManifestEntry(task),
+        status: 'skipped',
+        billable: false,
+        skipped_reason: 'resume'
+      });
       results.push(skipped);
       continue;
     }
-    const result = await runTask(task);
+    if (options.maxConsecutiveFailures > 0 && consecutiveFailures >= options.maxConsecutiveFailures) {
+      const skipped = buildCircuitBreakerSkippedTask(task, consecutiveFailures);
+      appendManifest(manifestPath, { ...baseManifestEntry(task), ...skipped });
+      results.push({ ok: true, id: task.id, idempotency_key: task.idempotencyKey, ...skipped });
+      continue;
+    }
+    const result = await runTaskWithAttempts(task);
     results.push(result);
+    if (result.ok) {
+      consecutiveFailures = 0;
+    } else {
+      consecutiveFailures += 1;
+      failedTasks.push(buildFailedTaskSummary(result, task));
+    }
   }
   const failed = results.filter((result) => !result.ok).length;
-  console.log(JSON.stringify({ ok: failed === 0, total: results.length, failed, manifest: manifestPath, results }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        ok: failed === 0,
+        total: results.length,
+        failed,
+        manifest: manifestPath,
+        max_attempts: options.maxAttempts,
+        max_consecutive_failures: options.maxConsecutiveFailures,
+        failure_summary: buildFailureSummary(failedTasks),
+        resume_fix_list: buildResumeFixList(failedTasks),
+        results
+      },
+      null,
+      2
+    )
+  );
   process.exit(failed === 0 ? 0 : 1);
 } catch (error) {
   console.error(errorMessage(error));
@@ -171,6 +238,8 @@ function parseArgs(argv) {
     manifest: undefined,
     orderedPrefix: 'batch',
     timeoutMs: undefined,
+    maxAttempts: undefined,
+    maxConsecutiveFailures: undefined,
     allowBillable: false,
     dryRun: false,
     resume: false,
@@ -188,6 +257,10 @@ function parseArgs(argv) {
     else if (arg === '--manifest') parsed.manifest = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--ordered-prefix') parsed.orderedPrefix = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--max-attempts') parsed.maxAttempts = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--max-consecutive-failures') {
+      parsed.maxConsecutiveFailures = readOptionValue(argv, (index += 1), arg);
+    }
     else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
     else if (!parsed.input) parsed.input = arg;
     else throw new Error(`未知位置参数：${arg}`);
@@ -279,6 +352,11 @@ function validateTaskFields(raw, id, mode) {
   if (hasOwn(raw, 'image_backend')) normalizeEnumValue(raw.image_backend, IMAGE_BACKENDS, `${id}.image_backend`);
   if (hasOwn(raw, 'background')) normalizeEnumValue(raw.background, BACKGROUNDS, `${id}.background`);
   if (hasOwn(raw, 'moderation')) normalizeEnumValue(raw.moderation, MODERATIONS, `${id}.moderation`);
+  if (hasOwn(raw, 'thinking')) normalizeEnumValue(raw.thinking, THINKING_VALUES, `${id}.thinking`);
+  readPromptOptimization(raw, id);
+  if (hasOwn(raw, 'force_web')) readBooleanAlias(raw.force_web, `${id}.force_web`);
+  if (hasOwn(raw, 'forceWeb')) readBooleanAlias(raw.forceWeb, `${id}.forceWeb`);
+  if (hasOwn(raw, 'sse_log_path')) readNonEmptyString(raw.sse_log_path, `${id}.sse_log_path`);
   validateResponsesModelField(raw, id);
   if (hasOwn(raw, 'stream_mode')) normalizeEnumValue(raw.stream_mode, STREAM_MODES, `${id}.stream_mode`);
   if (hasOwn(raw, 'streaming_strategy')) {
@@ -347,8 +425,8 @@ function validateOutputCompression(raw, id) {
 }
 
 function validateResponsesModelField(raw, id) {
-  if (!hasOwn(raw, 'responsesModel')) return;
-  readNonEmptyString(raw.responsesModel, `${id}.responsesModel`);
+  const responsesModel = readResponsesModel(raw, id);
+  if (!responsesModel) return;
   if (!hasOwn(raw, 'image_backend')) {
     throw new Error(`${id}.responsesModel 必须同时设置 image_backend=responses-image-generation。`);
   }
@@ -358,13 +436,44 @@ function validateResponsesModelField(raw, id) {
   }
 }
 
+function readResponsesModel(raw, id) {
+  const fields = ['responsesModel', 'gptModel', 'gpt_model'];
+  const present = fields.filter((field) => hasOwn(raw, field));
+  if (present.length === 0) return undefined;
+  if (present.length > 1) throw new Error(`${id}.responsesModel、gptModel 与 gpt_model 不能同时设置。`);
+  return readNonEmptyString(raw[present[0]], `${id}.${present[0]}`);
+}
+
+function readPromptOptimization(raw, id) {
+  const fields = ['promptOptimization', 'prompt_optimization'];
+  const present = fields.filter((field) => hasOwn(raw, field));
+  if (present.length === 0) return undefined;
+  if (present.length > 1) throw new Error(`${id}.promptOptimization 与 prompt_optimization 不能同时设置。`);
+  return readBooleanAlias(raw[present[0]], `${id}.${present[0]}`);
+}
+
+function readForceWeb(raw, id) {
+  const fields = ['force_web', 'forceWeb'];
+  const present = fields.filter((field) => hasOwn(raw, field));
+  if (present.length === 0) return undefined;
+  if (present.length > 1) throw new Error(`${id}.force_web 与 forceWeb 不能同时设置。`);
+  return readBooleanAlias(raw[present[0]], `${id}.${present[0]}`);
+}
+
+function readBooleanAlias(value, name) {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${name} 必须是布尔值。`);
+}
+
 function readOutputCompression(raw, id) {
   if (!hasOwn(raw, 'output_compression')) return undefined;
   const outputFormat = hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
     ? readOutputFormatField(raw, id)
     : 'png';
   if (outputFormat === 'png') {
-    throw new Error(`${id}.output_compression 仅适用于 jpeg 或 webp 输出。`);
+    return undefined;
   }
   const value = raw.output_compression;
   const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
@@ -372,6 +481,15 @@ function readOutputCompression(raw, id) {
     throw new Error(`${id}.output_compression 必须是 0 到 100 之间的整数。`);
   }
   return parsed;
+}
+
+function readTaskNormalizations(raw, id) {
+  if (!hasOwn(raw, 'output_compression')) return undefined;
+  const outputFormat = hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
+    ? readOutputFormatField(raw, id)
+    : 'png';
+  if (outputFormat !== 'png') return undefined;
+  return { output_compression_ignored_for_png: true };
 }
 
 function readOutputFormatField(raw, id) {
@@ -386,9 +504,19 @@ function validateTaskRoutingFields(raw, id) {
   if ((raw.page_sse === true || raw.transport === 'page_sse') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
     throw new Error(`${id} stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。`);
   }
-  if (hasOwn(raw, 'responsesModel') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
+  if (readResponsesModel(raw, id) && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
     throw new Error(`${id}.responsesModel 需要页面 SSE 路径，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`);
   }
+  if (hasOwn(raw, 'sse_log_path') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
+    throw new Error(`${id}.sse_log_path 需要页面 SSE 路径，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`);
+  }
+  if (hasPageAdvancedFields(raw) && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off') && raw.mode === 'edit') {
+    throw new Error(`${id} 图生图高级参数需要页面 SSE，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`);
+  }
+}
+
+function hasPageAdvancedFields(raw) {
+  return PAGE_ADVANCED_FIELDS.some((field) => hasOwn(raw, field));
 }
 
 function hasOwn(value, key) {
@@ -463,6 +591,41 @@ async function runTask(task) {
   }
 }
 
+async function runTaskWithAttempts(task) {
+  let lastResult;
+  for (let attempt = 1; attempt <= options.maxAttempts; attempt += 1) {
+    const attemptTask = buildAttemptTask(task, attempt);
+    const result = await runTask(attemptTask);
+    lastResult = addAttemptMetadata(result, task, attempt);
+    if (result.ok) return lastResult;
+  }
+  return lastResult;
+}
+
+function buildAttemptTask(task, attempt) {
+  if (attempt === 1) return { ...task, attempt, rootIdempotencyKey: task.idempotencyKey };
+  return {
+    ...task,
+    attempt,
+    rootIdempotencyKey: task.idempotencyKey,
+    idempotencyKey: buildAttemptIdempotencyKey(task.idempotencyKey, attempt)
+  };
+}
+
+function buildAttemptIdempotencyKey(idempotencyKey, attempt) {
+  const suffix = `-attempt-${attempt}`;
+  return `${idempotencyKey.slice(0, 200 - suffix.length)}${suffix}`;
+}
+
+function addAttemptMetadata(result, rootTask, attempt) {
+  return {
+    ...result,
+    attempt,
+    max_attempts: options.maxAttempts,
+    ...(attempt > 1 ? { root_idempotency_key: rootTask.idempotencyKey } : {})
+  };
+}
+
 function buildTaskFailureOutput(error, routing) {
   if (error?.pageSseFailure && typeof error.pageSseFailure === 'object') {
     return {
@@ -475,18 +638,77 @@ function buildTaskFailureOutput(error, routing) {
   return { error: errorMessage(error), routing };
 }
 
+function buildCircuitBreakerSkippedTask(task, consecutiveFailures) {
+  return {
+    status: 'skipped',
+    billable: false,
+    skipped_reason: 'max_consecutive_failures',
+    consecutive_failures: consecutiveFailures,
+    next_step: '先处理 failure_summary 中的失败任务，再用 --resume 续跑剩余任务。'
+  };
+}
+
+function buildFailedTaskSummary(result, task) {
+  const error = normalizeFailureError(result.error);
+  return {
+    index: task.index,
+    id: task.id,
+    idempotency_key: task.idempotencyKey,
+    attempt: result.attempt,
+    route: result.routing?.transport,
+    endpoint: result.routing?.endpoint,
+    billable: result.billable !== false,
+    code: error.code,
+    message: error.message,
+    next_step: result.next_step || buildFailureNextStep(error)
+  };
+}
+
+function normalizeFailureError(error) {
+  if (error && typeof error === 'object') {
+    return {
+      code: typeof error.code === 'string' ? error.code : 'batch_task_failed',
+      message: typeof error.message === 'string' ? error.message : JSON.stringify(error)
+    };
+  }
+  return { code: 'batch_task_failed', message: String(error || '任务失败。') };
+}
+
+function buildFailureNextStep(error) {
+  if (error.code === 'page_sse_request_rejected') return '修正请求参数或鉴权后，使用新的 Idempotency-Key 重试失败任务。';
+  if (error.code === 'page_sse_unavailable') return '补齐 page_sse capability 或显式改用 Agent JSON，再重试失败任务。';
+  return '诊断失败原因后，用新的 Idempotency-Key 重试失败任务；不要复用终态失败 key。';
+}
+
+function buildFailureSummary(failedTasks) {
+  return {
+    count: failedTasks.length,
+    billable_count: failedTasks.filter((task) => task.billable).length,
+    non_billable_count: failedTasks.filter((task) => !task.billable).length,
+    tasks: failedTasks
+  };
+}
+
+function buildResumeFixList(failedTasks) {
+  return failedTasks.map((task) => ({
+    id: task.id,
+    previous_idempotency_key: task.idempotency_key,
+    suggested_idempotency_key: buildAttemptIdempotencyKey(task.idempotency_key, (task.attempt || 1) + 1),
+    route: task.route,
+    next_step: task.next_step
+  }));
+}
+
 function buildTaskRouting(task) {
   if (shouldUsePageSseForTask(task)) {
+    const reason = buildPageSseRoutingReason(task);
     return {
       endpoint: PAGE_SSE_ENDPOINT,
       transport: 'page_sse',
       strength: task.mode === 'edit' && readTaskMaxEdge(task) > 2048 ? 'default' : 'recommended',
       fallback_endpoint: task.mode === 'edit' ? AGENT_ENDPOINTS.edit : AGENT_ENDPOINTS.generate,
       fallback_mode: 'manual_after_diagnosis',
-      reason:
-        task.mode === 'edit' && readTaskMaxEdge(task) > 2048
-          ? 'High-resolution edit defaults to page form-data SSE; fall back explicitly after diagnosis if streaming has issues.'
-          : 'Large or complex batch image tasks should use page form-data SSE for observability and recovery.'
+      reason
     };
   }
   return {
@@ -495,6 +717,19 @@ function buildTaskRouting(task) {
     strength: 'default',
     reason: 'Normal batch tasks use the Agent JSON response contract.'
   };
+}
+
+function buildPageSseRoutingReason(task) {
+  if (task.raw.sse_log_path) {
+    return 'Task requested raw SSE event logging, so it uses page form-data SSE for observable diagnostics.';
+  }
+  if (task.mode === 'edit' && hasPageAdvancedFields(task.raw)) {
+    return 'GPT2Image-compatible edit options require page form-data SSE; Agent JSON edit does not accept those fields.';
+  }
+  if (task.mode === 'edit' && readTaskMaxEdge(task) > 2048) {
+    return 'High-resolution edit defaults to page form-data SSE; fall back explicitly after diagnosis if streaming has issues.';
+  }
+  return 'Large or complex batch image tasks should use page form-data SSE for observability and recovery.';
 }
 
 function buildDryRunRequestPreview(task, routing) {
@@ -534,16 +769,20 @@ function buildPageSseRequestPreview(task) {
   if (raw.streaming_strategy) preview.image_streaming_strategy = String(raw.streaming_strategy);
   if (raw.partial_images !== undefined) preview.partial_images = readPartialImages(raw.partial_images, `${task.id}.partial_images`);
   if (raw.image_backend) preview.image_backend = normalizeImageBackendForPage(String(raw.image_backend));
-  if (raw.responsesModel) preview.responsesModel = readNonEmptyString(raw.responsesModel, `${task.id}.responsesModel`);
+  if (readResponsesModel(raw, task.id)) preview.responsesModel = readResponsesModel(raw, task.id);
+  if (raw.thinking) preview.thinking = String(raw.thinking);
+  if (readPromptOptimization(raw, task.id) !== undefined) preview.promptOptimization = readPromptOptimization(raw, task.id);
+  if (readForceWeb(raw, task.id) !== undefined) preview.force_web = readForceWeb(raw, task.id);
+  if (raw.sse_log_path) preview.sse_log_path = readNonEmptyString(raw.sse_log_path, `${task.id}.sse_log_path`);
   if (raw.background) preview.background = String(raw.background);
   if (raw.moderation) preview.moderation = String(raw.moderation);
   if (raw.output_compression !== undefined) preview.output_compression = readOutputCompression(raw, task.id);
+  if (readTaskNormalizations(raw, task.id)) preview.normalizations = readTaskNormalizations(raw, task.id);
   if (task.mode === 'edit') {
     preview.image_fields = readEditImagePaths(raw, task.id).map((_, index) => `image_${index}`);
     if (raw.mask_path) preview.mask = 'provided';
-  } else {
-    preview.output_format = readOutputFormat(raw);
   }
+  preview.output_format = readOutputFormat(raw);
   return preview;
 }
 
@@ -557,7 +796,9 @@ function shouldUsePageSseForTask(task) {
   }
   if (!pageSseAllowed) return false;
   if (task.raw.complex_ui === true || task.raw.long_image === true || task.raw.resume_or_recover === true) return true;
-  if (hasOwn(task.raw, 'responsesModel')) return true;
+  if (readResponsesModel(task.raw, task.id)) return true;
+  if (task.raw.sse_log_path) return true;
+  if (task.mode === 'edit' && hasPageAdvancedFields(task.raw)) return true;
   if (task.mode === 'edit' && readTaskMaxEdge(task) > 2048) return true;
   if (task.mode === 'generate' && readTaskMaxEdge(task) > 2048) {
     return true;
@@ -605,6 +846,7 @@ async function postPageSseTask(task, routing) {
       url: `${baseUrl}${PAGE_SSE_ENDPOINT}`,
       formData,
       timeoutMs,
+      sseLogPath: task.raw.sse_log_path,
       errorMessage
     });
     return formatPageSseOutput({
@@ -630,7 +872,7 @@ function buildGenerateBody(raw) {
     ? normalizeOutputFormat(raw.output_format ?? raw.format)
     : 'png';
   const outputCompression = readOutputCompression(raw, String(raw.id || 'generate'));
-  return {
+  const body = {
     prompt: raw.prompt,
     model: raw.model || 'gpt-image-2',
     n: readConfiguredPositiveInteger(raw.n, 'n', 1),
@@ -648,6 +890,8 @@ function buildGenerateBody(raw) {
       : {}),
     ...(hasOwn(raw, 'partial_images') ? { partial_images: readPartialImages(raw.partial_images, 'partial_images') } : {})
   };
+  const normalizations = readTaskNormalizations(raw, String(raw.id || 'generate'));
+  return normalizations ? { ...body, normalizations } : body;
 }
 
 function buildPageSseTaskFormData(task) {
@@ -666,17 +910,23 @@ function buildPageSseTaskFormData(task) {
   if (raw.streaming_strategy) formData.append('image_streaming_strategy', String(raw.streaming_strategy));
   if (raw.partial_images !== undefined) formData.append('partial_images', String(readPartialImages(raw.partial_images, `${task.id}.partial_images`)));
   if (raw.image_backend) formData.append('image_backend', normalizeImageBackendForPage(String(raw.image_backend)));
-  if (raw.responsesModel) formData.append('responsesModel', readNonEmptyString(raw.responsesModel, `${task.id}.responsesModel`));
+  if (readResponsesModel(raw, task.id)) formData.append('responsesModel', readResponsesModel(raw, task.id));
+  if (raw.thinking) formData.append('thinking', String(raw.thinking));
+  if (readPromptOptimization(raw, task.id) !== undefined) {
+    formData.append('promptOptimization', String(readPromptOptimization(raw, task.id)));
+  }
+  if (readForceWeb(raw, task.id) !== undefined) formData.append('force_web', String(readForceWeb(raw, task.id)));
   if (raw.background) formData.append('background', String(raw.background));
   if (raw.moderation) formData.append('moderation', String(raw.moderation));
-  if (raw.output_compression !== undefined) formData.append('output_compression', String(readOutputCompression(raw, task.id)));
+  if (readOutputCompression(raw, task.id) !== undefined) {
+    formData.append('output_compression', String(readOutputCompression(raw, task.id)));
+  }
   if (passwordHash) formData.append('passwordHash', passwordHash);
   if (task.mode === 'edit') {
     readEditImagePaths(raw, task.id).forEach((filePath, index) => appendFile(formData, `image_${index}`, filePath));
     if (raw.mask_path) appendFile(formData, 'mask', raw.mask_path);
-  } else {
-    formData.append('output_format', readOutputFormat(raw));
   }
+  formData.append('output_format', readOutputFormat(raw));
   return formData;
 }
 
@@ -726,6 +976,14 @@ function readPartialImages(value, name) {
   const parsed = readConfiguredPositiveInteger(value, name, 2);
   if (parsed < MIN_PARTIAL_IMAGES || parsed > MAX_PARTIAL_IMAGES) {
     throw new Error(`${name} 必须是 1 到 3 的整数。`);
+  }
+  return parsed;
+}
+
+function readNonNegativeInteger(value, name) {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} 必须是非负整数。`);
   }
   return parsed;
 }
@@ -875,7 +1133,17 @@ function appendManifest(filePath, entry) {
 }
 
 function baseManifestEntry(task) {
-  return { at: new Date().toISOString(), index: task.index, id: task.id, mode: task.mode, idempotency_key: task.idempotencyKey };
+  return {
+    at: new Date().toISOString(),
+    index: task.index,
+    id: task.id,
+    mode: task.mode,
+    idempotency_key: task.idempotencyKey,
+    attempt: task.attempt || 1,
+    ...(task.rootIdempotencyKey && task.rootIdempotencyKey !== task.idempotencyKey
+      ? { root_idempotency_key: task.rootIdempotencyKey }
+      : {})
+  };
 }
 
 function sanitizeResponse(response) {
@@ -899,5 +1167,5 @@ function mimeTypeForPath(filePath) {
 function printUsage() {
   console.error('用法：batch-images.mjs --input tasks.jsonl [options]');
   console.error('默认只输出 dry-run；添加 --allow-billable 才会按 routing rules 逐行真实请求 Agent API 或页面 SSE。');
-  console.error('常用参数：--manifest --resume --ordered-prefix --dimension-check --timeout-ms --dry-run --allow-billable');
+  console.error('常用参数：--manifest --resume --ordered-prefix --dimension-check --max-attempts --max-consecutive-failures --timeout-ms --dry-run --allow-billable');
 }

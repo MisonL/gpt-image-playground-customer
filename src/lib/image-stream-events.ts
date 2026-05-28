@@ -15,12 +15,14 @@ export type ImageStreamProviderDialect =
 export type NormalizedImageStreamEvent =
     | {
           type: 'partial_image';
-          b64Json: string;
+          b64Json?: string;
+          imageUrl?: string;
           partialImageIndex?: number;
       }
     | {
           type: 'completed';
-          b64Json: string;
+          b64Json?: string;
+          imageUrl?: string;
           usage?: ImageUsage;
           dedupeKey?: string;
       };
@@ -44,7 +46,8 @@ const PARTIAL_EVENT_TYPES = new Set([
     'image_generation.partial_image',
     'image_edit.partial_image',
     'image.generation.chunk',
-    'response.image_generation_call.partial_image'
+    'response.image_generation_call.partial_image',
+    'agent.partial_image'
 ]);
 
 const COMPLETED_EVENT_TYPES = new Set([
@@ -53,7 +56,8 @@ const COMPLETED_EVENT_TYPES = new Set([
     'image.generation.result',
     'response.image_generation_call.completed',
     'response.output_item.done',
-    'response.completed'
+    'response.completed',
+    'agent.completed'
 ]);
 
 const OFFICIAL_EVENT_TYPES = new Set([
@@ -73,6 +77,7 @@ const RESPONSES_EVENT_TYPES = new Set([
 ]);
 
 const OTOKAPI_EVENT_TYPES = new Set(['image.generation.chunk', 'image.generation.result']);
+const AGENT_EVENT_TYPES = new Set(['agent.event', 'agent.partial_image', 'agent.completed']);
 const MAX_RESPONSES_IMAGE_TRAVERSAL_DEPTH = 64;
 
 function readString(record: JsonRecord, ...keys: string[]): string | undefined {
@@ -244,12 +249,32 @@ function readResponsesImageBase64(record: JsonRecord): string | undefined {
     return readResponsesImageResultBase64(result) || readImageBase64(record);
 }
 
-function readResponsesImageDedupeKey(record: JsonRecord, b64Json?: string): string | undefined {
+function isImageResultUrl(value: string): boolean {
+    return isRemoteHttpUrl(value) || value.startsWith('/');
+}
+
+function readImageUrl(record: JsonRecord): string | undefined {
+    const url = readString(record, 'url');
+    if (url && isImageResultUrl(url)) return url;
+    return undefined;
+}
+
+function readResponsesImageUrl(record: JsonRecord): string | undefined {
+    if (readString(record, 'type') !== 'image_generation_call') {
+        return undefined;
+    }
+    const result = readString(record, 'result');
+    if (result && isImageResultUrl(result)) return result;
+    return readImageUrl(record);
+}
+
+function readResponsesImageDedupeKey(record: JsonRecord, b64Json?: string, imageUrl?: string): string | undefined {
     if (readString(record, 'type') !== 'image_generation_call') {
         return undefined;
     }
     const id = readString(record, 'id', 'item_id', 'itemId', 'call_id', 'callId');
     if (id) return `responses:${id}`;
+    if (imageUrl) return `responses:url:${hashImagePayload(imageUrl)}`;
     return b64Json ? `responses:result:${fingerprintImagePayload(b64Json)}` : undefined;
 }
 
@@ -261,16 +286,6 @@ function hashImagePayload(value: string): string {
     return createHash('sha256').update(value).digest('hex');
 }
 
-function hasRemoteOnlyResponsesImageResult(record: JsonRecord): boolean {
-    return readResponsesImageGenerationItems(record).some((item) => {
-        const result = readString(item, 'result');
-        const url = readString(item, 'url');
-        return Boolean(
-            ((result && isRemoteHttpUrl(result)) || (url && isRemoteHttpUrl(url))) && !readImageBase64(item)
-        );
-    });
-}
-
 function hasCompletedResponsesImageItem(record: JsonRecord): boolean {
     return readResponsesImageGenerationItems(record).some((item) => {
         const status = readString(item, 'status');
@@ -280,65 +295,96 @@ function hasCompletedResponsesImageItem(record: JsonRecord): boolean {
 
 function hasCompletedImagePayload(record: JsonRecord): boolean {
     return (
-        readNestedCompletedItems(record).some((item) => Boolean(readImageBase64(item))) ||
-        readResponsesImageGenerationItems(record).some((item) => Boolean(readResponsesImageBase64(item)))
+        readNestedCompletedItems(record).some((item) => Boolean(readImageBase64(item) || readImageUrl(item))) ||
+        readResponsesImageGenerationItems(record).some((item) =>
+            Boolean(readResponsesImageBase64(item) || readResponsesImageUrl(item))
+        )
     );
 }
 
 function normalizePartialEvent(record: JsonRecord): NormalizedImageStreamEvent[] {
     const b64Json = readImageBase64(record);
-    if (!b64Json) {
+    const imageUrl = readImageUrl(record);
+    if (!b64Json && !imageUrl) {
         return [];
     }
     const partialImageIndex = readNumber(record, 'partial_image_index', 'partialImageIndex', 'index');
     return [
         {
             type: 'partial_image',
-            b64Json,
+            ...(b64Json ? { b64Json } : {}),
+            ...(imageUrl ? { imageUrl } : {}),
             ...(partialImageIndex !== undefined ? { partialImageIndex } : {})
         }
     ];
 }
 
 type CompletedImageSource = {
-    b64Json: string;
+    b64Json?: string;
+    imageUrl?: string;
     dedupeKey?: string;
 };
 
+function completedSourceKey(source: CompletedImageSource): string | undefined {
+    if (source.dedupeKey) return source.dedupeKey;
+    return undefined;
+}
+
 function appendCompletedSource(completed: CompletedImageSource[], sourceValues: CompletedImageSource[]) {
-    const previousKeys = new Set(completed.flatMap((item) => (item.dedupeKey ? [item.dedupeKey] : [])));
+    const previousKeys = new Set(completed.flatMap((item) => {
+        const key = completedSourceKey(item);
+        return key ? [key] : [];
+    }));
     for (const value of sourceValues) {
-        if (value.dedupeKey && previousKeys.has(value.dedupeKey)) {
+        const key = completedSourceKey(value);
+        if (key && previousKeys.has(key)) {
             continue;
         }
         completed.push(value);
-        if (value.dedupeKey) previousKeys.add(value.dedupeKey);
+        if (key) previousKeys.add(key);
     }
 }
 
 function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefined): NormalizedImageStreamEvent[] {
     const usage = readUsage(record) || readResponseUsage(record) || readFirstNestedUsage(record);
     const rootB64 = readImageBase64(record);
+    const rootUrl = readImageUrl(record);
     const dataItems = readNestedCompletedItems(record);
     const responsesItems = readResponsesImageGenerationItems(record);
+    const isResponsesEvent = Boolean(eventType && RESPONSES_EVENT_TYPES.has(eventType));
     const completed: CompletedImageSource[] = [];
-    appendCompletedSource(completed, rootB64 ? [{ b64Json: rootB64 }] : []);
+    appendCompletedSource(completed, !isResponsesEvent && rootB64 ? [{ b64Json: rootB64 }] : []);
+    appendCompletedSource(completed, !isResponsesEvent && !rootB64 && rootUrl ? [{ imageUrl: rootUrl }] : []);
     appendCompletedSource(
         completed,
         dataItems.flatMap((item) => {
             const b64Json = readImageBase64(item);
-            if (!b64Json) return [];
-            const dedupeKey = readResponsesImageDedupeKey(item, b64Json);
-            return [{ b64Json, ...(dedupeKey ? { dedupeKey } : {}) }];
+            const imageUrl = readImageUrl(item);
+            if (!b64Json && !imageUrl) return [];
+            const dedupeKey = readResponsesImageDedupeKey(item, b64Json, imageUrl);
+            return [
+                {
+                    ...(b64Json ? { b64Json } : {}),
+                    ...(imageUrl ? { imageUrl } : {}),
+                    ...(dedupeKey ? { dedupeKey } : {})
+                }
+            ];
         })
     );
     appendCompletedSource(
         completed,
         responsesItems.flatMap((item) => {
             const b64Json = readResponsesImageBase64(item);
-            if (!b64Json) return [];
-            const dedupeKey = readResponsesImageDedupeKey(item, b64Json);
-            return [{ b64Json, ...(dedupeKey ? { dedupeKey } : {}) }];
+            const imageUrl = readResponsesImageUrl(item);
+            if (!b64Json && !imageUrl) return [];
+            const dedupeKey = readResponsesImageDedupeKey(item, b64Json, imageUrl);
+            return [
+                {
+                    ...(b64Json ? { b64Json } : {}),
+                    ...(imageUrl ? { imageUrl } : {}),
+                    ...(dedupeKey ? { dedupeKey } : {})
+                }
+            ];
         })
     );
 
@@ -348,24 +394,20 @@ function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefin
         COMPLETED_EVENT_TYPES.has(eventType) &&
         !RESPONSES_EVENT_TYPES.has(eventType)
     ) {
-        throw new UpstreamImageStreamEventError(`流式图片完成事件缺少 b64_json。上游事件类型：${eventType}。`);
+        throw new UpstreamImageStreamEventError(`流式图片完成事件缺少 b64_json 或 url。上游事件类型：${eventType}。`);
     }
     if (completed.length === 0 && eventType && RESPONSES_EVENT_TYPES.has(eventType)) {
-        if (hasRemoteOnlyResponsesImageResult(record)) {
-            throw new UpstreamImageStreamEventError(
-                `Responses API 图片完成事件只返回远程 URL，缺少可保存的 base64 result。上游事件类型：${eventType}。`
-            );
-        }
         if (hasCompletedResponsesImageItem(record)) {
             throw new UpstreamImageStreamEventError(
-                `Responses API 图片完成事件缺少 image_generation_call.result。上游事件类型：${eventType}。`
+                `Responses API 图片完成事件缺少 image_generation_call.result 或 url。上游事件类型：${eventType}。`
             );
         }
     }
 
     return completed.map((item) => ({
         type: 'completed' as const,
-        b64Json: item.b64Json,
+        ...(item.b64Json ? { b64Json: item.b64Json } : {}),
+        ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
         ...(item.dedupeKey ? { dedupeKey: item.dedupeKey } : {}),
         ...(usage ? { usage } : {})
     }));
@@ -383,6 +425,9 @@ function classifyProviderDialect(
     }
     if (eventType && OTOKAPI_EVENT_TYPES.has(eventType)) {
         return 'otokapi_image_event';
+    }
+    if (eventType && AGENT_EVENT_TYPES.has(eventType)) {
+        return events.length > 0 ? 'responses_image_event' : 'unknown_ignored_event';
     }
     if (!eventType && events.length > 0) {
         return 'sdk_parsed_fallback';
@@ -427,7 +472,8 @@ export function normalizeUpstreamImageStreamEvent(event: unknown): NormalizedIma
         }
         return {
             type: 'completed',
-            b64Json: normalizedEvent.b64Json,
+            ...(normalizedEvent.b64Json ? { b64Json: normalizedEvent.b64Json } : {}),
+            ...(normalizedEvent.imageUrl ? { imageUrl: normalizedEvent.imageUrl } : {}),
             ...(normalizedEvent.usage ? { usage: normalizedEvent.usage } : {})
         };
     });

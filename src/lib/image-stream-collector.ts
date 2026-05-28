@@ -1,4 +1,5 @@
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
+import { downloadSameOriginImageAsBase64 } from './image-url-result';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
@@ -18,7 +19,12 @@ export class MissingFinalImageStreamResultError extends Error {
 
 export async function collectOpenAiImagesFromStream(
     stream: AsyncIterable<unknown>,
-    options: { onStreamingDegraded?: (reason: string) => void } = {}
+    options: {
+        apiBaseUrl?: string;
+        apiKey?: string;
+        abortSignal?: AbortSignal;
+        onStreamingDegraded?: (reason: string) => void;
+    } = {}
 ): Promise<OpenAI.Images.ImagesResponse> {
     const data: Array<{ b64_json: string }> = [];
     const seenCompletedKeys = new Set<string>();
@@ -43,7 +49,18 @@ export async function collectOpenAiImagesFromStream(
                     }
                     continue;
                 }
-                data.push({ b64_json: normalizedEvent.b64Json });
+                const b64Json =
+                    normalizedEvent.b64Json ||
+                    (normalizedEvent.imageUrl
+                        ? await downloadSameOriginImageAsBase64({
+                              imageUrl: normalizedEvent.imageUrl,
+                              apiBaseUrl: options.apiBaseUrl,
+                              apiKey: options.apiKey,
+                              abortSignal: options.abortSignal
+                          })
+                        : undefined);
+                if (!b64Json) continue;
+                data.push({ b64_json: b64Json });
                 if (normalizedEvent.dedupeKey) {
                     seenCompletedKeys.add(normalizedEvent.dedupeKey);
                 }

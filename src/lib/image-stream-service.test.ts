@@ -2,6 +2,7 @@ import { createImageStreamResponse } from './image-stream-service';
 import { clearAppLogEntriesForTest, readAppLogEntries } from './app-logger';
 import { readSseEvents, upstreamEvents } from './sse-test-utils';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
@@ -35,6 +36,36 @@ afterEach(() => {
     console.info = originalInfo;
 });
 
+async function startImageDownloadServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer((request, response) => {
+        if (request.url === '/partial.png') {
+            const bytes = Buffer.from(PNG_BASE64, 'base64');
+            response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(bytes.byteLength) });
+            response.end(bytes);
+            return;
+        }
+        if (request.url === '/oversized-partial.png') {
+            response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(26 * 1024 * 1024) });
+            response.end(Buffer.from(PNG_BASE64, 'base64'));
+            return;
+        }
+        if (request.url === '/text-partial.txt') {
+            response.writeHead(200, { 'Content-Type': 'text/plain' });
+            response.end('not an image');
+            return;
+        }
+        response.writeHead(404, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: 'not found' }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    };
+}
+
 describe('createImageStreamResponse', () => {
     it('emits the stable client SSE contract for normalized upstream image events', async () => {
         const response = createImageStreamResponse({
@@ -53,7 +84,8 @@ describe('createImageStreamResponse', () => {
             startedAtMs: 1000,
             clientRequestId: 'client-1',
             requestLogContext: { clientRequestId: 'client-1' },
-            resolveActualCost
+            resolveActualCost,
+            logProviderDiagnostics: false
         });
 
         assert.equal(response.headers.get('content-type'), 'text/event-stream');
@@ -80,7 +112,7 @@ describe('createImageStreamResponse', () => {
         assert.equal((doneEvent.images as Array<Record<string, unknown>>)[0].b64_json, PNG_BASE64);
     });
 
-    it('logs provider dialect diagnostics without raw image payloads', async () => {
+    it('can suppress provider dialect diagnostics for isolated stream tests', async () => {
         const response = createImageStreamResponse({
             stream: upstreamEvents([
                 {
@@ -100,7 +132,8 @@ describe('createImageStreamResponse', () => {
             startedAtMs: 1000,
             clientRequestId: 'client-2',
             requestLogContext: { clientRequestId: 'client-2' },
-            resolveActualCost
+            resolveActualCost,
+            logProviderDiagnostics: false
         });
 
         await response.text();
@@ -108,9 +141,112 @@ describe('createImageStreamResponse', () => {
         const logText = readAppLogEntries()
             .map((entry) => `${entry.message}\n${entry.context || ''}`)
             .join('\n');
-        assert.match(logText, /"providerDialect": "otokapi_image_event"/);
-        assert.match(logText, /"providerDialect": "unknown_ignored_event"/);
+        assert.equal(logText, '');
         assert.doesNotMatch(logText, new RegExp(PNG_BASE64));
+    });
+
+    it('materializes same-origin URL partial images before emitting client SSE', async () => {
+        const downloadServer = await startImageDownloadServer();
+        try {
+            const response = createImageStreamResponse({
+                stream: upstreamEvents([
+                    {
+                        type: 'agent.partial_image',
+                        url: '/partial.png',
+                        partial_image_index: 0
+                    },
+                    {
+                        data: [{ b64_json: PNG_BASE64 }]
+                    }
+                ]),
+                modeLabel: '生成',
+                outputFormat: 'png',
+                storageMode: 'indexeddb',
+                apiBaseUrl: downloadServer.baseUrl,
+                apiKey: 'test-key',
+                model: 'gpt-image-2',
+                startedAtMs: 1000,
+                resolveActualCost
+            });
+
+            const events = await readSseEvents(response);
+
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['partial_image', 'completed', 'done']
+            );
+            assert.equal(events[0].b64_json, PNG_BASE64);
+        } finally {
+            await downloadServer.close();
+        }
+    });
+
+    it('skips URL partial images that cannot be safely materialized', async () => {
+        const response = createImageStreamResponse({
+            stream: upstreamEvents([
+                {
+                    type: 'agent.partial_image',
+                    url: 'https://other.example.test/partial.png',
+                    partial_image_index: 0
+                },
+                {
+                    data: [{ b64_json: PNG_BASE64 }]
+                }
+            ]),
+            modeLabel: '生成',
+            outputFormat: 'png',
+            storageMode: 'indexeddb',
+            apiBaseUrl: 'https://api.example.test/v1',
+            apiKey: 'test-key',
+            model: 'gpt-image-2',
+            startedAtMs: 1000,
+            resolveActualCost,
+            logProviderDiagnostics: false
+        });
+
+        const events = await readSseEvents(response);
+
+        assert.deepEqual(
+            events.map((event) => event.type),
+            ['completed', 'done']
+        );
+    });
+
+    it('skips unsafe same-origin URL partial downloads without emitting invalid client events', async () => {
+        const downloadServer = await startImageDownloadServer();
+        try {
+            for (const imageUrl of ['/oversized-partial.png', '/text-partial.txt']) {
+                const response = createImageStreamResponse({
+                    stream: upstreamEvents([
+                        {
+                            type: 'agent.partial_image',
+                            url: imageUrl,
+                            partial_image_index: 0
+                        },
+                        {
+                            data: [{ b64_json: PNG_BASE64 }]
+                        }
+                    ]),
+                    modeLabel: '生成',
+                    outputFormat: 'png',
+                    storageMode: 'indexeddb',
+                    apiBaseUrl: downloadServer.baseUrl,
+                    apiKey: 'test-key',
+                    model: 'gpt-image-2',
+                    startedAtMs: 1000,
+                    resolveActualCost,
+                    logProviderDiagnostics: false
+                });
+
+                const events = await readSseEvents(response);
+                assert.deepEqual(
+                    events.map((event) => event.type),
+                    ['completed', 'done']
+                );
+            }
+        } finally {
+            await downloadServer.close();
+        }
     });
 
     it('deduplicates repeated Responses final image items by item id', async () => {
@@ -133,7 +269,8 @@ describe('createImageStreamResponse', () => {
             apiKey: 'test-key',
             model: 'gpt-image-2',
             startedAtMs: 1000,
-            resolveActualCost
+            resolveActualCost,
+            logProviderDiagnostics: false
         });
 
         const events = await readSseEvents(response);
@@ -163,7 +300,8 @@ describe('createImageStreamResponse', () => {
             apiKey: 'test-key',
             model: 'gpt-image-2',
             startedAtMs: 1000,
-            resolveActualCost
+            resolveActualCost,
+            logProviderDiagnostics: false
         });
 
         const events = await readSseEvents(response);
@@ -195,7 +333,8 @@ describe('createImageStreamResponse', () => {
             apiKey: 'test-key',
             model: 'gpt-image-2',
             startedAtMs: 1000,
-            resolveActualCost
+            resolveActualCost,
+            logProviderDiagnostics: false
         });
 
         const events = await readSseEvents(response);

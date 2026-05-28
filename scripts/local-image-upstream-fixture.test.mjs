@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { FIXTURE_IMAGE_BASE64, MAX_JSON_BODY_BYTES, createFixtureServer } from './local-image-upstream-fixture.mjs';
+import {
+    FIXTURE_IMAGE_BASE64,
+    FIXTURE_IMAGE_PATH,
+    MAX_JSON_BODY_BYTES,
+    createFixtureServer
+} from './local-image-upstream-fixture.mjs';
 
 describe('local image upstream fixture', () => {
     it('serves Images API JSON responses', async () => {
@@ -71,7 +76,11 @@ describe('local image upstream fixture', () => {
             const body = await response.json();
             assert.equal(body.id, 'resp_fixture');
             assert.equal(body.output[0].type, 'image_generation_call');
-            assert.equal(body.output[0].result, FIXTURE_IMAGE_BASE64);
+            assert.equal(body.output[0].result, FIXTURE_IMAGE_PATH);
+            const imageResponse = await fetch(`${fixture.baseUrl}${FIXTURE_IMAGE_PATH}`);
+            assert.equal(imageResponse.status, 200);
+            assert.match(imageResponse.headers.get('content-type') || '', /^image\/png\b/);
+            assert.equal(Buffer.from(await imageResponse.arrayBuffer()).toString('base64'), FIXTURE_IMAGE_BASE64);
         } finally {
             await fixture.close();
         }
@@ -105,8 +114,8 @@ describe('local image upstream fixture', () => {
             );
             assert.equal(events[0].data.partial_image_b64, FIXTURE_IMAGE_BASE64);
             assert.equal(events[1].data.item.type, 'image_generation_call');
-            assert.equal(events[1].data.item.result, FIXTURE_IMAGE_BASE64);
-            assert.equal(events[2].data.response.output[0].result, FIXTURE_IMAGE_BASE64);
+            assert.equal(events[1].data.item.result, FIXTURE_IMAGE_PATH);
+            assert.equal(events[2].data.response.output[0].result, FIXTURE_IMAGE_PATH);
             assert.equal(events[3].done, true);
         } finally {
             await fixture.close();

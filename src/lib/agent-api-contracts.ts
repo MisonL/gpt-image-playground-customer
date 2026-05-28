@@ -286,10 +286,35 @@ export type AgentCapabilities = {
 
 export type AgentRoutingRule = {
     when: string[];
+    conditions: AgentRoutingCondition;
     endpoint: string;
     transport: AgentRoutingTransport;
     strength: AgentRoutingStrength;
+    action: AgentRoutingAction;
     reason: string;
+};
+
+export type AgentRoutingCondition = {
+    operation: 'generate' | 'edit' | 'generate_or_edit';
+    max_edge?: {
+        operator: 'gt' | 'lte';
+        value: number;
+    };
+    batch?: boolean;
+    single_request?: boolean;
+    complex_ui?: boolean;
+    long_image?: boolean;
+    resume_or_recover?: boolean;
+};
+
+export type AgentRoutingAction = {
+    endpoint: string;
+    transport: AgentRoutingTransport;
+    strength: AgentRoutingStrength;
+    fallback_endpoint?: string;
+    fallback_mode?: 'manual_after_diagnosis' | 'fix_request_before_retry';
+    requires_new_idempotency_key_on_retry: boolean;
+    no_automatic_fallback: boolean;
 };
 
 type FieldErrors = Record<string, string>;
@@ -750,37 +775,102 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         routing_rules: {
             high_resolution_edit: {
                 when: ['operation=edit', 'max_edge>2048'],
+                conditions: {
+                    operation: 'edit',
+                    max_edge: { operator: 'gt', value: 2048 }
+                },
                 endpoint: '/api/images',
                 transport: 'page_sse',
                 strength: 'default',
+                action: {
+                    endpoint: '/api/images',
+                    transport: 'page_sse',
+                    strength: 'default',
+                    fallback_endpoint: AGENT_ENDPOINTS.edit,
+                    fallback_mode: 'manual_after_diagnosis',
+                    requires_new_idempotency_key_on_retry: true,
+                    no_automatic_fallback: true
+                },
                 reason: 'High-resolution edit defaults to the page form-data SSE endpoint; if streaming has issues, diagnose first and explicitly fall back to Agent edit.'
             },
             complex_ui_batch: {
                 when: ['operation=generate_or_edit', 'complex_ui=true', 'batch=true'],
+                conditions: {
+                    operation: 'generate_or_edit',
+                    complex_ui: true,
+                    batch: true
+                },
                 endpoint: '/api/images',
                 transport: 'page_sse',
                 strength: 'recommended',
+                action: {
+                    endpoint: '/api/images',
+                    transport: 'page_sse',
+                    strength: 'recommended',
+                    fallback_mode: 'manual_after_diagnosis',
+                    requires_new_idempotency_key_on_retry: true,
+                    no_automatic_fallback: true
+                },
                 reason: 'Page form-data SSE keeps long-running image production observable and recoverable for complex UI batches.'
             },
             long_image_recovery: {
                 when: ['operation=generate_or_edit', 'long_image=true', 'resume_or_recover=true'],
+                conditions: {
+                    operation: 'generate_or_edit',
+                    long_image: true,
+                    resume_or_recover: true
+                },
                 endpoint: '/api/images',
                 transport: 'page_sse',
                 strength: 'recommended',
+                action: {
+                    endpoint: '/api/images',
+                    transport: 'page_sse',
+                    strength: 'recommended',
+                    fallback_mode: 'manual_after_diagnosis',
+                    requires_new_idempotency_key_on_retry: true,
+                    no_automatic_fallback: true
+                },
                 reason: 'Page form-data SSE exposes partial progress and final-image diagnostics needed for long-image recovery runs.'
             },
             agent_generate_small_smoke: {
                 when: ['operation=generate', 'max_edge<=2048', 'single_request=true'],
+                conditions: {
+                    operation: 'generate',
+                    max_edge: { operator: 'lte', value: 2048 },
+                    single_request: true
+                },
                 endpoint: AGENT_ENDPOINTS.generate,
                 transport: 'agent_json',
                 strength: 'default',
+                action: {
+                    endpoint: AGENT_ENDPOINTS.generate,
+                    transport: 'agent_json',
+                    strength: 'default',
+                    requires_new_idempotency_key_on_retry: true,
+                    no_automatic_fallback: true
+                },
                 reason: 'Agent JSON generate remains the stable contract and smoke path for normal single-image requests.'
             },
             page_sse_large_generate: {
                 when: ['operation=generate', 'max_edge>2048', 'single_request=true'],
+                conditions: {
+                    operation: 'generate',
+                    max_edge: { operator: 'gt', value: 2048 },
+                    single_request: true
+                },
                 endpoint: '/api/images',
                 transport: 'page_sse',
                 strength: 'recommended',
+                action: {
+                    endpoint: '/api/images',
+                    transport: 'page_sse',
+                    strength: 'recommended',
+                    fallback_endpoint: AGENT_ENDPOINTS.generate,
+                    fallback_mode: 'manual_after_diagnosis',
+                    requires_new_idempotency_key_on_retry: true,
+                    no_automatic_fallback: true
+                },
                 reason: 'Page form-data SSE keeps large generate requests observable; if the stream fails, diagnose first and choose any Agent JSON retry explicitly.'
             },
             retry_recovery: {
