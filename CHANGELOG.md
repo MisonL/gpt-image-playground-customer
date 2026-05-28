@@ -28,7 +28,6 @@
 
 ### 修复
 
-- 将 Cloudflare 524 错误提示中的第三方链接固定为 `https://gpt2image.superapi.buzz/`。
 - 收紧 Responses `image_generation` 结果解析，只有标准 base64 或常见位图 `data:image/...;base64,` payload 会被当作可保存图片。
 
 ## [1.3.0] - 2026-05-12
