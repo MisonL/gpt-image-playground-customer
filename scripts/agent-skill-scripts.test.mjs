@@ -476,8 +476,164 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stderr);
                 assert.equal(body.error.code, 'page_sse_failed');
                 assert.match(body.error.message, /缺少最终 done 事件/);
+                assert.equal(body.error.diagnostics.partial_image_count, 0);
+                assert.equal(body.error.diagnostics.completed_event_count, 1);
+                assert.equal(body.error.diagnostics.done_received, false);
+                assert.equal(body.error.diagnostics.final_image_count, 1);
+                assert.equal(body.error.diagnostics.last_upstream_event_type, 'completed');
             }
         );
+    });
+
+    it('reports page SSE partial image diagnostics when no final image arrives', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ agent_streaming: { page_sse: { supported: true, endpoint: '/api/images' } } }));
+                    return;
+                }
+                if (request.url === '/api/images') {
+                    response.writeHead(200, { 'content-type': 'text/event-stream' });
+                    response.end(
+                        [
+                            'data: {"type":"image_generation.partial_image","partial_image_b64":"partial-a"}',
+                            '',
+                            'data: {"type":"done","images":[]}',
+                            '',
+                            ''
+                        ].join('\n')
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--page-sse', '--size', '1024x1024', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                const body = JSON.parse(result.stderr);
+                assert.equal(body.error.code, 'page_sse_failed');
+                assert.match(body.error.message, /未返回最终图片/);
+                assert.equal(body.error.diagnostics.partial_image_count, 1);
+                assert.equal(body.error.diagnostics.completed_event_count, 0);
+                assert.equal(body.error.diagnostics.done_received, true);
+                assert.equal(body.error.diagnostics.final_image_count, 0);
+                assert.equal(body.error.diagnostics.last_upstream_event_type, 'done');
+            }
+        );
+    });
+
+    it('saves raw page SSE events when a generate log path is configured', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-sse-log-'));
+        try {
+            const logPath = join(tempRoot, 'events.jsonl');
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: {
+                                    page_sse: { supported: true, endpoint: '/api/images' }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'event: image_generation.partial_image',
+                                'data: {"type":"image_generation.partial_image","partial_image_b64":"abc"}',
+                                '',
+                                'data: {"type":"completed","filename":"image.png","path":"/generated/image.png"}',
+                                '',
+                                'data: {"type":"done","images":[{"filename":"image.png","path":"/generated/image.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'generate-image.mjs',
+                        ['--allow-billable', '--page-sse', '--sse-log', logPath, '--size', '1024x1024', 'prompt'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    const logLines = readFileSync(logPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+                    assert.equal(logLines.length, 3);
+                    assert.match(logLines[0].raw_event, /partial_image/);
+                    assert.match(logLines[2].raw_event, /"type":"done"/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps generate page SSE successful when the optional raw log path is unwritable', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-sse-log-unwritable-'));
+        try {
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: {
+                                    page_sse: { supported: true, endpoint: '/api/images' }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"image.png","path":"/generated/image.png"}',
+                                '',
+                                'data: {"type":"done","images":[{"filename":"image.png","path":"/generated/image.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'generate-image.mjs',
+                        ['--allow-billable', '--page-sse', '--sse-log', tempRoot, '--size', '1024x1024', 'prompt'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.match(result.stderr, /SSE log write failed/);
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.images.length, 1);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
     });
 
     it('requires page access hash before calling page SSE when capabilities declare page auth', async () => {
@@ -1271,6 +1427,41 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
+    it('routes GPT2Image-compatible edit options through page SSE dry-runs', () => {
+        const result = runSkillScript('edit-image.mjs', [
+            '--format',
+            'jpeg',
+            '--output-compression',
+            '85',
+            '--moderation',
+            'auto',
+            '--image-backend',
+            'responses',
+            '--responses-model',
+            'gpt-5.4-mini',
+            '--thinking',
+            'medium',
+            '--prompt-optimization',
+            'false',
+            '--force-web',
+            '/tmp/source.png',
+            'prompt'
+        ]);
+
+        assert.equal(result.status, 0);
+        assert.equal(result.stderr.trim(), '');
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.routing_guidance.transport, 'page_sse');
+        assert.equal(body.request.output_format, 'jpeg');
+        assert.equal(body.request.output_compression, 85);
+        assert.equal(body.request.moderation, 'auto');
+        assert.equal(body.request.image_backend, 'responses-image-generation');
+        assert.equal(body.request.responsesModel, 'gpt-5.4-mini');
+        assert.equal(body.request.thinking, 'medium');
+        assert.equal(body.request.promptOptimization, false);
+        assert.equal(body.request.force_web, true);
+    });
+
     it('uses page SSE for billable high-resolution edit requests', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-page-sse-'));
         try {
@@ -1347,6 +1538,128 @@ describe('Agent skill script argument validation', () => {
                     assert.match(pageSseRequestBody, /name="mode"\r?\n\r?\nedit/);
                     assert.match(pageSseRequestBody, /name="clientRequestId"\r?\n\r?\nedit-page-sse-key/);
                     assert.match(pageSseRequestBody, /name="image_0"; filename="source\.png"/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('passes GPT2Image-compatible edit options to page SSE form-data', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-page-sse-fields-'));
+        try {
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+            let pageSseRequestBody = '';
+
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ agent_streaming: { page_sse: { supported: true } } }));
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        pageSseRequestBody = await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"edit.jpg","path":"/generated/edit.jpg"}',
+                                '',
+                                'data: {"type":"done","images":[{"filename":"edit.jpg","path":"/generated/edit.jpg"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'edit-image.mjs',
+                        [
+                            '--allow-billable',
+                            '--format',
+                            'jpeg',
+                            '--output-compression',
+                            '85',
+                            '--moderation',
+                            'auto',
+                            '--image-backend',
+                            'responses',
+                            '--responses-model',
+                            'gpt-5.4-mini',
+                            '--thinking',
+                            'medium',
+                            '--prompt-optimization',
+                            'false',
+                            '--force-web',
+                            imagePath,
+                            'prompt'
+                        ],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.match(pageSseRequestBody, /name="output_format"\r?\n\r?\njpeg/);
+                    assert.match(pageSseRequestBody, /name="output_compression"\r?\n\r?\n85/);
+                    assert.match(pageSseRequestBody, /name="moderation"\r?\n\r?\nauto/);
+                    assert.match(pageSseRequestBody, /name="image_backend"\r?\n\r?\nresponses-image-generation/);
+                    assert.match(pageSseRequestBody, /name="responsesModel"\r?\n\r?\ngpt-5\.4-mini/);
+                    assert.match(pageSseRequestBody, /name="thinking"\r?\n\r?\nmedium/);
+                    assert.match(pageSseRequestBody, /name="promptOptimization"\r?\n\r?\nfalse/);
+                    assert.match(pageSseRequestBody, /name="force_web"\r?\n\r?\ntrue/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps edit page SSE successful when the optional raw log path is unwritable', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-sse-log-unwritable-'));
+        try {
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ agent_streaming: { page_sse: { supported: true } } }));
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"edit.png","path":"/generated/edit.png"}',
+                                '',
+                                'data: {"type":"done","images":[{"filename":"edit.png","path":"/generated/edit.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'edit-image.mjs',
+                        ['--allow-billable', '--page-sse', '--sse-log', tempRoot, imagePath, 'prompt'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.match(result.stderr, /SSE log write failed/);
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.images.length, 1);
                 }
             );
         } finally {
@@ -2241,6 +2554,100 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('passes GPT2Image-compatible edit options to batch page SSE form-data', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-edit-advanced-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    mode: 'edit',
+                    id: 'edit-advanced',
+                    prompt: 'edit prompt',
+                    image_path: imagePath,
+                    size: '1024x1024',
+                    output_format: 'jpeg',
+                    output_compression: 85,
+                    moderation: 'auto',
+                    image_backend: 'responses',
+                    responsesModel: 'gpt-5.4-mini',
+                    thinking: 'medium',
+                    promptOptimization: false,
+                    force_web: true,
+                    idempotency_key: 'batch-edit-advanced-key'
+                })
+            );
+
+            let pageSseRequestBody = '';
+            const requests = [];
+            await withServer(
+                async (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: {
+                                    page_sse: { supported: true, endpoint: '/api/images' }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        pageSseRequestBody = await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"edit.jpg","path":"/generated/edit.jpg"}',
+                                '',
+                                'data: {"type":"done","images":[{"filename":"edit.jpg","path":"/generated/edit.jpg"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/edit') {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: 'unexpected Agent edit call' }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
+                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                    });
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.results[0].routing.transport, 'page_sse');
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        ['GET /api/agent/capabilities', 'POST /api/images']
+                    );
+                    assert.match(pageSseRequestBody, /name="mode"\r?\n\r?\nedit/);
+                    assert.match(pageSseRequestBody, /name="output_format"\r?\n\r?\njpeg/);
+                    assert.match(pageSseRequestBody, /name="output_compression"\r?\n\r?\n85/);
+                    assert.match(pageSseRequestBody, /name="moderation"\r?\n\r?\nauto/);
+                    assert.match(pageSseRequestBody, /name="image_backend"\r?\n\r?\nresponses-image-generation/);
+                    assert.match(pageSseRequestBody, /name="responsesModel"\r?\n\r?\ngpt-5\.4-mini/);
+                    assert.match(pageSseRequestBody, /name="thinking"\r?\n\r?\nmedium/);
+                    assert.match(pageSseRequestBody, /name="promptOptimization"\r?\n\r?\nfalse/);
+                    assert.match(pageSseRequestBody, /name="force_web"\r?\n\r?\ntrue/);
+                    assert.match(pageSseRequestBody, /name="image_0"/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('fails batch responsesModel routing when page SSE capability is unavailable', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-responses-model-no-sse-'));
         try {
@@ -2428,6 +2835,192 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('retries batch failures with fresh attempt idempotency keys and reports a fix list', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-retry-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const manifestPath = join(tempRoot, 'manifest.jsonl');
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    id: 'retry-generate',
+                    prompt: 'prompt',
+                    idempotency_key: 'retry-key'
+                })
+            );
+
+            const idempotencyKeys = [];
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ ok: true }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        idempotencyKeys.push(request.headers['idempotency-key']);
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath, '--manifest', manifestPath, '--max-attempts', '2'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.deepEqual(idempotencyKeys, ['retry-key', 'retry-key-attempt-2']);
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.failure_summary.count, 1);
+                    assert.equal(body.failure_summary.tasks[0].id, 'retry-generate');
+                    assert.equal(body.resume_fix_list[0].previous_idempotency_key, 'retry-key');
+                    assert.equal(body.resume_fix_list[0].suggested_idempotency_key, 'retry-key-attempt-3');
+                    assert.equal(body.results[0].attempt, 2);
+                    assert.equal(body.results[0].root_idempotency_key, 'retry-key');
+
+                    const manifestLines = readFileSync(manifestPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+                    assert.equal(manifestLines.length, 2);
+                    assert.equal(manifestLines[0].idempotency_key, 'retry-key');
+                    assert.equal(manifestLines[0].attempt, 1);
+                    assert.equal(manifestLines[1].idempotency_key, 'retry-key-attempt-2');
+                    assert.equal(manifestLines[1].root_idempotency_key, 'retry-key');
+                    assert.equal(manifestLines[1].attempt, 2);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('preserves the retry suffix when long batch idempotency keys are truncated', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-retry-long-key-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const manifestPath = join(tempRoot, 'manifest.jsonl');
+            const longKey = 'k'.repeat(198);
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    id: 'retry-generate-long-key',
+                    prompt: 'prompt',
+                    idempotency_key: longKey
+                })
+            );
+
+            const idempotencyKeys = [];
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ ok: true }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        idempotencyKeys.push(request.headers['idempotency-key']);
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath, '--manifest', manifestPath, '--max-attempts', '3'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(idempotencyKeys.length, 3);
+                    assert.equal(idempotencyKeys[1].length, 200);
+                    assert.equal(idempotencyKeys[1].endsWith('-attempt-2'), true);
+                    assert.equal(idempotencyKeys[2].length, 200);
+                    assert.equal(idempotencyKeys[2].endsWith('-attempt-3'), true);
+                    assert.notEqual(idempotencyKeys[1], idempotencyKeys[2]);
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.resume_fix_list[0].suggested_idempotency_key.endsWith('-attempt-4'), true);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('stops batch execution after max consecutive failures and leaves later tasks resumable', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-circuit-breaker-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const manifestPath = join(tempRoot, 'manifest.jsonl');
+            writeFileSync(
+                inputPath,
+                [
+                    JSON.stringify({ id: 'first-fail', prompt: 'first', idempotency_key: 'first-key' }),
+                    JSON.stringify({ id: 'second-skip', prompt: 'second', idempotency_key: 'second-key' })
+                ].join('\n')
+            );
+
+            const idempotencyKeys = [];
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ ok: true }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        idempotencyKeys.push(request.headers['idempotency-key']);
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: 'upstream failed' }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        [
+                            '--allow-billable',
+                            '--input',
+                            inputPath,
+                            '--manifest',
+                            manifestPath,
+                            '--max-consecutive-failures',
+                            '1'
+                        ],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.deepEqual(idempotencyKeys, ['first-key']);
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.failed, 1);
+                    assert.equal(body.results[0].status, 'failed');
+                    assert.equal(body.results[1].status, 'skipped');
+                    assert.equal(body.results[1].skipped_reason, 'max_consecutive_failures');
+                    assert.equal(body.results[1].billable, false);
+                    assert.equal(body.failure_summary.count, 1);
+
+                    const manifestLines = readFileSync(manifestPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+                    assert.equal(manifestLines.length, 2);
+                    assert.equal(manifestLines[0].status, 'failed');
+                    assert.equal(manifestLines[1].status, 'skipped');
+                    assert.equal(manifestLines[1].skipped_reason, 'max_consecutive_failures');
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('checks batch output dimensions from same-origin artifact URLs', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-'));
         try {
@@ -2515,9 +3108,14 @@ describe('Agent skill script argument validation', () => {
                 })
             );
             const pngCompressionResult = runSkillScript('batch-images.mjs', ['--input', pngCompressionInputPath]);
-            assert.equal(pngCompressionResult.status, 2);
-            assert.match(pngCompressionResult.stderr, /png-compression\.output_compression 仅适用于 jpeg 或 webp 输出/);
-            assert.equal(pngCompressionResult.stdout.trim(), '');
+            assert.equal(pngCompressionResult.status, 0);
+            assert.equal(pngCompressionResult.stderr.trim(), '');
+            const pngCompressionBody = JSON.parse(pngCompressionResult.stdout);
+            assert.equal(
+                pngCompressionBody.tasks[0].request.normalizations.output_compression_ignored_for_png,
+                true
+            );
+            assert.equal(pngCompressionBody.tasks[0].request.output_compression, undefined);
 
             const conflictingFormatInputPath = join(tempRoot, 'conflicting-format.jsonl');
             writeFileSync(
@@ -2547,9 +3145,12 @@ describe('Agent skill script argument validation', () => {
                 })
             );
             const editFormatResult = runSkillScript('batch-images.mjs', ['--input', editFormatInputPath]);
-            assert.equal(editFormatResult.status, 2);
-            assert.match(editFormatResult.stderr, /edit-format\.output_format 仅适用于 generate 任务/);
-            assert.equal(editFormatResult.stdout.trim(), '');
+            assert.equal(editFormatResult.status, 0);
+            assert.equal(editFormatResult.stderr.trim(), '');
+            const editFormatBody = JSON.parse(editFormatResult.stdout);
+            assert.equal(editFormatBody.tasks[0].routing.transport, 'page_sse');
+            assert.match(editFormatBody.tasks[0].routing.reason, /GPT2Image-compatible edit options/);
+            assert.equal(editFormatBody.tasks[0].request.output_format, 'jpeg');
 
             const editBackendInputPath = join(tempRoot, 'edit-backend.jsonl');
             writeFileSync(
@@ -2563,9 +3164,11 @@ describe('Agent skill script argument validation', () => {
                 })
             );
             const editBackendResult = runSkillScript('batch-images.mjs', ['--input', editBackendInputPath]);
-            assert.equal(editBackendResult.status, 2);
-            assert.match(editBackendResult.stderr, /edit-backend\.image_backend 仅适用于 generate 任务/);
-            assert.equal(editBackendResult.stdout.trim(), '');
+            assert.equal(editBackendResult.status, 0);
+            assert.equal(editBackendResult.stderr.trim(), '');
+            const editBackendBody = JSON.parse(editBackendResult.stdout);
+            assert.equal(editBackendBody.tasks[0].routing.transport, 'page_sse');
+            assert.equal(editBackendBody.tasks[0].request.image_backend, 'responses-image-generation');
 
             const editBackgroundInputPath = join(tempRoot, 'edit-background.jsonl');
             writeFileSync(
@@ -2596,7 +3199,10 @@ describe('Agent skill script argument validation', () => {
             );
             const editResponsesModelResult = runSkillScript('batch-images.mjs', ['--input', editResponsesModelInputPath]);
             assert.equal(editResponsesModelResult.status, 2);
-            assert.match(editResponsesModelResult.stderr, /edit-responses-model\.responsesModel 仅适用于 generate 任务/);
+            assert.match(
+                editResponsesModelResult.stderr,
+                /edit-responses-model\.responsesModel 必须同时设置 image_backend=responses-image-generation/
+            );
             assert.equal(editResponsesModelResult.stdout.trim(), '');
 
             const generateImagePathInputPath = join(tempRoot, 'generate-image-path.jsonl');

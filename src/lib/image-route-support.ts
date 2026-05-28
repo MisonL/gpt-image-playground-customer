@@ -39,8 +39,8 @@ export function assertResponsesImageBackendAllowed(input: { imageBackend: ImageB
             400
         );
     }
-    if (input.mode !== 'generate') {
-        throw new RequestValidationError('Responses API 图片后端当前只支持 generate 模式。', 400);
+    if (input.mode !== 'generate' && input.mode !== 'edit') {
+        throw new RequestValidationError('Responses API 图片后端当前只支持 generate 或 edit 模式。', 400);
     }
 }
 

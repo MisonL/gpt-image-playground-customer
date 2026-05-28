@@ -12,7 +12,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
-import type { ImageUpstreamFormBackend, ImageUpstreamFormStreamingStrategy } from '@/lib/image-upstream-form';
+import type {
+    ImageUpstreamFormBackend,
+    ImageUpstreamFormPromptOptimization,
+    ImageUpstreamFormStreamingStrategy,
+    ImageUpstreamFormThinking
+} from '@/lib/image-upstream-form';
 import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
 import {
@@ -39,7 +44,9 @@ import {
     Lock,
     LockOpen,
     HelpCircle,
-    SquareDashed
+    SquareDashed,
+    WandSparkles,
+    Globe2
 } from 'lucide-react';
 import * as React from 'react';
 
@@ -58,6 +65,9 @@ export type GenerationFormData = {
     image_backend: ImageUpstreamFormBackend;
     streaming_strategy: ImageUpstreamFormStreamingStrategy;
     responsesModel: string;
+    thinking: ImageUpstreamFormThinking;
+    promptOptimization: ImageUpstreamFormPromptOptimization;
+    forceWeb: boolean;
 };
 
 type GenerationFormProps = {
@@ -101,6 +111,12 @@ type GenerationFormProps = {
     setStreamingStrategy: React.Dispatch<React.SetStateAction<GenerationFormData['streaming_strategy']>>;
     responsesModel: string;
     setResponsesModel: React.Dispatch<React.SetStateAction<string>>;
+    thinking: GenerationFormData['thinking'];
+    setThinking: React.Dispatch<React.SetStateAction<GenerationFormData['thinking']>>;
+    promptOptimization: GenerationFormData['promptOptimization'];
+    setPromptOptimization: React.Dispatch<React.SetStateAction<GenerationFormData['promptOptimization']>>;
+    forceWeb: boolean;
+    setForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
 const RadioItemWithIcon = ({
@@ -195,7 +211,13 @@ export function GenerationForm({
     streamingStrategy,
     setStreamingStrategy,
     responsesModel,
-    setResponsesModel
+    setResponsesModel,
+    thinking,
+    setThinking,
+    promptOptimization,
+    setPromptOptimization,
+    forceWeb,
+    setForceWeb
 }: GenerationFormProps) {
     const { locale, t } = useI18n();
     const showCompression = outputFormat === 'jpeg' || outputFormat === 'webp';
@@ -274,7 +296,10 @@ export function GenerationForm({
             model,
             image_backend: imageBackend,
             streaming_strategy: streamingStrategy,
-            responsesModel
+            responsesModel,
+            thinking,
+            promptOptimization,
+            forceWeb
         };
         if (showCompression) {
             formData.output_compression = compression[0];
@@ -574,18 +599,108 @@ export function GenerationForm({
                                 </div>
 
                                 {imageBackend === 'responses-image-generation' && (
-                                    <div className='space-y-1.5'>
-                                        <Label htmlFor='responses-model-input'>{t('upstream.responsesModel')}</Label>
-                                        <Input
-                                            id='responses-model-input'
-                                            name='responsesModel'
-                                            value={responsesModel}
-                                            onChange={(event) => setResponsesModel(event.target.value)}
+                                    <div className='space-y-3 rounded-md border border-border bg-muted/20 p-3'>
+                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                            <WandSparkles className='h-4 w-4 text-muted-foreground' />
+                                            {t('upstream.compatibilityParams')}
+                                        </div>
+                                        <div className='grid gap-3 sm:grid-cols-2'>
+                                            <div className='space-y-1.5 sm:col-span-2'>
+                                                <Label htmlFor='responses-model-input'>{t('upstream.gptModel')}</Label>
+                                                <Input
+                                                    id='responses-model-input'
+                                                    name='responsesModel'
+                                                    value={responsesModel}
+                                                    onChange={(event) => setResponsesModel(event.target.value)}
+                                                    disabled={isLoading}
+                                                    autoComplete='off'
+                                                    spellCheck={false}
+                                                    placeholder='gpt-5.4'
+                                                />
+                                            </div>
+                                            <div className='space-y-1.5'>
+                                                <Label htmlFor='thinking-select'>{t('upstream.thinking')}</Label>
+                                                <Select
+                                                    value={thinking}
+                                                    onValueChange={(value) =>
+                                                        setThinking(value as GenerationFormData['thinking'])
+                                                    }
+                                                    disabled={isLoading}
+                                                    name='thinking'>
+                                                    <SelectTrigger id='thinking-select'>
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value='server-default'>
+                                                            {t('upstream.serverDefault')}
+                                                        </SelectItem>
+                                                        <SelectItem value='none'>none</SelectItem>
+                                                        <SelectItem value='minimal'>minimal</SelectItem>
+                                                        <SelectItem value='low'>low</SelectItem>
+                                                        <SelectItem value='medium'>medium</SelectItem>
+                                                        <SelectItem value='high'>high</SelectItem>
+                                                        <SelectItem value='xhigh'>xhigh</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className='space-y-1.5'>
+                                                <Label htmlFor='prompt-optimization-select'>
+                                                    {t('upstream.promptOptimization')}
+                                                </Label>
+                                                <Select
+                                                    value={promptOptimization}
+                                                    onValueChange={(value) =>
+                                                        setPromptOptimization(
+                                                            value as GenerationFormData['promptOptimization']
+                                                        )
+                                                    }
+                                                    disabled={isLoading}
+                                                    name='promptOptimization'>
+                                                    <SelectTrigger id='prompt-optimization-select'>
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value='server-default'>
+                                                            {t('upstream.serverDefault')}
+                                                        </SelectItem>
+                                                        <SelectItem value='on'>{t('common.enabled')}</SelectItem>
+                                                        <SelectItem value='off'>{t('common.disabled')}</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {imageBackend === 'images-api' && (
+                                    <div className='space-y-3 rounded-md border border-border bg-muted/20 p-3'>
+                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                            <Globe2 className='h-4 w-4 text-muted-foreground' />
+                                            {t('upstream.compatibilityParams')}
+                                        </div>
+                                        <RadioGroup
+                                            value={forceWeb ? 'true' : 'false'}
+                                            onValueChange={(value) => setForceWeb(value === 'true')}
                                             disabled={isLoading}
-                                            autoComplete='off'
-                                            spellCheck={false}
-                                            placeholder='gpt-5.4'
-                                        />
+                                            name='force_web'
+                                            aria-label={t('upstream.forceWeb')}
+                                            className='grid grid-cols-2 gap-2'>
+                                            <RadioItemWithIcon
+                                                value='false'
+                                                id='force-web-false'
+                                                label={t('upstream.serverDefault')}
+                                                Icon={Sparkles}
+                                                disabled={isLoading}
+                                            />
+                                            <RadioItemWithIcon
+                                                value='true'
+                                                id='force-web-true'
+                                                label={t('upstream.forceWeb')}
+                                                Icon={Globe2}
+                                                disabled={isLoading}
+                                                tooltip={t('upstream.forceWebHint')}
+                                            />
+                                        </RadioGroup>
                                     </div>
                                 )}
 

@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 export const FIXTURE_IMAGE_BASE64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
+export const FIXTURE_IMAGE_PATH = '/api/storage/generations/fixture.png';
 
 class PayloadTooLargeError extends Error {
     constructor() {
@@ -75,6 +76,12 @@ function sendJson(response, status, body) {
     response.end(JSON.stringify(body));
 }
 
+function sendFixtureImage(response) {
+    const buffer = Buffer.from(FIXTURE_IMAGE_BASE64, 'base64');
+    response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(buffer.byteLength) });
+    response.end(buffer);
+}
+
 function writeSse(response, event, payload) {
     if (event) response.write(`event: ${event}\n`);
     response.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -119,13 +126,20 @@ function sendResponsesStream(response) {
             id: 'ig_fixture',
             type: 'image_generation_call',
             status: 'completed',
-            result: FIXTURE_IMAGE_BASE64
+            result: FIXTURE_IMAGE_PATH
         }
     });
     writeSse(response, 'response.completed', {
         type: 'response.completed',
         response: {
-            output: [{ id: 'ig_fixture', type: 'image_generation_call', status: 'completed', result: FIXTURE_IMAGE_BASE64 }]
+            output: [
+                {
+                    id: 'ig_fixture',
+                    type: 'image_generation_call',
+                    status: 'completed',
+                    result: FIXTURE_IMAGE_PATH
+                }
+            ]
         }
     });
     response.end('data: [DONE]\n\n');
@@ -153,7 +167,7 @@ function responsesJsonResponse(body) {
         id: 'resp_fixture',
         object: 'response',
         model: typeof body.model === 'string' ? body.model : 'gpt-5.4',
-        output: [{ id: 'ig_fixture', type: 'image_generation_call', status: 'completed', result: FIXTURE_IMAGE_BASE64 }],
+        output: [{ id: 'ig_fixture', type: 'image_generation_call', status: 'completed', result: FIXTURE_IMAGE_PATH }],
         usage: {
             input_tokens: 1,
             output_tokens: 1,
@@ -180,6 +194,10 @@ async function handleRequest(request, response) {
     }
     if (request.method === 'GET' && url.pathname === '/v1/models') {
         sendJson(response, 200, modelsResponse());
+        return;
+    }
+    if (request.method === 'GET' && url.pathname === FIXTURE_IMAGE_PATH) {
+        sendFixtureImage(response);
         return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/images/generations') {

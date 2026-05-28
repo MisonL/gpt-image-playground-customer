@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 export const PAGE_SSE_ENDPOINT = '/api/images';
 export const DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
 
@@ -30,7 +33,7 @@ export function assertPageSseReady({ capabilities, passwordHash, idempotencyKey 
   }
 }
 
-export async function postPageSse({ url, formData, timeoutMs, errorMessage }) {
+export async function postPageSse({ url, formData, timeoutMs, errorMessage, sseLogPath }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -47,7 +50,7 @@ export async function postPageSse({ url, formData, timeoutMs, errorMessage }) {
 
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('text/event-stream')) {
-      return await collectPageSseResult(response, controller.signal, errorMessage);
+      return await collectPageSseResult(response, controller.signal, errorMessage, sseLogPath);
     }
 
     const text = await response.text();
@@ -71,13 +74,15 @@ export function formatPageSseOutput({ result, baseUrl, responseMode = 'path', de
 }
 
 export function buildPageSseFailureOutput({ error, fallbackEndpoint, fallbackMode = 'manual_after_diagnosis', errorMessage }) {
+  const diagnostics = readPageSseDiagnostics(error);
   if (isPageSseScriptError(error)) {
     return {
       ok: false,
       billable: false,
       error: {
         code: error.scriptCode,
-        message: errorMessage(error)
+        message: errorMessage(error),
+        ...(diagnostics ? { diagnostics } : {})
       },
       routing: buildPageSseRouting(fallbackEndpoint, fallbackMode),
       next_step: '先补齐页面流式 capability 或访问码哈希，再重新执行；不要静默切换到 Agent JSON。'
@@ -90,7 +95,8 @@ export function buildPageSseFailureOutput({ error, fallbackEndpoint, fallbackMod
       error: {
         code: 'page_sse_request_rejected',
         status: error.status,
-        message: errorMessage(error)
+        message: errorMessage(error),
+        ...(diagnostics ? { diagnostics } : {})
       },
       routing: buildPageSseRouting(fallbackEndpoint, 'fix_request_before_retry'),
       next_step: '先修正页面端拒绝的请求参数或鉴权，再重新执行；这类本地 4xx 不应按上游计费失败处理。'
@@ -102,7 +108,8 @@ export function buildPageSseFailureOutput({ error, fallbackEndpoint, fallbackMod
     error: {
       code: 'page_sse_failed',
       ...buildPageSseFailureStatus(error),
-      message: errorMessage(error)
+      message: errorMessage(error),
+      ...(diagnostics ? { diagnostics } : {})
     },
     routing: buildPageSseRouting(fallbackEndpoint, fallbackMode),
     next_step: '先诊断页面流式失败原因，再决定是否显式选择备用路径；不要自动重试同一个请求。'
@@ -187,11 +194,11 @@ function parseJsonResponse(text, allowEmpty, url, errorMessage) {
   }
 }
 
-async function collectPageSseResult(response, signal, errorMessage) {
+async function collectPageSseResult(response, signal, errorMessage, sseLogPath) {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('页面 SSE 响应缺少 body。');
   const decoder = new TextDecoder();
-  const state = { completedImages: [], usage: undefined, actualCost: undefined, doneReceived: false };
+  const state = createPageSseState();
   let buffer = '';
   while (true) {
     const { done, value } = await readPageSseChunk(reader, signal);
@@ -200,18 +207,44 @@ async function collectPageSseResult(response, signal, errorMessage) {
     const events = buffer.split(/\r?\n\r?\n/);
     buffer = events.pop() || '';
     for (const rawEvent of events) {
+      appendPageSseLog(sseLogPath, rawEvent);
       applyPageSseEvent(state, rawEvent, errorMessage);
     }
   }
   buffer += decoder.decode();
-  if (buffer.trim()) applyPageSseEvent(state, buffer, errorMessage);
+  if (buffer.trim()) {
+    appendPageSseLog(sseLogPath, buffer);
+    applyPageSseEvent(state, buffer, errorMessage);
+  }
   if (state.completedImages.length === 0) {
-    throw new Error('页面 SSE 未返回最终图片。');
+    throw withPageSseDiagnostics(new Error('页面 SSE 未返回最终图片。'), state);
   }
   if (!state.doneReceived) {
-    throw new Error('页面 SSE 缺少最终 done 事件，流式响应可能已提前中断。');
+    throw withPageSseDiagnostics(new Error('页面 SSE 缺少最终 done 事件，流式响应可能已提前中断。'), state);
   }
-  return { images: state.completedImages, usage: state.usage, actualCost: state.actualCost };
+  return { images: state.completedImages, usage: state.usage, actualCost: state.actualCost, sse_diagnostics: buildPageSseDiagnostics(state) };
+}
+
+function appendPageSseLog(filePath, rawEvent) {
+  if (!filePath || !rawEvent.trim()) return;
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.appendFileSync(filePath, `${JSON.stringify({ at: new Date().toISOString(), raw_event: rawEvent })}\n`);
+  } catch (error) {
+    console.warn(`SSE log write failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function createPageSseState() {
+  return {
+    completedImages: [],
+    usage: undefined,
+    actualCost: undefined,
+    doneReceived: false,
+    completedEventCount: 0,
+    partialImageCount: 0,
+    lastEventType: undefined
+  };
 }
 
 function readPageSseChunk(reader, signal) {
@@ -232,10 +265,14 @@ function readPageSseChunk(reader, signal) {
 function applyPageSseEvent(state, rawEvent, errorMessage) {
   const event = parsePageSseEvent(rawEvent, errorMessage);
   if (!event) return;
+  const eventType = readPageSseEventType(event);
+  state.lastEventType = eventType;
+  if (isPartialPageSseEvent(event, eventType)) state.partialImageCount += 1;
   if (event.type === 'error') {
-    throw createPageSseStreamError(event);
+    throw createPageSseStreamError(event, state);
   }
   if (event.type === 'completed' && event.filename) {
+    state.completedEventCount += 1;
     state.completedImages.push(
       normalizePageSseImage(
         {
@@ -258,6 +295,17 @@ function applyPageSseEvent(state, rawEvent, errorMessage) {
   }
 }
 
+function readPageSseEventType(event) {
+  if (typeof event.type === 'string' && event.type.trim()) return event.type;
+  if (typeof event.event === 'string' && event.event.trim()) return event.event;
+  return undefined;
+}
+
+function isPartialPageSseEvent(event, eventType) {
+  if (typeof eventType === 'string' && eventType.includes('partial_image')) return true;
+  return Boolean(event.partial_image || event.partialImage || event.partial_image_b64 || event.partialImageB64);
+}
+
 function parsePageSseEvent(rawEvent, errorMessage) {
   const lines = rawEvent.split(/\r?\n/);
   const data = lines
@@ -273,11 +321,11 @@ function parsePageSseEvent(rawEvent, errorMessage) {
   }
 }
 
-function createPageSseStreamError(event) {
+function createPageSseStreamError(event, state) {
   const error = new Error(formatErrorValue(event.error));
   const status = readPageSseStreamStatus(event);
   if (Number.isInteger(status)) error.streamStatus = status;
-  return error;
+  return withPageSseDiagnostics(error, state);
 }
 
 function readPageSseStreamStatus(event) {
@@ -336,4 +384,24 @@ function buildPageSseFailureStatus(error) {
     if (Number.isInteger(error.status)) return { status: error.status };
   }
   return {};
+}
+
+function withPageSseDiagnostics(error, state) {
+  error.pageSseDiagnostics = buildPageSseDiagnostics(state);
+  return error;
+}
+
+function readPageSseDiagnostics(error) {
+  if (!error || typeof error !== 'object' || !error.pageSseDiagnostics) return undefined;
+  return error.pageSseDiagnostics;
+}
+
+function buildPageSseDiagnostics(state) {
+  return {
+    partial_image_count: state.partialImageCount,
+    completed_event_count: state.completedEventCount,
+    done_received: state.doneReceived,
+    final_image_count: state.completedImages.length,
+    ...(state.lastEventType ? { last_upstream_event_type: state.lastEventType } : {})
+  };
 }

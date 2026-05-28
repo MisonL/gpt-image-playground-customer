@@ -292,4 +292,5 @@ export function createImageResult(
 
 export type GenerateParams = Omit<OpenAI.Images.ImageGenerateParams, 'output_compression'> & {
     output_compression?: number;
+    force_web?: boolean;
 };

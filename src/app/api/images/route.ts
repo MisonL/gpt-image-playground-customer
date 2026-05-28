@@ -259,7 +259,9 @@ export async function POST(request: NextRequest) {
 
         const streamMode = readImageStreamMode(formData, process.env);
         const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
-        const imageBackend = readImageGenerationBackend(formData, process.env, { useEnvDefault: mode === 'generate' });
+        const imageBackend = readImageGenerationBackend(formData, process.env, {
+            useEnvDefault: mode === 'generate'
+        });
         const streamingStrategy = readImageStreamingStrategy(formData, process.env, {
             useEnvDefault: mode === 'generate'
         });
@@ -321,6 +323,7 @@ export async function POST(request: NextRequest) {
                       prompt,
                       streamEnabled: streamResolution.streamEnabled,
                       partialImagesCount,
+                      imageBackend,
                       storageMode: effectiveStorageMode,
                       apiBaseUrl: effectiveApiBaseUrl,
                       apiKey: effectiveApiKey,
@@ -352,7 +355,10 @@ export async function POST(request: NextRequest) {
                 result,
                 outputFormat: responseOutputFormat,
                 storageMode: effectiveStorageMode,
-                includeBase64: true
+                includeBase64: true,
+                apiBaseUrl: effectiveApiBaseUrl,
+                apiKey: effectiveApiKey,
+                abortSignal: request.signal
             });
             const savedImagesData = savedImages.map((image) => ({
                 ...persistedImageToLegacyResponse(image),

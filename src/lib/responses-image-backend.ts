@@ -1,8 +1,11 @@
 import { asRecord } from './json-record';
+import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
 import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
+type OpenAiImageData = NonNullable<OpenAI.Images.ImagesResponse['data']>[number];
+const MAX_RESPONSES_EDIT_INPUT_BYTES = MAX_UPLOAD_BYTES * 2;
 
 type ResponsesCreateClient = {
     create(
@@ -23,16 +26,27 @@ export type ResponsesImageGenerateInput = {
     prompt: string;
     responsesModel: string;
     imageModel: string;
-    size: '1024x1024' | '1024x1536' | '1536x1024' | 'auto';
+    size: string;
     quality: 'low' | 'medium' | 'high' | 'auto';
     outputFormat: 'png' | 'webp' | 'jpeg';
     background: 'transparent' | 'opaque' | 'auto';
     moderation: 'auto' | 'low';
     outputCompression?: number;
+    promptOptimization?: boolean;
+    thinking?: string;
     abortSignal?: AbortSignal;
 };
 
+export type ResponsesImageEditInput = ResponsesImageGenerateInput & {
+    imageFiles: File[];
+    maskFile?: File;
+};
+
 export type ResponsesImageStreamInput = ResponsesImageGenerateInput & {
+    partialImagesCount: 1 | 2 | 3;
+};
+
+export type ResponsesImageEditStreamInput = ResponsesImageEditInput & {
     partialImagesCount: 1 | 2 | 3;
 };
 
@@ -45,18 +59,27 @@ class ResponsesImageGenerationError extends Error {
     }
 }
 
-function readCompletedImageRecordBase64(record: Record<string, unknown>): string | undefined {
+function isImageUrlResult(value: string): boolean {
+    return isRemoteHttpUrl(value) || value.startsWith('/');
+}
+
+function readCompletedImageRecordResult(record: Record<string, unknown>): OpenAiImageData | undefined {
     if (typeof record.result === 'string') {
         const resultBase64 = readResponsesImageResultBase64(record.result);
-        if (resultBase64) return resultBase64;
+        if (resultBase64) return { b64_json: resultBase64 };
+        const result = record.result.trim();
+        if (isImageUrlResult(result)) return { url: result };
     }
     if (typeof record.url === 'string') {
-        return extractImageBase64FromDataUrl(record.url);
+        const url = record.url.trim();
+        const urlBase64 = extractImageBase64FromDataUrl(url);
+        if (urlBase64) return { b64_json: urlBase64 };
+        if (isImageUrlResult(url)) return { url };
     }
     return undefined;
 }
 
-function extractCompletedImageResults(output: unknown[] | undefined): string[] {
+function extractCompletedImageResults(output: unknown[] | undefined): OpenAiImageData[] {
     if (!Array.isArray(output)) {
         return [];
     }
@@ -69,8 +92,8 @@ function extractCompletedImageResults(output: unknown[] | undefined): string[] {
         if (record.status === 'failed') {
             return [];
         }
-        const b64Json = readCompletedImageRecordBase64(record);
-        return b64Json ? [b64Json] : [];
+        const imageResult = readCompletedImageRecordResult(record);
+        return imageResult ? [imageResult] : [];
     });
 }
 
@@ -95,21 +118,6 @@ function readFailedImageGenerationCallMessage(output: unknown[] | undefined): st
     return undefined;
 }
 
-function hasRemoteOnlyCompletedImageResult(output: unknown[] | undefined): boolean {
-    if (!Array.isArray(output)) return false;
-    return output.some((item) => {
-        const record = asRecord(item);
-        if (!record) return false;
-        return (
-            record.type === 'image_generation_call' &&
-            record.status !== 'failed' &&
-            ((typeof record.result === 'string' && isRemoteHttpUrl(record.result.trim())) ||
-                (typeof record.url === 'string' && isRemoteHttpUrl(record.url.trim()))) &&
-            !readCompletedImageRecordBase64(record)
-        );
-    });
-}
-
 function buildResponsesImageTool(
     input: ResponsesImageGenerateInput,
     partialImagesCount?: 1 | 2 | 3
@@ -124,8 +132,55 @@ function buildResponsesImageTool(
         background: input.background,
         moderation: input.moderation,
         ...(input.outputCompression !== undefined ? { output_compression: input.outputCompression } : {}),
+        ...(input.promptOptimization !== undefined ? { prompt_optimization: input.promptOptimization } : {}),
+        ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
         ...(partialImagesCount !== undefined ? { partial_images: partialImagesCount } : {})
-    };
+    } as unknown as OpenAI.Responses.Tool;
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    return `data:${file.type};base64,${buffer.toString('base64')}`;
+}
+
+function assertResponsesEditInputSize(input: ResponsesImageEditInput): void {
+    const totalBytes =
+        input.imageFiles.reduce((sum, file) => sum + file.size, 0) + (input.maskFile ? input.maskFile.size : 0);
+    if (totalBytes > MAX_RESPONSES_EDIT_INPUT_BYTES) {
+        throw new RequestValidationError(
+            `Responses API 图生图参考图和 mask 总大小不能超过 ${MAX_RESPONSES_EDIT_INPUT_BYTES / 1024 / 1024} MB。`,
+            400
+        );
+    }
+}
+
+async function buildResponsesImageEditInput(input: ResponsesImageEditInput): Promise<OpenAI.Responses.ResponseInput> {
+    assertResponsesEditInputSize(input);
+    const content: OpenAI.Responses.ResponseInputContent[] = [
+        {
+            type: 'input_text',
+            text: input.prompt
+        }
+    ];
+    for (const file of input.imageFiles) {
+        content.push({
+            type: 'input_image',
+            detail: 'auto',
+            image_url: await fileToDataUrl(file)
+        });
+    }
+    return [{ role: 'user', content }];
+}
+
+async function buildResponsesImageEditTool(
+    input: ResponsesImageEditInput,
+    partialImagesCount?: 1 | 2 | 3
+): Promise<OpenAI.Responses.Tool> {
+    const tool = buildResponsesImageTool(input, partialImagesCount) as unknown as Record<string, unknown>;
+    if (input.maskFile) {
+        tool.input_image_mask = { image_url: await fileToDataUrl(input.maskFile) };
+    }
+    return tool as unknown as OpenAI.Responses.Tool;
 }
 
 export async function generateImageWithResponsesBackend(
@@ -148,17 +203,40 @@ export async function generateImageWithResponsesBackend(
         if (failedMessage) {
             throw new ResponsesImageGenerationError(`Responses API image_generation_call 失败：${failedMessage}`);
         }
-        if (hasRemoteOnlyCompletedImageResult(response.output)) {
-            throw new ResponsesImageGenerationError(
-                'Responses API 只返回远程图片 URL，缺少可保存的 image_generation_call.result base64 数据。'
-            );
-        }
-        throw new ResponsesImageGenerationError('Responses API 未返回已完成的 image_generation_call.result。');
+        throw new ResponsesImageGenerationError('Responses API 未返回已完成的 image_generation_call.result 或 url。');
     }
 
     return {
         created: Math.floor(Date.now() / 1000),
-        data: imageResults.map((b64Json) => ({ b64_json: b64Json })),
+        data: imageResults,
+        ...(response.usage ? { usage: response.usage as ImageUsage } : {})
+    };
+}
+
+export async function editImageWithResponsesBackend(input: ResponsesImageEditInput): Promise<OpenAI.Images.ImagesResponse> {
+    const response = await input.responses.create(
+        {
+            model: input.responsesModel,
+            input: await buildResponsesImageEditInput(input),
+            stream: false,
+            tool_choice: { type: 'image_generation' },
+            tools: [await buildResponsesImageEditTool(input)]
+        },
+        input.abortSignal ? { signal: input.abortSignal } : undefined
+    );
+    const imageResults = extractCompletedImageResults(response.output);
+
+    if (imageResults.length === 0) {
+        const failedMessage = readFailedImageGenerationCallMessage(response.output);
+        if (failedMessage) {
+            throw new ResponsesImageGenerationError(`Responses API image_generation_call 失败：${failedMessage}`);
+        }
+        throw new ResponsesImageGenerationError('Responses API 未返回已完成的 image_generation_call.result 或 url。');
+    }
+
+    return {
+        created: Math.floor(Date.now() / 1000),
+        data: imageResults,
         ...(response.usage ? { usage: response.usage as ImageUsage } : {})
     };
 }
@@ -171,6 +249,19 @@ export async function createResponsesImageStream(input: ResponsesImageStreamInpu
             stream: true,
             tool_choice: { type: 'image_generation' },
             tools: [buildResponsesImageTool(input, input.partialImagesCount)]
+        },
+        input.abortSignal ? { signal: input.abortSignal } : undefined
+    );
+}
+
+export async function createResponsesImageEditStream(input: ResponsesImageEditStreamInput): Promise<AsyncIterable<unknown>> {
+    return input.responses.create(
+        {
+            model: input.responsesModel,
+            input: await buildResponsesImageEditInput(input),
+            stream: true,
+            tool_choice: { type: 'image_generation' },
+            tools: [await buildResponsesImageEditTool(input, input.partialImagesCount)]
         },
         input.abortSignal ? { signal: input.abortSignal } : undefined
     );

@@ -14,6 +14,7 @@ import {
 } from './lib/script-utils.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 
 const IMAGE_BACKENDS = new Set(['images-api', 'images', 'responses', 'responses-image-generation']);
 const RESPONSE_MODES = new Set(['path', 'base64', 'both']);
@@ -166,6 +167,7 @@ function parseArgs(argv) {
         streamMode: undefined,
         streamingStrategy: undefined,
         partialImages: undefined,
+        sseLogPath: undefined,
         timeoutMs: undefined,
         promptFile: undefined,
         idempotencyKey: undefined,
@@ -194,6 +196,7 @@ function parseArgs(argv) {
         else if (arg === '--stream-mode') parsed.streamMode = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--streaming-strategy') parsed.streamingStrategy = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--partial-images') parsed.partialImages = readOptionValue(argv, (index += 1), arg);
+        else if (arg === '--sse-log') parsed.sseLogPath = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--prompt-file') parsed.promptFile = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(argv, (index += 1), arg);
@@ -528,6 +531,18 @@ function formatPageSseImage(image) {
     return output;
 }
 
+function createPageSseState() {
+    return {
+        completedImages: [],
+        usage: undefined,
+        actualCost: undefined,
+        doneReceived: false,
+        completedEventCount: 0,
+        partialImageCount: 0,
+        lastEventType: undefined
+    };
+}
+
 function normalizeImageBackendForPage(value) {
     if (value === 'images') return 'images-api';
     if (value === 'responses') return 'responses-image-generation';
@@ -566,7 +581,7 @@ async function collectPageSseResult(response, signal) {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('页面 SSE 响应缺少 body。');
     const decoder = new TextDecoder();
-    const state = { completedImages: [], usage: undefined, actualCost: undefined, doneReceived: false };
+    const state = createPageSseState();
     let buffer = '';
     while (true) {
         const { done, value } = await readPageSseChunk(reader, signal);
@@ -575,18 +590,32 @@ async function collectPageSseResult(response, signal) {
         const events = buffer.split(/\r?\n\r?\n/);
         buffer = events.pop() || '';
         for (const rawEvent of events) {
+            appendPageSseLog(rawEvent);
             applyPageSseEvent(state, rawEvent);
         }
     }
     buffer += decoder.decode();
-    if (buffer.trim()) applyPageSseEvent(state, buffer);
+    if (buffer.trim()) {
+        appendPageSseLog(buffer);
+        applyPageSseEvent(state, buffer);
+    }
     if (state.completedImages.length === 0) {
-        throw new Error('页面 SSE 未返回最终图片。');
+        throw withPageSseDiagnostics(new Error('页面 SSE 未返回最终图片。'), state);
     }
     if (!state.doneReceived) {
-        throw new Error('页面 SSE 缺少最终 done 事件，流式响应可能已提前中断。');
+        throw withPageSseDiagnostics(new Error('页面 SSE 缺少最终 done 事件，流式响应可能已提前中断。'), state);
     }
-    return { images: state.completedImages, usage: state.usage, actualCost: state.actualCost };
+    return { images: state.completedImages, usage: state.usage, actualCost: state.actualCost, sse_diagnostics: buildPageSseDiagnostics(state) };
+}
+
+function appendPageSseLog(rawEvent) {
+    if (!options.sseLogPath || !rawEvent.trim()) return;
+    try {
+        fs.mkdirSync(path.dirname(options.sseLogPath), { recursive: true });
+        fs.appendFileSync(options.sseLogPath, `${JSON.stringify({ at: new Date().toISOString(), raw_event: rawEvent })}\n`);
+    } catch (error) {
+        console.warn(`SSE log write failed: ${errorMessage(error)}`);
+    }
 }
 
 function readPageSseChunk(reader, signal) {
@@ -609,10 +638,14 @@ function readPageSseChunk(reader, signal) {
 function applyPageSseEvent(state, rawEvent) {
     const event = parsePageSseEvent(rawEvent);
     if (!event) return;
+    const eventType = readPageSseEventType(event);
+    state.lastEventType = eventType;
+    if (isPartialPageSseEvent(event, eventType)) state.partialImageCount += 1;
     if (event.type === 'error') {
-        throw createPageSseStreamError(event);
+        throw createPageSseStreamError(event, state);
     }
     if (event.type === 'completed' && event.filename) {
+        state.completedEventCount += 1;
         state.completedImages.push(
             normalizePageSseImage(
                 {
@@ -635,6 +668,17 @@ function applyPageSseEvent(state, rawEvent) {
     }
 }
 
+function readPageSseEventType(event) {
+    if (typeof event.type === 'string' && event.type.trim()) return event.type;
+    if (typeof event.event === 'string' && event.event.trim()) return event.event;
+    return undefined;
+}
+
+function isPartialPageSseEvent(event, eventType) {
+    if (typeof eventType === 'string' && eventType.includes('partial_image')) return true;
+    return Boolean(event.partial_image || event.partialImage || event.partial_image_b64 || event.partialImageB64);
+}
+
 function formatPageSseError(value) {
     if (typeof value === 'string' && value.trim()) return value;
     if (value && typeof value === 'object') {
@@ -649,13 +693,13 @@ function formatPageSseError(value) {
     return '页面 SSE 返回错误事件。';
 }
 
-function createPageSseStreamError(event) {
+function createPageSseStreamError(event, state) {
     const error = new Error(formatPageSseError(event.error));
     const status = readPageSseStreamStatus(event);
     if (Number.isInteger(status)) {
         error.streamStatus = status;
     }
-    return error;
+    return withPageSseDiagnostics(error, state);
 }
 
 function readPageSseStreamStatus(event) {
@@ -686,13 +730,14 @@ function buildSuccessOutput(result, routing) {
 }
 
 function buildPageSseFailureOutput(error) {
+    const diagnostics = readPageSseDiagnostics(error);
     if (isScriptError(error)) {
-        return buildPageSseScriptFailure(error);
+        return buildPageSseScriptFailure(error, diagnostics);
     }
     if (isPageSseRequestRejected(error)) {
-        return buildPageSseRequestRejectedFailure(error);
+        return buildPageSseRequestRejectedFailure(error, diagnostics);
     }
-    return buildBillablePageSseFailure(error);
+    return buildBillablePageSseFailure(error, diagnostics);
 }
 
 function buildPageSseRouting(fallbackMode) {
@@ -704,41 +749,44 @@ function buildPageSseRouting(fallbackMode) {
     };
 }
 
-function buildPageSseScriptFailure(error) {
+function buildPageSseScriptFailure(error, diagnostics) {
     return {
         ok: false,
         billable: false,
         error: {
             code: error.scriptCode,
-            message: errorMessage(error)
+            message: errorMessage(error),
+            ...(diagnostics ? { diagnostics } : {})
         },
         routing: buildPageSseRouting('manual_after_diagnosis'),
         next_step: '先补齐页面流式 capability 或访问码哈希，再重新执行；不要静默切换到 Agent JSON。'
     };
 }
 
-function buildPageSseRequestRejectedFailure(error) {
+function buildPageSseRequestRejectedFailure(error, diagnostics) {
     return {
         ok: false,
         billable: false,
         error: {
             code: 'page_sse_request_rejected',
             status: error.status,
-            message: errorMessage(error)
+            message: errorMessage(error),
+            ...(diagnostics ? { diagnostics } : {})
         },
         routing: buildPageSseRouting('fix_request_before_retry'),
         next_step: '先修正页面端拒绝的请求参数或鉴权，再重新执行；这类本地 4xx 不应按上游计费失败处理。'
     };
 }
 
-function buildBillablePageSseFailure(error) {
+function buildBillablePageSseFailure(error, diagnostics) {
     return {
         ok: false,
         billable: true,
         error: {
             code: 'page_sse_failed',
             ...buildPageSseFailureStatus(error),
-            message: errorMessage(error)
+            message: errorMessage(error),
+            ...(diagnostics ? { diagnostics } : {})
         },
         routing: buildPageSseRouting('manual_after_diagnosis'),
         next_step: '先诊断页面流式失败原因，再决定是否用 --agent 重新执行同一业务请求；不要自动重试同一个请求。'
@@ -751,6 +799,26 @@ function buildPageSseFailureStatus(error) {
         if (Number.isInteger(error.status)) return { status: error.status };
     }
     return {};
+}
+
+function withPageSseDiagnostics(error, state) {
+    error.pageSseDiagnostics = buildPageSseDiagnostics(state);
+    return error;
+}
+
+function readPageSseDiagnostics(error) {
+    if (!error || typeof error !== 'object' || !error.pageSseDiagnostics) return undefined;
+    return error.pageSseDiagnostics;
+}
+
+function buildPageSseDiagnostics(state) {
+    return {
+        partial_image_count: state.partialImageCount,
+        completed_event_count: state.completedEventCount,
+        done_received: state.doneReceived,
+        final_image_count: state.completedImages.length,
+        ...(state.lastEventType ? { last_upstream_event_type: state.lastEventType } : {})
+    };
 }
 
 async function runGenerateJob() {
@@ -994,7 +1062,7 @@ function printUsage() {
     console.error('用法：generate-image.mjs [options] <prompt>');
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
     console.error(
-        '常用参数：--model --size --quality --n --format --response-mode --image-backend --stream-mode --streaming-strategy --partial-images --timeout-ms --prompt-file --idempotency-key --page-sse --agent --job --no-job(兼容别名)'
+        '常用参数：--model --size --quality --n --format --response-mode --image-backend --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --prompt-file --idempotency-key --page-sse --agent --job --no-job(兼容别名)'
     );
     console.error(
         '契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check'

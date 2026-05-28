@@ -19,6 +19,12 @@ export function imageFormRequest(input: {
     size?: string;
     n?: string;
     responsesModel?: string;
+    outputFormat?: 'png' | 'jpeg' | 'webp';
+    outputCompression?: string;
+    promptOptimization?: string;
+    gptModel?: string;
+    thinking?: string;
+    forceWeb?: string;
     clientRequestId?: string;
     signal?: AbortSignal;
 }): NextRequest {
@@ -28,10 +34,25 @@ export function imageFormRequest(input: {
     formData.append('model', 'gpt-image-2');
     formData.append('n', input.n || '1');
     formData.append('size', input.size || '1024x1024');
-    formData.append('output_format', 'png');
+    formData.append('output_format', input.outputFormat || 'png');
     formData.append('apiBaseUrl', input.apiBaseUrl);
     formData.append('apiKey', input.apiKey);
     formData.append('clientRequestId', input.clientRequestId ?? 'client-route-stream');
+    if (input.outputCompression) {
+        formData.append('output_compression', input.outputCompression);
+    }
+    if (input.promptOptimization) {
+        formData.append('promptOptimization', input.promptOptimization);
+    }
+    if (input.gptModel) {
+        formData.append('gptModel', input.gptModel);
+    }
+    if (input.thinking) {
+        formData.append('thinking', input.thinking);
+    }
+    if (input.forceWeb) {
+        formData.append('forceWeb', input.forceWeb);
+    }
     if (input.imageBackend) {
         formData.append('imageBackend', input.imageBackend);
     }
@@ -92,10 +113,21 @@ export async function startStreamingImageUpstream(
 }
 
 export async function startImagesJsonUpstream(
-    handler: (body: string, url: string) => Promise<unknown>
+    handler: (body: string, url: string) => Promise<unknown | Buffer>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         const isImagePath = request.url?.endsWith('/images/generations') || request.url?.endsWith('/images/edits');
+        if (request.method === 'GET') {
+            const payload = await handler('', request.url || '');
+            if (Buffer.isBuffer(payload)) {
+                response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(payload.byteLength) });
+                response.end(payload);
+                return;
+            }
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
         if (request.method !== 'POST' || !isImagePath) {
             response.writeHead(404, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({ error: { message: 'not found' } }));
@@ -105,6 +137,11 @@ export async function startImagesJsonUpstream(
         request.on('data', (chunk: Buffer) => chunks.push(chunk));
         await new Promise<void>((resolve) => request.on('end', resolve));
         const payload = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
+        if (Buffer.isBuffer(payload)) {
+            response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(payload.byteLength) });
+            response.end(payload);
+            return;
+        }
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify(payload));
     });
@@ -223,6 +260,45 @@ export async function startResponsesImageUpstream(
         response.end(JSON.stringify(payload));
     });
     return listen(server);
+}
+
+export async function startResponsesStreamFailureThenJsonUpstream(): Promise<{
+    baseUrl: string;
+    calls: Array<{ stream?: boolean }>;
+    close: () => Promise<void>;
+}> {
+    const calls: Array<{ stream?: boolean }> = [];
+    const server = http.createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { stream?: boolean };
+        calls.push({ stream: payload.stream });
+        if (payload.stream) {
+            response.writeHead(500, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'stream setup failed' } }));
+            return;
+        }
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(
+            JSON.stringify({
+                output: [
+                    {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: PNG_BASE64
+                    }
+                ]
+            })
+        );
+    });
+    const result = await listen(server);
+    return { ...result, calls };
 }
 
 export async function startStreamingResponsesImageUpstream(

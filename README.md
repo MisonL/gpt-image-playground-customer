@@ -148,11 +148,12 @@ http://localhost:4783
 - 默认路径是服务端中继 OpenAI Images API：`/api/images` 调用上游 `/images/generations` 或 `/images/edits`，再返回本项目稳定的 JSON 或 SSE 协议。原版 new-api 和 sub2api 普通 JSON 能力保持这个基线。
 - 流式策略由请求字段或环境变量控制：`off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。请求级 `stream_mode` 支持 `auto`、`stream`、`non_stream`；`IMAGE_STREAMING_STRATEGY=off` 时页面会切到 `non_stream`。Agent 辅助脚本对 `max_edge>2048` 的单次文生图默认优先使用页面端 `/api/images` SSE，失败后先诊断，再显式选择 Agent JSON 或 job 路径。
 - 流式请求在没有 partial image 前只显示连接保持状态，不会把 keepalive 当成图片预览或成功结果。
-- gaoren002/new-api、sub2api、OtokAPI 与 GPT2Image 风格 Responses 兼容仅发生在事件适配层：partial image 只作为预览，只有最终 completed base64 才会保存为 artifact；缺最终 base64 或仅返回远程 URL 会显式失败。
+- gaoren002/new-api、sub2api、OtokAPI 与 GPT2Image 风格 Responses 兼容发生在事件和结果适配层：partial image 只作为预览，最终 completed 可返回 base64、图片 data URL 或与上游 `BASE_URL` 同源的图片 URL。同源 URL 会由服务端下载并保存；跨源 URL、非图片响应或超过大小限制会显式失败。
 - Responses API image generation 是实验路径，默认关闭。只有同时设置 `ENABLE_RESPONSES_IMAGE_BACKEND=true`、配置 `OPENAI_RESPONSES_API_MODEL`，并在请求中显式传入 `image_backend=responses-image-generation` 或兼容别名 `imageBackend=responses` 时，服务端才会调用 `/responses` 并读取 `image_generation_call.result`。
 - Agent capabilities 会同时暴露 `supported.image_backends` 枚举和 `supported.enabled_image_backends` 当前启用后端；自动化脚本应以后者和 `image_backend_requirements` 判断 runtime 是否已准备好。
-- Responses API 的顶层模型由 `OPENAI_RESPONSES_API_MODEL` 或请求字段 `responsesModel` 指定；页面表单里的图片模型只传给 `image_generation` 工具。
-- Responses API 实验路径支持单张 `generate` 的非流式和上游 SSE 消费，不替换默认 Images API，不接入编辑表单。Agent generate/edit 对外仍返回最终 JSON；generate 可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制服务端内部上游 SSE 消费，edit 仅支持 `stream_mode`、`streaming_strategy`、`partial_images`。
+- Responses API 的顶层模型由 `OPENAI_RESPONSES_API_MODEL` 或请求字段 `responsesModel` 指定；兼容字段 `gptModel`/`gpt_model` 也可覆盖顶层模型。页面表单里的图片模型只传给 `image_generation` 工具。
+- GPT2Image 兼容字段会尽量透传：文生图和图生图页面高级参数都可按后端选择提交字段；Responses 图片后端支持 `output_compression`、`promptOptimization`/`prompt_optimization` 和 `thinking`；Images API 路径支持 `force_web`/`forceWeb`。这些字段最终是否生效取决于命中的上游后端。
+- Responses API 实验路径支持单张 `generate` 和 `edit` 的非流式与上游 SSE 消费，不替换默认 Images API。页面文生图和图生图表单都可显式选择 Responses 图片后端；Agent generate/edit 对外仍返回最终 JSON；generate 可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制服务端内部上游 SSE 消费，edit 仅支持 `stream_mode`、`streaming_strategy`、`partial_images`。
 
 ## 编辑与遮罩
 
@@ -237,9 +238,9 @@ node skills/gpt-image-playground-agent/scripts/batch-images.mjs \
   --ordered-prefix product-set
 ```
 
-默认 dry-run 只解析 JSONL 和输出计划，不联网、不计费。真实执行必须加 `--allow-billable`，并可配合 `--manifest`、`--resume` 和 `--dimension-check` 做 append-only 续跑和 PNG/JPEG/WebP 尺寸校验。
+默认 dry-run 只解析 JSONL 和输出计划，不联网、不计费。真实执行必须加 `--allow-billable`，并可配合 `--manifest`、`--resume`、`--dimension-check`、`--max-attempts`、`--max-consecutive-failures` 和任务级 `sse_log_path` 做 append-only 续跑、PNG/JPEG/WebP 尺寸校验、失败重试、连续失败熔断和页面 SSE 原始事件留档。
 
-批量 JSONL 中，`output_format`、`format`、`output_compression`、`background`、`moderation`、`image_backend`、`responsesModel` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
+批量 JSONL 中，`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径，其中 edit 任务传入这些高级字段时会显式选择 `/api/images` form-data SSE，因为 Agent JSON edit 不接收这些字段。`responsesModel` 必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`。PNG 搭配 `output_compression` 会在 dry-run 输出 `normalizations.output_compression_ignored_for_png=true`，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
 生成示例：
 
@@ -502,7 +503,15 @@ npm run deploy:space
 npm run agent:doctor
 ```
 
-`status` 只读输出 git、Node、固定 Space 目标、Agent capabilities 路径、仓库 Skill 入口和独立真实图片上游 smoke 配置摘要。它会按 shell 环境变量、`.env.real-smoke.local`、`.env.local` 的优先级判断真实 smoke 配置是否齐全，但不会输出 URL 或 API Key；`doctor` 汇总本机与 HF Space 诊断；`verify` 执行提交前基线，需要真实 PostgreSQL gate 时加 `--postgres`；`deploy:local` 重建本地 Docker 并探测真实端点；`deploy:space` 是 HF Space 发布的稳定别名；`agent:doctor` 对当前 Agent API 做只读契约检查。
+`status` 只读输出 git、Node、固定 Space 目标、Agent capabilities 路径、仓库 Skill 入口和独立真实图片上游 smoke 配置摘要。它会按 shell 环境变量、`.env.real-smoke.local`、`.env.local` 的优先级判断真实 smoke 配置是否齐全，但不会输出 URL 或 API Key；`doctor` 汇总本机与 HF Space 诊断；`verify` 执行提交前基线，需要真实 PostgreSQL gate 时加 `--postgres`；`deploy:local` 重建本地 Docker 并探测真实端点；`deploy:space` 是 HF Space 发布的稳定别名；`agent:doctor` 默认做非计费分层诊断，覆盖 capabilities、Agent contract、runtime backend、state backend、Responses/GPT2Image readiness，并把真实生图 smoke 标记为 skipped。
+
+如需让 `agent:doctor` 执行真实计费 smoke，必须显式传入：
+
+```bash
+npm run agent:doctor -- --allow-billable --edit-image /path/to/reference.png
+```
+
+其中 1K 文生图、1K 图生图和 2K page SSE edit 会按真实上游路径执行；未传 `--allow-billable` 时不会触发生图。
 
 如果只想诊断 HF Space 前置条件，可运行：
 
@@ -582,7 +591,7 @@ docker logs -f gpt-image-playground-customer
 | `npm run verify` | 执行提交前基线：测试、lint、脚本语法、构建和 `git diff --check`；加 `-- --postgres` 会包含 live PostgreSQL gate。 |
 | `npm run deploy:local` | 重建本地 Docker 服务并探测 `/api/auth-status`、`/api/runtime-capabilities`、`/api/agent/capabilities`；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。 |
 | `npm run deploy:space` | 上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证。 |
-| `npm run agent:doctor` | 通过仓库 Skill 脚本执行只读 Agent API 契约检查，不触发真实生图。 |
+| `npm run agent:doctor` | 执行非计费 Agent 分层诊断，真实 1K/2K smoke 必须显式加 `-- --allow-billable`。 |
 | `npm run deploy:hf-space` | 使用官方 `hf` CLI 上传当前干净 git HEAD 到固定 Space 并做只读公网验证。 |
 | `npm run doctor:hf-space` | 只读诊断 HF Space 部署前置条件、固定 Space 目标和远端配置。 |
 | `npm run keepalive:hf-space` | 访问 HF Space 只读状态端点，用于 keepalive 验证。 |
@@ -595,6 +604,8 @@ docker logs -f gpt-image-playground-customer
 | `npm run format` | 格式化 `src/` 下的 TypeScript 和 React 文件。 |
 
 真实上游 smoke 使用以下环境变量前缀逐类配置：`IMAGE_REAL_SMOKE_ORIGINAL_*`、`IMAGE_REAL_SMOKE_GAOREN_*`、`IMAGE_REAL_SMOKE_SUB2API_*`、`IMAGE_REAL_SMOKE_SUB2API_RESPONSES_*`、`IMAGE_REAL_SMOKE_GPT2IMAGE_*`。每类至少提供 `BASE_URL` 和 `API_KEY`；Responses 场景还必须提供 `/responses` 顶层模型。可选覆盖图片 `MODEL`、`SIZE`、`QUALITY`。`BASE_URL` 必须是无凭据、无查询参数、无片段的 `http`/`https` 绝对 URL。默认不触发计费请求，必须显式加 `-- --allow-billable`。可复制 `.env.real-smoke.example` 为未跟踪的 `.env.real-smoke.local`，再通过 `-- --env-file .env.real-smoke.local` 加载；shell 环境变量优先级高于 `--env-file`，`--env-file` 优先级高于 `.env.local`。
+
+GPT2Image 付费站的真实上游地址应配置为 `https://gpt2image.superapi.buzz/v1`，不要使用站点首页 URL。该场景会通过 Responses image_generation SSE 验证 URL 结果物化和最终图片保存。
 
 `npm run smoke:image-upstream-local` 会临时启动仓库内置 fixture，把 5 个独立场景全部指向本机 `/v1` 兼容服务，并调用同一个 `smoke:image-upstream-real -- --require-independent-targets --allow-billable` 门禁路径。该命令用于验证本项目的 final-gate 脚本、事件归一化和本地可复现环境；输出会标记 `local_fixture=true`。它不证明原版 new-api、gaoren/new-api、sub2api 或 GPT2Image 第三方部署当前可访问，真实验收仍需配置 `.env.real-smoke.local` 后运行真实上游门禁。
 

@@ -342,6 +342,9 @@ export default function HomePage() {
     const [editCustomWidth, setEditCustomWidth] = React.useState<number>(1024);
     const [editCustomHeight, setEditCustomHeight] = React.useState<number>(1024);
     const [editQuality, setEditQuality] = React.useState<EditingFormData['quality']>('auto');
+    const [editOutputFormat, setEditOutputFormat] = React.useState<EditingFormData['output_format']>('png');
+    const [editCompression, setEditCompression] = React.useState([100]);
+    const [editModeration, setEditModeration] = React.useState<EditingFormData['moderation']>('auto');
     const [editBrushSize, setEditBrushSize] = React.useState([20]);
     const [editShowMaskEditor, setEditShowMaskEditor] = React.useState(false);
     const [editGeneratedMaskFile, setEditGeneratedMaskFile] = React.useState<File | null>(null);
@@ -351,6 +354,16 @@ export default function HomePage() {
     );
     const [editDrawnPoints, setEditDrawnPoints] = React.useState<DrawnPoint[]>([]);
     const [editMaskPreviewUrl, setEditMaskPreviewUrl] = React.useState<string | null>(null);
+    const [editImageBackend, setEditImageBackend] =
+        React.useState<EditingFormData['image_backend']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [editStreamingStrategy, setEditStreamingStrategy] =
+        React.useState<EditingFormData['streaming_strategy']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [editResponsesModel, setEditResponsesModel] = React.useState('');
+    const [editThinking, setEditThinking] =
+        React.useState<EditingFormData['thinking']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [editPromptOptimization, setEditPromptOptimization] =
+        React.useState<EditingFormData['promptOptimization']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [editForceWeb, setEditForceWeb] = React.useState(false);
 
     const [genModel, setGenModel] = React.useState<GenerationFormData['model']>('gpt-image-2');
     const [genPrompt, setGenPrompt] = React.useState('');
@@ -368,6 +381,11 @@ export default function HomePage() {
     const [genStreamingStrategy, setGenStreamingStrategy] =
         React.useState<GenerationFormData['streaming_strategy']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
     const [genResponsesModel, setGenResponsesModel] = React.useState('');
+    const [genThinking, setGenThinking] =
+        React.useState<GenerationFormData['thinking']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [genPromptOptimization, setGenPromptOptimization] =
+        React.useState<GenerationFormData['promptOptimization']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [genForceWeb, setGenForceWeb] = React.useState(false);
 
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
 
@@ -739,7 +757,7 @@ export default function HomePage() {
                 quality: isGenerateMode ? genQuality : editQuality,
                 background: isGenerateMode ? genBackground : 'auto',
                 moderation: isGenerateMode ? genModeration : 'auto',
-                output_format: isGenerateMode ? genOutputFormat : 'png',
+                output_format: isGenerateMode ? genOutputFormat : editOutputFormat,
                 prompt: isGenerateMode ? genPrompt : editPrompt,
                 mode,
                 costDetails,
@@ -760,6 +778,7 @@ export default function HomePage() {
             editCustomHeight,
             editCustomWidth,
             editModel,
+            editOutputFormat,
             editPrompt,
             editQuality,
             editSize,
@@ -895,7 +914,10 @@ export default function HomePage() {
                 appendImageUpstreamOverrideFields(apiFormData, {
                     imageBackend: genData.image_backend,
                     streamingStrategy: genData.streaming_strategy,
-                    responsesModel: genData.responsesModel
+                    responsesModel: genData.responsesModel,
+                    thinking: genData.thinking,
+                    promptOptimization: genData.promptOptimization,
+                    forceWeb: genData.forceWeb
                 });
             } else {
                 const editData = formData as EditingFormData;
@@ -908,6 +930,22 @@ export default function HomePage() {
                         : (getPresetDimensions(editData.size, editData.model) ?? editData.size);
                 apiFormData.append('size', editSizeToSend);
                 apiFormData.append('quality', editData.quality);
+                apiFormData.append('output_format', editData.output_format);
+                if (
+                    (editData.output_format === 'jpeg' || editData.output_format === 'webp') &&
+                    editData.output_compression !== undefined
+                ) {
+                    apiFormData.append('output_compression', editData.output_compression.toString());
+                }
+                apiFormData.append('moderation', editData.moderation);
+                appendImageUpstreamOverrideFields(apiFormData, {
+                    imageBackend: editData.image_backend,
+                    streamingStrategy: editData.streaming_strategy,
+                    responsesModel: editData.responsesModel,
+                    thinking: editData.thinking,
+                    promptOptimization: editData.promptOptimization,
+                    forceWeb: editData.forceWeb
+                });
 
                 editData.imageFiles.forEach((file, index) => {
                     apiFormData.append(`image_${index}`, file, file.name);
@@ -1209,7 +1247,10 @@ export default function HomePage() {
                 model: genModel,
                 image_backend: genImageBackend,
                 streaming_strategy: genStreamingStrategy,
-                responsesModel: genResponsesModel
+                responsesModel: genResponsesModel,
+                thinking: genThinking,
+                promptOptimization: genPromptOptimization,
+                forceWeb: genForceWeb
             });
             return;
         }
@@ -1220,9 +1261,20 @@ export default function HomePage() {
             customWidth: editCustomWidth,
             customHeight: editCustomHeight,
             quality: editQuality,
+            output_format: editOutputFormat,
+            ...(editOutputFormat === 'jpeg' || editOutputFormat === 'webp'
+                ? { output_compression: editCompression[0] }
+                : {}),
+            moderation: editModeration,
             imageFiles: editImageFiles,
             maskFile: editGeneratedMaskFile,
-            model: editModel
+            model: editModel,
+            image_backend: editImageBackend,
+            streaming_strategy: editStreamingStrategy,
+            responsesModel: editResponsesModel,
+            thinking: editThinking,
+            promptOptimization: editPromptOptimization,
+            forceWeb: editForceWeb
         });
     }
 
@@ -1631,6 +1683,12 @@ export default function HomePage() {
                                         setStreamingStrategy={setGenStreamingStrategy}
                                         responsesModel={genResponsesModel}
                                         setResponsesModel={setGenResponsesModel}
+                                        thinking={genThinking}
+                                        setThinking={setGenThinking}
+                                        promptOptimization={genPromptOptimization}
+                                        setPromptOptimization={setGenPromptOptimization}
+                                        forceWeb={genForceWeb}
+                                        setForceWeb={setGenForceWeb}
                                     />
                                 </div>
                                 <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
@@ -1661,6 +1719,12 @@ export default function HomePage() {
                                         setEditCustomHeight={setEditCustomHeight}
                                         editQuality={editQuality}
                                         setEditQuality={setEditQuality}
+                                        editOutputFormat={editOutputFormat}
+                                        setEditOutputFormat={setEditOutputFormat}
+                                        editCompression={editCompression}
+                                        setEditCompression={setEditCompression}
+                                        editModeration={editModeration}
+                                        setEditModeration={setEditModeration}
                                         editBrushSize={editBrushSize}
                                         setEditBrushSize={setEditBrushSize}
                                         editShowMaskEditor={editShowMaskEditor}
@@ -1680,6 +1744,18 @@ export default function HomePage() {
                                         allowStreamingBatch={streamingBatchEnabled}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}
+                                        editImageBackend={editImageBackend}
+                                        setEditImageBackend={setEditImageBackend}
+                                        editStreamingStrategy={editStreamingStrategy}
+                                        setEditStreamingStrategy={setEditStreamingStrategy}
+                                        editResponsesModel={editResponsesModel}
+                                        setEditResponsesModel={setEditResponsesModel}
+                                        editThinking={editThinking}
+                                        setEditThinking={setEditThinking}
+                                        editPromptOptimization={editPromptOptimization}
+                                        setEditPromptOptimization={setEditPromptOptimization}
+                                        editForceWeb={editForceWeb}
+                                        setEditForceWeb={setEditForceWeb}
                                     />
                                 </div>
                             </div>

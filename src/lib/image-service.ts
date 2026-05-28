@@ -4,6 +4,7 @@ import {
     type StorageMode,
     type ValidOutputFormat
 } from './image-request-utils';
+import { downloadSameOriginImageAsBase64 } from './image-url-result';
 import { createBatchId, createImageFilename, outputDir } from './server-runtime';
 import fs from 'fs/promises';
 import type OpenAI from 'openai';
@@ -60,6 +61,9 @@ export async function persistOpenAiImages(options: {
     storageMode: StorageMode;
     includeBase64: boolean;
     batchId?: string;
+    apiBaseUrl?: string;
+    apiKey?: string;
+    abortSignal?: AbortSignal;
 }): Promise<PersistedOpenAiImage[]> {
     const result = options.result;
     assertOpenAiImagesResponse(result);
@@ -71,21 +75,31 @@ export async function persistOpenAiImages(options: {
     const imageItems = result.data;
 
     for (const [index, imageData] of imageItems.entries()) {
-        if (!imageData.b64_json) {
+        const b64Json =
+            imageData.b64_json ||
+            (imageData.url
+                ? await downloadSameOriginImageAsBase64({
+                      imageUrl: imageData.url,
+                      apiBaseUrl: options.apiBaseUrl,
+                      apiKey: options.apiKey,
+                      abortSignal: options.abortSignal
+                  })
+                : undefined);
+        if (!b64Json) {
             throw new MissingOpenAiImageDataError(index);
         }
-        const buffer = Buffer.from(imageData.b64_json, 'base64');
+        const buffer = Buffer.from(b64Json, 'base64');
         const filename = createImageFilename(batchId, index, options.outputFormat);
         const filepath = path.join(outputDir, filename);
         if (options.storageMode === 'fs') {
             await writeFileAtomic(filepath, buffer);
         }
         const dimensions = readImageDimensions(buffer);
-        const legacyResult = createImageResult(filename, imageData.b64_json, options.outputFormat, options.storageMode);
+        const legacyResult = createImageResult(filename, b64Json, options.outputFormat, options.storageMode);
         persisted.push({
             filename,
-            b64Json: imageData.b64_json,
-            ...(options.includeBase64 ? { responseJson: imageData.b64_json } : {}),
+            b64Json,
+            ...(options.includeBase64 ? { responseJson: b64Json } : {}),
             ...(legacyResult.path ? { path: legacyResult.path } : {}),
             outputFormat: options.outputFormat,
             filepath,

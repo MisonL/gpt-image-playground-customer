@@ -99,7 +99,7 @@ Authorization: Bearer <token>
 - `npm run verify`：运行提交前基线；需要真实 PostgreSQL gate 时加 `-- --postgres`。
 - `npm run deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。
 - `npm run deploy:space`：部署干净 git HEAD 到固定 Space，并做只读公网验证。
-- `npm run agent:doctor`：执行只读 Agent API 契约检查，不触发真实生图。
+- `npm run agent:doctor`：执行非计费分层诊断，覆盖 capabilities、Agent contract、runtime backend、state backend 和 Responses/GPT2Image readiness；真实 1K/2K smoke 必须显式加 `-- --allow-billable`。
 
 生成脚本常用参数：
 
@@ -137,12 +137,12 @@ node "<skill-root>/scripts/batch-images.mjs" --input tasks.jsonl --ordered-prefi
 真实批量执行必须显式允许计费：
 
 ```text
-node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check
+node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check --max-attempts 2 --max-consecutive-failures 3
 ```
 
-`--manifest` 使用 JSONL append-only 记录每条任务的 `index`、`id`、`idempotency_key`、`status`、响应或错误；`--resume` 会读取已成功记录并跳过同一 `id` 或 `idempotency_key`。`--dimension-check` 会读取响应里的 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸是否等于任务 `size`。
+`--manifest` 使用 JSONL append-only 记录每条任务的 `index`、`id`、`idempotency_key`、`attempt`、`status`、响应或错误；`--resume` 会读取已成功记录并跳过同一 `id` 或 `idempotency_key`。`--dimension-check` 会读取响应里的 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸是否等于任务 `size`。`--max-attempts` 会为第二次及以后尝试追加新的 attempt 级 idempotency key，避免复用终态失败 key；`--max-consecutive-failures` 会在连续失败达到阈值后跳过后续任务并输出 `failure_summary` 与 `resume_fix_list`。任务级 `sse_log_path` 会把页面 SSE 原始事件按 JSONL 追加保存，便于区分上游未给终图和解析/断流问题。
 
-批量 JSONL 字段按模式区分：`output_format`、`format`、`output_compression`、`background`、`moderation`、`image_backend`、`responsesModel` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段。
+批量 JSONL 字段按模式区分：`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径；edit 任务使用这些高级字段会显式走 `/api/images`，因为 Agent JSON edit 不接收它们。`responsesModel` 必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段。
 
 编辑脚本支持 `--model`、`--size`、`--quality`、`--response-mode`、`--stream-mode`、`--streaming-strategy`、`--partial-images`、`--timeout-ms`、`--idempotency-key`、`--page-sse`、`--agent`、`--dry-run` 和 `--allow-billable`。
 
