@@ -30,7 +30,7 @@ import {
 } from './size-utils';
 
 export const AGENT_API_VERSION = '1.0.0';
-export const AGENT_SCHEMA_VERSION = '2026-05-27';
+export const AGENT_SCHEMA_VERSION = '2026-05-28';
 export const AGENT_DEFAULT_SQLITE_PATH = 'generated-images/.agent-state/agent.sqlite';
 export const AGENT_DEFAULT_LEASE_MS = 10 * 60 * 1000;
 export const AGENT_DEFAULT_REQUEST_TTL_SECONDS = 24 * 60 * 60;

@@ -120,11 +120,12 @@ function readFailedImageGenerationCallMessage(output: unknown[] | undefined): st
 
 function buildResponsesImageTool(
     input: ResponsesImageGenerateInput,
-    partialImagesCount?: 1 | 2 | 3
+    partialImagesCount?: 1 | 2 | 3,
+    action: 'generate' | 'edit' = 'generate'
 ): OpenAI.Responses.Tool {
     return {
         type: 'image_generation',
-        action: 'generate',
+        action,
         model: input.imageModel,
         size: input.size,
         quality: input.quality,
@@ -176,7 +177,7 @@ async function buildResponsesImageEditTool(
     input: ResponsesImageEditInput,
     partialImagesCount?: 1 | 2 | 3
 ): Promise<OpenAI.Responses.Tool> {
-    const tool = buildResponsesImageTool(input, partialImagesCount) as unknown as Record<string, unknown>;
+    const tool = buildResponsesImageTool(input, partialImagesCount, 'edit') as unknown as Record<string, unknown>;
     if (input.maskFile) {
         tool.input_image_mask = { image_url: await fileToDataUrl(input.maskFile) };
     }

@@ -2953,6 +2953,60 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('keeps truncated batch retry idempotency keys distinct when long roots share a prefix', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-retry-collision-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const manifestPath = join(tempRoot, 'manifest.jsonl');
+            const sharedPrefix = 'shared-key-'.padEnd(199, 'x');
+            const firstKey = `${sharedPrefix}a`;
+            const secondKey = `${sharedPrefix}b`;
+            writeFileSync(
+                inputPath,
+                [
+                    JSON.stringify({ id: 'first-long-key', prompt: 'first', idempotency_key: firstKey }),
+                    JSON.stringify({ id: 'second-long-key', prompt: 'second', idempotency_key: secondKey })
+                ].join('\n')
+            );
+
+            const idempotencyKeys = [];
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ ok: true }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        idempotencyKeys.push(request.headers['idempotency-key']);
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath, '--manifest', manifestPath, '--max-attempts', '2'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(idempotencyKeys.length, 4);
+                    assert.equal(idempotencyKeys[1].length, 200);
+                    assert.equal(idempotencyKeys[3].length, 200);
+                    assert.equal(idempotencyKeys[1].endsWith('-attempt-2'), true);
+                    assert.equal(idempotencyKeys[3].endsWith('-attempt-2'), true);
+                    assert.notEqual(idempotencyKeys[1], idempotencyKeys[3]);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('stops batch execution after max consecutive failures and leaves later tasks resumable', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-circuit-breaker-'));
         try {
