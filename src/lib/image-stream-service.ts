@@ -315,12 +315,22 @@ async function emitFallbackImages(runtime: StreamRuntime, result: OpenAI.Images.
     }
     runtime.state.fallbackUsed = true;
     for (const [index, image] of result.data.entries()) {
-        if (!image.b64_json) {
-            throw new Error(`非流式回退第 ${index} 个图片缺少 b64_json。`);
+        const b64Json =
+            image.b64_json ||
+            (image.url
+                ? await downloadSameOriginImageAsBase64({
+                      imageUrl: image.url,
+                      apiBaseUrl: runtime.options.apiBaseUrl,
+                      apiKey: runtime.options.apiKey,
+                      abortSignal: runtime.options.abortSignal
+                  })
+                : undefined);
+        if (!b64Json) {
+            throw new Error(`非流式回退第 ${index} 个图片缺少 b64_json 或 url。`);
         }
         const emitted = await emitCompletedImage(runtime, {
             type: 'completed',
-            b64Json: image.b64_json,
+            b64Json,
             usage: index === result.data.length - 1 ? result.usage : undefined
         });
         if (!emitted) return false;

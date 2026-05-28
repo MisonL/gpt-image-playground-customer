@@ -401,7 +401,7 @@ describe('generateImageWithResponsesBackend', () => {
         assert.match(String(content[1].image_url), /^data:image\/png;base64,/);
         const tools = params.tools as Array<Record<string, unknown>>;
         assert.equal(tools[0].type, 'image_generation');
-        assert.equal(tools[0].action, 'generate');
+        assert.equal(tools[0].action, 'edit');
         assert.equal(tools[0].size, '1536x864');
         assert.equal(tools[0].output_format, 'webp');
         assert.equal(tools[0].output_compression, 85);
@@ -477,6 +477,7 @@ describe('generateImageWithResponsesBackend', () => {
         const params = capturedParams as Record<string, unknown>;
         assert.equal(params.stream, true);
         const tools = params.tools as Array<Record<string, unknown>>;
+        assert.equal(tools[0].action, 'edit');
         assert.equal(tools[0].partial_images, 2);
         const input = params.input as Array<Record<string, unknown>>;
         const content = input[0].content as Array<Record<string, unknown>>;

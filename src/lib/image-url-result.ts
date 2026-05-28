@@ -82,7 +82,15 @@ export async function downloadSameOriginImageAsBase64(input: {
 
 async function readBoundedResponseBody(response: Response): Promise<Buffer> {
     if (!response.body) {
-        return Buffer.from(await response.arrayBuffer());
+        const contentLength = response.headers.get('content-length');
+        if (contentLength && Number(contentLength) > MAX_REMOTE_IMAGE_BYTES) {
+            throw new RemoteImageResultError('下载上游图片失败：图片超过 25 MB 限制。');
+        }
+        const buffer = Buffer.from(await response.arrayBuffer());
+        if (buffer.byteLength > MAX_REMOTE_IMAGE_BYTES) {
+            throw new RemoteImageResultError('下载上游图片失败：图片超过 25 MB 限制。');
+        }
+        return buffer;
     }
     const chunks: Uint8Array[] = [];
     let totalBytes = 0;

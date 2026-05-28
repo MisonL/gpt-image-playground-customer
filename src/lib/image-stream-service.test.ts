@@ -249,6 +249,48 @@ describe('createImageStreamResponse', () => {
         }
     });
 
+    it('materializes same-origin URL images returned by non-streaming fallback', async () => {
+        const downloadServer = await startImageDownloadServer();
+        async function* failingStream() {
+            yield {
+                type: 'agent.partial_image',
+                b64_json: 'partial-before-fallback',
+                partial_image_index: 0
+            };
+            throw new Error('stream failed before final image');
+        }
+
+        try {
+            const response = createImageStreamResponse({
+                stream: failingStream(),
+                modeLabel: '生成',
+                outputFormat: 'png',
+                storageMode: 'indexeddb',
+                apiBaseUrl: downloadServer.baseUrl,
+                apiKey: 'test-key',
+                model: 'gpt-image-2',
+                startedAtMs: 1000,
+                resolveActualCost,
+                fallbackOnError: async () => ({
+                    created: 1,
+                    data: [{ url: '/partial.png' }]
+                }),
+                logProviderDiagnostics: false
+            });
+
+            const events = await readSseEvents(response);
+
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['partial_image', 'completed', 'done']
+            );
+            assert.equal(events[1].b64_json, PNG_BASE64);
+            assert.equal(events[2].fallback_used, true);
+        } finally {
+            await downloadServer.close();
+        }
+    });
+
     it('deduplicates repeated Responses final image items by item id', async () => {
         const response = createImageStreamResponse({
             stream: upstreamEvents([

@@ -19,6 +19,7 @@ import {
   normalizeImageBackendForPage,
   postPageSse
 } from './lib/page-sse-client.mjs';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -41,6 +42,7 @@ const STREAMING_STRATEGIES = new Set([
 const MAX_EDIT_IMAGES = 10;
 const MIN_PARTIAL_IMAGES = 1;
 const MAX_PARTIAL_IMAGES = 3;
+const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const DEFAULT_BATCH_MAX_ATTEMPTS = 1;
 const DEFAULT_MAX_CONSECUTIVE_FAILURES = 0;
 const GENERATE_ONLY_FIELDS = [
@@ -614,7 +616,12 @@ function buildAttemptTask(task, attempt) {
 
 function buildAttemptIdempotencyKey(idempotencyKey, attempt) {
   const suffix = `-attempt-${attempt}`;
-  return `${idempotencyKey.slice(0, 200 - suffix.length)}${suffix}`;
+  if (idempotencyKey.length + suffix.length <= MAX_IDEMPOTENCY_KEY_LENGTH) {
+    return `${idempotencyKey}${suffix}`;
+  }
+  const digest = crypto.createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 12);
+  const hashedSuffix = `-${digest}${suffix}`;
+  return `${idempotencyKey.slice(0, MAX_IDEMPOTENCY_KEY_LENGTH - hashedSuffix.length)}${hashedSuffix}`;
 }
 
 function addAttemptMetadata(result, rootTask, attempt) {
