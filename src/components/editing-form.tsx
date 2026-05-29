@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
@@ -144,7 +145,10 @@ type EditingFormProps = {
     editForceWeb: boolean;
     setEditForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
     initialAdvancedOpen?: boolean;
+    initialAdvancedTab?: 'route' | 'output' | 'stream';
 };
+
+type AdvancedTab = 'route' | 'output' | 'stream';
 
 const RadioItemWithIcon = ({
     value,
@@ -167,7 +171,7 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md border-border px-3 py-2 text-sm text-muted-foreground shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground enabled:active:translate-y-0 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground [&_[data-slot=radio-group-indicator]]:hidden'>
+            className='border-border text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
             <Icon className='h-4 w-4 text-current opacity-70' />
             <span>{label}</span>
         </RadioGroupItem>
@@ -182,6 +186,31 @@ const RadioItemWithIcon = ({
         </Tooltip>
     );
 };
+
+function getBackendLabel(backend: EditingFormData['image_backend'], t: (key: string) => string): string {
+    if (backend === 'images-api') return t('upstream.backendImages');
+    if (backend === 'responses-image-generation') return t('upstream.backendResponses');
+    return t('upstream.serverDefault');
+}
+
+function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => string): string {
+    if (streamMode === 'stream') return t('streaming.modeStream');
+    if (streamMode === 'non_stream') return t('streaming.modeNonStream');
+    return t('streaming.modeAuto');
+}
+
+function getQualityLabel(quality: EditingFormData['quality'], t: (key: string) => string): string {
+    if (quality === 'low') return t('common.low');
+    if (quality === 'medium') return t('common.medium');
+    if (quality === 'high') return t('common.high');
+    return t('common.auto');
+}
+
+function getOutputFormatLabel(format: EditingFormData['output_format'], t: (key: string) => string): string {
+    if (format === 'jpeg') return t('common.jpeg');
+    if (format === 'webp') return t('common.webp');
+    return t('common.png');
+}
 
 export function EditingForm({
     onSubmit,
@@ -247,7 +276,8 @@ export function EditingForm({
     setEditPromptOptimization,
     editForceWeb,
     setEditForceWeb,
-    initialAdvancedOpen = false
+    initialAdvancedOpen = false,
+    initialAdvancedTab = 'route'
 }: EditingFormProps) {
     const { locale, t } = useI18n();
     const [firstImagePreviewUrl, setFirstImagePreviewUrl] = React.useState<string | null>(null);
@@ -271,6 +301,7 @@ export function EditingForm({
     const showCompression = editOutputFormat === 'jpeg' || editOutputFormat === 'webp';
 
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(initialAdvancedOpen);
+    const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>(initialAdvancedTab);
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (!editPrompt.trim()) return t('ux.disabledPrompt');
@@ -291,6 +322,12 @@ export function EditingForm({
         isLoading,
         t
     ]);
+    const advancedSummary = [
+        `${t('form.quality')}: ${getQualityLabel(editQuality, t)}`,
+        `${t('form.outputFormat')}: ${getOutputFormatLabel(editOutputFormat, t)}`,
+        getBackendLabel(editImageBackend, t)
+    ].join(', ');
+    const streamModeLabel = getStreamModeLabel(streamMode, t);
 
     // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
@@ -303,7 +340,9 @@ export function EditingForm({
     const visualFeedbackCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
     const isDrawing = React.useRef(false);
     const lastPos = React.useRef<{ x: number; y: number } | null>(null);
+    const imageInputRef = React.useRef<HTMLInputElement>(null);
     const maskInputRef = React.useRef<HTMLInputElement>(null);
+    const primaryImagePreviewUrl = sourceImagePreviewUrls[0] ?? null;
 
     React.useEffect(() => {
         if (editOriginalImageSize) {
@@ -316,7 +355,10 @@ export function EditingForm({
     }, [editOriginalImageSize]);
 
     React.useEffect(() => {
+        let cancelled = false;
+
         queueMicrotask(() => {
+            if (cancelled) return;
             setEditGeneratedMaskFile(null);
             setEditIsMaskSaved(false);
             setEditOriginalImageSize(null);
@@ -325,26 +367,35 @@ export function EditingForm({
             setEditMaskPreviewUrl(null);
         });
 
-        if (imageFiles.length > 0 && sourceImagePreviewUrls.length > 0) {
+        if (primaryImagePreviewUrl) {
             const img = new window.Image();
             img.onload = () => {
+                if (cancelled) return;
                 setEditOriginalImageSize({ width: img.width, height: img.height });
             };
-            img.src = sourceImagePreviewUrls[0];
+            img.src = primaryImagePreviewUrl;
             queueMicrotask(() => {
-                setFirstImagePreviewUrl(sourceImagePreviewUrls[0]);
+                if (!cancelled) {
+                    setFirstImagePreviewUrl(primaryImagePreviewUrl);
+                }
             });
         } else {
             queueMicrotask(() => {
-                setEditShowMaskEditor(false);
+                if (!cancelled) {
+                    setEditShowMaskEditor(false);
+                }
             });
         }
+
+        return () => {
+            cancelled = true;
+        };
     }, [
-        imageFiles,
-        sourceImagePreviewUrls,
+        primaryImagePreviewUrl,
         setEditGeneratedMaskFile,
         setEditIsMaskSaved,
         setEditOriginalImageSize,
+        setFirstImagePreviewUrl,
         setEditDrawnPoints,
         setEditMaskPreviewUrl,
         setEditShowMaskEditor
@@ -629,8 +680,8 @@ export function EditingForm({
     };
 
     return (
-        <Card className='bg-card text-card-foreground flex w-full flex-col overflow-hidden rounded-lg border border-border lg:h-full'>
-            <CardHeader className='flex items-start justify-between border-b border-border pb-4'>
+        <Card className='bg-card text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border lg:h-full'>
+            <CardHeader className='border-border flex items-start justify-between border-b pb-4'>
                 <div>
                     <div className='flex items-center'>
                         <CardTitle className='py-1 text-lg font-medium'>{t('edit.title')}</CardTitle>
@@ -639,7 +690,7 @@ export function EditingForm({
                                 variant='ghost'
                                 size='icon'
                                 onClick={onOpenPasswordDialog}
-                                className='text-muted-foreground ml-2 hover:text-foreground'
+                                className='text-muted-foreground hover:text-foreground ml-2'
                                 aria-label={t('password.configure')}>
                                 {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                             </Button>
@@ -651,75 +702,71 @@ export function EditingForm({
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
                 <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
-                    <div className='space-y-1.5'>
-                        <Label htmlFor='edit-model-select'>{t('form.model')}</Label>
-                        <div className='flex flex-wrap items-center gap-4'>
+                    <div className='border-border bg-muted/20 grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]'>
+                        <div className='space-y-1.5'>
+                            <div className='flex items-center gap-2'>
+                                <Label htmlFor='edit-model-select'>{t('form.model')}</Label>
+                                {isGptImage2 && (
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <button
+                                                type='button'
+                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
+                                                aria-label={t('edit.fidelityHint')}>
+                                                <Info className='h-4 w-4' />
+                                            </button>
+                                        </TooltipTrigger>
+                                        <TooltipContent className='max-w-[280px]'>
+                                            {t('edit.fidelityHint')}
+                                        </TooltipContent>
+                                    </Tooltip>
+                                )}
+                            </div>
                             <Select
                                 value={editModel}
                                 onValueChange={(value) => setEditModel(value as EditingFormData['model'])}
                                 disabled={isLoading}
                                 name='edit-model'>
-                                <SelectTrigger id='edit-model-select' className='w-[180px]'>
+                                <SelectTrigger id='edit-model-select' className='w-full'>
                                     <SelectValue placeholder={t('form.selectModel')} />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value='gpt-image-2'>
-                                        gpt-image-2
-                                    </SelectItem>
-                                    <SelectItem value='gpt-image-1.5'>
-                                        gpt-image-1.5
-                                    </SelectItem>
-                                    <SelectItem value='gpt-image-1'>
-                                        gpt-image-1
-                                    </SelectItem>
-                                    <SelectItem value='gpt-image-1-mini'>
-                                        gpt-image-1-mini
-                                    </SelectItem>
+                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
+                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
+                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
+                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
                                 </SelectContent>
                             </Select>
-                            {isGptImage2 && (
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <button
-                                            type='button'
-                                            className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 inline-flex h-5 w-5 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
-                                            aria-label={t('edit.fidelityHint')}>
-                                            <Info className='h-4 w-4' />
-                                        </button>
-                                    </TooltipTrigger>
-                                    <TooltipContent className='max-w-[280px]'>{t('edit.fidelityHint')}</TooltipContent>
-                                </Tooltip>
-                            )}
-                            <div className='space-y-1.5'>
-                                <Label htmlFor='edit-stream-mode-select'>{t('streaming.mode')}</Label>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <div>
-                                            <Select
-                                                value={streamMode}
-                                                onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
-                                                disabled={isLoading}
-                                                name='edit-stream_mode'>
-                                                <SelectTrigger id='edit-stream-mode-select' className='w-[170px]'>
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
-                                                    <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
-                                                    <SelectItem value='non_stream'>
-                                                        {t('streaming.modeNonStream')}
-                                                    </SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent className='max-w-[250px]'>
-                                        {allowStreamingBatch && editN[0] > 1 && streamMode !== 'non_stream'
-                                            ? t('streaming.batchDescription')
-                                            : t('streaming.description')}
-                                    </TooltipContent>
-                                </Tooltip>
-                            </div>
+                        </div>
+                        <div className='space-y-1.5'>
+                            <Label htmlFor='edit-stream-mode-select'>{t('streaming.mode')}</Label>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <div>
+                                        <Select
+                                            value={streamMode}
+                                            onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
+                                            disabled={isLoading}
+                                            name='edit-stream_mode'>
+                                            <SelectTrigger id='edit-stream-mode-select' className='w-full'>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
+                                                <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
+                                                <SelectItem value='non_stream'>
+                                                    {t('streaming.modeNonStream')}
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </TooltipTrigger>
+                                <TooltipContent className='max-w-[250px]'>
+                                    {allowStreamingBatch && editN[0] > 1 && streamMode !== 'non_stream'
+                                        ? t('streaming.batchDescription')
+                                        : t('streaming.description')}
+                                </TooltipContent>
+                            </Tooltip>
                         </div>
                     </div>
 
@@ -733,23 +780,31 @@ export function EditingForm({
                             onChange={(e) => setEditPrompt(e.target.value)}
                             required
                             disabled={isLoading}
-                            className='min-h-[80px]'
+                            className='min-h-[112px]'
                         />
                     </div>
 
-                    <div className='space-y-2'>
-                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                    <div className='border-border bg-background space-y-2 rounded-md border p-3'>
+                        <div
+                            id='source-image-upload-label'
+                            className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                             {t('edit.sourceImages', { count: maxImages })}
                         </div>
-                        <Label
-                            htmlFor='image-files-input'
-                            className='flex h-10 w-full cursor-pointer items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm transition-colors hover:bg-accent'>
-                            <span className='text-muted-foreground truncate pr-2'>{displayFileNames(imageFiles)}</span>
-                            <span className='bg-muted text-muted-foreground hover:text-foreground flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium hover:bg-accent'>
+                        <button
+                            type='button'
+                            onClick={() => imageInputRef.current?.click()}
+                            disabled={isLoading || imageFiles.length >= maxImages}
+                            aria-labelledby='source-image-upload-label source-image-file-status'
+                            className='border-input bg-background hover:bg-accent focus-visible:ring-ring flex h-10 w-full cursor-pointer items-center justify-between rounded-md border px-3 py-2 text-sm transition-[background-color,box-shadow] focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50'>
+                            <span id='source-image-file-status' className='text-muted-foreground truncate pr-2'>
+                                {displayFileNames(imageFiles)}
+                            </span>
+                            <span className='bg-muted text-muted-foreground hover:text-foreground hover:bg-accent flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium'>
                                 <Upload className='h-3 w-3' /> {t('edit.browse')}
                             </span>
-                        </Label>
+                        </button>
                         <Input
+                            ref={imageInputRef}
                             id='image-files-input'
                             name='sourceImages'
                             type='file'
@@ -757,7 +812,7 @@ export function EditingForm({
                             multiple
                             onChange={handleImageFileChange}
                             disabled={isLoading || imageFiles.length >= maxImages}
-                            className='sr-only'
+                            className='hidden'
                         />
                         {sourceImagePreviewUrls.length > 0 && (
                             <div className='flex space-x-2 overflow-x-auto pt-2'>
@@ -768,7 +823,7 @@ export function EditingForm({
                                             alt={t('edit.sourcePreview', { index: index + 1 })}
                                             width={80}
                                             height={80}
-                                            className='rounded border border-border object-cover'
+                                            className='border-border rounded border object-cover'
                                             unoptimized
                                         />
                                         <Button
@@ -786,7 +841,7 @@ export function EditingForm({
                         )}
                     </div>
 
-                    <div className='space-y-3'>
+                    <div className='border-border bg-background space-y-3 rounded-md border p-3'>
                         <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('edit.mask')}
                         </div>
@@ -803,16 +858,18 @@ export function EditingForm({
                                   ? t('edit.editSavedMask')
                                   : t('edit.createMask')}
                             {editIsMaskSaved && !editShowMaskEditor && (
-                                <span className='ml-auto text-xs text-emerald-600 dark:text-emerald-400'>({t('common.saved')})</span>
+                                <span className='ml-auto text-xs text-emerald-600 dark:text-emerald-400'>
+                                    ({t('common.saved')})
+                                </span>
                             )}
                             <ScanEye className='mt-0.5' />
                         </Button>
 
                         {editShowMaskEditor && firstImagePreviewUrl && editOriginalImageSize && (
-                            <div className='bg-muted/20 space-y-3 rounded-md border border-border p-3'>
+                            <div className='bg-muted/20 border-border space-y-3 rounded-md border p-3'>
                                 <p className='text-muted-foreground text-xs'>{t('edit.drawMaskHint')}</p>
                                 <div
-                                    className='relative mx-auto w-full overflow-hidden rounded border border-border'
+                                    className='border-border relative mx-auto w-full overflow-hidden rounded border'
                                     style={{
                                         maxWidth: `min(100%, ${editOriginalImageSize.width}px)`,
                                         aspectRatio: `${editOriginalImageSize.width} / ${editOriginalImageSize.height}`
@@ -858,14 +915,14 @@ export function EditingForm({
                                         />
                                     </div>
                                 </div>
-                                <div className='flex items-center justify-between gap-2 pt-3'>
+                                <div className='flex flex-col items-stretch gap-2 pt-3 sm:flex-row sm:items-center sm:justify-between'>
                                     <Button
                                         type='button'
                                         variant='outline'
                                         size='sm'
                                         onClick={() => maskInputRef.current?.click()}
                                         disabled={isLoading || !editOriginalImageSize}
-                                        className='mr-auto'>
+                                        className='w-full sm:mr-auto sm:w-auto'>
                                         <UploadCloud className='mr-1.5 h-4 w-4' /> {t('edit.uploadMask')}
                                     </Button>
                                     <Input
@@ -875,15 +932,16 @@ export function EditingForm({
                                         type='file'
                                         accept='image/png'
                                         onChange={handleMaskFileChange}
-                                        className='sr-only'
+                                        className='hidden'
                                     />
-                                    <div className='flex gap-2'>
+                                    <div className='flex flex-col gap-2 sm:flex-row'>
                                         <Button
                                             type='button'
                                             variant='outline'
                                             size='sm'
                                             onClick={handleClearMask}
-                                            disabled={isLoading}>
+                                            disabled={isLoading}
+                                            className='w-full sm:w-auto'>
                                             <Eraser className='mr-1.5 h-4 w-4' /> {t('edit.clearMask')}
                                         </Button>
                                         <Button
@@ -891,22 +949,23 @@ export function EditingForm({
                                             variant='default'
                                             size='sm'
                                             onClick={generateAndSaveMask}
-                                            disabled={isLoading || editDrawnPoints.length === 0}>
+                                            disabled={isLoading || editDrawnPoints.length === 0}
+                                            className='w-full sm:w-auto'>
                                             <Save className='mr-1.5 h-4 w-4' /> {t('edit.saveMask')}
                                         </Button>
                                     </div>
                                 </div>
                                 {editMaskPreviewUrl && (
-                                    <div className='mt-3 border-t border-border pt-3 text-center'>
+                                    <div className='border-border mt-3 border-t pt-3 text-center'>
                                         <div className='text-foreground mb-1.5 block text-sm leading-none font-medium select-none'>
                                             {t('edit.maskPreview')}
                                         </div>
-                                        <div className='inline-block rounded border border-border bg-background p-1'>
+                                        <div className='border-border bg-background inline-block rounded border p-1'>
                                             <Image
                                                 src={editMaskPreviewUrl}
                                                 alt={t('edit.generatedMaskPreviewAlt')}
-                                                width={0}
-                                                height={134}
+                                                width={editOriginalImageSize.width}
+                                                height={editOriginalImageSize.height}
                                                 className='block max-w-full'
                                                 style={{ width: 'auto', height: '134px' }}
                                                 unoptimized
@@ -920,7 +979,9 @@ export function EditingForm({
                                     </p>
                                 )}
                                 {editIsMaskSaved && editMaskPreviewUrl && (
-                                    <p className='pt-1 text-center text-xs text-emerald-600 dark:text-emerald-400'>{t('edit.maskSaved')}</p>
+                                    <p className='pt-1 text-center text-xs text-emerald-600 dark:text-emerald-400'>
+                                        {t('edit.maskSaved')}
+                                    </p>
                                 )}
                             </div>
                         )}
@@ -931,7 +992,7 @@ export function EditingForm({
                         )}
                     </div>
 
-                    <div className='space-y-3'>
+                    <div className='border-border bg-background space-y-3 rounded-md border p-3'>
                         <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('form.size')}
                         </div>
@@ -984,7 +1045,7 @@ export function EditingForm({
                             />
                         </RadioGroup>
                         {isGptImage2 && editSize === 'custom' && (
-                            <div className='bg-muted/30 space-y-2 rounded-md border border-border p-3'>
+                            <div className='bg-muted/30 border-border space-y-2 rounded-md border p-3'>
                                 <div className='flex items-center gap-3'>
                                     <div className='flex-1 space-y-1'>
                                         <Label htmlFor='edit-custom-width' className='text-muted-foreground text-xs'>
@@ -1029,384 +1090,442 @@ export function EditingForm({
                                         ratio: editCustomRatio
                                     })}
                                 </p>
-                                {editCustomSizeError && <p className='text-destructive text-xs'>{editCustomSizeError}</p>}
+                                {editCustomSizeError && (
+                                    <p className='text-destructive text-xs'>{editCustomSizeError}</p>
+                                )}
                                 <p className='text-muted-foreground text-xs'>{t('form.customConstraints')}</p>
                             </div>
                         )}
                     </div>
 
-                    <div className='bg-muted/20 rounded-md border border-border'>
+                    <div className='bg-muted/20 border-border rounded-md border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
-                            className='text-muted-foreground hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center justify-between px-3 py-3 text-left text-sm font-medium transition-[background-color,color,transform] active:scale-[0.995] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                            className='text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-3 text-left text-sm font-medium transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-[0.995]'
                             aria-expanded={isAdvancedOpen}
                             aria-controls='editing-advanced-panel'>
-                            <span className='flex items-center gap-2'>
-                                <SlidersHorizontal className='h-4 w-4' />
-                                {t('ux.advanced')}
+                            <span className='flex min-w-0 items-center gap-2'>
+                                <SlidersHorizontal className='h-4 w-4 shrink-0' />
+                                <span className='min-w-0'>
+                                    <span className='text-foreground block'>{t('ux.advanced')}</span>
+                                    <span className='text-muted-foreground block truncate text-xs font-normal'>
+                                        {advancedSummary}
+                                    </span>
+                                </span>
                             </span>
                             <ChevronDown
-                                className={`h-4 w-4 transition-transform ${isAdvancedOpen ? 'rotate-180' : ''}`}
+                                className={`h-4 w-4 shrink-0 transition-transform ${isAdvancedOpen ? 'rotate-180' : ''}`}
                             />
                         </button>
                         {isAdvancedOpen && (
-                            <div id='editing-advanced-panel' className='space-y-5 border-t border-border p-3'>
-                                <div className='grid gap-3 sm:grid-cols-2'>
-                                    <div className='space-y-1.5'>
-                                        <Label htmlFor='edit-image-backend-select'>{t('upstream.backend')}</Label>
-                                        <Select
-                                            value={editImageBackend}
-                                            onValueChange={(value) =>
-                                                setEditImageBackend(value as EditingFormData['image_backend'])
-                                            }
-                                            disabled={isLoading}
-                                            name='edit-image_backend'>
-                                            <SelectTrigger id='edit-image-backend-select'>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value='images-api'>{t('upstream.backendImages')}</SelectItem>
-                                                <SelectItem value='responses-image-generation'>
-                                                    {t('upstream.backendResponses')}
-                                                </SelectItem>
-                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <div className='space-y-1.5'>
-                                        <Label htmlFor='edit-streaming-strategy-select'>
-                                            {t('upstream.streamingStrategy')}
-                                        </Label>
-                                        <Select
-                                            value={editStreamingStrategy}
-                                            onValueChange={(value) =>
-                                                setEditStreamingStrategy(
-                                                    value as EditingFormData['streaming_strategy']
-                                                )
-                                            }
-                                            disabled={isLoading}
-                                            name='edit-image_streaming_strategy'>
-                                            <SelectTrigger id='edit-streaming-strategy-select'>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value='auto'>{t('upstream.strategyAuto')}</SelectItem>
-                                                <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
-                                                <SelectItem value='openai-sse'>{t('upstream.strategyOpenAiSse')}</SelectItem>
-                                                <SelectItem value='newapi-keepalive-sse'>
-                                                    {t('upstream.strategyKeepaliveSse')}
-                                                </SelectItem>
-                                                <SelectItem value='responses-sse'>
-                                                    {t('upstream.strategyResponsesSse')}
-                                                </SelectItem>
-                                                <SelectItem value='force-sse'>{t('upstream.strategyForceSse')}</SelectItem>
-                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </div>
-
-                                {editImageBackend === 'responses-image-generation' && (
-                                    <div className='space-y-3 rounded-md border border-border bg-muted/20 p-3'>
-                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                            <WandSparkles className='h-4 w-4 text-muted-foreground' />
-                                            {t('upstream.compatibilityParams')}
-                                        </div>
+                            <div id='editing-advanced-panel' className='border-border border-t p-3'>
+                                <Tabs
+                                    value={advancedTab}
+                                    onValueChange={(value) => setAdvancedTab(value as AdvancedTab)}
+                                    className='gap-3'>
+                                    <TabsList className='grid h-auto w-full grid-cols-3 rounded-md'>
+                                        <TabsTrigger value='route' className='min-h-9'>
+                                            {t('ux.route')}
+                                        </TabsTrigger>
+                                        <TabsTrigger value='output' className='min-h-9'>
+                                            {t('ux.output')}
+                                        </TabsTrigger>
+                                        <TabsTrigger value='stream' className='min-h-9'>
+                                            {t('ux.streaming')}
+                                        </TabsTrigger>
+                                    </TabsList>
+                                    <TabsContent value='route' className='space-y-5'>
                                         <div className='grid gap-3 sm:grid-cols-2'>
-                                            <div className='space-y-1.5 sm:col-span-2'>
-                                                <Label htmlFor='edit-responses-model-input'>
-                                                    {t('upstream.gptModel')}
-                                                </Label>
-                                                <Input
-                                                    id='edit-responses-model-input'
-                                                    name='editResponsesModel'
-                                                    value={editResponsesModel}
-                                                    onChange={(event) => setEditResponsesModel(event.target.value)}
-                                                    disabled={isLoading}
-                                                    autoComplete='off'
-                                                    spellCheck={false}
-                                                    placeholder='gpt-5.4'
-                                                />
-                                            </div>
                                             <div className='space-y-1.5'>
-                                                <Label htmlFor='edit-thinking-select'>{t('upstream.thinking')}</Label>
+                                                <Label htmlFor='edit-image-backend-select'>
+                                                    {t('upstream.backend')}
+                                                </Label>
                                                 <Select
-                                                    value={editThinking}
+                                                    value={editImageBackend}
                                                     onValueChange={(value) =>
-                                                        setEditThinking(value as EditingFormData['thinking'])
+                                                        setEditImageBackend(value as EditingFormData['image_backend'])
                                                     }
                                                     disabled={isLoading}
-                                                    name='edit-thinking'>
-                                                    <SelectTrigger id='edit-thinking-select'>
+                                                    name='edit-image_backend'>
+                                                    <SelectTrigger id='edit-image-backend-select'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
+                                                        <SelectItem value='images-api'>
+                                                            {t('upstream.backendImages')}
+                                                        </SelectItem>
+                                                        <SelectItem value='responses-image-generation'>
+                                                            {t('upstream.backendResponses')}
+                                                        </SelectItem>
                                                         <SelectItem value='server-default'>
                                                             {t('upstream.serverDefault')}
                                                         </SelectItem>
-                                                        <SelectItem value='none'>none</SelectItem>
-                                                        <SelectItem value='minimal'>minimal</SelectItem>
-                                                        <SelectItem value='low'>low</SelectItem>
-                                                        <SelectItem value='medium'>medium</SelectItem>
-                                                        <SelectItem value='high'>high</SelectItem>
-                                                        <SelectItem value='xhigh'>xhigh</SelectItem>
                                                     </SelectContent>
                                                 </Select>
                                             </div>
                                             <div className='space-y-1.5'>
-                                                <Label htmlFor='edit-prompt-optimization-select'>
-                                                    {t('upstream.promptOptimization')}
+                                                <Label htmlFor='edit-streaming-strategy-select'>
+                                                    {t('upstream.streamingStrategy')}
                                                 </Label>
                                                 <Select
-                                                    value={editPromptOptimization}
+                                                    value={editStreamingStrategy}
                                                     onValueChange={(value) =>
-                                                        setEditPromptOptimization(
-                                                            value as EditingFormData['promptOptimization']
+                                                        setEditStreamingStrategy(
+                                                            value as EditingFormData['streaming_strategy']
                                                         )
                                                     }
                                                     disabled={isLoading}
-                                                    name='edit-promptOptimization'>
-                                                    <SelectTrigger id='edit-prompt-optimization-select'>
+                                                    name='edit-image_streaming_strategy'>
+                                                    <SelectTrigger id='edit-streaming-strategy-select'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
+                                                        <SelectItem value='auto'>
+                                                            {t('upstream.strategyAuto')}
+                                                        </SelectItem>
+                                                        <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
+                                                        <SelectItem value='openai-sse'>
+                                                            {t('upstream.strategyOpenAiSse')}
+                                                        </SelectItem>
+                                                        <SelectItem value='newapi-keepalive-sse'>
+                                                            {t('upstream.strategyKeepaliveSse')}
+                                                        </SelectItem>
+                                                        <SelectItem value='responses-sse'>
+                                                            {t('upstream.strategyResponsesSse')}
+                                                        </SelectItem>
+                                                        <SelectItem value='force-sse'>
+                                                            {t('upstream.strategyForceSse')}
+                                                        </SelectItem>
                                                         <SelectItem value='server-default'>
                                                             {t('upstream.serverDefault')}
                                                         </SelectItem>
-                                                        <SelectItem value='on'>{t('common.enabled')}</SelectItem>
-                                                        <SelectItem value='off'>{t('common.disabled')}</SelectItem>
                                                     </SelectContent>
                                                 </Select>
                                             </div>
                                         </div>
-                                    </div>
-                                )}
 
-                                {editImageBackend === 'images-api' && (
-                                    <div className='space-y-3 rounded-md border border-border bg-muted/20 p-3'>
-                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                            <Globe2 className='h-4 w-4 text-muted-foreground' />
-                                            {t('upstream.compatibilityParams')}
-                                        </div>
-                                        <RadioGroup
-                                            value={editForceWeb ? 'true' : 'false'}
-                                            onValueChange={(value) => setEditForceWeb(value === 'true')}
-                                            disabled={isLoading}
-                                            name='edit-force_web'
-                                            aria-label={t('upstream.forceWeb')}
-                                            className='grid grid-cols-2 gap-2'>
-                                            <RadioItemWithIcon
-                                                value='false'
-                                                id='edit-force-web-false'
-                                                label={t('upstream.serverDefault')}
-                                                Icon={Sparkles}
-                                                disabled={isLoading}
-                                            />
-                                            <RadioItemWithIcon
-                                                value='true'
-                                                id='edit-force-web-true'
-                                                label={t('upstream.forceWeb')}
-                                                Icon={Globe2}
-                                                disabled={isLoading}
-                                                tooltip={t('upstream.forceWebHint')}
-                                            />
-                                        </RadioGroup>
-                                    </div>
-                                )}
-
-                                {streamMode !== 'non_stream' && (
-                                    <div className='space-y-3'>
-                                        <div className='flex items-center gap-2'>
-                                            <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                                {t('streaming.previewImages')}
+                                        {editImageBackend === 'responses-image-generation' && (
+                                            <div className='border-border bg-muted/20 space-y-3 rounded-md border p-3'>
+                                                <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                    <WandSparkles className='text-muted-foreground h-4 w-4' />
+                                                    {t('upstream.compatibilityParams')}
+                                                </div>
+                                                <div className='grid gap-3 sm:grid-cols-2'>
+                                                    <div className='space-y-1.5 sm:col-span-2'>
+                                                        <Label htmlFor='edit-responses-model-input'>
+                                                            {t('upstream.gptModel')}
+                                                        </Label>
+                                                        <Input
+                                                            id='edit-responses-model-input'
+                                                            name='editResponsesModel'
+                                                            value={editResponsesModel}
+                                                            onChange={(event) =>
+                                                                setEditResponsesModel(event.target.value)
+                                                            }
+                                                            disabled={isLoading}
+                                                            autoComplete='off'
+                                                            spellCheck={false}
+                                                            placeholder='gpt-5.4'
+                                                        />
+                                                    </div>
+                                                    <div className='space-y-1.5'>
+                                                        <Label htmlFor='edit-thinking-select'>
+                                                            {t('upstream.thinking')}
+                                                        </Label>
+                                                        <Select
+                                                            value={editThinking}
+                                                            onValueChange={(value) =>
+                                                                setEditThinking(value as EditingFormData['thinking'])
+                                                            }
+                                                            disabled={isLoading}
+                                                            name='edit-thinking'>
+                                                            <SelectTrigger id='edit-thinking-select'>
+                                                                <SelectValue />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value='server-default'>
+                                                                    {t('upstream.serverDefault')}
+                                                                </SelectItem>
+                                                                <SelectItem value='none'>none</SelectItem>
+                                                                <SelectItem value='minimal'>minimal</SelectItem>
+                                                                <SelectItem value='low'>low</SelectItem>
+                                                                <SelectItem value='medium'>medium</SelectItem>
+                                                                <SelectItem value='high'>high</SelectItem>
+                                                                <SelectItem value='xhigh'>xhigh</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    <div className='space-y-1.5'>
+                                                        <Label htmlFor='edit-prompt-optimization-select'>
+                                                            {t('upstream.promptOptimization')}
+                                                        </Label>
+                                                        <Select
+                                                            value={editPromptOptimization}
+                                                            onValueChange={(value) =>
+                                                                setEditPromptOptimization(
+                                                                    value as EditingFormData['promptOptimization']
+                                                                )
+                                                            }
+                                                            disabled={isLoading}
+                                                            name='edit-promptOptimization'>
+                                                            <SelectTrigger id='edit-prompt-optimization-select'>
+                                                                <SelectValue />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value='server-default'>
+                                                                    {t('upstream.serverDefault')}
+                                                                </SelectItem>
+                                                                <SelectItem value='on'>
+                                                                    {t('common.enabled')}
+                                                                </SelectItem>
+                                                                <SelectItem value='off'>
+                                                                    {t('common.disabled')}
+                                                                </SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                    <button
-                                                        type='button'
-                                                        className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 inline-flex h-5 w-5 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
-                                                        aria-label={t('streaming.costHint')}>
-                                                        <HelpCircle className='h-4 w-4' />
-                                                    </button>
-                                                </TooltipTrigger>
-                                                <TooltipContent className='max-w-[250px]'>
-                                                    {t('streaming.costHint')}
-                                                </TooltipContent>
-                                            </Tooltip>
-                                        </div>
-                                        <RadioGroup
-                                            value={String(partialImages)}
-                                            onValueChange={(value) => setPartialImages(Number(value) as 1 | 2 | 3)}
-                                            disabled={isLoading}
-                                            name='edit-partial_images'
-                                            aria-label={t('streaming.previewImages')}
-                                            className='grid grid-cols-3 gap-2'>
-                                            {[1, 2, 3].map((value) => (
+                                        )}
+
+                                        {editImageBackend === 'images-api' && (
+                                            <div className='border-border bg-muted/20 space-y-3 rounded-md border p-3'>
+                                                <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                    <Globe2 className='text-muted-foreground h-4 w-4' />
+                                                    {t('upstream.compatibilityParams')}
+                                                </div>
+                                                <RadioGroup
+                                                    value={editForceWeb ? 'true' : 'false'}
+                                                    onValueChange={(value) => setEditForceWeb(value === 'true')}
+                                                    disabled={isLoading}
+                                                    name='edit-force_web'
+                                                    aria-label={t('upstream.forceWeb')}
+                                                    className='grid grid-cols-2 gap-2'>
+                                                    <RadioItemWithIcon
+                                                        value='false'
+                                                        id='edit-force-web-false'
+                                                        label={t('upstream.serverDefault')}
+                                                        Icon={Sparkles}
+                                                        disabled={isLoading}
+                                                    />
+                                                    <RadioItemWithIcon
+                                                        value='true'
+                                                        id='edit-force-web-true'
+                                                        label={t('upstream.forceWeb')}
+                                                        Icon={Globe2}
+                                                        disabled={isLoading}
+                                                        tooltip={t('upstream.forceWebHint')}
+                                                    />
+                                                </RadioGroup>
+                                            </div>
+                                        )}
+                                    </TabsContent>
+                                    <TabsContent value='stream' className='space-y-5'>
+                                        {streamMode !== 'non_stream' && (
+                                            <div className='space-y-3'>
+                                                <div className='flex items-center gap-2'>
+                                                    <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                        {t('streaming.previewImages')}
+                                                    </div>
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <button
+                                                                type='button'
+                                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
+                                                                aria-label={t('streaming.costHint')}>
+                                                                <HelpCircle className='h-4 w-4' />
+                                                            </button>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent className='max-w-[250px]'>
+                                                            {t('streaming.costHint')}
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                </div>
+                                                <RadioGroup
+                                                    value={String(partialImages)}
+                                                    onValueChange={(value) =>
+                                                        setPartialImages(Number(value) as 1 | 2 | 3)
+                                                    }
+                                                    disabled={isLoading}
+                                                    name='edit-partial_images'
+                                                    aria-label={t('streaming.previewImages')}
+                                                    className='grid grid-cols-3 gap-2'>
+                                                    {[1, 2, 3].map((value) => (
+                                                        <RadioItemWithIcon
+                                                            key={value}
+                                                            value={String(value)}
+                                                            id={`edit-partial-${value}`}
+                                                            label={String(value)}
+                                                            Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                                            disabled={isLoading}
+                                                        />
+                                                    ))}
+                                                </RadioGroup>
+                                            </div>
+                                        )}
+                                        {streamMode === 'non_stream' && (
+                                            <div className='border-border bg-muted/20 text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
+                                                {streamModeLabel}
+                                            </div>
+                                        )}
+                                    </TabsContent>
+                                    <TabsContent value='output' className='space-y-5'>
+                                        <div className='space-y-3'>
+                                            <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                                {t('form.quality')}
+                                            </div>
+                                            <RadioGroup
+                                                value={editQuality}
+                                                onValueChange={(value) =>
+                                                    setEditQuality(value as EditingFormData['quality'])
+                                                }
+                                                disabled={isLoading}
+                                                name='edit-quality'
+                                                aria-label={t('form.quality')}
+                                                className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
                                                 <RadioItemWithIcon
-                                                    key={value}
-                                                    value={String(value)}
-                                                    id={`edit-partial-${value}`}
-                                                    label={String(value)}
-                                                    Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                                    value='auto'
+                                                    id='edit-quality-auto'
+                                                    label={t('common.auto')}
+                                                    Icon={Sparkles}
                                                     disabled={isLoading}
                                                 />
-                                            ))}
-                                        </RadioGroup>
-                                    </div>
-                                )}
-
-                                <div className='space-y-3'>
-                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                                        {t('form.quality')}
-                                    </div>
-                                    <RadioGroup
-                                        value={editQuality}
-                                        onValueChange={(value) => setEditQuality(value as EditingFormData['quality'])}
-                                        disabled={isLoading}
-                                        name='edit-quality'
-                                        aria-label={t('form.quality')}
-                                        className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
-                                        <RadioItemWithIcon
-                                            value='auto'
-                                            id='edit-quality-auto'
-                                            label={t('common.auto')}
-                                            Icon={Sparkles}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='low'
-                                            id='edit-quality-low'
-                                            label={t('common.low')}
-                                            Icon={Tally1}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='medium'
-                                            id='edit-quality-medium'
-                                            label={t('common.medium')}
-                                            Icon={Tally2}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='high'
-                                            id='edit-quality-high'
-                                            label={t('common.high')}
-                                            Icon={Tally3}
-                                            disabled={isLoading}
-                                        />
-                                    </RadioGroup>
-                                </div>
-
-                                <div className='space-y-3'>
-                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                                        {t('form.outputFormat')}
-                                    </div>
-                                    <RadioGroup
-                                        value={editOutputFormat}
-                                        onValueChange={(value) =>
-                                            setEditOutputFormat(value as EditingFormData['output_format'])
-                                        }
-                                        disabled={isLoading}
-                                        name='edit-output_format'
-                                        aria-label={t('form.outputFormat')}
-                                        className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
-                                        <RadioItemWithIcon
-                                            value='png'
-                                            id='edit-format-png'
-                                            label='PNG'
-                                            Icon={FileImage}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='jpeg'
-                                            id='edit-format-jpeg'
-                                            label='JPEG'
-                                            Icon={FileImage}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='webp'
-                                            id='edit-format-webp'
-                                            label='WebP'
-                                            Icon={FileImage}
-                                            disabled={isLoading}
-                                        />
-                                    </RadioGroup>
-                                </div>
-
-                                {showCompression && (
-                                    <div className='space-y-2 pt-2 transition-opacity duration-300'>
-                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                            {t('form.compression', { value: editCompression[0] })}
+                                                <RadioItemWithIcon
+                                                    value='low'
+                                                    id='edit-quality-low'
+                                                    label={t('common.low')}
+                                                    Icon={Tally1}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='medium'
+                                                    id='edit-quality-medium'
+                                                    label={t('common.medium')}
+                                                    Icon={Tally2}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='high'
+                                                    id='edit-quality-high'
+                                                    label={t('common.high')}
+                                                    Icon={Tally3}
+                                                    disabled={isLoading}
+                                                />
+                                            </RadioGroup>
                                         </div>
-                                        <Slider
-                                            id='edit-compression-slider'
-                                            name='edit-output_compression'
-                                            thumbLabel={t('form.compression', { value: editCompression[0] })}
-                                            min={0}
-                                            max={100}
-                                            step={1}
-                                            value={editCompression}
-                                            onValueChange={setEditCompression}
-                                            disabled={isLoading}
-                                            className='mt-3'
-                                        />
-                                    </div>
-                                )}
 
-                                <div className='space-y-3'>
-                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                                        {t('form.moderation')}
-                                    </div>
-                                    <RadioGroup
-                                        value={editModeration}
-                                        onValueChange={(value) =>
-                                            setEditModeration(value as EditingFormData['moderation'])
-                                        }
-                                        disabled={isLoading}
-                                        name='edit-moderation'
-                                        aria-label={t('form.moderation')}
-                                        className='grid grid-cols-2 gap-2'>
-                                        <RadioItemWithIcon
-                                            value='auto'
-                                            id='edit-mod-auto'
-                                            label={t('common.auto')}
-                                            Icon={ShieldCheck}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='low'
-                                            id='edit-mod-low'
-                                            label={t('common.low')}
-                                            Icon={ShieldAlert}
-                                            disabled={isLoading}
-                                        />
-                                    </RadioGroup>
-                                </div>
+                                        <div className='space-y-3'>
+                                            <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                                {t('form.outputFormat')}
+                                            </div>
+                                            <RadioGroup
+                                                value={editOutputFormat}
+                                                onValueChange={(value) =>
+                                                    setEditOutputFormat(value as EditingFormData['output_format'])
+                                                }
+                                                disabled={isLoading}
+                                                name='edit-output_format'
+                                                aria-label={t('form.outputFormat')}
+                                                className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
+                                                <RadioItemWithIcon
+                                                    value='png'
+                                                    id='edit-format-png'
+                                                    label='PNG'
+                                                    Icon={FileImage}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='jpeg'
+                                                    id='edit-format-jpeg'
+                                                    label='JPEG'
+                                                    Icon={FileImage}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='webp'
+                                                    id='edit-format-webp'
+                                                    label='WebP'
+                                                    Icon={FileImage}
+                                                    disabled={isLoading}
+                                                />
+                                            </RadioGroup>
+                                        </div>
 
-                                <div className='space-y-2'>
-                                    <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                        {t('form.numberOfImages', { count: editN[0] })}
-                                    </div>
-                                    <Slider
-                                        id='edit-n-slider'
-                                        name='edit-n'
-                                        thumbLabel={t('form.numberOfImages', { count: editN[0] })}
-                                        min={1}
-                                        max={10}
-                                        step={1}
-                                        value={editN}
-                                        onValueChange={setEditN}
-                                        disabled={isLoading}
-                                        className='mt-3'
-                                    />
-                                </div>
+                                        {showCompression && (
+                                            <div className='space-y-2 pt-2 transition-opacity duration-300'>
+                                                <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                    {t('form.compression', { value: editCompression[0] })}
+                                                </div>
+                                                <Slider
+                                                    id='edit-compression-slider'
+                                                    name='edit-output_compression'
+                                                    thumbLabel={t('form.compression', { value: editCompression[0] })}
+                                                    min={0}
+                                                    max={100}
+                                                    step={1}
+                                                    value={editCompression}
+                                                    onValueChange={setEditCompression}
+                                                    disabled={isLoading}
+                                                    className='mt-3'
+                                                />
+                                            </div>
+                                        )}
+
+                                        <div className='space-y-3'>
+                                            <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                                {t('form.moderation')}
+                                            </div>
+                                            <RadioGroup
+                                                value={editModeration}
+                                                onValueChange={(value) =>
+                                                    setEditModeration(value as EditingFormData['moderation'])
+                                                }
+                                                disabled={isLoading}
+                                                name='edit-moderation'
+                                                aria-label={t('form.moderation')}
+                                                className='grid grid-cols-2 gap-2'>
+                                                <RadioItemWithIcon
+                                                    value='auto'
+                                                    id='edit-mod-auto'
+                                                    label={t('common.auto')}
+                                                    Icon={ShieldCheck}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='low'
+                                                    id='edit-mod-low'
+                                                    label={t('common.low')}
+                                                    Icon={ShieldAlert}
+                                                    disabled={isLoading}
+                                                />
+                                            </RadioGroup>
+                                        </div>
+
+                                        <div className='space-y-2'>
+                                            <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                {t('form.numberOfImages', { count: editN[0] })}
+                                            </div>
+                                            <Slider
+                                                id='edit-n-slider'
+                                                name='edit-n'
+                                                thumbLabel={t('form.numberOfImages', { count: editN[0] })}
+                                                min={1}
+                                                max={10}
+                                                step={1}
+                                                value={editN}
+                                                onValueChange={setEditN}
+                                                disabled={isLoading}
+                                                className='mt-3'
+                                            />
+                                        </div>
+                                    </TabsContent>
+                                </Tabs>
                             </div>
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='hidden border-t border-border p-4 lg:flex'>
+                <CardFooter className='border-border hidden border-t p-4 lg:flex'>
                     <div className='w-full space-y-2'>
                         {submitDisabledReason && (
                             <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>

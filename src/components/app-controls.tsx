@@ -33,7 +33,7 @@ export function AppControls({ onOpenApiSettings }: AppControlsProps) {
                     variant={locale === 'zh-CN' ? 'default' : 'ghost'}
                     size='sm'
                     onClick={() => setLocale('zh-CN')}
-                    className='h-7 px-2'>
+                    className='min-w-10 px-2'>
                     中文
                 </Button>
                 <Button
@@ -41,7 +41,7 @@ export function AppControls({ onOpenApiSettings }: AppControlsProps) {
                     variant={locale === 'en-US' ? 'default' : 'ghost'}
                     size='sm'
                     onClick={() => setLocale('en-US')}
-                    className='h-7 px-2'>
+                    className='min-w-10 px-2'>
                     EN
                 </Button>
             </div>

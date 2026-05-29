@@ -19,7 +19,7 @@ export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
             <TabsList className='grid h-auto grid-cols-2 gap-1 rounded-md border-none bg-transparent p-0'>
                 <TabsTrigger
                     value='generate'
-                    className={`rounded-md border px-3 py-1 text-sm transition-colors ${
+                    className={`min-h-9 rounded-md border px-3 py-2 text-sm transition-colors ${
                         currentMode === 'generate'
                             ? 'border-border bg-background text-foreground shadow-sm'
                             : 'border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground'
@@ -28,7 +28,7 @@ export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
                 </TabsTrigger>
                 <TabsTrigger
                     value='edit'
-                    className={`rounded-md border px-3 py-1 text-sm transition-colors ${
+                    className={`min-h-9 rounded-md border px-3 py-2 text-sm transition-colors ${
                         currentMode === 'edit'
                             ? 'border-border bg-background text-foreground shadow-sm'
                             : 'border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground'
