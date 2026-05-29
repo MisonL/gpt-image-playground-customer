@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
@@ -18,13 +19,13 @@ import type {
     ImageUpstreamFormStreamingStrategy,
     ImageUpstreamFormThinking
 } from '@/lib/image-upstream-form';
-import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
-import type { SizePreset } from '@/lib/size-utils';
 import {
     shouldRecommendImageStreaming,
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
+import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
+import type { SizePreset } from '@/lib/size-utils';
 import {
     Square,
     RectangleHorizontal,
@@ -119,6 +120,8 @@ type GenerationFormProps = {
     setForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
+type AdvancedTab = 'route' | 'output' | 'stream';
+
 const RadioItemWithIcon = ({
     value,
     id,
@@ -140,7 +143,7 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md border-border px-3 py-2 text-sm text-muted-foreground shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground enabled:active:translate-y-0 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground [&_[data-slot=radio-group-indicator]]:hidden'>
+            className='border-border text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
             <Icon className='h-4 w-4 text-current opacity-70' />
             <span>{label}</span>
         </RadioGroupItem>
@@ -169,6 +172,31 @@ function readConcreteSize(input: {
     if (!preset) return null;
     const [width, height] = preset.split('x').map(Number);
     return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null;
+}
+
+function getBackendLabel(backend: GenerationFormData['image_backend'], t: (key: string) => string): string {
+    if (backend === 'images-api') return t('upstream.backendImages');
+    if (backend === 'responses-image-generation') return t('upstream.backendResponses');
+    return t('upstream.serverDefault');
+}
+
+function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => string): string {
+    if (streamMode === 'stream') return t('streaming.modeStream');
+    if (streamMode === 'non_stream') return t('streaming.modeNonStream');
+    return t('streaming.modeAuto');
+}
+
+function getQualityLabel(quality: GenerationFormData['quality'], t: (key: string) => string): string {
+    if (quality === 'low') return t('common.low');
+    if (quality === 'medium') return t('common.medium');
+    if (quality === 'high') return t('common.high');
+    return t('common.auto');
+}
+
+function getOutputFormatLabel(format: GenerationFormData['output_format'], t: (key: string) => string): string {
+    if (format === 'jpeg') return t('common.jpeg');
+    if (format === 'webp') return t('common.webp');
+    return t('common.png');
 }
 
 export function GenerationForm({
@@ -240,24 +268,30 @@ export function GenerationForm({
         streamingStrategy === 'server-default' ? 'auto' : streamingStrategy;
     const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
     const concreteSize = readConcreteSize({ size, model, customWidth, customHeight });
-    const recommendStreaming =
-        Boolean(
-            concreteSize &&
-                shouldRecommendImageStreaming({
-                    streamingStrategy: effectiveStreamingStrategy,
-                    quality,
-                    width: concreteSize.width,
-                    height: concreteSize.height,
-                    streamEnabled: streamMode !== 'non_stream'
-                })
-        );
+    const recommendStreaming = Boolean(
+        concreteSize &&
+            shouldRecommendImageStreaming({
+                streamingStrategy: effectiveStreamingStrategy,
+                quality,
+                width: concreteSize.width,
+                height: concreteSize.height,
+                streamEnabled: streamMode !== 'non_stream'
+            })
+    );
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
+    const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>('route');
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (!prompt.trim()) return t('ux.disabledPrompt');
         if (customSizeInvalid) return customSizeError || t('ux.disabledCustomSize');
         return '';
     }, [customSizeError, customSizeInvalid, isLoading, prompt, t]);
+    const advancedSummary = [
+        `${t('form.quality')}: ${getQualityLabel(quality, t)}`,
+        `${t('form.outputFormat')}: ${getOutputFormatLabel(outputFormat, t)}`,
+        getBackendLabel(imageBackend, t)
+    ].join(', ');
+    const streamModeLabel = getStreamModeLabel(streamMode, t);
 
     React.useEffect(() => {
         if (streamingDisabledByStrategy && streamMode !== 'non_stream') {
@@ -308,8 +342,8 @@ export function GenerationForm({
     };
 
     return (
-        <Card className='bg-card text-card-foreground flex w-full flex-col overflow-hidden rounded-lg border border-border lg:h-full'>
-            <CardHeader className='flex items-start justify-between border-b border-border pb-4'>
+        <Card className='bg-card text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border lg:h-full'>
+            <CardHeader className='border-border flex items-start justify-between border-b pb-4'>
                 <div>
                     <div className='flex items-center'>
                         <CardTitle className='py-1 text-lg font-medium'>{t('generate.title')}</CardTitle>
@@ -318,7 +352,7 @@ export function GenerationForm({
                                 variant='ghost'
                                 size='icon'
                                 onClick={onOpenPasswordDialog}
-                                className='text-muted-foreground ml-2 hover:text-foreground'
+                                className='text-muted-foreground hover:text-foreground ml-2'
                                 aria-label={t('password.configure')}>
                                 {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                             </Button>
@@ -330,70 +364,62 @@ export function GenerationForm({
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
                 <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
-                    <div className='space-y-1.5'>
-                        <Label htmlFor='model-select'>{t('form.model')}</Label>
-                        <div className='flex flex-wrap items-center gap-4'>
+                    <div className='border-border bg-muted/20 grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]'>
+                        <div className='space-y-1.5'>
+                            <Label htmlFor='model-select'>{t('form.model')}</Label>
                             <Select
                                 value={model}
                                 onValueChange={(value) => setModel(value as GenerationFormData['model'])}
                                 disabled={isLoading}
                                 name='model'>
-                                <SelectTrigger id='model-select' className='w-[180px]'>
+                                <SelectTrigger id='model-select' className='w-full'>
                                     <SelectValue placeholder={t('form.selectModel')} />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value='gpt-image-2'>
-                                        gpt-image-2
-                                    </SelectItem>
-                                    <SelectItem value='gpt-image-1.5'>
-                                        gpt-image-1.5
-                                    </SelectItem>
-                                    <SelectItem value='gpt-image-1'>
-                                        gpt-image-1
-                                    </SelectItem>
-                                    <SelectItem value='gpt-image-1-mini'>
-                                        gpt-image-1-mini
-                                    </SelectItem>
+                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
+                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
+                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
+                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
                                 </SelectContent>
                             </Select>
-                            <div className='space-y-1.5'>
-                                <Label htmlFor='stream-mode-select'>{t('streaming.mode')}</Label>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <div>
-                                            <Select
-                                                value={streamMode}
-                                                onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
-                                                disabled={isLoading || streamingDisabledByStrategy}
-                                                name='stream_mode'>
-                                                <SelectTrigger id='stream-mode-select' className='w-[170px]'>
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
-                                                    <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
-                                                    <SelectItem value='non_stream'>
-                                                        {t('streaming.modeNonStream')}
-                                                    </SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent className='max-w-[250px]'>
-                                        {streamingDisabledByStrategy
-                                            ? t('streaming.disabledByStrategy')
-                                            : allowStreamingBatch && n[0] > 1 && streamMode !== 'non_stream'
-                                              ? t('streaming.batchDescription')
-                                              : t('streaming.description')}
-                                    </TooltipContent>
-                                </Tooltip>
-                            </div>
-                            {recommendStreaming && (
-                                <p className='text-xs text-amber-700 dark:text-amber-300'>
-                                    {t('streaming.highResolutionRecommendation')}
-                                </p>
-                            )}
                         </div>
+                        <div className='space-y-1.5'>
+                            <Label htmlFor='stream-mode-select'>{t('streaming.mode')}</Label>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <div>
+                                        <Select
+                                            value={streamMode}
+                                            onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
+                                            disabled={isLoading || streamingDisabledByStrategy}
+                                            name='stream_mode'>
+                                            <SelectTrigger id='stream-mode-select' className='w-full'>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
+                                                <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
+                                                <SelectItem value='non_stream'>
+                                                    {t('streaming.modeNonStream')}
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </TooltipTrigger>
+                                <TooltipContent className='max-w-[250px]'>
+                                    {streamingDisabledByStrategy
+                                        ? t('streaming.disabledByStrategy')
+                                        : allowStreamingBatch && n[0] > 1 && streamMode !== 'non_stream'
+                                          ? t('streaming.batchDescription')
+                                          : t('streaming.description')}
+                                </TooltipContent>
+                            </Tooltip>
+                        </div>
+                        {recommendStreaming && (
+                            <p className='text-xs text-amber-700 sm:col-span-2 dark:text-amber-300'>
+                                {t('streaming.highResolutionRecommendation')}
+                            </p>
+                        )}
                     </div>
 
                     <div className='space-y-1.5'>
@@ -406,11 +432,11 @@ export function GenerationForm({
                             onChange={(e) => setPrompt(e.target.value)}
                             required
                             disabled={isLoading}
-                            className='min-h-[80px]'
+                            className='min-h-[112px]'
                         />
                     </div>
 
-                    <div className='space-y-2'>
+                    <div className='border-border bg-background space-y-2 rounded-md border p-3'>
                         <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                             {t('form.numberOfImages', { count: n[0] })}
                         </div>
@@ -428,7 +454,7 @@ export function GenerationForm({
                         />
                     </div>
 
-                    <div className='space-y-3'>
+                    <div className='border-border bg-background space-y-3 rounded-md border p-3'>
                         <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('form.size')}
                         </div>
@@ -481,7 +507,7 @@ export function GenerationForm({
                             />
                         </RadioGroup>
                         {isGptImage2 && size === 'custom' && (
-                            <div className='bg-muted/30 space-y-2 rounded-md border border-border p-3'>
+                            <div className='bg-muted/30 border-border space-y-2 rounded-md border p-3'>
                                 <div className='flex items-center gap-3'>
                                     <div className='flex-1 space-y-1'>
                                         <Label htmlFor='custom-width' className='text-muted-foreground text-xs'>
@@ -532,393 +558,455 @@ export function GenerationForm({
                         )}
                     </div>
 
-                    <div className='bg-muted/20 rounded-md border border-border'>
+                    <div className='bg-muted/20 border-border rounded-md border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
-                            className='text-muted-foreground hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center justify-between px-3 py-3 text-left text-sm font-medium transition-[background-color,color,transform] active:scale-[0.995] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                            className='text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-3 text-left text-sm font-medium transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-[0.995]'
                             aria-expanded={isAdvancedOpen}
                             aria-controls='generation-advanced-panel'>
-                            <span className='flex items-center gap-2'>
-                                <SlidersHorizontal className='h-4 w-4' />
-                                {t('ux.advanced')}
+                            <span className='flex min-w-0 items-center gap-2'>
+                                <SlidersHorizontal className='h-4 w-4 shrink-0' />
+                                <span className='min-w-0'>
+                                    <span className='text-foreground block'>{t('ux.advanced')}</span>
+                                    <span className='text-muted-foreground block truncate text-xs font-normal'>
+                                        {advancedSummary}
+                                    </span>
+                                </span>
                             </span>
                             <ChevronDown
-                                className={`h-4 w-4 transition-transform ${isAdvancedOpen ? 'rotate-180' : ''}`}
+                                className={`h-4 w-4 shrink-0 transition-transform ${isAdvancedOpen ? 'rotate-180' : ''}`}
                             />
                         </button>
                         {isAdvancedOpen && (
-                            <div id='generation-advanced-panel' className='space-y-5 border-t border-border p-3'>
-                                <div className='grid gap-3 sm:grid-cols-2'>
-                                    <div className='space-y-1.5'>
-                                        <Label htmlFor='image-backend-select'>{t('upstream.backend')}</Label>
-                                        <Select
-                                            value={imageBackend}
-                                            onValueChange={(value) =>
-                                                setImageBackend(value as GenerationFormData['image_backend'])
-                                            }
-                                            disabled={isLoading}
-                                            name='image_backend'>
-                                            <SelectTrigger id='image-backend-select'>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value='images-api'>{t('upstream.backendImages')}</SelectItem>
-                                                <SelectItem value='responses-image-generation'>
-                                                    {t('upstream.backendResponses')}
-                                                </SelectItem>
-                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <div className='space-y-1.5'>
-                                        <Label htmlFor='streaming-strategy-select'>{t('upstream.streamingStrategy')}</Label>
-                                        <Select
-                                            value={streamingStrategy}
-                                            onValueChange={(value) =>
-                                                setStreamingStrategy(value as GenerationFormData['streaming_strategy'])
-                                            }
-                                            disabled={isLoading}
-                                            name='image_streaming_strategy'>
-                                            <SelectTrigger id='streaming-strategy-select'>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value='auto'>{t('upstream.strategyAuto')}</SelectItem>
-                                                <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
-                                                <SelectItem value='openai-sse'>{t('upstream.strategyOpenAiSse')}</SelectItem>
-                                                <SelectItem value='newapi-keepalive-sse'>
-                                                    {t('upstream.strategyKeepaliveSse')}
-                                                </SelectItem>
-                                                <SelectItem value='responses-sse'>{t('upstream.strategyResponsesSse')}</SelectItem>
-                                                <SelectItem value='force-sse'>{t('upstream.strategyForceSse')}</SelectItem>
-                                                <SelectItem value='server-default'>{t('upstream.serverDefault')}</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </div>
-
-                                {imageBackend === 'responses-image-generation' && (
-                                    <div className='space-y-3 rounded-md border border-border bg-muted/20 p-3'>
-                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                            <WandSparkles className='h-4 w-4 text-muted-foreground' />
-                                            {t('upstream.compatibilityParams')}
-                                        </div>
+                            <div id='generation-advanced-panel' className='border-border border-t p-3'>
+                                <Tabs
+                                    value={advancedTab}
+                                    onValueChange={(value) => setAdvancedTab(value as AdvancedTab)}
+                                    className='gap-3'>
+                                    <TabsList className='grid h-auto w-full grid-cols-3 rounded-md'>
+                                        <TabsTrigger value='route' className='min-h-9'>
+                                            {t('ux.route')}
+                                        </TabsTrigger>
+                                        <TabsTrigger value='output' className='min-h-9'>
+                                            {t('ux.output')}
+                                        </TabsTrigger>
+                                        <TabsTrigger value='stream' className='min-h-9'>
+                                            {t('ux.streaming')}
+                                        </TabsTrigger>
+                                    </TabsList>
+                                    <TabsContent value='route' className='space-y-5'>
                                         <div className='grid gap-3 sm:grid-cols-2'>
-                                            <div className='space-y-1.5 sm:col-span-2'>
-                                                <Label htmlFor='responses-model-input'>{t('upstream.gptModel')}</Label>
-                                                <Input
-                                                    id='responses-model-input'
-                                                    name='responsesModel'
-                                                    value={responsesModel}
-                                                    onChange={(event) => setResponsesModel(event.target.value)}
-                                                    disabled={isLoading}
-                                                    autoComplete='off'
-                                                    spellCheck={false}
-                                                    placeholder='gpt-5.4'
-                                                />
-                                            </div>
                                             <div className='space-y-1.5'>
-                                                <Label htmlFor='thinking-select'>{t('upstream.thinking')}</Label>
+                                                <Label htmlFor='image-backend-select'>{t('upstream.backend')}</Label>
                                                 <Select
-                                                    value={thinking}
+                                                    value={imageBackend}
                                                     onValueChange={(value) =>
-                                                        setThinking(value as GenerationFormData['thinking'])
+                                                        setImageBackend(value as GenerationFormData['image_backend'])
                                                     }
                                                     disabled={isLoading}
-                                                    name='thinking'>
-                                                    <SelectTrigger id='thinking-select'>
+                                                    name='image_backend'>
+                                                    <SelectTrigger id='image-backend-select'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
+                                                        <SelectItem value='images-api'>
+                                                            {t('upstream.backendImages')}
+                                                        </SelectItem>
+                                                        <SelectItem value='responses-image-generation'>
+                                                            {t('upstream.backendResponses')}
+                                                        </SelectItem>
                                                         <SelectItem value='server-default'>
                                                             {t('upstream.serverDefault')}
                                                         </SelectItem>
-                                                        <SelectItem value='none'>none</SelectItem>
-                                                        <SelectItem value='minimal'>minimal</SelectItem>
-                                                        <SelectItem value='low'>low</SelectItem>
-                                                        <SelectItem value='medium'>medium</SelectItem>
-                                                        <SelectItem value='high'>high</SelectItem>
-                                                        <SelectItem value='xhigh'>xhigh</SelectItem>
                                                     </SelectContent>
                                                 </Select>
                                             </div>
                                             <div className='space-y-1.5'>
-                                                <Label htmlFor='prompt-optimization-select'>
-                                                    {t('upstream.promptOptimization')}
+                                                <Label htmlFor='streaming-strategy-select'>
+                                                    {t('upstream.streamingStrategy')}
                                                 </Label>
                                                 <Select
-                                                    value={promptOptimization}
+                                                    value={streamingStrategy}
                                                     onValueChange={(value) =>
-                                                        setPromptOptimization(
-                                                            value as GenerationFormData['promptOptimization']
+                                                        setStreamingStrategy(
+                                                            value as GenerationFormData['streaming_strategy']
                                                         )
                                                     }
                                                     disabled={isLoading}
-                                                    name='promptOptimization'>
-                                                    <SelectTrigger id='prompt-optimization-select'>
+                                                    name='image_streaming_strategy'>
+                                                    <SelectTrigger id='streaming-strategy-select'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
+                                                        <SelectItem value='auto'>
+                                                            {t('upstream.strategyAuto')}
+                                                        </SelectItem>
+                                                        <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
+                                                        <SelectItem value='openai-sse'>
+                                                            {t('upstream.strategyOpenAiSse')}
+                                                        </SelectItem>
+                                                        <SelectItem value='newapi-keepalive-sse'>
+                                                            {t('upstream.strategyKeepaliveSse')}
+                                                        </SelectItem>
+                                                        <SelectItem value='responses-sse'>
+                                                            {t('upstream.strategyResponsesSse')}
+                                                        </SelectItem>
+                                                        <SelectItem value='force-sse'>
+                                                            {t('upstream.strategyForceSse')}
+                                                        </SelectItem>
                                                         <SelectItem value='server-default'>
                                                             {t('upstream.serverDefault')}
                                                         </SelectItem>
-                                                        <SelectItem value='on'>{t('common.enabled')}</SelectItem>
-                                                        <SelectItem value='off'>{t('common.disabled')}</SelectItem>
                                                     </SelectContent>
                                                 </Select>
                                             </div>
                                         </div>
-                                    </div>
-                                )}
 
-                                {imageBackend === 'images-api' && (
-                                    <div className='space-y-3 rounded-md border border-border bg-muted/20 p-3'>
-                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                            <Globe2 className='h-4 w-4 text-muted-foreground' />
-                                            {t('upstream.compatibilityParams')}
-                                        </div>
-                                        <RadioGroup
-                                            value={forceWeb ? 'true' : 'false'}
-                                            onValueChange={(value) => setForceWeb(value === 'true')}
-                                            disabled={isLoading}
-                                            name='force_web'
-                                            aria-label={t('upstream.forceWeb')}
-                                            className='grid grid-cols-2 gap-2'>
-                                            <RadioItemWithIcon
-                                                value='false'
-                                                id='force-web-false'
-                                                label={t('upstream.serverDefault')}
-                                                Icon={Sparkles}
-                                                disabled={isLoading}
-                                            />
-                                            <RadioItemWithIcon
-                                                value='true'
-                                                id='force-web-true'
-                                                label={t('upstream.forceWeb')}
-                                                Icon={Globe2}
-                                                disabled={isLoading}
-                                                tooltip={t('upstream.forceWebHint')}
-                                            />
-                                        </RadioGroup>
-                                    </div>
-                                )}
-
-                                {streamMode !== 'non_stream' && (
-                                    <div className='space-y-3'>
-                                        <div className='flex items-center gap-2'>
-                                            <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                                {t('streaming.previewImages')}
+                                        {imageBackend === 'responses-image-generation' && (
+                                            <div className='border-border bg-muted/20 space-y-3 rounded-md border p-3'>
+                                                <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                    <WandSparkles className='text-muted-foreground h-4 w-4' />
+                                                    {t('upstream.compatibilityParams')}
+                                                </div>
+                                                <div className='grid gap-3 sm:grid-cols-2'>
+                                                    <div className='space-y-1.5 sm:col-span-2'>
+                                                        <Label htmlFor='responses-model-input'>
+                                                            {t('upstream.gptModel')}
+                                                        </Label>
+                                                        <Input
+                                                            id='responses-model-input'
+                                                            name='responsesModel'
+                                                            value={responsesModel}
+                                                            onChange={(event) => setResponsesModel(event.target.value)}
+                                                            disabled={isLoading}
+                                                            autoComplete='off'
+                                                            spellCheck={false}
+                                                            placeholder='gpt-5.4'
+                                                        />
+                                                    </div>
+                                                    <div className='space-y-1.5'>
+                                                        <Label htmlFor='thinking-select'>
+                                                            {t('upstream.thinking')}
+                                                        </Label>
+                                                        <Select
+                                                            value={thinking}
+                                                            onValueChange={(value) =>
+                                                                setThinking(value as GenerationFormData['thinking'])
+                                                            }
+                                                            disabled={isLoading}
+                                                            name='thinking'>
+                                                            <SelectTrigger id='thinking-select'>
+                                                                <SelectValue />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value='server-default'>
+                                                                    {t('upstream.serverDefault')}
+                                                                </SelectItem>
+                                                                <SelectItem value='none'>none</SelectItem>
+                                                                <SelectItem value='minimal'>minimal</SelectItem>
+                                                                <SelectItem value='low'>low</SelectItem>
+                                                                <SelectItem value='medium'>medium</SelectItem>
+                                                                <SelectItem value='high'>high</SelectItem>
+                                                                <SelectItem value='xhigh'>xhigh</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    <div className='space-y-1.5'>
+                                                        <Label htmlFor='prompt-optimization-select'>
+                                                            {t('upstream.promptOptimization')}
+                                                        </Label>
+                                                        <Select
+                                                            value={promptOptimization}
+                                                            onValueChange={(value) =>
+                                                                setPromptOptimization(
+                                                                    value as GenerationFormData['promptOptimization']
+                                                                )
+                                                            }
+                                                            disabled={isLoading}
+                                                            name='promptOptimization'>
+                                                            <SelectTrigger id='prompt-optimization-select'>
+                                                                <SelectValue />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value='server-default'>
+                                                                    {t('upstream.serverDefault')}
+                                                                </SelectItem>
+                                                                <SelectItem value='on'>
+                                                                    {t('common.enabled')}
+                                                                </SelectItem>
+                                                                <SelectItem value='off'>
+                                                                    {t('common.disabled')}
+                                                                </SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                    <button
-                                                        type='button'
-                                                        className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 inline-flex h-5 w-5 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] active:scale-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
-                                                        aria-label={t('streaming.costHint')}>
-                                                        <HelpCircle className='h-4 w-4' />
-                                                    </button>
-                                                </TooltipTrigger>
-                                                <TooltipContent className='max-w-[250px]'>
-                                                    {t('streaming.costHint')}
-                                                </TooltipContent>
-                                            </Tooltip>
-                                        </div>
-                                        <RadioGroup
-                                            value={String(partialImages)}
-                                            onValueChange={(value) => setPartialImages(Number(value) as 1 | 2 | 3)}
-                                            disabled={isLoading}
-                                            name='partial_images'
-                                            aria-label={t('streaming.previewImages')}
-                                            className='grid grid-cols-3 gap-2'>
-                                            {[1, 2, 3].map((value) => (
+                                        )}
+
+                                        {imageBackend === 'images-api' && (
+                                            <div className='border-border bg-muted/20 space-y-3 rounded-md border p-3'>
+                                                <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                    <Globe2 className='text-muted-foreground h-4 w-4' />
+                                                    {t('upstream.compatibilityParams')}
+                                                </div>
+                                                <RadioGroup
+                                                    value={forceWeb ? 'true' : 'false'}
+                                                    onValueChange={(value) => setForceWeb(value === 'true')}
+                                                    disabled={isLoading}
+                                                    name='force_web'
+                                                    aria-label={t('upstream.forceWeb')}
+                                                    className='grid grid-cols-2 gap-2'>
+                                                    <RadioItemWithIcon
+                                                        value='false'
+                                                        id='force-web-false'
+                                                        label={t('upstream.serverDefault')}
+                                                        Icon={Sparkles}
+                                                        disabled={isLoading}
+                                                    />
+                                                    <RadioItemWithIcon
+                                                        value='true'
+                                                        id='force-web-true'
+                                                        label={t('upstream.forceWeb')}
+                                                        Icon={Globe2}
+                                                        disabled={isLoading}
+                                                        tooltip={t('upstream.forceWebHint')}
+                                                    />
+                                                </RadioGroup>
+                                            </div>
+                                        )}
+                                    </TabsContent>
+                                    <TabsContent value='stream' className='space-y-5'>
+                                        {streamMode !== 'non_stream' && (
+                                            <div className='space-y-3'>
+                                                <div className='flex items-center gap-2'>
+                                                    <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                        {t('streaming.previewImages')}
+                                                    </div>
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <button
+                                                                type='button'
+                                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
+                                                                aria-label={t('streaming.costHint')}>
+                                                                <HelpCircle className='h-4 w-4' />
+                                                            </button>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent className='max-w-[250px]'>
+                                                            {t('streaming.costHint')}
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                </div>
+                                                <RadioGroup
+                                                    value={String(partialImages)}
+                                                    onValueChange={(value) =>
+                                                        setPartialImages(Number(value) as 1 | 2 | 3)
+                                                    }
+                                                    disabled={isLoading}
+                                                    name='partial_images'
+                                                    aria-label={t('streaming.previewImages')}
+                                                    className='grid grid-cols-3 gap-2'>
+                                                    {[1, 2, 3].map((value) => (
+                                                        <RadioItemWithIcon
+                                                            key={value}
+                                                            value={String(value)}
+                                                            id={`partial-${value}`}
+                                                            label={String(value)}
+                                                            Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                                            disabled={isLoading}
+                                                        />
+                                                    ))}
+                                                </RadioGroup>
+                                            </div>
+                                        )}
+                                        {streamMode === 'non_stream' && (
+                                            <div className='border-border bg-muted/20 text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
+                                                {streamModeLabel}
+                                            </div>
+                                        )}
+                                    </TabsContent>
+                                    <TabsContent value='output' className='space-y-5'>
+                                        <div className='space-y-3'>
+                                            <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                                {t('form.quality')}
+                                            </div>
+                                            <RadioGroup
+                                                value={quality}
+                                                onValueChange={(value) =>
+                                                    setQuality(value as GenerationFormData['quality'])
+                                                }
+                                                disabled={isLoading}
+                                                name='quality'
+                                                aria-label={t('form.quality')}
+                                                className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
                                                 <RadioItemWithIcon
-                                                    key={value}
-                                                    value={String(value)}
-                                                    id={`partial-${value}`}
-                                                    label={String(value)}
-                                                    Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                                    value='auto'
+                                                    id='quality-auto'
+                                                    label={t('common.auto')}
+                                                    Icon={Sparkles}
                                                     disabled={isLoading}
                                                 />
-                                            ))}
-                                        </RadioGroup>
-                                    </div>
-                                )}
-
-                                <div className='space-y-3'>
-                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                                        {t('form.quality')}
-                                    </div>
-                                    <RadioGroup
-                                        value={quality}
-                                        onValueChange={(value) => setQuality(value as GenerationFormData['quality'])}
-                                        disabled={isLoading}
-                                        name='quality'
-                                        aria-label={t('form.quality')}
-                                        className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
-                                        <RadioItemWithIcon
-                                            value='auto'
-                                            id='quality-auto'
-                                            label={t('common.auto')}
-                                            Icon={Sparkles}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='low'
-                                            id='quality-low'
-                                            label={t('common.low')}
-                                            Icon={Tally1}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='medium'
-                                            id='quality-medium'
-                                            label={t('common.medium')}
-                                            Icon={Tally2}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='high'
-                                            id='quality-high'
-                                            label={t('common.high')}
-                                            Icon={Tally3}
-                                            disabled={isLoading}
-                                        />
-                                    </RadioGroup>
-                                </div>
-
-                                {!isGptImage2 && (
-                                    <div className='space-y-3'>
-                                        <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                                            {t('form.background')}
+                                                <RadioItemWithIcon
+                                                    value='low'
+                                                    id='quality-low'
+                                                    label={t('common.low')}
+                                                    Icon={Tally1}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='medium'
+                                                    id='quality-medium'
+                                                    label={t('common.medium')}
+                                                    Icon={Tally2}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='high'
+                                                    id='quality-high'
+                                                    label={t('common.high')}
+                                                    Icon={Tally3}
+                                                    disabled={isLoading}
+                                                />
+                                            </RadioGroup>
                                         </div>
-                                        <RadioGroup
-                                            value={background}
-                                            onValueChange={(value) =>
-                                                setBackground(value as GenerationFormData['background'])
-                                            }
-                                            disabled={isLoading}
-                                            name='background'
-                                            aria-label={t('form.background')}
-                                            className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
-                                            <RadioItemWithIcon
-                                                value='auto'
-                                                id='bg-auto'
-                                                label={t('common.auto')}
-                                                Icon={Sparkles}
-                                                disabled={isLoading}
-                                            />
-                                            <RadioItemWithIcon
-                                                value='opaque'
-                                                id='bg-opaque'
-                                                label={t('form.backgroundOpaque')}
-                                                Icon={BrickWall}
-                                                disabled={isLoading}
-                                            />
-                                            <RadioItemWithIcon
-                                                value='transparent'
-                                                id='bg-transparent'
-                                                label={t('form.backgroundTransparent')}
-                                                Icon={Eraser}
-                                                disabled={isLoading}
-                                            />
-                                        </RadioGroup>
-                                    </div>
-                                )}
 
-                                <div className='space-y-3'>
-                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                                        {t('form.outputFormat')}
-                                    </div>
-                                    <RadioGroup
-                                        value={outputFormat}
-                                        onValueChange={(value) =>
-                                            setOutputFormat(value as GenerationFormData['output_format'])
-                                        }
-                                        disabled={isLoading}
-                                        name='output_format'
-                                        aria-label={t('form.outputFormat')}
-                                        className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
-                                        <RadioItemWithIcon
-                                            value='png'
-                                            id='format-png'
-                                            label='PNG'
-                                            Icon={FileImage}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='jpeg'
-                                            id='format-jpeg'
-                                            label='JPEG'
-                                            Icon={FileImage}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='webp'
-                                            id='format-webp'
-                                            label='WebP'
-                                            Icon={FileImage}
-                                            disabled={isLoading}
-                                        />
-                                    </RadioGroup>
-                                </div>
+                                        {!isGptImage2 && (
+                                            <div className='space-y-3'>
+                                                <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                                    {t('form.background')}
+                                                </div>
+                                                <RadioGroup
+                                                    value={background}
+                                                    onValueChange={(value) =>
+                                                        setBackground(value as GenerationFormData['background'])
+                                                    }
+                                                    disabled={isLoading}
+                                                    name='background'
+                                                    aria-label={t('form.background')}
+                                                    className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
+                                                    <RadioItemWithIcon
+                                                        value='auto'
+                                                        id='bg-auto'
+                                                        label={t('common.auto')}
+                                                        Icon={Sparkles}
+                                                        disabled={isLoading}
+                                                    />
+                                                    <RadioItemWithIcon
+                                                        value='opaque'
+                                                        id='bg-opaque'
+                                                        label={t('form.backgroundOpaque')}
+                                                        Icon={BrickWall}
+                                                        disabled={isLoading}
+                                                    />
+                                                    <RadioItemWithIcon
+                                                        value='transparent'
+                                                        id='bg-transparent'
+                                                        label={t('form.backgroundTransparent')}
+                                                        Icon={Eraser}
+                                                        disabled={isLoading}
+                                                    />
+                                                </RadioGroup>
+                                            </div>
+                                        )}
 
-                                {showCompression && (
-                                    <div className='space-y-2 pt-2 transition-opacity duration-300'>
-                                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                            {t('form.compression', { value: compression[0] })}
+                                        <div className='space-y-3'>
+                                            <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                                {t('form.outputFormat')}
+                                            </div>
+                                            <RadioGroup
+                                                value={outputFormat}
+                                                onValueChange={(value) =>
+                                                    setOutputFormat(value as GenerationFormData['output_format'])
+                                                }
+                                                disabled={isLoading}
+                                                name='output_format'
+                                                aria-label={t('form.outputFormat')}
+                                                className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
+                                                <RadioItemWithIcon
+                                                    value='png'
+                                                    id='format-png'
+                                                    label='PNG'
+                                                    Icon={FileImage}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='jpeg'
+                                                    id='format-jpeg'
+                                                    label='JPEG'
+                                                    Icon={FileImage}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='webp'
+                                                    id='format-webp'
+                                                    label='WebP'
+                                                    Icon={FileImage}
+                                                    disabled={isLoading}
+                                                />
+                                            </RadioGroup>
                                         </div>
-                                        <Slider
-                                            id='compression-slider'
-                                            name='output_compression'
-                                            thumbLabel={t('form.compression', { value: compression[0] })}
-                                            min={0}
-                                            max={100}
-                                            step={1}
-                                            value={compression}
-                                            onValueChange={setCompression}
-                                            disabled={isLoading}
-                                            className='mt-3'
-                                        />
-                                    </div>
-                                )}
 
-                                <div className='space-y-3'>
-                                    <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                                        {t('form.moderation')}
-                                    </div>
-                                    <RadioGroup
-                                        value={moderation}
-                                        onValueChange={(value) =>
-                                            setModeration(value as GenerationFormData['moderation'])
-                                        }
-                                        disabled={isLoading}
-                                        name='moderation'
-                                        aria-label={t('form.moderation')}
-                                        className='grid grid-cols-2 gap-2'>
-                                        <RadioItemWithIcon
-                                            value='auto'
-                                            id='mod-auto'
-                                            label={t('common.auto')}
-                                            Icon={ShieldCheck}
-                                            disabled={isLoading}
-                                        />
-                                        <RadioItemWithIcon
-                                            value='low'
-                                            id='mod-low'
-                                            label={t('common.low')}
-                                            Icon={ShieldAlert}
-                                            disabled={isLoading}
-                                        />
-                                    </RadioGroup>
-                                </div>
+                                        {showCompression && (
+                                            <div className='space-y-2 pt-2 transition-opacity duration-300'>
+                                                <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                    {t('form.compression', { value: compression[0] })}
+                                                </div>
+                                                <Slider
+                                                    id='compression-slider'
+                                                    name='output_compression'
+                                                    thumbLabel={t('form.compression', { value: compression[0] })}
+                                                    min={0}
+                                                    max={100}
+                                                    step={1}
+                                                    value={compression}
+                                                    onValueChange={setCompression}
+                                                    disabled={isLoading}
+                                                    className='mt-3'
+                                                />
+                                            </div>
+                                        )}
+
+                                        <div className='space-y-3'>
+                                            <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                                {t('form.moderation')}
+                                            </div>
+                                            <RadioGroup
+                                                value={moderation}
+                                                onValueChange={(value) =>
+                                                    setModeration(value as GenerationFormData['moderation'])
+                                                }
+                                                disabled={isLoading}
+                                                name='moderation'
+                                                aria-label={t('form.moderation')}
+                                                className='grid grid-cols-2 gap-2'>
+                                                <RadioItemWithIcon
+                                                    value='auto'
+                                                    id='mod-auto'
+                                                    label={t('common.auto')}
+                                                    Icon={ShieldCheck}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='low'
+                                                    id='mod-low'
+                                                    label={t('common.low')}
+                                                    Icon={ShieldAlert}
+                                                    disabled={isLoading}
+                                                />
+                                            </RadioGroup>
+                                        </div>
+                                    </TabsContent>
+                                </Tabs>
                             </div>
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='hidden border-t border-border p-4 lg:flex'>
+                <CardFooter className='border-border hidden border-t p-4 lg:flex'>
                     <div className='w-full space-y-2'>
-                        {submitDisabledReason && <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>}
+                        {submitDisabledReason && (
+                            <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>
+                        )}
                         <Button
                             type='button'
                             onClick={handleSubmit}

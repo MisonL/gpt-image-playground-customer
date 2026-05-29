@@ -8,11 +8,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 type RenderOptions = {
     backend: EditingFormData['image_backend'];
     outputFormat?: EditingFormData['output_format'];
+    advancedTab?: 'route' | 'output' | 'stream';
 };
 
 const noop = () => {};
 
-function renderEditingForm({ backend, outputFormat = 'png' }: RenderOptions): string {
+function renderEditingForm({ backend, outputFormat = 'png', advancedTab = 'route' }: RenderOptions): string {
     return renderToStaticMarkup(
         <I18nProvider>
             <EditingForm
@@ -80,6 +81,7 @@ function renderEditingForm({ backend, outputFormat = 'png' }: RenderOptions): st
                 editForceWeb={false}
                 setEditForceWeb={noop}
                 initialAdvancedOpen
+                initialAdvancedTab={advancedTab}
             />
         </I18nProvider>
     );
@@ -97,10 +99,9 @@ describe('EditingForm advanced upstream controls', () => {
     });
 
     it('renders Images API edit controls and compression when JPEG output is selected', () => {
-        const html = renderEditingForm({ backend: 'images-api', outputFormat: 'jpeg' });
+        const html = renderEditingForm({ backend: 'images-api', outputFormat: 'jpeg', advancedTab: 'output' });
 
-        assert.match(html, /图片生成后端/);
-        assert.match(html, /优先 Web 账号/);
+        assert.match(html, /Images API/);
         assert.match(html, /输出格式/);
         assert.match(html, /压缩：85%/);
         assert.match(html, /内容审核级别/);

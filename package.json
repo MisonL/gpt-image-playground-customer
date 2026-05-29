@@ -7,7 +7,7 @@
     "prebuild": "node scripts/clean-standalone.mjs",
     "build": "next build",
     "postbuild": "node scripts/patch-standalone-runtime.mjs",
-    "test": "node --test --import tsx \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\"",
+    "test": "node --test --import tsx \"src/**/*.test.ts\" \"src/**/*.test.tsx\" \"scripts/**/*.test.mjs\"",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "test:postgres": "node scripts/test-postgres-live.mjs",
     "doctor": "node scripts/doctor.mjs",
