@@ -2,8 +2,12 @@
 
 import { ApiSettingsDialog, type ApiSettings } from '@/components/api-settings-dialog';
 import { EditingForm, type EditingFormData } from '@/components/editing-form';
-import { GenerationForm, type GenerationFormData } from '@/components/generation-form';
-import { HistoryPanel, type InspirationItem } from '@/components/history-panel';
+import {
+    GenerationForm,
+    type GenerationFormData,
+    type WorkbenchReuseContext
+} from '@/components/generation-form';
+import { HistoryPanel, type InspirationItem, type PromptApplySource } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import type { WorkbenchMode } from '@/components/mode-toggle';
 import { PasswordDialog } from '@/components/password-dialog';
@@ -46,7 +50,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
     ArrowUp,
     CircleCheck,
-    Heart,
+    Flower2,
     HelpCircle,
     Loader2,
     Lock,
@@ -195,6 +199,43 @@ function readStoredInspirations(): InspirationItem[] {
 
 function readStoredDeletePreference(): boolean {
     return readLocalStorageValue('imageGenSkipDeleteConfirm') === 'true';
+}
+
+function readHistoryImageCountSelection(count: number): number | null {
+    return [1, 2, 4, 8].includes(count) ? count : null;
+}
+
+function readHistorySizeSelection(
+    item: HistoryMetadata,
+    model: GptImageModel
+): {
+    size: GenerationFormData['size'];
+    customWidth: number | null;
+    customHeight: number | null;
+    restored: boolean;
+} {
+    const rawSize = item.size;
+    if (!rawSize || rawSize === 'auto') {
+        return { size: 'auto', customWidth: null, customHeight: null, restored: Boolean(rawSize) };
+    }
+
+    const presets: Array<Exclude<GenerationFormData['size'], 'auto' | 'custom'>> = ['square', 'landscape', 'portrait'];
+    const matchedPreset = presets.find((preset) => rawSize === preset || rawSize === getPresetDimensions(preset, model));
+    if (matchedPreset) {
+        return { size: matchedPreset, customWidth: null, customHeight: null, restored: true };
+    }
+
+    const customMatch = /^(\d+)x(\d+)$/.exec(rawSize);
+    if (customMatch && model === 'gpt-image-2') {
+        return {
+            size: 'custom',
+            customWidth: Number(customMatch[1]),
+            customHeight: Number(customMatch[2]),
+            restored: true
+        };
+    }
+
+    return { size: 'auto', customWidth: null, customHeight: null, restored: false };
 }
 
 function getMimeTypeFromFormat(format: string): string {
@@ -439,10 +480,11 @@ function WorkbenchProDock({
 }
 
 export default function HomePage() {
-    const { t } = useI18n();
+    const { locale, t } = useI18n();
     const createErrorNotice = React.useCallback((message: string) => buildApiErrorNotice(message), []);
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [workbenchMode, setWorkbenchMode] = React.useState<WorkbenchMode>('generate');
+    const [reuseContext, setReuseContext] = React.useState<WorkbenchReuseContext | null>(null);
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
     const [isEntryAuthenticated, setIsEntryAuthenticated] = React.useState(false);
@@ -578,6 +620,9 @@ export default function HomePage() {
     const handleWorkbenchModeChange = React.useCallback(
         (nextMode: WorkbenchMode) => {
             setWorkbenchMode(nextMode);
+            if (nextMode !== 'reuse') {
+                setReuseContext(null);
+            }
             if (nextMode === 'edit') {
                 setMode('edit');
                 return;
@@ -1463,8 +1508,15 @@ export default function HomePage() {
     }
 
     function handleReuseCurrentPrompt() {
-        if (mode === 'edit' && editPrompt.trim()) {
-            setGenPrompt(editPrompt);
+        const promptToReuse = mode === 'edit' && editPrompt.trim() ? editPrompt : currentPrompt;
+        const trimmedPrompt = promptToReuse.trim();
+        if (trimmedPrompt) {
+            setGenPrompt(trimmedPrompt);
+            setReuseContext({
+                sourceLabel: t('reuse.sourceCurrent'),
+                restoredFields: [t('reuse.fieldPrompt')],
+                promptPreview: trimmedPrompt
+            });
         }
         setWorkbenchMode('reuse');
         setMode('generate');
@@ -1517,11 +1569,65 @@ export default function HomePage() {
         [createErrorNotice, getImageSrc, refreshImageAccessCookie, t]
     );
 
-    const handleApplyPrompt = React.useCallback((prompt: string) => {
-        setGenPrompt(prompt);
-        setWorkbenchMode('generate');
-        setMode('generate');
-    }, []);
+    const handleApplyPrompt = React.useCallback(
+        (prompt: string, source: PromptApplySource) => {
+            const trimmedPrompt = prompt.trim();
+            const restoredFields = [t('reuse.fieldPrompt')];
+            setGenPrompt(trimmedPrompt || prompt);
+
+            if (source.type === 'history') {
+                const item = source.item;
+                const nextModel = item.model ?? genModel;
+                const sizeSelection = readHistorySizeSelection(item, nextModel);
+                setGenModel(nextModel);
+                setGenSize(sizeSelection.size);
+                if (typeof sizeSelection.customWidth === 'number') {
+                    setGenCustomWidth(sizeSelection.customWidth);
+                }
+                if (typeof sizeSelection.customHeight === 'number') {
+                    setGenCustomHeight(sizeSelection.customHeight);
+                }
+                setGenQuality(item.quality);
+                setGenBackground(item.background);
+                setGenModeration(item.moderation);
+                const imageCount = readHistoryImageCountSelection(item.images.length);
+                if (imageCount !== null) {
+                    setGenN([imageCount]);
+                    restoredFields.push(t('reuse.fieldCount'));
+                }
+                restoredFields.push(
+                    t('reuse.fieldModel'),
+                    t('reuse.fieldQuality'),
+                    t('reuse.fieldBackground'),
+                    t('reuse.fieldModeration')
+                );
+                if (sizeSelection.restored) {
+                    restoredFields.push(t('reuse.fieldSize'));
+                }
+                if (item.output_format) {
+                    setGenOutputFormat(item.output_format);
+                    restoredFields.push(t('reuse.fieldFormat'));
+                }
+                setReuseContext({
+                    sourceLabel: t('reuse.sourceHistory', {
+                        time: new Date(item.timestamp).toLocaleString(locale)
+                    }),
+                    restoredFields: Array.from(new Set(restoredFields)),
+                    promptPreview: trimmedPrompt || t('history.noPrompt')
+                });
+            } else {
+                setReuseContext({
+                    sourceLabel: t('reuse.sourceInspiration', { title: source.title }),
+                    restoredFields,
+                    promptPreview: trimmedPrompt || t('history.noPrompt')
+                });
+            }
+
+            setWorkbenchMode('reuse');
+            setMode('generate');
+        },
+        [genModel, locale, t]
+    );
 
     const handleSaveInspiration = React.useCallback((prompt: string) => {
         const trimmedPrompt = prompt.trim();
@@ -1852,19 +1958,19 @@ export default function HomePage() {
             ) : null}
             {!showEntryLock && isPasswordRequiredByBackend !== null ? (
                 <>
-                    <div className='mx-auto flex min-h-screen w-full max-w-[1680px] flex-col px-4 py-3 lg:h-full lg:min-h-0 lg:px-7 lg:py-5'>
+                    <div className='mx-auto flex min-h-screen w-full max-w-[1760px] flex-col px-4 py-3 lg:h-full lg:min-h-0 lg:px-7 lg:py-5'>
                         <header className='mb-5 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
                             <div className='flex min-w-0 items-center gap-3'>
                                 <h1 className='editorial-title truncate text-3xl font-semibold tracking-normal sm:text-4xl'>
                                     {t('app.studioTitle')}
                                 </h1>
-                                <Heart className='hidden h-7 w-7 text-primary sm:block' />
+                                <Flower2 className='hidden h-7 w-7 rotate-12 text-[oklch(0.68_0.12_64)] sm:block' />
                                 <p className='text-muted-foreground text-sm'>{t('app.studioSubtitle')}</p>
                             </div>
                             <div className='flex flex-wrap items-center gap-4 sm:justify-end'>
                                 <div className='flex flex-wrap items-center gap-3 text-sm text-muted-foreground'>
                                     <span className='inline-flex items-center gap-2'>
-                                        <CircleCheck className='h-3.5 w-3.5' />
+                                        <CircleCheck className='h-3.5 w-3.5 text-[oklch(0.5_0.12_150)]' />
                                         {t('app.apiConnected')}
                                     </span>
                                     <span className='hidden sm:inline'>{mode === 'generate' ? genModel : editModel}</span>
@@ -1901,7 +2007,7 @@ export default function HomePage() {
                                 </div>
                             </div>
                         </header>
-                        <div className='grid flex-1 grid-cols-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(360px,410px)_minmax(0,1fr)_minmax(360px,430px)]'>
+                        <div className='grid flex-1 grid-cols-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(360px,410px)_minmax(0,1fr)_minmax(390px,460px)]'>
                             <section
                                 ref={creationPanelRef}
                                 aria-label={t('app.creationControls')}
@@ -1913,6 +2019,8 @@ export default function HomePage() {
                                         isLoading={isLoading}
                                         currentMode={workbenchMode}
                                         onModeChange={handleWorkbenchModeChange}
+                                        reuseContext={reuseContext}
+                                        onClearReuseContext={() => setReuseContext(null)}
                                         isPasswordRequiredByBackend={isPasswordRequiredByBackend}
                                         clientPasswordHash={clientPasswordHash}
                                         onOpenPasswordDialog={handleOpenPasswordDialog}

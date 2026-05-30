@@ -72,12 +72,20 @@ export type GenerationFormData = {
     forceWeb: boolean;
 };
 
+export type WorkbenchReuseContext = {
+    sourceLabel: string;
+    restoredFields: string[];
+    promptPreview: string;
+};
+
 type GenerationFormProps = {
     onSubmit: (data: GenerationFormData) => void;
     onSaveInspiration: (prompt: string) => void;
     isLoading: boolean;
     currentMode: WorkbenchMode;
     onModeChange: (mode: WorkbenchMode) => void;
+    reuseContext: WorkbenchReuseContext | null;
+    onClearReuseContext: () => void;
     isPasswordRequiredByBackend: boolean | null;
     clientPasswordHash: string | null;
     onOpenPasswordDialog: () => void;
@@ -181,8 +189,8 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border bg-background/60 text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
-            <Icon className='h-3 w-3 text-current opacity-70' />
+            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
+            <Icon className='h-3 w-3 text-current opacity-50' />
             <span className='min-w-0 max-w-full truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
@@ -243,6 +251,8 @@ export function GenerationForm({
     isLoading,
     currentMode,
     onModeChange,
+    reuseContext,
+    onClearReuseContext,
     isPasswordRequiredByBackend,
     clientPasswordHash,
     onOpenPasswordDialog,
@@ -457,8 +467,8 @@ export function GenerationForm({
                                         aria-pressed={selected}
                                         className={`rounded-full border px-2.5 py-0.5 text-xs shadow-sm transition-[background-color,border-color,color,transform,box-shadow] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
                                             selected
-                                                ? 'border-primary/55 bg-primary text-primary-foreground shadow-[0_4px_10px_oklch(0.5_0.12_30/0.14)]'
-                                                : 'border-border bg-background/78 text-muted-foreground hover:border-primary/25 hover:bg-accent/55 hover:text-foreground'
+                                                ? 'border-primary/50 bg-primary/90 text-primary-foreground shadow-[0_4px_10px_oklch(0.5_0.12_30/0.14)]'
+                                                : 'border-border bg-[oklch(0.982_0.012_84)] text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground'
                                         }`}>
                                         {label}
                                     </button>
@@ -471,9 +481,43 @@ export function GenerationForm({
                             </p>
                         )}
                         {isReuseMode && (
-                            <p className='text-muted-foreground rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-xs leading-5'>
-                                {t('mode.reuseHint')}
-                            </p>
+                            <div className='rounded-md border border-primary/25 bg-[oklch(0.965_0.03_76)] px-3 py-2 text-xs leading-5 shadow-sm dark:bg-muted/40'>
+                                {reuseContext ? (
+                                    <div className='space-y-2'>
+                                        <div className='flex items-start justify-between gap-3'>
+                                            <div className='min-w-0'>
+                                                <p className='text-foreground font-medium'>
+                                                    {t('reuse.appliedTitle')}
+                                                </p>
+                                                <p className='truncate text-muted-foreground'>
+                                                    {reuseContext.sourceLabel}
+                                                </p>
+                                            </div>
+                                            <button
+                                                type='button'
+                                                onClick={onClearReuseContext}
+                                                disabled={isLoading}
+                                                className='shrink-0 text-muted-foreground hover:text-foreground disabled:opacity-50'>
+                                                {t('common.clear')}
+                                            </button>
+                                        </div>
+                                        <div className='flex flex-wrap gap-1'>
+                                            {reuseContext.restoredFields.map((field) => (
+                                                <span
+                                                    key={field}
+                                                    className='rounded-full border border-primary/20 bg-background/70 px-2 py-0.5 text-primary'>
+                                                    {field}
+                                                </span>
+                                            ))}
+                                        </div>
+                                        <p className='max-h-10 overflow-hidden break-words text-muted-foreground'>
+                                            {reuseContext.promptPreview}
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <p className='text-muted-foreground'>{t('mode.reuseHint')}</p>
+                                )}
+                            </div>
                         )}
                     </div>
 

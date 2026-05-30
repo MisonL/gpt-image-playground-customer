@@ -41,7 +41,7 @@ type HistoryPanelProps = {
     history: HistoryMetadata[];
     inspirations: InspirationItem[];
     onSelectImage: (item: HistoryMetadata) => void;
-    onApplyPrompt: (prompt: string) => void;
+    onApplyPrompt: (prompt: string, source: PromptApplySource) => void;
     onDeleteInspiration: (id: number) => void;
     onClearHistory: () => void;
     getImageSrc: (filename: string) => string | undefined;
@@ -58,6 +58,16 @@ export type InspirationItem = {
     prompt: string;
     createdAt: number;
 };
+
+export type PromptApplySource =
+    | {
+          type: 'inspiration';
+          title: string;
+      }
+    | {
+          type: 'history';
+          item: HistoryMetadata;
+      };
 
 const formatDuration = (ms: number): string => {
     if (ms < 1000) {
@@ -360,7 +370,7 @@ function HistoryPanelImpl({
             </CardHeader>
             <CardContent className='flex-grow overflow-y-auto p-3 lg:p-3'>
                 {activeTab === 'inspiration' ? (
-                    <div className='space-y-2.5'>
+                    <div className='space-y-3'>
                         {inspirations.length === 0 ? (
                             <div className='text-muted-foreground flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/20 px-4 text-center text-sm'>
                                 <WandSparkles className='h-5 w-5 opacity-70' />
@@ -374,28 +384,28 @@ function HistoryPanelImpl({
                                 return (
                                     <div
                                         key={item.id}
-                                        className='group flex items-center gap-2 overflow-hidden rounded-md border border-border/80 bg-card/56 p-1.5 shadow-sm transition-[border-color,box-shadow] hover:border-primary/25 hover:shadow-md'>
+                                        className='group flex items-stretch gap-3 overflow-hidden rounded-md border border-border/70 bg-card/58 p-2 shadow-sm transition-[border-color,box-shadow] hover:border-primary/30 hover:shadow-md'>
                                         <button
                                             type='button'
-                                            onClick={() => onApplyPrompt(item.prompt)}
-                                            className='relative h-12 w-16 shrink-0 overflow-hidden rounded border border-border bg-muted'>
+                                            onClick={() => onApplyPrompt(item.prompt, { type: 'inspiration', title })}
+                                            className='relative min-h-24 w-36 shrink-0 overflow-hidden rounded border border-border bg-muted shadow-sm sm:w-40'>
                                             <Image
                                                 src={thumbnail}
                                                 alt={title}
                                                 fill
-                                                sizes='64px'
+                                                sizes='160px'
                                                 className='object-cover'
                                             />
                                         </button>
-                                        <div className='flex min-w-0 flex-1 flex-col gap-1 pr-1'>
+                                        <div className='flex min-w-0 flex-1 flex-col gap-1.5 pr-1'>
                                             <div className='flex items-start justify-between gap-1.5'>
                                                 <div className='min-w-0'>
-                                                    <p className='truncate text-sm font-medium leading-5'>{title}</p>
-                                                    <div className='mt-0.5 flex gap-1 overflow-hidden'>
+                                                    <p className='truncate text-[15px] font-medium leading-5'>{title}</p>
+                                                    <div className='mt-1 flex gap-1 overflow-hidden'>
                                                         {tags.map((tag) => (
                                                             <span
                                                                 key={tag}
-                                                                className='shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>
+                                                                className='shrink-0 rounded-sm bg-muted/80 px-1.5 py-0.5 text-[11px] text-muted-foreground'>
                                                                 {tag}
                                                             </span>
                                                         ))}
@@ -421,7 +431,9 @@ function HistoryPanelImpl({
                                                     </Button>
                                                 </div>
                                             </div>
-                                            <p className='truncate text-xs text-muted-foreground' title={item.prompt}>
+                                            <p
+                                                className='max-h-8 min-h-8 overflow-hidden text-xs leading-4 text-muted-foreground'
+                                                title={item.prompt}>
                                                 {item.prompt}
                                             </p>
                                             <div className='flex items-center justify-between gap-2'>
@@ -433,7 +445,7 @@ function HistoryPanelImpl({
                                                     size='sm'
                                                     variant='ghost'
                                                     className='h-6 px-1.5 text-xs'
-                                                    onClick={() => onApplyPrompt(item.prompt)}>
+                                                    onClick={() => onApplyPrompt(item.prompt, { type: 'inspiration', title })}>
                                                     {t('history.applyInspiration')}
                                                 </Button>
                                             </div>
@@ -446,7 +458,13 @@ function HistoryPanelImpl({
                             <button
                                 type='button'
                                 className='inline-flex items-center gap-1.5 text-muted-foreground hover:text-primary'
-                                onClick={() => inspirations[0] && onApplyPrompt(inspirations[0].prompt)}>
+                                onClick={() =>
+                                    inspirations[0] &&
+                                    onApplyPrompt(inspirations[0].prompt, {
+                                        type: 'inspiration',
+                                        title: t('history.inspirationAlbum')
+                                    })
+                                }>
                                 <Plus className='h-4 w-4' />
                                 {t('history.newInspirationTemplate')}
                             </button>
@@ -833,6 +851,15 @@ function HistoryPanelImpl({
                                             {item.moderation}
                                         </p>
                                         <div className='mt-2 flex items-center gap-1'>
+                                            <Button
+                                                type='button'
+                                                variant='outline'
+                                                size='sm'
+                                                className='h-6 px-2 py-1 text-xs'
+                                                disabled={!item.prompt.trim()}
+                                                onClick={() => onApplyPrompt(item.prompt, { type: 'history', item })}>
+                                                {t('history.applyHistory')}
+                                            </Button>
                                             <Dialog
                                                 open={openPromptDialogTimestamp === itemKey}
                                                 onOpenChange={(isOpen) =>
