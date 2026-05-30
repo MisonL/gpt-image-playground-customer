@@ -25,7 +25,7 @@ export function AppControls({ onOpenApiSettings }: AppControlsProps) {
     return (
         <div className='flex flex-wrap items-center justify-end gap-2'>
             <div
-                className='border-border bg-card text-card-foreground inline-flex items-center gap-1 rounded-md border p-1'
+                className='border-border bg-card/80 text-card-foreground inline-flex min-h-11 items-center gap-1 rounded-md border p-1 shadow-sm'
                 aria-label={t('app.language')}>
                 <Languages className='text-muted-foreground ml-1 h-4 w-4' />
                 <Button
@@ -33,7 +33,7 @@ export function AppControls({ onOpenApiSettings }: AppControlsProps) {
                     variant={locale === 'zh-CN' ? 'default' : 'ghost'}
                     size='sm'
                     onClick={() => setLocale('zh-CN')}
-                    className='min-w-10 px-2'>
+                    className='min-h-9 min-w-11 px-2'>
                     中文
                 </Button>
                 <Button
@@ -41,7 +41,7 @@ export function AppControls({ onOpenApiSettings }: AppControlsProps) {
                     variant={locale === 'en-US' ? 'default' : 'ghost'}
                     size='sm'
                     onClick={() => setLocale('en-US')}
-                    className='min-w-10 px-2'>
+                    className='min-h-9 min-w-11 px-2'>
                     EN
                 </Button>
             </div>
@@ -50,11 +50,11 @@ export function AppControls({ onOpenApiSettings }: AppControlsProps) {
                 variant='outline'
                 size='sm'
                 onClick={() => setTheme(isDark ? 'light' : 'dark')}
-                className={cn('h-9 gap-2', isDark ? 'border-border' : 'border-input')}>
+                className={cn('min-h-11 gap-2 bg-card/80 px-3 shadow-sm', isDark ? 'border-border' : 'border-input')}>
                 {isDark ? <Moon className='h-4 w-4' /> : <Sun className='h-4 w-4' />}
                 {isDark ? t('app.themeDark') : t('app.themeLight')}
             </Button>
-            <Button type='button' variant='outline' onClick={onOpenApiSettings} className='gap-2'>
+            <Button type='button' variant='outline' onClick={onOpenApiSettings} className='min-h-11 gap-2 bg-card/80 shadow-sm'>
                 <Settings2 className='h-4 w-4' />
                 {t('app.apiSettings')}
             </Button>

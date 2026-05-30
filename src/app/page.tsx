@@ -4,8 +4,9 @@ import { ApiSettingsDialog, type ApiSettings } from '@/components/api-settings-d
 import { AppControls } from '@/components/app-controls';
 import { EditingForm, type EditingFormData } from '@/components/editing-form';
 import { GenerationForm, type GenerationFormData } from '@/components/generation-form';
-import { HistoryPanel } from '@/components/history-panel';
+import { HistoryPanel, type InspirationItem } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
+import type { WorkbenchMode } from '@/components/mode-toggle';
 import { PasswordDialog } from '@/components/password-dialog';
 import { ShareDialog, type ShareDialogValues } from '@/components/share-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -42,7 +43,7 @@ import {
 } from '@/lib/streaming-batch';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowDown, Loader2, Lock, Terminal } from 'lucide-react';
+import { ArrowDown, CircleCheck, Loader2, Lock, Terminal } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -76,11 +77,30 @@ type DrawnPoint = {
 
 const MAX_EDIT_IMAGES = 10;
 const apiSettingsLocalStorageKey = 'openaiImageApiSettings';
+const inspirationsLocalStorageKey = 'openaiImageInspirations';
 const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
 type RequestMode = 'generate' | 'edit';
 type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, 1 | 2 | 3];
 type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
+
+const defaultInspirations: InspirationItem[] = [
+    {
+        id: -1,
+        createdAt: 0,
+        prompt: '午后咖啡馆窗边，一束粉白花，胶片感，柔和自然光，松弛的生活杂志封面'
+    },
+    {
+        id: -2,
+        createdAt: 0,
+        prompt: '奶油色卧室一角，棉麻床品，阳光洒在书页上，日杂摄影，安静温柔'
+    },
+    {
+        id: -3,
+        createdAt: 0,
+        prompt: '周末花店门口，鼠尾草绿招牌，浅粉花束，复古咖啡色调，清透胶片'
+    }
+];
 
 function createClientRequestId(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -135,6 +155,30 @@ function readStoredApiSettings(): ApiSettings {
         console.error('从 localStorage 加载 API 设置失败：', error);
         window.localStorage.removeItem(apiSettingsLocalStorageKey);
         return emptyApiSettings;
+    }
+}
+
+function readStoredInspirations(): InspirationItem[] {
+    const storedInspirations = readLocalStorageValue(inspirationsLocalStorageKey);
+    if (!storedInspirations) return defaultInspirations;
+    try {
+        const parsedInspirations: unknown = JSON.parse(storedInspirations);
+        if (!Array.isArray(parsedInspirations)) {
+            window.localStorage.removeItem(inspirationsLocalStorageKey);
+            return [];
+        }
+        return parsedInspirations.filter(
+            (item): item is InspirationItem =>
+                item !== null &&
+                typeof item === 'object' &&
+                typeof (item as InspirationItem).id === 'number' &&
+                typeof (item as InspirationItem).prompt === 'string' &&
+                typeof (item as InspirationItem).createdAt === 'number'
+        );
+    } catch (error) {
+        console.error('加载或解析灵感相册失败：', error);
+        window.localStorage.removeItem(inspirationsLocalStorageKey);
+        return [];
     }
 }
 
@@ -226,7 +270,7 @@ function renderErrorDescription(error: ApiErrorNotice): React.ReactNode {
             <p>{error.message}</p>
             {error.links.map((link) => (
                 <a
-                    className='w-fit rounded-md border border-red-400/50 px-2 py-1 font-medium text-red-100 underline-offset-2 hover:bg-red-900/30 hover:underline'
+                    className='w-fit rounded-md border border-destructive/45 px-2 py-1 font-medium text-destructive underline-offset-2 hover:bg-destructive/10 hover:underline'
                     href={link.url}
                     key={link.url}
                     rel='noreferrer'
@@ -304,6 +348,7 @@ export default function HomePage() {
     const { t } = useI18n();
     const createErrorNotice = React.useCallback((message: string) => buildApiErrorNotice(message), []);
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
+    const [workbenchMode, setWorkbenchMode] = React.useState<WorkbenchMode>('generate');
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
     const [isEntryAuthenticated, setIsEntryAuthenticated] = React.useState(false);
@@ -313,6 +358,7 @@ export default function HomePage() {
     const [latestImageBatch, setLatestImageBatch] = React.useState<ApiImageResult[] | null>(null);
     const [imageOutputView, setImageOutputView] = React.useState<'grid' | number>('grid');
     const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
+    const [inspirations, setInspirations] = React.useState<InspirationItem[]>([]);
     const hasLoadedStoredHistoryRef = React.useRef(false);
     const blobUrlCacheRef = React.useRef<Map<string, string>>(new Map());
     const [isPasswordDialogOpen, setIsPasswordDialogOpen] = React.useState(false);
@@ -434,6 +480,21 @@ export default function HomePage() {
         (mode === 'edit' && !currentEditSizeValidation.valid) ||
         (mode === 'edit' && editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved);
 
+    const handleWorkbenchModeChange = React.useCallback(
+        (nextMode: WorkbenchMode) => {
+            setWorkbenchMode(nextMode);
+            if (nextMode === 'edit') {
+                setMode('edit');
+                return;
+            }
+            if (nextMode === 'batch') {
+                setGenN((current) => (current[0] > 1 ? current : [4]));
+            }
+            setMode('generate');
+        },
+        []
+    );
+
     const scrollToOutput = React.useCallback(() => {
         outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, []);
@@ -466,6 +527,7 @@ export default function HomePage() {
     React.useEffect(() => {
         queueMicrotask(() => {
             setHistory(readStoredHistory());
+            setInspirations(readStoredInspirations());
             hasLoadedStoredHistoryRef.current = true;
         });
     }, []);
@@ -622,6 +684,15 @@ export default function HomePage() {
             console.error('保存历史记录到 localStorage 失败：', e);
         }
     }, [history]);
+
+    React.useEffect(() => {
+        if (!hasLoadedStoredHistoryRef.current) return;
+        try {
+            localStorage.setItem(inspirationsLocalStorageKey, JSON.stringify(inspirations));
+        } catch (e) {
+            console.error('保存灵感相册到 localStorage 失败：', e);
+        }
+    }, [inspirations]);
 
     React.useEffect(() => {
         return () => {
@@ -1278,6 +1349,18 @@ export default function HomePage() {
         });
     }
 
+    function handleCreateVariant() {
+        handleMobilePrimaryAction();
+    }
+
+    function handleReuseCurrentPrompt() {
+        if (mode === 'edit' && editPrompt.trim()) {
+            setGenPrompt(editPrompt);
+        }
+        setWorkbenchMode('reuse');
+        setMode('generate');
+    }
+
     const handleHistorySelect = React.useCallback(
         async (item: HistoryMetadata) => {
             const originalStorageMode = item.storageModeUsed || 'fs';
@@ -1324,6 +1407,28 @@ export default function HomePage() {
         },
         [createErrorNotice, getImageSrc, refreshImageAccessCookie, t]
     );
+
+    const handleApplyPrompt = React.useCallback((prompt: string) => {
+        setGenPrompt(prompt);
+        setWorkbenchMode('generate');
+        setMode('generate');
+    }, []);
+
+    const handleSaveInspiration = React.useCallback((prompt: string) => {
+        const trimmedPrompt = prompt.trim();
+        if (!trimmedPrompt) return;
+        setInspirations((current) => {
+            const existing = current.find((item) => item.prompt === trimmedPrompt);
+            if (existing) {
+                return [existing, ...current.filter((item) => item.id !== existing.id)];
+            }
+            return [{ id: Date.now(), prompt: trimmedPrompt, createdAt: Date.now() }, ...current].slice(0, 24);
+        });
+    }, []);
+
+    const handleDeleteInspiration = React.useCallback((id: number) => {
+        setInspirations((current) => current.filter((item) => item.id !== id));
+    }, []);
 
     const handleClearHistory = React.useCallback(async () => {
         const confirmationMessage =
@@ -1494,6 +1599,7 @@ export default function HomePage() {
 
             if (mode === 'generate') {
                 setMode('edit');
+                setWorkbenchMode('edit');
             }
         } catch (err: unknown) {
             console.error('发送图片到编辑模式失败：', err);
@@ -1580,7 +1686,7 @@ export default function HomePage() {
     const showEntryLock = isPasswordRequiredByBackend === true && !isEntryAuthenticated;
 
     return (
-        <main className='bg-background text-foreground flex min-h-screen flex-col items-center p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:p-8 md:pb-[calc(6rem+env(safe-area-inset-bottom))] lg:p-12'>
+        <main className='studio-paper text-foreground min-h-screen pb-[calc(6rem+env(safe-area-inset-bottom))] lg:h-dvh lg:overflow-hidden lg:pb-0'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -1609,17 +1715,17 @@ export default function HomePage() {
                 onCreate={handleCreateShare}
             />
             {showEntryLock ? (
-                <div className='flex min-h-[70vh] w-full max-w-md flex-col items-center justify-center gap-6 text-center'>
-                    <div className='flex size-14 items-center justify-center rounded-full border border-white/15 bg-black text-white'>
+                <div className='mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-6 px-4 text-center'>
+                    <div className='bg-primary text-primary-foreground flex size-14 items-center justify-center rounded-full border border-primary/20 shadow-sm'>
                         <Lock className='h-6 w-6' />
                     </div>
                     <div className='space-y-2'>
-                        <h1 className='text-2xl font-semibold text-white'>{t('password.required')}</h1>
-                        <p className='text-sm text-white/60'>{t('password.entryDescription')}</p>
+                        <h1 className='text-2xl font-semibold'>{t('password.required')}</h1>
+                        <p className='text-muted-foreground text-sm'>{t('password.entryDescription')}</p>
                     </div>
                     {error && (
-                        <Alert variant='destructive' className='border-red-500/50 bg-red-900/20 text-left text-red-300'>
-                            <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
+                        <Alert variant='destructive' className='border-destructive/45 bg-destructive/10 text-left text-destructive'>
+                            <AlertTitle>{t('common.error')}</AlertTitle>
                             <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                         </Alert>
                     )}
@@ -1630,23 +1736,55 @@ export default function HomePage() {
                             setPasswordDialogContext('initial');
                             setIsPasswordDialogOpen(true);
                         }}
-                        className='bg-white px-6 text-black hover:bg-white/90'>
+                        className='px-6'>
                         {t('password.unlock')}
                     </Button>
                 </div>
             ) : null}
             {!showEntryLock && isPasswordRequiredByBackend !== null ? (
                 <>
-                    <div className='w-full max-w-screen-2xl space-y-6'>
-                        <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
-                        <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
-                            <div className='relative flex flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
+                    <div className='mx-auto flex min-h-screen w-full max-w-[1800px] flex-col px-3 py-3 sm:px-4 lg:h-full lg:min-h-0 lg:px-5 lg:py-4'>
+                        <header className='paper-soft-shadow mb-3 flex shrink-0 flex-col gap-3 border-b border-border/70 bg-background/80 px-3 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between lg:rounded-lg lg:border'>
+                            <div className='min-w-0'>
+                                <p className='text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase'>
+                                    {t('app.brand')}
+                                </p>
+                                <h1 className='mt-1 truncate text-xl font-semibold tracking-normal sm:text-2xl'>
+                                    {t('app.studioTitle')}
+                                </h1>
+                                <p className='text-muted-foreground mt-1 text-sm'>{t('app.studioSubtitle')}</p>
+                            </div>
+                            <div className='flex flex-col gap-2 sm:items-end'>
+                                <div className='flex flex-wrap gap-1.5 text-xs'>
+                                    <span className='rounded-full border border-border bg-card/75 px-2 py-1 text-muted-foreground'>
+                                        {mode === 'generate' ? genModel : editModel}
+                                    </span>
+                                    <span className='inline-flex items-center gap-1 rounded-full border border-secondary/50 bg-secondary/45 px-2 py-1 text-secondary-foreground'>
+                                        <CircleCheck className='h-3.5 w-3.5' />
+                                        {streamMode === 'non_stream'
+                                            ? t('streaming.modeNonStream')
+                                            : streamMode === 'stream'
+                                              ? t('streaming.modeStream')
+                                              : t('streaming.modeAuto')}
+                                    </span>
+                                    <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-primary'>
+                                        {t('workbench.estimatedCost')}
+                                    </span>
+                                </div>
+                                <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
+                            </div>
+                        </header>
+                        <div className='grid flex-1 grid-cols-1 gap-3 lg:min-h-0 lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)_minmax(250px,310px)] xl:grid-cols-[minmax(320px,390px)_minmax(0,1fr)_minmax(280px,340px)]'>
+                            <section
+                                aria-label={t('app.creationControls')}
+                                className='order-1 min-h-[620px] lg:order-1 lg:min-h-0 lg:overflow-hidden'>
                                 <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
                                     <GenerationForm
                                         onSubmit={handleApiCall}
+                                        onSaveInspiration={handleSaveInspiration}
                                         isLoading={isLoading}
-                                        currentMode={mode}
-                                        onModeChange={setMode}
+                                        currentMode={workbenchMode}
+                                        onModeChange={handleWorkbenchModeChange}
                                         isPasswordRequiredByBackend={isPasswordRequiredByBackend}
                                         clientPasswordHash={clientPasswordHash}
                                         onOpenPasswordDialog={handleOpenPasswordDialog}
@@ -1695,8 +1833,8 @@ export default function HomePage() {
                                     <EditingForm
                                         onSubmit={handleApiCall}
                                         isLoading={isLoading || isSendingToEdit}
-                                        currentMode={mode}
-                                        onModeChange={setMode}
+                                        currentMode={workbenchMode}
+                                        onModeChange={handleWorkbenchModeChange}
                                         isPasswordRequiredByBackend={isPasswordRequiredByBackend}
                                         clientPasswordHash={clientPasswordHash}
                                         onOpenPasswordDialog={handleOpenPasswordDialog}
@@ -1758,15 +1896,16 @@ export default function HomePage() {
                                         setEditForceWeb={setEditForceWeb}
                                     />
                                 </div>
-                            </div>
-                            <div
+                            </section>
+                            <section
                                 ref={outputPanelRef}
-                                className='scroll-mt-4 flex min-h-[420px] flex-col lg:col-span-1 lg:h-[70vh] lg:min-h-[600px]'>
+                                aria-label={t('app.canvasPreview')}
+                                className='order-2 scroll-mt-4 flex min-h-[460px] flex-col rounded-lg border border-border bg-card/58 p-2 shadow-sm lg:order-2 lg:min-h-0'>
                                 {error && (
                                     <Alert
                                         variant='destructive'
-                                        className='mb-4 border-red-500/50 bg-red-900/20 text-red-300'>
-                                        <AlertTitle className='text-red-200'>{t('common.error')}</AlertTitle>
+                                        className='mb-4 border-destructive/45 bg-destructive/10 text-destructive'>
+                                        <AlertTitle>{t('common.error')}</AlertTitle>
                                         <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                                     </Alert>
                                 )}
@@ -1779,6 +1918,10 @@ export default function HomePage() {
                                     onSendToEdit={handleSendToEdit}
                                     onDownloadImage={handleDownloadImage}
                                     onShareImage={handleOpenShareImage}
+                                    onCreateVariant={handleCreateVariant}
+                                    onReusePrompt={handleReuseCurrentPrompt}
+                                    canCreateVariant={Boolean(currentPrompt.trim()) && !!latestImageBatch}
+                                    canReusePrompt={Boolean(currentPrompt.trim())}
                                     currentMode={mode}
                                     baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
                                     streamingPreviewImages={streamingPreviewImages}
@@ -1789,25 +1932,29 @@ export default function HomePage() {
                                     logClientRequestIds={activeLogClientRequestIds}
                                     logFilenames={activeLogFilenames}
                                 />
-                            </div>
-                        </div>
-
-                        <div className='min-h-[450px]'>
-                            <HistoryPanel
-                                history={history}
-                                onSelectImage={handleHistorySelect}
-                                onClearHistory={handleClearHistory}
-                                getImageSrc={getImageSrc}
-                                onDeleteItemRequest={handleRequestDeleteItem}
-                                itemPendingDeleteConfirmation={itemToDeleteConfirm}
-                                onConfirmDeletion={handleConfirmDeletion}
-                                onCancelDeletion={handleCancelDeletion}
-                                deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
-                                onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
-                            />
+                            </section>
+                            <aside
+                                aria-label={t('history.title')}
+                                className='order-3 min-h-[420px] lg:min-h-0 lg:overflow-hidden'>
+                                <HistoryPanel
+                                    history={history}
+                                    inspirations={inspirations}
+                                    onSelectImage={handleHistorySelect}
+                                    onApplyPrompt={handleApplyPrompt}
+                                    onDeleteInspiration={handleDeleteInspiration}
+                                    onClearHistory={handleClearHistory}
+                                    getImageSrc={getImageSrc}
+                                    onDeleteItemRequest={handleRequestDeleteItem}
+                                    itemPendingDeleteConfirmation={itemToDeleteConfirm}
+                                    onConfirmDeletion={handleConfirmDeletion}
+                                    onCancelDeletion={handleCancelDeletion}
+                                    deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
+                                    onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
+                                />
+                            </aside>
                         </div>
                     </div>
-                    <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
+                    <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
                         <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
                             <Button
                                 type='button'

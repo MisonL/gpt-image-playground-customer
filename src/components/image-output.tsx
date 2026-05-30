@@ -12,7 +12,7 @@ import {
 import { useI18n } from '@/lib/i18n';
 import { filterLogsByScope, resolveLogClientRequestIds } from '@/lib/log-filter';
 import { cn } from '@/lib/utils';
-import { Download, Grid, Loader2, Send, Share2, Terminal, Trash2 } from 'lucide-react';
+import { Copy, Download, GitCompare, Grid, Loader2, RefreshCcw, Send, Share2, Terminal, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
 
@@ -31,6 +31,10 @@ type ImageOutputProps = {
     onSendToEdit: (filename: string) => void;
     onDownloadImage: (filename: string) => void;
     onShareImage: (filename: string) => void;
+    onCreateVariant: () => void;
+    onReusePrompt: () => void;
+    canCreateVariant: boolean;
+    canReusePrompt: boolean;
     currentMode: 'generate' | 'edit';
     baseImagePreviewUrl: string | null;
     streamingPreviewImages?: Map<number, string>;
@@ -74,6 +78,10 @@ export function ImageOutput({
     onSendToEdit,
     onDownloadImage,
     onShareImage,
+    onCreateVariant,
+    onReusePrompt,
+    canCreateVariant,
+    canReusePrompt,
     currentMode,
     baseImagePreviewUrl,
     streamingPreviewImages,
@@ -121,6 +129,12 @@ export function ImageOutput({
     const handleShareClick = () => {
         if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
             onShareImage(imageBatch[viewMode].filename);
+        }
+    };
+
+    const handleCompareClick = () => {
+        if (imageBatch && imageBatch.length > 1) {
+            onViewChange('grid');
         }
     };
 
@@ -219,8 +233,22 @@ export function ImageOutput({
     const canUseImageActions = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
 
     return (
-        <div className='bg-card text-card-foreground flex h-full min-h-[300px] w-full flex-col items-center justify-between gap-4 overflow-hidden rounded-lg border border-border p-4'>
-            <div className='relative flex h-full w-full flex-grow items-center justify-center overflow-hidden'>
+        <div className='bg-card/92 text-card-foreground flex h-full min-h-[300px] w-full flex-col gap-3 overflow-hidden rounded-md border border-border p-3 shadow-sm sm:p-4'>
+            <div className='flex shrink-0 items-center justify-between gap-3'>
+                <div>
+                    <p className='text-muted-foreground text-xs font-medium tracking-[0.16em] uppercase'>
+                        {t('output.previewEyebrow')}
+                    </p>
+                    <h2 className='text-lg font-medium'>{t('output.previewTitle')}</h2>
+                </div>
+                {isLoading && (
+                    <div className='text-primary flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs'>
+                        <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                        {t('output.progressGenerating')}
+                    </div>
+                )}
+            </div>
+            <div className='relative flex h-full w-full flex-grow items-center justify-center overflow-hidden rounded-sm border border-border/70 bg-background/45'>
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
                         // 展示流式预览图，单图时和最终视图一样居中。
@@ -243,7 +271,7 @@ export function ImageOutput({
                                 );
                             })()}
                             {/* 在底部居中叠加加载状态。 */}
-                            <div className='absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-white/80'>
+                            <div className='absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-foreground/80 px-3 py-1.5 text-background'>
                                 <Loader2 className='h-4 w-4 animate-spin' />
                                 <p className='text-sm'>{t('output.streaming')}</p>
                             </div>
@@ -303,7 +331,7 @@ export function ImageOutput({
                         </div>
                     )
                 ) : (
-                    <div className='mx-auto max-w-sm text-center'>
+                    <div className='mx-auto max-w-sm px-4 text-center'>
                         <p className='text-foreground text-base font-medium'>{t('output.emptyTitle')}</p>
                         <p className='text-muted-foreground mt-2 text-sm leading-6'>{t('output.emptyDescription')}</p>
                     </div>
@@ -383,9 +411,9 @@ export function ImageOutput({
                 </DialogContent>
             </Dialog>
 
-            <div className='flex h-10 w-full shrink-0 items-center justify-center gap-3'>
+            <div className='flex min-h-10 w-full shrink-0 flex-wrap items-center justify-center gap-2'>
                 {showCarousel && (
-                    <div className='bg-muted/50 flex items-center gap-1.5 rounded-md border border-border p-1'>
+                    <div className='bg-muted/70 flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border border-border p-1'>
                         <Button
                             variant='ghost'
                             size='icon'
@@ -428,7 +456,7 @@ export function ImageOutput({
                         variant='outline'
                         size='sm'
                         onClick={() => setIsLogDialogOpen(true)}
-                        className='shrink-0'>
+                        className='min-h-9 shrink-0'>
                         <Terminal className='mr-2 h-4 w-4' />
                         {t('logs.open')}
                     </Button>
@@ -440,12 +468,39 @@ export function ImageOutput({
                     onClick={handleSendClick}
                     disabled={!canSendToEdit}
                     className={cn(
-                        'shrink-0 disabled:opacity-50',
+                        'min-h-9 shrink-0 disabled:opacity-50',
                         // 多图网格视图下完全隐藏按钮。
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
-                    )}>
+                )}>
                     <Send className='mr-2 h-4 w-4' />
-                    {t('output.sendToEdit')}
+                    {t('output.continueEdit')}
+                </Button>
+                <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={onCreateVariant}
+                    disabled={isLoading || !canCreateVariant}
+                    className='min-h-9 shrink-0 disabled:opacity-50'>
+                    <RefreshCcw className='mr-2 h-4 w-4' />
+                    {t('output.createVariant')}
+                </Button>
+                <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={onReusePrompt}
+                    disabled={isLoading || !canReusePrompt}
+                    className='min-h-9 shrink-0 disabled:opacity-50'>
+                    <Copy className='mr-2 h-4 w-4' />
+                    {t('output.reusePrompt')}
+                </Button>
+                <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={handleCompareClick}
+                    disabled={!imageBatch || imageBatch.length <= 1}
+                    className='min-h-9 shrink-0 disabled:opacity-50'>
+                    <GitCompare className='mr-2 h-4 w-4' />
+                    {t('output.compare')}
                 </Button>
                 <Button
                     variant='outline'
@@ -453,7 +508,7 @@ export function ImageOutput({
                     onClick={handleDownloadClick}
                     disabled={!canUseImageActions}
                     className={cn(
-                        'shrink-0 disabled:opacity-50',
+                        'min-h-9 shrink-0 disabled:opacity-50',
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
                     )}>
                     <Download className='mr-2 h-4 w-4' />
@@ -465,7 +520,7 @@ export function ImageOutput({
                     onClick={handleShareClick}
                     disabled={!canUseImageActions}
                     className={cn(
-                        'shrink-0 disabled:opacity-50',
+                        'min-h-9 shrink-0 disabled:opacity-50',
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
                     )}>
                     <Share2 className='mr-2 h-4 w-4' />

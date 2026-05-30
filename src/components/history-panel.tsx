@@ -17,6 +17,7 @@ import {
 import { getModelRates, type GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
     Copy,
     Check,
@@ -27,14 +28,19 @@ import {
     HardDrive,
     Database,
     FileImage,
-    Trash2
+    Trash2,
+    Heart,
+    WandSparkles
 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
 
 type HistoryPanelProps = {
     history: HistoryMetadata[];
+    inspirations: InspirationItem[];
     onSelectImage: (item: HistoryMetadata) => void;
+    onApplyPrompt: (prompt: string) => void;
+    onDeleteInspiration: (id: number) => void;
     onClearHistory: () => void;
     getImageSrc: (filename: string) => string | undefined;
     onDeleteItemRequest: (item: HistoryMetadata) => void;
@@ -43,6 +49,12 @@ type HistoryPanelProps = {
     onCancelDeletion: () => void;
     deletePreferenceDialogValue: boolean;
     onDeletePreferenceDialogChange: (isChecked: boolean) => void;
+};
+
+export type InspirationItem = {
+    id: number;
+    prompt: string;
+    createdAt: number;
 };
 
 const formatDuration = (ms: number): string => {
@@ -122,7 +134,10 @@ function getCostStatusLabel(item: HistoryMetadata, labels: { actual: string; pen
 
 function HistoryPanelImpl({
     history,
+    inspirations,
     onSelectImage,
+    onApplyPrompt,
+    onDeleteInspiration,
     onClearHistory,
     getImageSrc,
     onDeleteItemRequest,
@@ -133,6 +148,7 @@ function HistoryPanelImpl({
     onDeletePreferenceDialogChange
 }: HistoryPanelProps) {
     const { locale, t } = useI18n();
+    const [activeTab, setActiveTab] = React.useState<'inspiration' | 'history'>('inspiration');
     const [openPromptDialogTimestamp, setOpenPromptDialogTimestamp] = React.useState<number | null>(null);
     const [openCostDialogTimestamp, setOpenCostDialogTimestamp] = React.useState<number | null>(null);
     const [isTotalCostDialogOpen, setIsTotalCostDialogOpen] = React.useState(false);
@@ -197,16 +213,21 @@ function HistoryPanelImpl({
     );
 
     return (
-        <Card className='bg-card text-card-foreground flex h-full w-full flex-col overflow-hidden rounded-lg border border-border'>
-            <CardHeader className='flex flex-row items-center justify-between gap-4 border-b border-border px-4 py-3'>
-                <div className='flex items-center gap-2'>
-                    <CardTitle className='text-lg font-medium'>{t('history.title')}</CardTitle>
+        <Card className='bg-card/92 text-card-foreground flex h-full w-full flex-col overflow-hidden rounded-lg border border-border shadow-sm'>
+            <CardHeader className='bg-card/80 flex flex-col gap-3 border-b border-border px-4 py-3'>
+                <div className='flex items-center justify-between gap-3'>
+                    <div>
+                        <p className='text-muted-foreground text-xs font-medium tracking-[0.16em] uppercase'>
+                            {t('workbench.album')}
+                        </p>
+                        <CardTitle className='mt-1 text-lg font-medium'>{t('history.title')}</CardTitle>
+                    </div>
                     {totalCost > 0 && (
                         <Dialog open={isTotalCostDialogOpen} onOpenChange={setIsTotalCostDialogOpen}>
 	                            <DialogTrigger asChild>
 	                                <button
 	                                    type='button'
-	                                    className='mt-0.5 flex cursor-pointer items-center gap-1 rounded-full bg-green-600/80 px-1.5 py-0.5 text-[12px] text-white transition-[background-color,transform] hover:-translate-y-0.5 hover:bg-green-500/90 active:translate-y-0'
+	                                    className='mt-0.5 flex min-h-6 cursor-pointer items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[12px] text-secondary-foreground transition-[background-color,transform] hover:-translate-y-0.5 hover:bg-secondary/80 active:translate-y-0'
 	                                    aria-label={t('history.showTotalCost')}>
                                     {t('history.totalCost', { cost: totalCost.toFixed(4) })}
                                 </button>
@@ -297,7 +318,22 @@ function HistoryPanelImpl({
                         </Dialog>
                     )}
                 </div>
-                {history.length > 0 && (
+                <Tabs
+                    value={activeTab}
+                    onValueChange={(value) => setActiveTab(value as 'inspiration' | 'history')}
+                    className='gap-0'>
+                    <TabsList className='grid h-auto w-full grid-cols-2 rounded-md border border-border bg-muted/55 p-1'>
+                        <TabsTrigger value='inspiration' className='min-h-9'>
+                            {t('history.inspirationAlbum')}
+                        </TabsTrigger>
+                        <TabsTrigger value='history' className='min-h-9'>
+                            {t('history.recentGenerated')}
+                        </TabsTrigger>
+                    </TabsList>
+                    <TabsContent value='inspiration' forceMount className='hidden' />
+                    <TabsContent value='history' forceMount className='hidden' />
+                </Tabs>
+                {history.length > 0 && activeTab === 'history' && (
                     <Button
                         variant='ghost'
                         size='sm'
@@ -307,13 +343,61 @@ function HistoryPanelImpl({
                     </Button>
                 )}
             </CardHeader>
-            <CardContent className='flex-grow overflow-y-auto p-4'>
-                {history.length === 0 ? (
+            <CardContent className='flex-grow overflow-y-auto p-3 lg:p-3'>
+                {activeTab === 'inspiration' ? (
+                    inspirations.length === 0 ? (
+                        <div className='text-muted-foreground flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/20 px-4 text-center text-sm'>
+                            <WandSparkles className='h-5 w-5 opacity-70' />
+                            <p>{t('history.inspirationEmpty')}</p>
+                        </div>
+                    ) : (
+                        <div className='grid gap-3'>
+                            {inspirations.map((item) => (
+                                <div
+                                    key={item.id}
+                                    className='group relative overflow-hidden rounded-md border border-border bg-card/70 p-3 shadow-sm'>
+                                    <div className='absolute top-2 right-2 flex gap-1'>
+                                        <Button
+                                            type='button'
+                                            variant='ghost'
+                                            size='icon'
+                                            className='h-7 w-7 text-primary'
+                                            aria-label={t('history.favorite')}>
+                                            <Heart className='h-4 w-4 fill-current' />
+                                        </Button>
+                                        <Button
+                                            type='button'
+                                            variant='ghost'
+                                            size='icon'
+                                            className='h-7 w-7 text-muted-foreground hover:text-destructive'
+                                            onClick={() => onDeleteInspiration(item.id)}
+                                            aria-label={t('history.deleteInspiration')}>
+                                            <Trash2 className='h-4 w-4' />
+                                        </Button>
+                                    </div>
+                                    <p className='pr-16 text-sm leading-6 text-foreground'>{item.prompt}</p>
+                                    <div className='mt-3 flex items-center justify-between gap-2'>
+                                        <span className='text-muted-foreground text-xs'>
+                                            {item.createdAt > 0 ? formatTimestamp(item.createdAt) : t('history.template')}
+                                        </span>
+                                        <Button
+                                            type='button'
+                                            size='sm'
+                                            variant='outline'
+                                            onClick={() => onApplyPrompt(item.prompt)}>
+                                            {t('history.applyInspiration')}
+                                        </Button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )
+                ) : history.length === 0 ? (
                     <div className='text-muted-foreground flex min-h-24 items-center justify-center rounded-md border border-dashed border-border px-4 text-center text-sm'>
                         <p>{t('history.empty')}</p>
                     </div>
                 ) : (
-                    <div className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5'>
+                    <div className='grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-1 2xl:grid-cols-2'>
                         {[...history].map((item) => {
                             const firstImage = item.images?.[0];
                             const imageCount = item.images?.length ?? 0;
@@ -377,8 +461,10 @@ function HistoryPanelImpl({
 	                                            )}
                                             <div
                                                 className={cn(
-                                                    'pointer-events-none absolute top-1 left-1 z-10 flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] text-white',
-                                                    item.mode === 'edit' ? 'bg-orange-600/80' : 'bg-blue-600/80'
+                                                    'pointer-events-none absolute top-1 left-1 z-10 flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px]',
+                                                    item.mode === 'edit'
+                                                        ? 'border-primary/30 bg-primary/88 text-primary-foreground'
+                                                        : 'border-secondary/40 bg-secondary/90 text-secondary-foreground'
                                                 )}>
                                                 {item.mode === 'edit' ? (
                                                     <Pencil size={12} />
@@ -398,7 +484,7 @@ function HistoryPanelImpl({
                                                     {originalStorageMode === 'fs' ? (
                                                         <HardDrive size={12} className='text-muted-foreground' />
                                                     ) : (
-                                                        <Database size={12} className='text-blue-400' />
+                                                        <Database size={12} className='text-primary' />
                                                     )}
                                                     <span>
                                                         {originalStorageMode === 'fs'
@@ -428,8 +514,8 @@ function HistoryPanelImpl({
 	                                                        className={cn(
 	                                                            'absolute top-7 right-1 z-20 flex min-h-6 cursor-pointer items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] text-white shadow-sm transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0',
 	                                                            costBadge.actual
-	                                                                ? 'bg-green-600/80 hover:bg-green-500/90'
-	                                                                : 'bg-zinc-700/80 hover:bg-zinc-600/90'
+	                                                                ? 'bg-secondary text-secondary-foreground hover:bg-secondary/85'
+	                                                                : 'bg-foreground/80 text-background hover:bg-foreground/70'
 	                                                        )}
 	                                                        aria-label={`${t('history.showCost')} ${costBadge.label}`}>
 	                                                        <DollarSign size={12} />
@@ -764,7 +850,7 @@ function HistoryPanelImpl({
                                                 }}>
                                                 <DialogTrigger asChild>
                                                     <Button
-                                                        className='h-6 w-6 bg-red-700/60 text-white hover:bg-red-600/60'
+                                                        className='h-6 w-6 bg-destructive text-white hover:bg-destructive/90'
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             onDeleteItemRequest(item);
