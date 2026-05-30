@@ -2,7 +2,7 @@
 
 import { ModeToggle } from '@/components/mode-toggle';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -172,9 +172,9 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
-            <Icon className='h-4 w-4 text-current opacity-70' />
-            <span className='min-w-0 whitespace-normal break-words text-left leading-5'>{label}</span>
+            className='border-border bg-background/60 text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
+            <Icon className='h-3 w-3 text-current opacity-70' />
+            <span className='min-w-0 max-w-full truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
 
@@ -681,31 +681,29 @@ export function EditingForm({
     };
 
     return (
-        <Card className='bg-card/92 text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border shadow-sm lg:h-full'>
-            <CardHeader className='border-border bg-card/80 flex flex-col gap-4 border-b px-4 py-4'>
-                <div className='space-y-1'>
-                    <p className='text-muted-foreground text-xs font-medium tracking-[0.16em] uppercase'>
-                        {t('workbench.creationSheet')}
-                    </p>
-                    <div className='flex items-center'>
-                        <CardTitle className='py-1 text-lg font-medium'>{t('edit.title')}</CardTitle>
-                        {isPasswordRequiredByBackend && (
-                            <Button
-                                variant='ghost'
-                                size='icon'
-                                onClick={onOpenPasswordDialog}
-                                className='text-muted-foreground hover:text-foreground ml-2'
-                                aria-label={t('password.configure')}>
-                                {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
-                            </Button>
-                        )}
-                    </div>
-                    <CardDescription className='mt-1 text-xs leading-5'>{t('edit.description')}</CardDescription>
-                </div>
+        <Card className='workbench-panel text-card-foreground border-border flex w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 lg:h-full'>
+            <CardHeader className='border-border/70 border-b px-3 pt-2 !pb-2'>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
-                <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
+                <CardContent className='space-y-3 p-4 pb-28 lg:flex-1 lg:overflow-y-auto lg:pb-4'>
+                    <div className='space-y-1'>
+                        <div className='flex items-center'>
+                            <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
+                                {t('workbench.creationSheet')}
+                            </CardTitle>
+                            {isPasswordRequiredByBackend && (
+                                <Button
+                                    variant='ghost'
+                                    size='sm'
+                                    onClick={onOpenPasswordDialog}
+                                    className='text-muted-foreground hover:text-foreground ml-auto h-7 px-2'
+                                    aria-label={t('password.configure')}>
+                                    {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
+                                </Button>
+                            )}
+                        </div>
+                    </div>
                     <div className='border-border bg-muted/45 grid gap-3 rounded-md border p-3'>
                         <div className='space-y-1.5'>
                             <div className='flex items-center gap-2'>
@@ -1549,7 +1547,7 @@ export function EditingForm({
                             type='button'
                             onClick={handleSubmit}
                             disabled={isLoading || !!submitDisabledReason}
-                            className='flex w-full items-center justify-center gap-2 rounded-md'>
+                            className='flex w-full items-center justify-center gap-2 rounded-md border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white'>
                             {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
                             {isLoading ? t('edit.loading') : t('edit.submit')}
                         </Button>

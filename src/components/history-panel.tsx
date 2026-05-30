@@ -2,7 +2,7 @@
 
 import type { HistoryMetadata } from '@/app/page';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
@@ -222,16 +222,10 @@ function HistoryPanelImpl({
     );
 
     return (
-        <Card className='workbench-panel text-card-foreground flex h-full w-full flex-col overflow-hidden rounded-lg border border-border'>
-            <CardHeader className='flex flex-col gap-3 border-b border-border/70 px-4 py-3'>
-                <div className='flex items-center justify-between gap-3'>
-                    <div>
-                        <p className='text-muted-foreground text-xs font-medium tracking-normal'>
-                            {t('workbench.album')}
-                        </p>
-                        <CardTitle className='editorial-title mt-1 text-xl font-semibold'>{t('history.title')}</CardTitle>
-                    </div>
-                    {totalCost > 0 && (
+        <Card className='workbench-panel text-card-foreground flex h-full w-full flex-col gap-0 overflow-hidden rounded-lg border border-border py-0'>
+            <CardHeader className='flex flex-col gap-2 border-b border-border/70 px-4 pt-3 !pb-3'>
+                {totalCost > 0 ? (
+                    <div className='flex items-center justify-end gap-3'>
                         <Dialog open={isTotalCostDialogOpen} onOpenChange={setIsTotalCostDialogOpen}>
 	                            <DialogTrigger asChild>
 	                                <button
@@ -325,17 +319,21 @@ function HistoryPanelImpl({
                                 </DialogFooter>
                             </DialogContent>
                         </Dialog>
-                    )}
-                </div>
+                    </div>
+                ) : null}
                 <Tabs
                     value={activeTab}
                     onValueChange={(value) => setActiveTab(value as 'inspiration' | 'history')}
                     className='gap-0'>
-                    <TabsList className='grid h-auto w-full grid-cols-2 rounded-md border border-border bg-background/70 p-1'>
-                        <TabsTrigger value='inspiration' className='min-h-9'>
+                    <TabsList className='grid h-auto w-full grid-cols-2 rounded-none border-0 border-b border-border bg-transparent p-0'>
+                        <TabsTrigger
+                            value='inspiration'
+                            className='min-h-8 rounded-none border-0 border-b-2 border-transparent bg-transparent px-1 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none'>
                             {t('history.inspirationAlbum')}
                         </TabsTrigger>
-                        <TabsTrigger value='history' className='min-h-9'>
+                        <TabsTrigger
+                            value='history'
+                            className='min-h-8 rounded-none border-0 border-b-2 border-transparent bg-transparent px-1 shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary data-[state=active]:shadow-none'>
                             {t('history.recentGenerated')}
                         </TabsTrigger>
                     </TabsList>
@@ -354,7 +352,7 @@ function HistoryPanelImpl({
             </CardHeader>
             <CardContent className='flex-grow overflow-y-auto p-3 lg:p-3'>
                 {activeTab === 'inspiration' ? (
-                    <div className='space-y-3'>
+                    <div className='space-y-2.5'>
                         {inspirations.length === 0 ? (
                             <div className='text-muted-foreground flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/20 px-4 text-center text-sm'>
                                 <WandSparkles className='h-5 w-5 opacity-70' />
@@ -364,67 +362,69 @@ function HistoryPanelImpl({
                             inspirations.map((item, index) => {
                                 const thumbnail = inspirationThumbnails[index % inspirationThumbnails.length];
                                 const title = inspirationTitles[index % inspirationTitles.length] || t('history.inspirationAlbum');
-                                const tags = inspirationTags.slice(index * 2, index * 2 + 3);
+                                const tags = inspirationTags.slice(index * 2, index * 2 + 2);
                                 return (
                                     <div
                                         key={item.id}
-                                        className='group grid grid-cols-[44%_1fr] gap-3 overflow-hidden rounded-md border border-border bg-card/72 p-2 shadow-sm transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-md'>
+                                        className='group flex items-center gap-2 overflow-hidden rounded-md border border-border/80 bg-card/56 p-1.5 shadow-sm transition-[border-color,box-shadow] hover:border-primary/25 hover:shadow-md'>
                                         <button
                                             type='button'
                                             onClick={() => onApplyPrompt(item.prompt)}
-                                            className='relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-muted'>
+                                            className='relative h-12 w-16 shrink-0 overflow-hidden rounded border border-border bg-muted'>
                                             <Image
                                                 src={thumbnail}
                                                 alt={title}
                                                 fill
-                                                sizes='160px'
+                                                sizes='64px'
                                                 className='object-cover'
                                             />
                                         </button>
-                                        <div className='flex min-w-0 flex-col gap-2 py-1 pr-1'>
-                                            <div className='flex items-start justify-between gap-2'>
+                                        <div className='flex min-w-0 flex-1 flex-col gap-1 pr-1'>
+                                            <div className='flex items-start justify-between gap-1.5'>
                                                 <div className='min-w-0'>
-                                                    <p className='truncate text-sm font-medium'>{title}</p>
-                                                    <div className='mt-1 flex flex-wrap gap-1'>
+                                                    <p className='truncate text-sm font-medium leading-5'>{title}</p>
+                                                    <div className='mt-0.5 flex gap-1 overflow-hidden'>
                                                         {tags.map((tag) => (
                                                             <span
                                                                 key={tag}
-                                                                className='rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>
+                                                                className='shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>
                                                                 {tag}
                                                             </span>
                                                         ))}
                                                     </div>
                                                 </div>
-                                                <div className='flex shrink-0 gap-0.5'>
+                                                <div className='flex shrink-0 gap-0.5 opacity-65 transition-opacity group-hover:opacity-100'>
                                                     <Button
                                                         type='button'
                                                         variant='ghost'
                                                         size='icon'
-                                                        className='h-7 w-7 text-primary'
+                                                        className='h-6 w-6 text-primary'
                                                         aria-label={t('history.favorite')}>
-                                                        <Pin className='h-4 w-4 fill-current' />
+                                                        <Pin className='h-3.5 w-3.5 fill-current' />
                                                     </Button>
                                                     <Button
                                                         type='button'
                                                         variant='ghost'
                                                         size='icon'
-                                                        className='h-7 w-7 text-muted-foreground hover:text-destructive'
+                                                        className='h-6 w-6 text-muted-foreground hover:text-destructive'
                                                         onClick={() => onDeleteInspiration(item.id)}
                                                         aria-label={t('history.deleteInspiration')}>
-                                                        <Trash2 className='h-4 w-4' />
+                                                        <Trash2 className='h-3.5 w-3.5' />
                                                     </Button>
                                                 </div>
                                             </div>
-                                            <p className='line-clamp-2 text-xs leading-5 text-muted-foreground'>{item.prompt}</p>
-                                            <div className='mt-auto flex items-center justify-between gap-2'>
+                                            <p className='truncate text-xs text-muted-foreground' title={item.prompt}>
+                                                {item.prompt}
+                                            </p>
+                                            <div className='flex items-center justify-between gap-2'>
                                                 <span className='text-muted-foreground text-[11px]'>
                                                     {item.createdAt > 0 ? formatTimestamp(item.createdAt) : t('history.template')}
                                                 </span>
                                                 <Button
                                                     type='button'
                                                     size='sm'
-                                                    variant='outline'
-                                                    className='h-7 px-2'
+                                                    variant='ghost'
+                                                    className='h-6 px-1.5 text-xs'
                                                     onClick={() => onApplyPrompt(item.prompt)}>
                                                     {t('history.applyInspiration')}
                                                 </Button>
@@ -446,8 +446,8 @@ function HistoryPanelImpl({
                                 {t('history.manage')}
                             </button>
                         </div>
-                        <div className='rounded-md border border-border bg-background/68 p-3'>
-                            <div className='mb-2 flex items-center justify-between'>
+                        <div className='space-y-1.5 rounded-md border border-border bg-background/68 p-2.5'>
+                            <div className='flex items-center justify-between'>
                                 <p className='text-sm font-medium'>{t('history.generationStatus')}</p>
                                 <button
                                     type='button'
@@ -456,7 +456,7 @@ function HistoryPanelImpl({
                                     {t('history.clear')}
                                 </button>
                             </div>
-                            <div className='space-y-2 text-xs'>
+                            <div className='space-y-1.5 text-xs'>
                                 <div className='flex items-center gap-2 rounded-md px-2 py-1 text-muted-foreground'>
                                     <span className='h-2 w-2 rounded-full bg-[oklch(0.58_0.12_150)]' />
                                     <span>10:32:11</span>

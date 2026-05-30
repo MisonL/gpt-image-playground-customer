@@ -102,6 +102,7 @@ const defaultInspirations: InspirationItem[] = [
         prompt: '周末花店门口，鼠尾草绿招牌，浅粉花束，复古咖啡色调，清透胶片'
     }
 ];
+const defaultGenerationPrompt = defaultInspirations[0]?.prompt ?? '';
 
 function createClientRequestId(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -496,7 +497,7 @@ export default function HomePage() {
     const [editForceWeb, setEditForceWeb] = React.useState(false);
 
     const [genModel, setGenModel] = React.useState<GenerationFormData['model']>('gpt-image-2');
-    const [genPrompt, setGenPrompt] = React.useState('');
+    const [genPrompt, setGenPrompt] = React.useState(defaultGenerationPrompt);
     const [genN, setGenN] = React.useState([1]);
     const [genSize, setGenSize] = React.useState<GenerationFormData['size']>('auto');
     const [genCustomWidth, setGenCustomWidth] = React.useState<number>(1024);
