@@ -44,7 +44,17 @@ import {
 } from '@/lib/streaming-batch';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowDown, CircleCheck, Heart, HelpCircle, Loader2, Lock, Settings2, Terminal } from 'lucide-react';
+import {
+    ArrowUp,
+    CircleCheck,
+    Heart,
+    HelpCircle,
+    Loader2,
+    Lock,
+    PenLine,
+    Settings2,
+    Terminal
+} from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -462,6 +472,7 @@ export default function HomePage() {
     const [shareError, setShareError] = React.useState<string | null>(null);
     const [isCreatingShare, setIsCreatingShare] = React.useState(false);
     const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
+    const creationPanelRef = React.useRef<HTMLElement | null>(null);
 
     const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
 
@@ -581,7 +592,21 @@ export default function HomePage() {
     );
 
     const scrollToOutput = React.useCallback(() => {
-        outputPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const outputTop = outputPanelRef.current?.getBoundingClientRect().top;
+        if (typeof outputTop !== 'number') return;
+        window.scrollTo({
+            top: window.scrollY + outputTop - 12,
+            behavior: 'smooth'
+        });
+    }, []);
+
+    const scrollToCreation = React.useCallback(() => {
+        const creationTop = creationPanelRef.current?.getBoundingClientRect().top;
+        if (typeof creationTop !== 'number') return;
+        window.scrollTo({
+            top: window.scrollY + creationTop - 12,
+            behavior: 'smooth'
+        });
     }, []);
 
     const getImageSrc = React.useCallback(
@@ -1871,8 +1896,9 @@ export default function HomePage() {
                         </header>
                         <div className='grid flex-1 grid-cols-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(360px,410px)_minmax(0,1fr)_minmax(360px,430px)]'>
                             <section
+                                ref={creationPanelRef}
                                 aria-label={t('app.creationControls')}
-                                className='order-1 min-h-[620px] lg:order-1 lg:min-h-0 lg:overflow-hidden'>
+                                className='order-2 min-h-[620px] lg:order-1 lg:min-h-0 lg:overflow-hidden'>
                                 <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
                                     <GenerationForm
                                         onSubmit={handleApiCall}
@@ -1995,7 +2021,7 @@ export default function HomePage() {
                             <section
                                 ref={outputPanelRef}
                                 aria-label={t('app.canvasPreview')}
-                                className='order-2 scroll-mt-4 flex min-h-[460px] flex-col lg:order-2 lg:min-h-0'>
+                                className='order-1 scroll-mt-4 flex min-h-[460px] flex-col lg:order-2 lg:min-h-0'>
                                 {error && (
                                     <Alert
                                         variant='destructive'
@@ -2057,7 +2083,16 @@ export default function HomePage() {
                         </div>
                     </div>
                     <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
-                        <div className='mx-auto grid max-w-screen-sm grid-cols-[1fr_auto_auto] gap-2'>
+                        <div className='mx-auto grid max-w-screen-sm grid-cols-[auto_1fr_auto_auto] gap-2'>
+                            <Button
+                                type='button'
+                                variant='outline'
+                                size='icon'
+                                onClick={scrollToCreation}
+                                className='text-muted-foreground hover:text-foreground'
+                                aria-label={t('ux.openCreationSheet')}>
+                                <PenLine className='h-4 w-4' />
+                            </Button>
                             <Button
                                 type='button'
                                 onClick={handleMobilePrimaryAction}
@@ -2079,7 +2114,7 @@ export default function HomePage() {
                                 onClick={scrollToOutput}
                                 className='text-muted-foreground hover:text-foreground'
                                 aria-label={t('ux.jumpToResult')}>
-                                <ArrowDown className='h-4 w-4' />
+                                <ArrowUp className='h-4 w-4' />
                             </Button>
                             {canOpenLogs && (
                                 <Button
