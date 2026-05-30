@@ -156,9 +156,9 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
-            <Icon className='h-4 w-4 text-current opacity-70' />
-            <span className='min-w-0 whitespace-normal break-words text-left leading-5'>{label}</span>
+            className='border-border bg-background/60 text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1.5 py-1.5 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
+            <Icon className='h-3.5 w-3.5 text-current opacity-70' />
+            <span className='min-w-0 max-w-full truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
 
@@ -370,45 +370,48 @@ export function GenerationForm({
     };
 
     return (
-        <Card className='bg-card/92 text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border shadow-sm lg:h-full'>
-            <CardHeader className='border-border bg-card/80 flex flex-col gap-4 border-b px-4 py-4'>
-                <div className='space-y-1'>
-                    <p className='text-muted-foreground text-xs font-medium tracking-[0.16em] uppercase'>
-                        {t('workbench.creationSheet')}
-                    </p>
-                    <div className='flex items-center'>
-                        <CardTitle className='py-1 text-lg font-medium'>
-                            {isBatchMode
-                                ? t('mode.batch')
-                                : isReuseMode
-                                  ? t('mode.reuse')
-                                  : t('generate.title')}
-                        </CardTitle>
-                        {isPasswordRequiredByBackend && (
-                            <Button
-                                variant='ghost'
-                                size='icon'
-                                onClick={onOpenPasswordDialog}
-                                className='text-muted-foreground hover:text-foreground ml-2'
-                                aria-label={t('password.configure')}>
-                                {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
-                            </Button>
-                        )}
-                    </div>
-                    <CardDescription className='mt-1 text-xs leading-5'>
-                        {isBatchMode
-                            ? t('mode.batchPanelDescription')
-                            : isReuseMode
-                              ? t('mode.reusePanelDescription')
-                              : t('generate.description')}
-                    </CardDescription>
-                </div>
+        <Card className='workbench-panel text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border lg:h-full'>
+            <CardHeader className='border-border/70 border-b px-4 py-2.5'>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
-                <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
+                <CardContent className='space-y-3 p-4 pb-36 lg:flex-1 lg:overflow-y-auto'>
+                    <div className='space-y-0.5'>
+                        <p className='text-muted-foreground text-xs font-medium tracking-normal'>
+                            {t('workbench.creationSheet')}
+                        </p>
+                        <div className='flex items-center'>
+                            <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
+                                {isBatchMode
+                                    ? t('mode.batch')
+                                    : isReuseMode
+                                      ? t('mode.reuse')
+                                      : t('generate.title')}
+                            </CardTitle>
+                            {isPasswordRequiredByBackend && (
+                                <Button
+                                    variant='ghost'
+                                    size='icon'
+                                    onClick={onOpenPasswordDialog}
+                                    className='text-muted-foreground hover:text-foreground ml-2'
+                                    aria-label={t('password.configure')}>
+                                    {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
+                                </Button>
+                            )}
+                        </div>
+                        <CardDescription className='mt-0.5 text-xs leading-5'>
+                            {isBatchMode
+                                ? t('mode.batchPanelDescription')
+                                : isReuseMode
+                                  ? t('mode.reusePanelDescription')
+                                  : t('generate.description')}
+                        </CardDescription>
+                    </div>
                     <div className='space-y-1.5'>
-                        <Label htmlFor='prompt'>{t('workbench.promptTitle')}</Label>
+                        <div className='flex items-center justify-between gap-2'>
+                            <Label htmlFor='prompt'>{t('workbench.promptTitle')}</Label>
+                            <span className='text-muted-foreground text-xs'>{prompt.trim().length} / 1000</span>
+                        </div>
                         <Textarea
                             id='prompt'
                             name='prompt'
@@ -417,9 +420,9 @@ export function GenerationForm({
                             onChange={(e) => setPrompt(e.target.value)}
                             required
                             disabled={isLoading}
-                            className='min-h-[132px] bg-background/72 leading-6'
+                            className='min-h-[104px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 leading-7 shadow-inner'
                         />
-                        <div className='flex flex-wrap gap-2 pt-2'>
+                        <div className='flex flex-wrap gap-1.5 pt-1.5'>
                             {promptStyleTags.map((key) => {
                                 const label = t(key);
                                 const selected = prompt.includes(label);
@@ -429,10 +432,10 @@ export function GenerationForm({
                                         type='button'
                                         onClick={() => applyPromptTag(label)}
                                         disabled={isLoading}
-                                        className={`rounded-full border px-2.5 py-1 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
+                                        className={`rounded-full border px-2.5 py-0.5 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
                                             selected
-                                                ? 'border-primary/40 bg-primary/10 text-primary'
-                                                : 'border-border bg-muted/45 text-muted-foreground hover:border-primary/25 hover:bg-accent/55 hover:text-foreground'
+                                                ? 'border-primary/45 bg-accent text-primary'
+                                                : 'border-border bg-background/68 text-muted-foreground hover:border-primary/25 hover:bg-accent/55 hover:text-foreground'
                                         }`}>
                                         {label}
                                     </button>
@@ -451,42 +454,19 @@ export function GenerationForm({
                         )}
                     </div>
 
-                    <div className='border-border bg-background/65 space-y-2 rounded-md border p-3'>
-                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                            {isBatchMode
-                                ? t('form.batchNumberOfImages', { count: n[0] })
-                                : t('form.numberOfImages', { count: n[0] })}
-                        </div>
-                        <Slider
-                            id='n-slider'
-                            name='n'
-                            thumbLabel={t('form.numberOfImages', { count: n[0] })}
-                            min={1}
-                            max={10}
-                            step={1}
-                            value={n}
-                            onValueChange={setN}
-                            disabled={isLoading}
-                            className='mt-3'
-                        />
-                        {isBatchMode && (
-                            <p className='text-muted-foreground text-xs leading-5'>
-                                {t('mode.batchHint')}
-                            </p>
-                        )}
-                    </div>
-
-                    <div className='border-border bg-background space-y-3 rounded-md border p-3'>
+                    <div className='space-y-3 border-t border-border/70 pt-3'>
                         <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                            {t('form.size')}
+                            {t('workbench.basicSettings')}
                         </div>
-                        <RadioGroup
-                            value={size}
-                            onValueChange={(value) => setSize(value as GenerationFormData['size'])}
-                            disabled={isLoading}
-                            name='size'
-                            aria-label={t('form.size')}
-                            className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
+                        <div className='space-y-2'>
+                            <div className='text-muted-foreground text-xs'>{t('form.size')}</div>
+                            <RadioGroup
+                                value={size}
+                                onValueChange={(value) => setSize(value as GenerationFormData['size'])}
+                                disabled={isLoading}
+                                name='size'
+                                aria-label={t('form.size')}
+                                className='grid grid-cols-5 gap-2'>
                             <RadioItemWithIcon
                                 value='auto'
                                 id='size-auto'
@@ -527,7 +507,8 @@ export function GenerationForm({
                                 disabled={isLoading}
                                 tooltip={getPresetTooltip('portrait', model)}
                             />
-                        </RadioGroup>
+                            </RadioGroup>
+                        </div>
                         {isGptImage2 && size === 'custom' && (
                             <div className='bg-muted/30 border-border space-y-2 rounded-md border p-3'>
                                 <div className='flex items-center gap-3'>
@@ -578,6 +559,103 @@ export function GenerationForm({
                                 <p className='text-muted-foreground text-xs'>{t('form.customConstraints')}</p>
                             </div>
                         )}
+
+                        <div className='space-y-2'>
+                            <div className='text-muted-foreground text-xs'>
+                                {isBatchMode
+                                    ? t('form.batchNumberOfImages', { count: n[0] })
+                                    : t('form.numberOfImages', { count: n[0] })}
+                            </div>
+                            <RadioGroup
+                                value={String(n[0])}
+                                onValueChange={(value) => setN([Number(value)])}
+                                disabled={isLoading}
+                                name='n'
+                                aria-label={t('form.numberOfImages', { count: n[0] })}
+                                className='grid grid-cols-4 gap-2'>
+                                {[1, 2, 4, 8].map((value) => (
+                                    <RadioItemWithIcon
+                                        key={value}
+                                        value={String(value)}
+                                        id={`n-${value}`}
+                                        label={String(value)}
+                                        Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                        disabled={isLoading}
+                                    />
+                                ))}
+                            </RadioGroup>
+                            {isBatchMode && (
+                                <p className='text-muted-foreground text-xs leading-5'>
+                                    {t('mode.batchHint')}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className='space-y-2'>
+                            <div className='text-muted-foreground text-xs'>{t('form.quality')}</div>
+                            <RadioGroup
+                                value={quality}
+                                onValueChange={(value) => setQuality(value as GenerationFormData['quality'])}
+                                disabled={isLoading}
+                                name='quality'
+                                aria-label={t('form.quality')}
+                                className='grid grid-cols-3 gap-2'>
+                                <RadioItemWithIcon
+                                    value='medium'
+                                    id='quality-medium-quick'
+                                    label={t('common.standard')}
+                                    Icon={Tally1}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='high'
+                                    id='quality-high-quick'
+                                    label={t('common.high')}
+                                    Icon={Tally2}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='auto'
+                                    id='quality-auto-quick'
+                                    label={t('common.auto')}
+                                    Icon={Sparkles}
+                                    disabled={isLoading}
+                                />
+                            </RadioGroup>
+                        </div>
+
+                        <div className='space-y-2'>
+                            <div className='text-muted-foreground text-xs'>{t('form.outputFormat')}</div>
+                            <RadioGroup
+                                value={outputFormat}
+                                onValueChange={(value) => setOutputFormat(value as GenerationFormData['output_format'])}
+                                disabled={isLoading}
+                                name='output_format'
+                                aria-label={t('form.outputFormat')}
+                                className='grid grid-cols-3 gap-2'>
+                                <RadioItemWithIcon
+                                    value='jpeg'
+                                    id='format-jpeg-quick'
+                                    label='JPG'
+                                    Icon={FileImage}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='png'
+                                    id='format-png-quick'
+                                    label='PNG'
+                                    Icon={FileImage}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='webp'
+                                    id='format-webp-quick'
+                                    label='WEBP'
+                                    Icon={FileImage}
+                                    disabled={isLoading}
+                                />
+                            </RadioGroup>
+                        </div>
                     </div>
 
                     <div className='border-border bg-muted/20 rounded-md border'>

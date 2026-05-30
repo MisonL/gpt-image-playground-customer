@@ -31,21 +31,21 @@ export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
             value={currentMode}
             onValueChange={(value) => onModeChange(value as WorkbenchMode)}
             className='w-full'>
-            <TabsList className='bg-muted/55 grid h-auto w-full grid-cols-2 gap-1 rounded-md border border-border p-1'>
+            <TabsList className='grid h-auto w-full grid-cols-4 gap-1 rounded-md border border-border bg-background/70 p-1'>
                 {modeItems.map(({ value, labelKey, descriptionKey, Icon }) => (
                     <TabsTrigger
                         key={value}
                         value={value}
-                        className={`min-h-14 rounded-md border px-2.5 py-2 text-left transition-colors ${
+                        className={`min-h-10 rounded-md border px-2 py-2 text-center transition-colors ${
                             currentMode === value
-                                ? 'border-primary/35 bg-card text-foreground shadow-sm'
-                                : 'border-transparent text-muted-foreground hover:border-border hover:bg-background/60 hover:text-foreground'
+                                ? 'border-primary/35 bg-primary text-primary-foreground shadow-sm'
+                                : 'border-transparent bg-muted/30 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground'
                         } `}>
-                        <span className='flex w-full items-start gap-2'>
-                            <Icon className='mt-0.5 h-4 w-4 shrink-0 opacity-75' />
+                        <span className='flex w-full items-center justify-center gap-1.5'>
+                            <Icon className='hidden h-3.5 w-3.5 shrink-0 opacity-75 sm:block' />
                             <span className='min-w-0'>
                                 <span className='block text-sm leading-5 font-medium'>{t(labelKey)}</span>
-                                <span className='text-muted-foreground block truncate text-[11px] leading-4 font-normal'>
+                                <span className='hidden truncate text-[11px] leading-4 font-normal opacity-75 xl:block'>
                                     {t(descriptionKey)}
                                 </span>
                             </span>
