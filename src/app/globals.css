@@ -170,7 +170,11 @@
         background: oklch(0.99 0.008 85);
         box-shadow:
             0 2px 0 oklch(0.82 0.026 74 / 0.48),
-            0 14px 32px oklch(0.35 0.036 54 / 0.12);
+            0 18px 38px oklch(0.35 0.036 54 / 0.16);
+    }
+
+    .sample-art-image {
+        filter: saturate(1.08) contrast(1.04) brightness(1.01);
     }
 
     .photo-paper::before {

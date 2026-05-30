@@ -267,11 +267,11 @@ export function ImageOutput({
                     <span>1024 x 768</span>
                 </div>
             </div>
-            <div className='relative flex min-h-[360px] flex-1 items-center justify-center overflow-hidden bg-[linear-gradient(180deg,oklch(0.995_0.007_85),oklch(0.972_0.016_80))] px-4 py-6 sm:px-8'>
+            <div className='relative flex min-h-[420px] flex-1 items-center justify-center overflow-hidden bg-[linear-gradient(180deg,oklch(0.995_0.007_85),oklch(0.972_0.016_80))] px-3 py-5 sm:px-6 lg:min-h-[520px]'>
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
                         // 展示流式预览图，单图时和最终视图一样居中。
-                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[620px] items-center justify-center p-3'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] items-center justify-center p-3'>
                             {/* 展示最新的预览图，也就是最大索引图片。 */}
                             {(() => {
                                 const entries = Array.from(streamingPreviewImages.entries());
@@ -296,7 +296,7 @@ export function ImageOutput({
                             </div>
                         </div>
                     ) : currentMode === 'edit' && baseImagePreviewUrl ? (
-                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[620px] items-center justify-center p-3'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] items-center justify-center p-3'>
                             <Image
                                 src={baseImagePreviewUrl}
                                 alt={t('output.editing')}
@@ -319,7 +319,7 @@ export function ImageOutput({
                 ) : imageBatch && imageBatch.length > 0 ? (
                     viewMode === 'grid' ? (
                         <div
-                            className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[660px] gap-2`}>
+                            className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[720px] gap-2`}>
                             {imageBatch.map((img, index) => (
                                 <div
                                     key={img.filename}
@@ -336,7 +336,7 @@ export function ImageOutput({
                             ))}
                         </div>
                     ) : imageBatch[viewMode] ? (
-                        <div className='photo-paper relative aspect-[4/3] w-full max-w-[620px] p-3'>
+                        <div className='photo-paper relative aspect-[4/3] w-full max-w-[720px] p-3'>
                             <Image
                                 src={imageBatch[viewMode].path}
                                 alt={altText}
@@ -352,13 +352,13 @@ export function ImageOutput({
                         </div>
                     )
                 ) : (
-                    <div className='photo-paper relative aspect-[4/3] w-full max-w-[620px] p-3'>
+                    <div className='photo-paper relative aspect-[4/3] w-full max-w-[720px] p-3'>
                         <Image
                             src='/assets/workbench-sample.jpg'
                             alt={t('output.sampleAlt')}
                             fill
                             sizes='(max-width: 768px) 92vw, 56vw'
-                            className='object-cover p-3'
+                            className='sample-art-image object-cover p-2'
                             priority
                         />
                         <div className='absolute right-7 bottom-4 rotate-[-2deg] text-sm text-muted-foreground hand-note'>
