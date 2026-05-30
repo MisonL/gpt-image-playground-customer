@@ -24,7 +24,6 @@ import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
 import type { WorkbenchMode } from '@/components/mode-toggle';
 import {
-    Upload,
     Eraser,
     Save,
     Square,
@@ -172,8 +171,8 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border bg-background/60 text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
-            <Icon className='h-3 w-3 text-current opacity-70' />
+            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
+            <Icon className='h-3 w-3 text-current opacity-50' />
             <span className='min-w-0 max-w-full truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
@@ -305,8 +304,8 @@ export function EditingForm({
     const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>(initialAdvancedTab);
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
-        if (!editPrompt.trim()) return t('ux.disabledPrompt');
         if (imageFiles.length === 0) return t('ux.disabledSourceImage');
+        if (!editPrompt.trim()) return t('ux.disabledPrompt');
         if (editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved) {
             return t('ux.disabledUnsavedMask');
         }
@@ -344,6 +343,9 @@ export function EditingForm({
     const imageInputRef = React.useRef<HTMLInputElement>(null);
     const maskInputRef = React.useRef<HTMLInputElement>(null);
     const primaryImagePreviewUrl = sourceImagePreviewUrls[0] ?? null;
+    const hasSourceImages = imageFiles.length > 0;
+    const hasSourcePreviews = sourceImagePreviewUrls.length > 0;
+    const canAddSourceImage = !isLoading && imageFiles.length < maxImages;
 
     React.useEffect(() => {
         if (editOriginalImageSize) {
@@ -674,12 +676,6 @@ export function EditingForm({
         onSubmit(formData);
     };
 
-    const displayFileNames = (files: File[]) => {
-        if (files.length === 0) return t('edit.noFile');
-        if (files.length === 1) return files[0].name;
-        return t('edit.filesSelected', { count: files.length });
-    };
-
     return (
         <Card className='workbench-panel text-card-foreground border-border flex w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 lg:h-full'>
             <CardHeader className='border-border/70 border-b px-3 pt-2 !pb-2'>
@@ -704,105 +700,46 @@ export function EditingForm({
                             )}
                         </div>
                     </div>
-                    <div className='border-border bg-muted/45 grid gap-3 rounded-md border p-3'>
-                        <div className='space-y-1.5'>
-                            <div className='flex items-center gap-2'>
-                                <Label htmlFor='edit-model-select'>{t('form.model')}</Label>
-                                {isGptImage2 && (
-                                    <Tooltip>
-                                        <TooltipTrigger asChild>
-                                            <button
-                                                type='button'
-                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
-                                                aria-label={t('edit.fidelityHint')}>
-                                                <Info className='h-4 w-4' />
-                                            </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent className='max-w-[280px]'>
-                                            {t('edit.fidelityHint')}
-                                        </TooltipContent>
-                                    </Tooltip>
-                                )}
+                    <div className='space-y-3 border-b border-dashed border-border/80 pb-4'>
+                        <div className='flex items-start justify-between gap-3'>
+                            <div className='space-y-1'>
+                                <div
+                                    id='source-image-upload-label'
+                                    className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                    {t('edit.referenceTitle')}
+                                </div>
+                                <p id='source-image-upload-description' className='text-muted-foreground text-xs leading-5'>
+                                    {t('edit.referenceHint', { count: maxImages })}
+                                </p>
                             </div>
-                            <Select
-                                value={editModel}
-                                onValueChange={(value) => setEditModel(value as EditingFormData['model'])}
-                                disabled={isLoading}
-                                name='edit-model'>
-                                <SelectTrigger id='edit-model-select' className='w-full'>
-                                    <SelectValue placeholder={t('form.selectModel')} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
-                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
-                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
-                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className='space-y-1.5'>
-                            <Label htmlFor='edit-stream-mode-select'>{t('streaming.mode')}</Label>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <Select
-                                            value={streamMode}
-                                            onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
-                                            disabled={isLoading}
-                                            name='edit-stream_mode'>
-                                            <SelectTrigger id='edit-stream-mode-select' className='w-full'>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
-                                                <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
-                                                <SelectItem value='non_stream'>
-                                                    {t('streaming.modeNonStream')}
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent className='max-w-[250px]'>
-                                    {allowStreamingBatch && editN[0] > 1 && streamMode !== 'non_stream'
-                                        ? t('streaming.batchDescription')
-                                        : t('streaming.description')}
-                                </TooltipContent>
-                            </Tooltip>
-                        </div>
-                    </div>
-
-                    <div className='space-y-1.5'>
-                        <Label htmlFor='edit-prompt'>{t('form.prompt')}</Label>
-                        <Textarea
-                            id='edit-prompt'
-                            name='editPrompt'
-                            placeholder={t('form.editPromptPlaceholder')}
-                            value={editPrompt}
-                            onChange={(e) => setEditPrompt(e.target.value)}
-                            required
-                            disabled={isLoading}
-                            className='min-h-[112px]'
-                        />
-                    </div>
-
-                    <div className='border-border bg-background space-y-2 rounded-md border p-3'>
-                        <div
-                            id='source-image-upload-label'
-                            className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                            {t('edit.sourceImages', { count: maxImages })}
+                            <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-xs text-primary'>
+                                {t('edit.referenceCount', { count: imageFiles.length, max: maxImages })}
+                            </span>
                         </div>
                         <button
                             type='button'
                             onClick={() => imageInputRef.current?.click()}
-                            disabled={isLoading || imageFiles.length >= maxImages}
-                            aria-labelledby='source-image-upload-label source-image-file-status'
-                            className='border-input bg-background hover:bg-accent focus-visible:ring-ring flex h-10 w-full cursor-pointer items-center justify-between rounded-md border px-3 py-2 text-sm transition-[background-color,box-shadow] focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50'>
-                            <span id='source-image-file-status' className='text-muted-foreground truncate pr-2'>
-                                {displayFileNames(imageFiles)}
+                            disabled={!canAddSourceImage}
+                            aria-label={t('edit.referenceAction')}
+                            aria-describedby='source-image-upload-description'
+                            className={`group flex w-full cursor-pointer rounded-md border border-dashed border-[oklch(0.78_0.035_75)] bg-[oklch(0.982_0.016_84)] text-center shadow-inner transition-[background-color,border-color,box-shadow,transform] hover:border-primary/35 hover:bg-[oklch(0.99_0.018_82)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60 enabled:active:scale-[0.995] ${
+                                hasSourceImages
+                                    ? 'min-h-11 flex-row items-center justify-start gap-2 px-3 py-2 text-left'
+                                    : 'min-h-[116px] flex-col items-center justify-center gap-2 px-4 py-4'
+                            }`}>
+                            <span
+                                className={`flex items-center justify-center rounded-md border border-primary/20 bg-background/80 text-primary shadow-sm transition-transform group-hover:-translate-y-0.5 ${
+                                    hasSourceImages ? 'h-8 w-8 shrink-0' : 'h-10 w-10'
+                                }`}>
+                                <UploadCloud className='h-5 w-5' />
                             </span>
-                            <span className='bg-muted text-muted-foreground hover:text-foreground hover:bg-accent flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium'>
-                                <Upload className='h-3 w-3' /> {t('edit.browse')}
+                            <span className={hasSourceImages ? 'min-w-0' : ''}>
+                                <span className='text-foreground block text-sm font-medium'>
+                                    {hasSourceImages ? t('edit.referenceAddMore') : t('edit.referenceAction')}
+                                </span>
+                                <span className='text-muted-foreground block max-w-[18rem] text-xs leading-5'>
+                                    {hasSourceImages ? t('edit.referenceReady') : t('edit.referenceEmpty')}
+                                </span>
                             </span>
                         </button>
                         <Input
@@ -816,23 +753,35 @@ export function EditingForm({
                             disabled={isLoading || imageFiles.length >= maxImages}
                             className='hidden'
                         />
-                        {sourceImagePreviewUrls.length > 0 && (
-                            <div className='flex space-x-2 overflow-x-auto pt-2'>
+                        {!hasSourceImages && (
+                            <div className='rounded-md border border-[oklch(0.88_0.05_86)] bg-[oklch(0.975_0.055_88)] px-3 py-2 text-xs leading-5 text-[oklch(0.43_0.055_68)]'>
+                                {t('edit.referenceRequiredNote')}
+                            </div>
+                        )}
+                        {hasSourceImages && !hasSourcePreviews && (
+                            <div className='rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground'>
+                                {t('edit.referencePreparing')}
+                            </div>
+                        )}
+                        {hasSourcePreviews && (
+                            <div className='flex space-x-2 overflow-x-auto pt-1.5'>
                                 {sourceImagePreviewUrls.map((url, index) => (
-                                    <div key={url} className='relative shrink-0'>
+                                    <div
+                                        key={url}
+                                        className='group relative shrink-0 rounded-sm border border-[oklch(0.86_0.03_78)] bg-white p-1 shadow-[0_6px_14px_oklch(0.42_0.035_58/0.1)]'>
                                         <Image
                                             src={url}
                                             alt={t('edit.sourcePreview', { index: index + 1 })}
-                                            width={80}
-                                            height={80}
-                                            className='border-border rounded border object-cover'
+                                            width={96}
+                                            height={96}
+                                            className='h-24 w-24 rounded-[3px] object-cover'
                                             unoptimized
                                         />
                                         <Button
                                             type='button'
-                                            variant='destructive'
+                                            variant='secondary'
                                             size='icon'
-                                            className='absolute top-0 right-0 h-5 w-5 translate-x-1/3 -translate-y-1/3 transform rounded-full p-0.5'
+                                            className='absolute top-1.5 right-1.5 h-7 w-7 rounded-full border border-background/80 bg-[oklch(0.36_0.02_62/0.74)] p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-[oklch(0.32_0.02_62/0.86)] hover:text-white sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100'
                                             onClick={() => handleRemoveImage(index)}
                                             aria-label={t('edit.removeImage', { index: index + 1 })}>
                                             <X className='h-3 w-3' />
@@ -841,6 +790,94 @@ export function EditingForm({
                                 ))}
                             </div>
                         )}
+                    </div>
+
+                    <div className='space-y-1.5 border-b border-dashed border-border/80 pb-4'>
+                        <Label htmlFor='edit-prompt'>{t('edit.instructionTitle')}</Label>
+                        <div className='relative'>
+                            <Textarea
+                                id='edit-prompt'
+                                name='editPrompt'
+                                placeholder={t('form.editPromptPlaceholder')}
+                                value={editPrompt}
+                                onChange={(e) => setEditPrompt(e.target.value)}
+                                required
+                                disabled={isLoading}
+                                className='min-h-[118px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-9 leading-7 shadow-inner'
+                            />
+                            <span className='pointer-events-none absolute bottom-3 left-4 text-xs text-muted-foreground'>
+                                {editPrompt.trim().length} / 1000
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className='grid gap-3 border-b border-dashed border-border/80 pb-4'>
+                        <div className='flex items-center justify-between gap-2'>
+                            <div className='text-foreground text-sm font-medium'>{t('edit.routeSettings')}</div>
+                            {isGptImage2 && (
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <button
+                                            type='button'
+                                            className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
+                                            aria-label={t('edit.fidelityHint')}>
+                                            <Info className='h-4 w-4' />
+                                        </button>
+                                    </TooltipTrigger>
+                                    <TooltipContent className='max-w-[280px]'>{t('edit.fidelityHint')}</TooltipContent>
+                                </Tooltip>
+                            )}
+                        </div>
+                        <div className='grid gap-3 sm:grid-cols-2'>
+                            <div className='space-y-1.5'>
+                                <Label htmlFor='edit-model-select'>{t('form.model')}</Label>
+                                <Select
+                                    value={editModel}
+                                    onValueChange={(value) => setEditModel(value as EditingFormData['model'])}
+                                    disabled={isLoading}
+                                    name='edit-model'>
+                                    <SelectTrigger id='edit-model-select' className='w-full'>
+                                        <SelectValue placeholder={t('form.selectModel')} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
+                                        <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
+                                        <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
+                                        <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className='space-y-1.5'>
+                                <Label htmlFor='edit-stream-mode-select'>{t('streaming.mode')}</Label>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <div>
+                                            <Select
+                                                value={streamMode}
+                                                onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
+                                                disabled={isLoading}
+                                                name='edit-stream_mode'>
+                                                <SelectTrigger id='edit-stream-mode-select' className='w-full'>
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
+                                                    <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
+                                                    <SelectItem value='non_stream'>
+                                                        {t('streaming.modeNonStream')}
+                                                    </SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent className='max-w-[250px]'>
+                                        {allowStreamingBatch && editN[0] > 1 && streamMode !== 'non_stream'
+                                            ? t('streaming.batchDescription')
+                                            : t('streaming.description')}
+                                    </TooltipContent>
+                                </Tooltip>
+                            </div>
+                        </div>
                     </div>
 
                     <div className='border-border bg-background space-y-3 rounded-md border p-3'>
