@@ -22,6 +22,7 @@ import type {
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
 import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
+import type { WorkbenchMode } from '@/components/mode-toggle';
 import {
     Upload,
     Eraser,
@@ -83,8 +84,8 @@ export type EditingFormData = {
 type EditingFormProps = {
     onSubmit: (data: EditingFormData) => void;
     isLoading: boolean;
-    currentMode: 'generate' | 'edit';
-    onModeChange: (mode: 'generate' | 'edit') => void;
+    currentMode: WorkbenchMode;
+    onModeChange: (mode: WorkbenchMode) => void;
     isPasswordRequiredByBackend: boolean | null;
     clientPasswordHash: string | null;
     onOpenPasswordDialog: () => void;
@@ -173,7 +174,7 @@ const RadioItemWithIcon = ({
             aria-label={label}
             className='border-border text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
             <Icon className='h-4 w-4 text-current opacity-70' />
-            <span>{label}</span>
+            <span className='min-w-0 whitespace-normal break-words text-left leading-5'>{label}</span>
         </RadioGroupItem>
     );
 
@@ -680,9 +681,12 @@ export function EditingForm({
     };
 
     return (
-        <Card className='bg-card text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border lg:h-full'>
-            <CardHeader className='border-border flex items-start justify-between border-b pb-4'>
-                <div>
+        <Card className='bg-card/92 text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border shadow-sm lg:h-full'>
+            <CardHeader className='border-border bg-card/80 flex flex-col gap-4 border-b px-4 py-4'>
+                <div className='space-y-1'>
+                    <p className='text-muted-foreground text-xs font-medium tracking-[0.16em] uppercase'>
+                        {t('workbench.creationSheet')}
+                    </p>
                     <div className='flex items-center'>
                         <CardTitle className='py-1 text-lg font-medium'>{t('edit.title')}</CardTitle>
                         {isPasswordRequiredByBackend && (
@@ -696,13 +700,13 @@ export function EditingForm({
                             </Button>
                         )}
                     </div>
-                    <CardDescription className='mt-1'>{t('edit.description')}</CardDescription>
+                    <CardDescription className='mt-1 text-xs leading-5'>{t('edit.description')}</CardDescription>
                 </div>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
                 <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
-                    <div className='border-border bg-muted/20 grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]'>
+                    <div className='border-border bg-muted/45 grid gap-3 rounded-md border p-3'>
                         <div className='space-y-1.5'>
                             <div className='flex items-center gap-2'>
                                 <Label htmlFor='edit-model-select'>{t('form.model')}</Label>
@@ -851,7 +855,7 @@ export function EditingForm({
                             size='sm'
                             onClick={() => setEditShowMaskEditor(!editShowMaskEditor)}
                             disabled={isLoading || !editOriginalImageSize}
-                            className='w-full justify-start px-3'>
+                            className='min-h-9 w-full justify-start px-3'>
                             {editShowMaskEditor
                                 ? t('edit.closeMaskEditor')
                                 : editGeneratedMaskFile
@@ -1098,7 +1102,7 @@ export function EditingForm({
                         )}
                     </div>
 
-                    <div className='bg-muted/20 border-border rounded-md border'>
+                    <div className='border-border bg-muted/20 rounded-md border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
@@ -1108,7 +1112,7 @@ export function EditingForm({
                             <span className='flex min-w-0 items-center gap-2'>
                                 <SlidersHorizontal className='h-4 w-4 shrink-0' />
                                 <span className='min-w-0'>
-                                    <span className='text-foreground block'>{t('ux.advanced')}</span>
+                                    <span className='text-foreground block'>{t('ux.professionalMode')}</span>
                                     <span className='text-muted-foreground block truncate text-xs font-normal'>
                                         {advancedSummary}
                                     </span>
@@ -1126,7 +1130,7 @@ export function EditingForm({
                                     className='gap-3'>
                                     <TabsList className='grid h-auto w-full grid-cols-3 rounded-md'>
                                         <TabsTrigger value='route' className='min-h-9'>
-                                            {t('ux.route')}
+                                            {t('ux.modelRoute')}
                                         </TabsTrigger>
                                         <TabsTrigger value='output' className='min-h-9'>
                                             {t('ux.output')}
@@ -1525,8 +1529,19 @@ export function EditingForm({
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='border-border hidden border-t p-4 lg:flex'>
+                <CardFooter className='border-border bg-card/80 hidden border-t p-4 lg:flex'>
                     <div className='w-full space-y-2'>
+                        <div className='flex flex-wrap items-center gap-1.5 text-xs'>
+                            <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
+                                {editModel}
+                            </span>
+                            <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
+                                {streamModeLabel}
+                            </span>
+                            <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-primary'>
+                                {t('workbench.estimatedCost')}
+                            </span>
+                        </div>
                         {submitDisabledReason && (
                             <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>
                         )}

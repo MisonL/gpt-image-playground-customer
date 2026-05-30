@@ -26,6 +26,7 @@ import {
 } from '@/lib/image-upstream-strategy';
 import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
+import type { WorkbenchMode } from '@/components/mode-toggle';
 import {
     Square,
     RectangleHorizontal,
@@ -73,9 +74,10 @@ export type GenerationFormData = {
 
 type GenerationFormProps = {
     onSubmit: (data: GenerationFormData) => void;
+    onSaveInspiration: (prompt: string) => void;
     isLoading: boolean;
-    currentMode: 'generate' | 'edit';
-    onModeChange: (mode: 'generate' | 'edit') => void;
+    currentMode: WorkbenchMode;
+    onModeChange: (mode: WorkbenchMode) => void;
     isPasswordRequiredByBackend: boolean | null;
     clientPasswordHash: string | null;
     onOpenPasswordDialog: () => void;
@@ -122,6 +124,17 @@ type GenerationFormProps = {
 
 type AdvancedTab = 'route' | 'output' | 'stream';
 
+const promptStyleTags = [
+    'promptTag.film',
+    'promptTag.cream',
+    'promptTag.japaneseMagazine',
+    'promptTag.bouquet',
+    'promptTag.clear',
+    'promptTag.relaxed',
+    'promptTag.coffee',
+    'promptTag.summerWindow'
+];
+
 const RadioItemWithIcon = ({
     value,
     id,
@@ -145,7 +158,7 @@ const RadioItemWithIcon = ({
             aria-label={label}
             className='border-border text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
             <Icon className='h-4 w-4 text-current opacity-70' />
-            <span>{label}</span>
+            <span className='min-w-0 whitespace-normal break-words text-left leading-5'>{label}</span>
         </RadioGroupItem>
     );
 
@@ -201,6 +214,7 @@ function getOutputFormatLabel(format: GenerationFormData['output_format'], t: (k
 
 export function GenerationForm({
     onSubmit,
+    onSaveInspiration,
     isLoading,
     currentMode,
     onModeChange,
@@ -292,6 +306,20 @@ export function GenerationForm({
         getBackendLabel(imageBackend, t)
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
+    const isBatchMode = currentMode === 'batch';
+    const isReuseMode = currentMode === 'reuse';
+
+    const applyPromptTag = React.useCallback(
+        (label: string) => {
+            setPrompt((current) => {
+                const trimmed = current.trim();
+                if (!trimmed) return label;
+                if (trimmed.includes(label)) return current;
+                return `${trimmed}，${label}`;
+            });
+        },
+        [setPrompt]
+    );
 
     React.useEffect(() => {
         if (streamingDisabledByStrategy && streamMode !== 'non_stream') {
@@ -342,11 +370,20 @@ export function GenerationForm({
     };
 
     return (
-        <Card className='bg-card text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border lg:h-full'>
-            <CardHeader className='border-border flex items-start justify-between border-b pb-4'>
-                <div>
+        <Card className='bg-card/92 text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border shadow-sm lg:h-full'>
+            <CardHeader className='border-border bg-card/80 flex flex-col gap-4 border-b px-4 py-4'>
+                <div className='space-y-1'>
+                    <p className='text-muted-foreground text-xs font-medium tracking-[0.16em] uppercase'>
+                        {t('workbench.creationSheet')}
+                    </p>
                     <div className='flex items-center'>
-                        <CardTitle className='py-1 text-lg font-medium'>{t('generate.title')}</CardTitle>
+                        <CardTitle className='py-1 text-lg font-medium'>
+                            {isBatchMode
+                                ? t('mode.batch')
+                                : isReuseMode
+                                  ? t('mode.reuse')
+                                  : t('generate.title')}
+                        </CardTitle>
                         {isPasswordRequiredByBackend && (
                             <Button
                                 variant='ghost'
@@ -358,72 +395,20 @@ export function GenerationForm({
                             </Button>
                         )}
                     </div>
-                    <CardDescription className='mt-1'>{t('generate.description')}</CardDescription>
+                    <CardDescription className='mt-1 text-xs leading-5'>
+                        {isBatchMode
+                            ? t('mode.batchPanelDescription')
+                            : isReuseMode
+                              ? t('mode.reusePanelDescription')
+                              : t('generate.description')}
+                    </CardDescription>
                 </div>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
                 <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
-                    <div className='border-border bg-muted/20 grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]'>
-                        <div className='space-y-1.5'>
-                            <Label htmlFor='model-select'>{t('form.model')}</Label>
-                            <Select
-                                value={model}
-                                onValueChange={(value) => setModel(value as GenerationFormData['model'])}
-                                disabled={isLoading}
-                                name='model'>
-                                <SelectTrigger id='model-select' className='w-full'>
-                                    <SelectValue placeholder={t('form.selectModel')} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
-                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
-                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
-                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className='space-y-1.5'>
-                            <Label htmlFor='stream-mode-select'>{t('streaming.mode')}</Label>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <Select
-                                            value={streamMode}
-                                            onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
-                                            disabled={isLoading || streamingDisabledByStrategy}
-                                            name='stream_mode'>
-                                            <SelectTrigger id='stream-mode-select' className='w-full'>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
-                                                <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
-                                                <SelectItem value='non_stream'>
-                                                    {t('streaming.modeNonStream')}
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent className='max-w-[250px]'>
-                                    {streamingDisabledByStrategy
-                                        ? t('streaming.disabledByStrategy')
-                                        : allowStreamingBatch && n[0] > 1 && streamMode !== 'non_stream'
-                                          ? t('streaming.batchDescription')
-                                          : t('streaming.description')}
-                                </TooltipContent>
-                            </Tooltip>
-                        </div>
-                        {recommendStreaming && (
-                            <p className='text-xs text-amber-700 sm:col-span-2 dark:text-amber-300'>
-                                {t('streaming.highResolutionRecommendation')}
-                            </p>
-                        )}
-                    </div>
-
                     <div className='space-y-1.5'>
-                        <Label htmlFor='prompt'>{t('form.prompt')}</Label>
+                        <Label htmlFor='prompt'>{t('workbench.promptTitle')}</Label>
                         <Textarea
                             id='prompt'
                             name='prompt'
@@ -432,13 +417,45 @@ export function GenerationForm({
                             onChange={(e) => setPrompt(e.target.value)}
                             required
                             disabled={isLoading}
-                            className='min-h-[112px]'
+                            className='min-h-[132px] bg-background/72 leading-6'
                         />
+                        <div className='flex flex-wrap gap-2 pt-2'>
+                            {promptStyleTags.map((key) => {
+                                const label = t(key);
+                                const selected = prompt.includes(label);
+                                return (
+                                    <button
+                                        key={key}
+                                        type='button'
+                                        onClick={() => applyPromptTag(label)}
+                                        disabled={isLoading}
+                                        className={`rounded-full border px-2.5 py-1 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
+                                            selected
+                                                ? 'border-primary/40 bg-primary/10 text-primary'
+                                                : 'border-border bg-muted/45 text-muted-foreground hover:border-primary/25 hover:bg-accent/55 hover:text-foreground'
+                                        }`}>
+                                        {label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        {recommendStreaming && (
+                            <p className='text-xs text-amber-700 dark:text-amber-300'>
+                                {t('streaming.highResolutionRecommendation')}
+                            </p>
+                        )}
+                        {isReuseMode && (
+                            <p className='text-muted-foreground rounded-md border border-dashed border-border bg-muted/20 px-3 py-2 text-xs leading-5'>
+                                {t('mode.reuseHint')}
+                            </p>
+                        )}
                     </div>
 
-                    <div className='border-border bg-background space-y-2 rounded-md border p-3'>
+                    <div className='border-border bg-background/65 space-y-2 rounded-md border p-3'>
                         <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                            {t('form.numberOfImages', { count: n[0] })}
+                            {isBatchMode
+                                ? t('form.batchNumberOfImages', { count: n[0] })
+                                : t('form.numberOfImages', { count: n[0] })}
                         </div>
                         <Slider
                             id='n-slider'
@@ -452,6 +469,11 @@ export function GenerationForm({
                             disabled={isLoading}
                             className='mt-3'
                         />
+                        {isBatchMode && (
+                            <p className='text-muted-foreground text-xs leading-5'>
+                                {t('mode.batchHint')}
+                            </p>
+                        )}
                     </div>
 
                     <div className='border-border bg-background space-y-3 rounded-md border p-3'>
@@ -558,7 +580,7 @@ export function GenerationForm({
                         )}
                     </div>
 
-                    <div className='bg-muted/20 border-border rounded-md border'>
+                    <div className='border-border bg-muted/20 rounded-md border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
@@ -568,7 +590,7 @@ export function GenerationForm({
                             <span className='flex min-w-0 items-center gap-2'>
                                 <SlidersHorizontal className='h-4 w-4 shrink-0' />
                                 <span className='min-w-0'>
-                                    <span className='text-foreground block'>{t('ux.advanced')}</span>
+                                    <span className='text-foreground block'>{t('ux.professionalMode')}</span>
                                     <span className='text-muted-foreground block truncate text-xs font-normal'>
                                         {advancedSummary}
                                     </span>
@@ -586,7 +608,7 @@ export function GenerationForm({
                                     className='gap-3'>
                                     <TabsList className='grid h-auto w-full grid-cols-3 rounded-md'>
                                         <TabsTrigger value='route' className='min-h-9'>
-                                            {t('ux.route')}
+                                            {t('ux.modelRoute')}
                                         </TabsTrigger>
                                         <TabsTrigger value='output' className='min-h-9'>
                                             {t('ux.output')}
@@ -597,6 +619,24 @@ export function GenerationForm({
                                     </TabsList>
                                     <TabsContent value='route' className='space-y-5'>
                                         <div className='grid gap-3 sm:grid-cols-2'>
+                                            <div className='space-y-1.5'>
+                                                <Label htmlFor='model-select'>{t('form.model')}</Label>
+                                                <Select
+                                                    value={model}
+                                                    onValueChange={(value) => setModel(value as GenerationFormData['model'])}
+                                                    disabled={isLoading}
+                                                    name='model'>
+                                                    <SelectTrigger id='model-select' className='w-full'>
+                                                        <SelectValue placeholder={t('form.selectModel')} />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
+                                                        <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
+                                                        <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
+                                                        <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
                                             <div className='space-y-1.5'>
                                                 <Label htmlFor='image-backend-select'>{t('upstream.backend')}</Label>
                                                 <Select
@@ -778,6 +818,38 @@ export function GenerationForm({
                                         )}
                                     </TabsContent>
                                     <TabsContent value='stream' className='space-y-5'>
+                                        <div className='space-y-1.5'>
+                                            <Label htmlFor='stream-mode-select'>{t('streaming.mode')}</Label>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <div>
+                                                        <Select
+                                                            value={streamMode}
+                                                            onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
+                                                            disabled={isLoading || streamingDisabledByStrategy}
+                                                            name='stream_mode'>
+                                                            <SelectTrigger id='stream-mode-select' className='w-full'>
+                                                                <SelectValue />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
+                                                                <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
+                                                                <SelectItem value='non_stream'>
+                                                                    {t('streaming.modeNonStream')}
+                                                                </SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                </TooltipTrigger>
+                                                <TooltipContent className='max-w-[250px]'>
+                                                    {streamingDisabledByStrategy
+                                                        ? t('streaming.disabledByStrategy')
+                                                        : allowStreamingBatch && n[0] > 1 && streamMode !== 'non_stream'
+                                                          ? t('streaming.batchDescription')
+                                                          : t('streaming.description')}
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </div>
                                         {streamMode !== 'non_stream' && (
                                             <div className='space-y-3'>
                                                 <div className='flex items-center gap-2'>
@@ -1002,8 +1074,19 @@ export function GenerationForm({
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='border-border hidden border-t p-4 lg:flex'>
+                <CardFooter className='border-border bg-card/80 hidden border-t p-4 lg:flex'>
                     <div className='w-full space-y-2'>
+                        <div className='flex flex-wrap items-center gap-1.5 text-xs'>
+                            <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
+                                {model}
+                            </span>
+                            <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
+                                {streamModeLabel}
+                            </span>
+                            <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-primary'>
+                                {t('workbench.estimatedCost')}
+                            </span>
+                        </div>
                         {submitDisabledReason && (
                             <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>
                         )}
@@ -1015,6 +1098,24 @@ export function GenerationForm({
                             {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
                             {isLoading ? t('generate.loading') : t('generate.submit')}
                         </Button>
+                        <div className='flex justify-center gap-3 text-xs'>
+                            <button
+                                type='button'
+                                className='text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50'
+                                disabled={!prompt.trim() || isLoading}
+                                onClick={() => onSaveInspiration(prompt)}>
+                                {t('workbench.saveInspiration')}
+                            </button>
+                            <button
+                                type='button'
+                                className='text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50'
+                                disabled={isLoading}
+                                onClick={() =>
+                                    setPrompt(t('workbench.randomPromptExample'))
+                                }>
+                                {t('workbench.randomInspiration')}
+                            </button>
+                        </div>
                     </div>
                 </CardFooter>
             </div>
