@@ -362,7 +362,7 @@ export function ImageOutput({
                             priority
                         />
                         <div className='absolute right-7 bottom-4 rotate-[-2deg] text-sm text-muted-foreground hand-note'>
-                            soft day
+                            {t('output.sampleNote')}
                         </div>
                         <div className='absolute left-6 bottom-5 rounded-full border border-border/70 bg-background/82 px-3 py-1 text-xs text-muted-foreground shadow-sm'>
                             {t('output.sampleLabel')}

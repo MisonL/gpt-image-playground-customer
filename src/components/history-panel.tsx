@@ -194,6 +194,14 @@ function HistoryPanelImpl({
         (timestamp: number) => new Date(timestamp).toLocaleString(locale),
         [locale]
     );
+    const formatStatusTime = React.useCallback(
+        (timestamp: number) =>
+            new Date(timestamp).toLocaleTimeString(locale, {
+                hour: '2-digit',
+                minute: '2-digit'
+            }),
+        [locale]
+    );
     const handleThumbnailLoad = React.useCallback(
         (filename: string, event: React.SyntheticEvent<HTMLImageElement>) => {
             const image = event.currentTarget;
@@ -449,65 +457,66 @@ function HistoryPanelImpl({
                         <div className='space-y-1.5 rounded-md border border-border bg-background/68 p-2.5'>
                             <div className='flex items-center justify-between'>
                                 <p className='text-sm font-medium'>{t('history.generationStatus')}</p>
-                                <button
-                                    type='button'
-                                    className='text-muted-foreground text-xs hover:text-foreground'
-                                    onClick={onClearHistory}>
-                                    {t('history.clear')}
-                                </button>
+                                {history.length > 0 ? (
+                                    <button
+                                        type='button'
+                                        className='text-muted-foreground text-xs hover:text-foreground'
+                                        onClick={onClearHistory}>
+                                        {t('history.clear')}
+                                    </button>
+                                ) : null}
                             </div>
-                            <div className='space-y-1.5 text-xs'>
-                                <div className='flex items-center gap-2 rounded-md px-2 py-1 text-muted-foreground'>
-                                    <span className='h-2 w-2 rounded-full bg-[oklch(0.58_0.12_150)]' />
-                                    <span>10:32:11</span>
-                                    <span>{t('history.statusStart')}</span>
+                            {history.length > 0 ? (
+                                <div className='space-y-1.5 text-xs'>
+                                    {history.slice(0, 3).map((item) => (
+                                        <button
+                                            key={item.timestamp}
+                                            type='button'
+                                            onClick={() => onSelectImage(item)}
+                                            className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-muted-foreground transition-colors hover:bg-[oklch(0.95_0.035_80)] hover:text-foreground'>
+                                            <span className='h-2 w-2 shrink-0 rounded-full bg-[oklch(0.58_0.12_150)]' />
+                                            <span className='shrink-0'>{formatStatusTime(item.timestamp)}</span>
+                                            <span className='min-w-0 flex-1 truncate'>
+                                                {item.mode === 'edit' ? t('history.modeEdit') : t('history.modeCreate')}
+                                                {t('history.statusDone')}
+                                            </span>
+                                            <span className='shrink-0'>
+                                                {t('history.statusBatchSummary', {
+                                                    count: item.images.length,
+                                                    duration: formatDuration(item.durationMs)
+                                                })}
+                                            </span>
+                                            <span className='ml-auto hidden shrink-0 gap-1 sm:flex'>
+                                                {item.images.slice(0, 3).map((image) => {
+                                                    const source =
+                                                        item.storageModeUsed === 'indexeddb'
+                                                            ? getImageSrc(image.filename)
+                                                            : `/api/image/${image.filename}`;
+                                                    return source ? (
+                                                        <span
+                                                            key={image.filename}
+                                                            className='relative h-6 w-6 overflow-hidden rounded-sm border border-border'>
+                                                            <Image
+                                                                src={source}
+                                                                alt={image.filename}
+                                                                fill
+                                                                sizes='24px'
+                                                                className='object-cover'
+                                                                unoptimized
+                                                            />
+                                                        </span>
+                                                    ) : null;
+                                                })}
+                                            </span>
+                                        </button>
+                                    ))}
                                 </div>
-                                <div className='flex items-center gap-2 rounded-md bg-[oklch(0.95_0.035_80)] px-2 py-1 text-muted-foreground'>
-                                    <span className='h-2 w-2 rounded-full bg-[oklch(0.65_0.14_58)]' />
-                                    <span>10:32:14</span>
-                                    <span>{t('history.statusDeveloping')}</span>
+                            ) : (
+                                <div className='flex items-center gap-2 rounded-md border border-dashed border-border px-2 py-2 text-xs text-muted-foreground'>
+                                    <span className='h-2 w-2 rounded-full bg-muted-foreground/45' />
+                                    <span>{t('history.statusEmpty')}</span>
                                 </div>
-                                {history[0] ? (
-                                    <div className='flex items-center gap-2 rounded-md px-2 py-1 text-muted-foreground'>
-                                        <span className='h-2 w-2 rounded-full bg-[oklch(0.58_0.12_150)]' />
-                                        <span>{formatDuration(history[0].durationMs)}</span>
-                                        <span>{t('history.statusDone')}</span>
-                                        <span className='ml-auto flex gap-1'>
-                                            {history[0].images.slice(0, 3).map((image) => {
-                                                const source =
-                                                    history[0].storageModeUsed === 'indexeddb'
-                                                        ? getImageSrc(image.filename)
-                                                        : `/api/image/${image.filename}`;
-                                                return source ? (
-                                                    <span
-                                                        key={image.filename}
-                                                        className='relative h-6 w-6 overflow-hidden rounded-sm border border-border'>
-                                                        <Image
-                                                            src={source}
-                                                            alt={image.filename}
-                                                            fill
-                                                            sizes='24px'
-                                                            className='object-cover'
-                                                            unoptimized
-                                                        />
-                                                    </span>
-                                                ) : null;
-                                            })}
-                                        </span>
-                                    </div>
-                                ) : (
-                                    <div className='flex items-center gap-2 rounded-md px-2 py-1 text-muted-foreground'>
-                                        <span className='h-2 w-2 rounded-full bg-muted-foreground/45' />
-                                        <span>10:32:16</span>
-                                        <span>{t('history.statusEstimate')}</span>
-                                    </div>
-                                )}
-                                <div className='flex items-center gap-2 rounded-md px-2 py-1 text-destructive'>
-                                    <span className='h-2 w-2 rounded-full bg-destructive' />
-                                    <span>10:28:55</span>
-                                    <span>{t('history.statusFailed')}</span>
-                                </div>
-                            </div>
+                            )}
                         </div>
                         <div className='ml-auto flex w-fit items-center gap-2 rounded-md bg-[oklch(0.92_0.055_78)] px-3 py-2 text-xs text-muted-foreground shadow-sm'>
                             <Smartphone className='h-4 w-4' />
