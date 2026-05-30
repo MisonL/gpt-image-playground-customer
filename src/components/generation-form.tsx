@@ -2,7 +2,7 @@
 
 import { ModeToggle } from '@/components/mode-toggle';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -156,8 +156,8 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border bg-background/60 text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1.5 py-1.5 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
-            <Icon className='h-3.5 w-3.5 text-current opacity-70' />
+            className='border-border bg-background/60 text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
+            <Icon className='h-3 w-3 text-current opacity-70' />
             <span className='min-w-0 max-w-full truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
@@ -370,58 +370,54 @@ export function GenerationForm({
     };
 
     return (
-        <Card className='workbench-panel text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border lg:h-full'>
-            <CardHeader className='border-border/70 border-b px-4 py-2.5'>
+        <Card className='workbench-panel text-card-foreground border-border flex w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 lg:h-full'>
+            <CardHeader className='border-border/70 border-b px-3 pt-2 !pb-2'>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
-                <CardContent className='space-y-3 p-4 pb-36 lg:flex-1 lg:overflow-y-auto'>
-                    <div className='space-y-0.5'>
-                        <p className='text-muted-foreground text-xs font-medium tracking-normal'>
-                            {t('workbench.creationSheet')}
-                        </p>
+                <CardContent className='space-y-3 p-4 pb-28 lg:flex-1 lg:overflow-y-auto lg:pb-4'>
+                    <div className='space-y-1'>
                         <div className='flex items-center'>
                             <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
-                                {isBatchMode
-                                    ? t('mode.batch')
-                                    : isReuseMode
-                                      ? t('mode.reuse')
-                                      : t('generate.title')}
+                                {t('workbench.creationSheet')}
                             </CardTitle>
+                            {prompt.trim() && (
+                                <button
+                                    type='button'
+                                    onClick={() => setPrompt('')}
+                                    disabled={isLoading}
+                                    className='text-muted-foreground hover:text-foreground ml-auto text-xs disabled:opacity-50'>
+                                    {t('common.clear')}
+                                </button>
+                            )}
                             {isPasswordRequiredByBackend && (
                                 <Button
                                     variant='ghost'
-                                    size='icon'
+                                    size='sm'
                                     onClick={onOpenPasswordDialog}
-                                    className='text-muted-foreground hover:text-foreground ml-2'
+                                    className='text-muted-foreground hover:text-foreground ml-2 h-7 px-2'
                                     aria-label={t('password.configure')}>
                                     {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                                 </Button>
                             )}
                         </div>
-                        <CardDescription className='mt-0.5 text-xs leading-5'>
-                            {isBatchMode
-                                ? t('mode.batchPanelDescription')
-                                : isReuseMode
-                                  ? t('mode.reusePanelDescription')
-                                  : t('generate.description')}
-                        </CardDescription>
                     </div>
                     <div className='space-y-1.5'>
-                        <div className='flex items-center justify-between gap-2'>
-                            <Label htmlFor='prompt'>{t('workbench.promptTitle')}</Label>
-                            <span className='text-muted-foreground text-xs'>{prompt.trim().length} / 1000</span>
+                        <div className='relative'>
+                            <Textarea
+                                id='prompt'
+                                name='prompt'
+                                placeholder={t('form.promptPlaceholder')}
+                                value={prompt}
+                                onChange={(e) => setPrompt(e.target.value)}
+                                required
+                                disabled={isLoading}
+                                className='min-h-[118px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-9 leading-7 shadow-inner'
+                            />
+                            <span className='pointer-events-none absolute bottom-3 left-4 text-xs text-muted-foreground'>
+                                {prompt.trim().length} / 1000
+                            </span>
                         </div>
-                        <Textarea
-                            id='prompt'
-                            name='prompt'
-                            placeholder={t('form.promptPlaceholder')}
-                            value={prompt}
-                            onChange={(e) => setPrompt(e.target.value)}
-                            required
-                            disabled={isLoading}
-                            className='min-h-[104px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 leading-7 shadow-inner'
-                        />
                         <div className='flex flex-wrap gap-1.5 pt-1.5'>
                             {promptStyleTags.map((key) => {
                                 const label = t(key);
@@ -466,7 +462,7 @@ export function GenerationForm({
                                 disabled={isLoading}
                                 name='size'
                                 aria-label={t('form.size')}
-                                className='grid grid-cols-5 gap-2'>
+                                className='grid grid-cols-5 gap-1.5'>
                             <RadioItemWithIcon
                                 value='auto'
                                 id='size-auto'
@@ -572,7 +568,7 @@ export function GenerationForm({
                                 disabled={isLoading}
                                 name='n'
                                 aria-label={t('form.numberOfImages', { count: n[0] })}
-                                className='grid grid-cols-4 gap-2'>
+                                className='grid grid-cols-4 gap-1.5'>
                                 {[1, 2, 4, 8].map((value) => (
                                     <RadioItemWithIcon
                                         key={value}
@@ -599,7 +595,7 @@ export function GenerationForm({
                                 disabled={isLoading}
                                 name='quality'
                                 aria-label={t('form.quality')}
-                                className='grid grid-cols-3 gap-2'>
+                                className='grid grid-cols-3 gap-1.5'>
                                 <RadioItemWithIcon
                                     value='medium'
                                     id='quality-medium-quick'
@@ -632,7 +628,7 @@ export function GenerationForm({
                                 disabled={isLoading}
                                 name='output_format'
                                 aria-label={t('form.outputFormat')}
-                                className='grid grid-cols-3 gap-2'>
+                                className='grid grid-cols-3 gap-1.5'>
                                 <RadioItemWithIcon
                                     value='jpeg'
                                     id='format-jpeg-quick'
@@ -1172,7 +1168,7 @@ export function GenerationForm({
                             type='button'
                             onClick={handleSubmit}
                             disabled={isLoading || !!submitDisabledReason}
-                            className='flex w-full items-center justify-center gap-2'>
+                            className='flex w-full items-center justify-center gap-2 border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white'>
                             {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
                             {isLoading ? t('generate.loading') : t('generate.submit')}
                         </Button>

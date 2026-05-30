@@ -271,7 +271,7 @@ export function ImageOutput({
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
                         // 展示流式预览图，单图时和最终视图一样居中。
-                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[760px] items-center justify-center p-3'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[620px] items-center justify-center p-3'>
                             {/* 展示最新的预览图，也就是最大索引图片。 */}
                             {(() => {
                                 const entries = Array.from(streamingPreviewImages.entries());
@@ -296,7 +296,7 @@ export function ImageOutput({
                             </div>
                         </div>
                     ) : currentMode === 'edit' && baseImagePreviewUrl ? (
-                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[760px] items-center justify-center p-3'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[620px] items-center justify-center p-3'>
                             <Image
                                 src={baseImagePreviewUrl}
                                 alt={t('output.editing')}
@@ -319,7 +319,7 @@ export function ImageOutput({
                 ) : imageBatch && imageBatch.length > 0 ? (
                     viewMode === 'grid' ? (
                         <div
-                            className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[780px] gap-2`}>
+                            className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[660px] gap-2`}>
                             {imageBatch.map((img, index) => (
                                 <div
                                     key={img.filename}
@@ -336,7 +336,7 @@ export function ImageOutput({
                             ))}
                         </div>
                     ) : imageBatch[viewMode] ? (
-                        <div className='photo-paper relative aspect-[4/3] w-full max-w-[760px] p-3'>
+                        <div className='photo-paper relative aspect-[4/3] w-full max-w-[620px] p-3'>
                             <Image
                                 src={imageBatch[viewMode].path}
                                 alt={altText}
@@ -352,7 +352,7 @@ export function ImageOutput({
                         </div>
                     )
                 ) : (
-                    <div className='photo-paper relative aspect-[4/3] w-full max-w-[760px] p-3'>
+                    <div className='photo-paper relative aspect-[4/3] w-full max-w-[620px] p-3'>
                         <Image
                             src='/assets/workbench-sample.jpg'
                             alt={t('output.sampleAlt')}
@@ -362,7 +362,7 @@ export function ImageOutput({
                             priority
                         />
                         <div className='absolute right-7 bottom-4 rotate-[-2deg] text-sm text-muted-foreground hand-note'>
-                            soft day :)
+                            soft day
                         </div>
                         <div className='absolute left-6 bottom-5 rounded-full border border-border/70 bg-background/82 px-3 py-1 text-xs text-muted-foreground shadow-sm'>
                             {t('output.sampleLabel')}
@@ -444,7 +444,7 @@ export function ImageOutput({
                 </DialogContent>
             </Dialog>
 
-            <div className='flex min-h-12 w-full shrink-0 flex-wrap items-center justify-center gap-1.5 border-t border-border/70 bg-background/72 px-3 py-3'>
+            <div className='flex w-full shrink-0 flex-wrap items-center justify-center gap-1 border-t border-border/40 bg-transparent px-3 py-2'>
                 {showCarousel && (
                     <div className='bg-card/80 flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border border-border p-1'>
                         <Button
@@ -486,22 +486,22 @@ export function ImageOutput({
 
                 {canOpenLogs && (
                     <Button
-                        variant='outline'
+                        variant='ghost'
                         size='sm'
                         onClick={() => setIsLogDialogOpen(true)}
-                        className='min-h-9 shrink-0'>
+                        className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground'>
                         <Terminal className='mr-2 h-4 w-4' />
                         {t('logs.open')}
                     </Button>
                 )}
 
                 <Button
-                    variant='outline'
+                    variant='ghost'
                     size='sm'
                     onClick={handleSendClick}
                     disabled={!canSendToEdit}
                     className={cn(
-                        'min-h-9 shrink-0 disabled:opacity-50',
+                        'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
                         // 多图网格视图下完全隐藏按钮。
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
                 )}>
@@ -509,61 +509,61 @@ export function ImageOutput({
                     {t('output.continueEdit')}
                 </Button>
                 <Button
-                    variant='outline'
+                    variant='ghost'
                     size='sm'
                     onClick={onCreateVariant}
                     disabled={isLoading || !canCreateVariant}
-                    className='min-h-9 shrink-0 disabled:opacity-50'>
+                    className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'>
                     <RefreshCcw className='mr-2 h-4 w-4' />
                     {t('output.createVariant')}
                 </Button>
                 <Button
-                    variant='outline'
+                    variant='ghost'
                     size='sm'
                     onClick={onReusePrompt}
                     disabled={isLoading || !canReusePrompt}
-                    className='min-h-9 shrink-0 disabled:opacity-50'>
+                    className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'>
                     <Copy className='mr-2 h-4 w-4' />
                     {t('output.reusePrompt')}
                 </Button>
                 <Button
-                    variant='outline'
+                    variant='ghost'
                     size='sm'
                     onClick={handleCompareClick}
                     disabled={!imageBatch || imageBatch.length <= 1}
-                    className='min-h-9 shrink-0 disabled:opacity-50'>
+                    className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'>
                     <GitCompare className='mr-2 h-4 w-4' />
                     {t('output.compare')}
                 </Button>
                 <Button
-                    variant='outline'
+                    variant='ghost'
                     size='sm'
                     onClick={handleDownloadClick}
                     disabled={!canUseImageActions}
                     className={cn(
-                        'min-h-9 shrink-0 disabled:opacity-50',
+                        'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
                     )}>
                     <Download className='mr-2 h-4 w-4' />
                     {t('output.download')}
                 </Button>
                 <Button
-                    variant='outline'
+                    variant='ghost'
                     size='sm'
                     onClick={handleShareClick}
                     disabled={!canUseImageActions}
                     className={cn(
-                        'min-h-9 shrink-0 disabled:opacity-50',
+                        'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
                         showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
                     )}>
                     <Share2 className='mr-2 h-4 w-4' />
                     {t('output.share')}
                 </Button>
                 <Button
-                    variant='outline'
+                    variant='ghost'
                     size='sm'
                     disabled
-                    className='min-h-9 shrink-0 disabled:opacity-50'
+                    className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'
                     aria-label={t('output.more')}>
                     <MoreHorizontal className='h-4 w-4' />
                 </Button>
