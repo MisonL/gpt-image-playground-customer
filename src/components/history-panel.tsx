@@ -29,8 +29,10 @@ import {
     Database,
     FileImage,
     Trash2,
-    Heart,
-    WandSparkles
+    WandSparkles,
+    Pin,
+    Plus,
+    Smartphone
 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
@@ -84,6 +86,13 @@ const calculateCost = (value: number, rate: number): string => {
 
 const formatMoney = (value: number): string => value.toFixed(4);
 const formatEstimatedTokenCost = (value: number, rate: number): string => `$${calculateCost(value, rate)}`;
+const inspirationThumbnails = [
+    '/assets/inspiration-flowers.jpg',
+    '/assets/inspiration-desk.jpg',
+    '/assets/inspiration-window.jpg'
+];
+const inspirationTitles = ['窗边的花与书', '复古桌面时光', '海边的夏日下午'];
+const inspirationTags = ['奶油色', '花束', '日杂', '胶片感', '复古', '咖啡', '清透', '夏日'];
 
 function getCostBadge(
     item: HistoryMetadata,
@@ -213,14 +222,14 @@ function HistoryPanelImpl({
     );
 
     return (
-        <Card className='bg-card/92 text-card-foreground flex h-full w-full flex-col overflow-hidden rounded-lg border border-border shadow-sm'>
-            <CardHeader className='bg-card/80 flex flex-col gap-3 border-b border-border px-4 py-3'>
+        <Card className='workbench-panel text-card-foreground flex h-full w-full flex-col overflow-hidden rounded-lg border border-border'>
+            <CardHeader className='flex flex-col gap-3 border-b border-border/70 px-4 py-3'>
                 <div className='flex items-center justify-between gap-3'>
                     <div>
-                        <p className='text-muted-foreground text-xs font-medium tracking-[0.16em] uppercase'>
+                        <p className='text-muted-foreground text-xs font-medium tracking-normal'>
                             {t('workbench.album')}
                         </p>
-                        <CardTitle className='mt-1 text-lg font-medium'>{t('history.title')}</CardTitle>
+                        <CardTitle className='editorial-title mt-1 text-xl font-semibold'>{t('history.title')}</CardTitle>
                     </div>
                     {totalCost > 0 && (
                         <Dialog open={isTotalCostDialogOpen} onOpenChange={setIsTotalCostDialogOpen}>
@@ -322,7 +331,7 @@ function HistoryPanelImpl({
                     value={activeTab}
                     onValueChange={(value) => setActiveTab(value as 'inspiration' | 'history')}
                     className='gap-0'>
-                    <TabsList className='grid h-auto w-full grid-cols-2 rounded-md border border-border bg-muted/55 p-1'>
+                    <TabsList className='grid h-auto w-full grid-cols-2 rounded-md border border-border bg-background/70 p-1'>
                         <TabsTrigger value='inspiration' className='min-h-9'>
                             {t('history.inspirationAlbum')}
                         </TabsTrigger>
@@ -345,53 +354,166 @@ function HistoryPanelImpl({
             </CardHeader>
             <CardContent className='flex-grow overflow-y-auto p-3 lg:p-3'>
                 {activeTab === 'inspiration' ? (
-                    inspirations.length === 0 ? (
-                        <div className='text-muted-foreground flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/20 px-4 text-center text-sm'>
-                            <WandSparkles className='h-5 w-5 opacity-70' />
-                            <p>{t('history.inspirationEmpty')}</p>
+                    <div className='space-y-3'>
+                        {inspirations.length === 0 ? (
+                            <div className='text-muted-foreground flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/20 px-4 text-center text-sm'>
+                                <WandSparkles className='h-5 w-5 opacity-70' />
+                                <p>{t('history.inspirationEmpty')}</p>
+                            </div>
+                        ) : (
+                            inspirations.map((item, index) => {
+                                const thumbnail = inspirationThumbnails[index % inspirationThumbnails.length];
+                                const title = inspirationTitles[index % inspirationTitles.length] || t('history.inspirationAlbum');
+                                const tags = inspirationTags.slice(index * 2, index * 2 + 3);
+                                return (
+                                    <div
+                                        key={item.id}
+                                        className='group grid grid-cols-[44%_1fr] gap-3 overflow-hidden rounded-md border border-border bg-card/72 p-2 shadow-sm transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-primary/25 hover:shadow-md'>
+                                        <button
+                                            type='button'
+                                            onClick={() => onApplyPrompt(item.prompt)}
+                                            className='relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-muted'>
+                                            <Image
+                                                src={thumbnail}
+                                                alt={title}
+                                                fill
+                                                sizes='160px'
+                                                className='object-cover'
+                                            />
+                                        </button>
+                                        <div className='flex min-w-0 flex-col gap-2 py-1 pr-1'>
+                                            <div className='flex items-start justify-between gap-2'>
+                                                <div className='min-w-0'>
+                                                    <p className='truncate text-sm font-medium'>{title}</p>
+                                                    <div className='mt-1 flex flex-wrap gap-1'>
+                                                        {tags.map((tag) => (
+                                                            <span
+                                                                key={tag}
+                                                                className='rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>
+                                                                {tag}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <div className='flex shrink-0 gap-0.5'>
+                                                    <Button
+                                                        type='button'
+                                                        variant='ghost'
+                                                        size='icon'
+                                                        className='h-7 w-7 text-primary'
+                                                        aria-label={t('history.favorite')}>
+                                                        <Pin className='h-4 w-4 fill-current' />
+                                                    </Button>
+                                                    <Button
+                                                        type='button'
+                                                        variant='ghost'
+                                                        size='icon'
+                                                        className='h-7 w-7 text-muted-foreground hover:text-destructive'
+                                                        onClick={() => onDeleteInspiration(item.id)}
+                                                        aria-label={t('history.deleteInspiration')}>
+                                                        <Trash2 className='h-4 w-4' />
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                            <p className='line-clamp-2 text-xs leading-5 text-muted-foreground'>{item.prompt}</p>
+                                            <div className='mt-auto flex items-center justify-between gap-2'>
+                                                <span className='text-muted-foreground text-[11px]'>
+                                                    {item.createdAt > 0 ? formatTimestamp(item.createdAt) : t('history.template')}
+                                                </span>
+                                                <Button
+                                                    type='button'
+                                                    size='sm'
+                                                    variant='outline'
+                                                    className='h-7 px-2'
+                                                    onClick={() => onApplyPrompt(item.prompt)}>
+                                                    {t('history.applyInspiration')}
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })
+                        )}
+                        <div className='flex items-center justify-between rounded-md px-1 text-sm'>
+                            <button
+                                type='button'
+                                className='inline-flex items-center gap-1.5 text-muted-foreground hover:text-primary'
+                                onClick={() => inspirations[0] && onApplyPrompt(inspirations[0].prompt)}>
+                                <Plus className='h-4 w-4' />
+                                {t('history.newInspirationTemplate')}
+                            </button>
+                            <button type='button' className='text-muted-foreground hover:text-foreground'>
+                                {t('history.manage')}
+                            </button>
                         </div>
-                    ) : (
-                        <div className='grid gap-3'>
-                            {inspirations.map((item) => (
-                                <div
-                                    key={item.id}
-                                    className='group relative overflow-hidden rounded-md border border-border bg-card/70 p-3 shadow-sm'>
-                                    <div className='absolute top-2 right-2 flex gap-1'>
-                                        <Button
-                                            type='button'
-                                            variant='ghost'
-                                            size='icon'
-                                            className='h-7 w-7 text-primary'
-                                            aria-label={t('history.favorite')}>
-                                            <Heart className='h-4 w-4 fill-current' />
-                                        </Button>
-                                        <Button
-                                            type='button'
-                                            variant='ghost'
-                                            size='icon'
-                                            className='h-7 w-7 text-muted-foreground hover:text-destructive'
-                                            onClick={() => onDeleteInspiration(item.id)}
-                                            aria-label={t('history.deleteInspiration')}>
-                                            <Trash2 className='h-4 w-4' />
-                                        </Button>
-                                    </div>
-                                    <p className='pr-16 text-sm leading-6 text-foreground'>{item.prompt}</p>
-                                    <div className='mt-3 flex items-center justify-between gap-2'>
-                                        <span className='text-muted-foreground text-xs'>
-                                            {item.createdAt > 0 ? formatTimestamp(item.createdAt) : t('history.template')}
-                                        </span>
-                                        <Button
-                                            type='button'
-                                            size='sm'
-                                            variant='outline'
-                                            onClick={() => onApplyPrompt(item.prompt)}>
-                                            {t('history.applyInspiration')}
-                                        </Button>
-                                    </div>
+                        <div className='rounded-md border border-border bg-background/68 p-3'>
+                            <div className='mb-2 flex items-center justify-between'>
+                                <p className='text-sm font-medium'>{t('history.generationStatus')}</p>
+                                <button
+                                    type='button'
+                                    className='text-muted-foreground text-xs hover:text-foreground'
+                                    onClick={onClearHistory}>
+                                    {t('history.clear')}
+                                </button>
+                            </div>
+                            <div className='space-y-2 text-xs'>
+                                <div className='flex items-center gap-2 rounded-md px-2 py-1 text-muted-foreground'>
+                                    <span className='h-2 w-2 rounded-full bg-[oklch(0.58_0.12_150)]' />
+                                    <span>10:32:11</span>
+                                    <span>{t('history.statusStart')}</span>
                                 </div>
-                            ))}
+                                <div className='flex items-center gap-2 rounded-md bg-[oklch(0.95_0.035_80)] px-2 py-1 text-muted-foreground'>
+                                    <span className='h-2 w-2 rounded-full bg-[oklch(0.65_0.14_58)]' />
+                                    <span>10:32:14</span>
+                                    <span>{t('history.statusDeveloping')}</span>
+                                </div>
+                                {history[0] ? (
+                                    <div className='flex items-center gap-2 rounded-md px-2 py-1 text-muted-foreground'>
+                                        <span className='h-2 w-2 rounded-full bg-[oklch(0.58_0.12_150)]' />
+                                        <span>{formatDuration(history[0].durationMs)}</span>
+                                        <span>{t('history.statusDone')}</span>
+                                        <span className='ml-auto flex gap-1'>
+                                            {history[0].images.slice(0, 3).map((image) => {
+                                                const source =
+                                                    history[0].storageModeUsed === 'indexeddb'
+                                                        ? getImageSrc(image.filename)
+                                                        : `/api/image/${image.filename}`;
+                                                return source ? (
+                                                    <span
+                                                        key={image.filename}
+                                                        className='relative h-6 w-6 overflow-hidden rounded-sm border border-border'>
+                                                        <Image
+                                                            src={source}
+                                                            alt={image.filename}
+                                                            fill
+                                                            sizes='24px'
+                                                            className='object-cover'
+                                                            unoptimized
+                                                        />
+                                                    </span>
+                                                ) : null;
+                                            })}
+                                        </span>
+                                    </div>
+                                ) : (
+                                    <div className='flex items-center gap-2 rounded-md px-2 py-1 text-muted-foreground'>
+                                        <span className='h-2 w-2 rounded-full bg-muted-foreground/45' />
+                                        <span>10:32:16</span>
+                                        <span>{t('history.statusEstimate')}</span>
+                                    </div>
+                                )}
+                                <div className='flex items-center gap-2 rounded-md px-2 py-1 text-destructive'>
+                                    <span className='h-2 w-2 rounded-full bg-destructive' />
+                                    <span>10:28:55</span>
+                                    <span>{t('history.statusFailed')}</span>
+                                </div>
+                            </div>
                         </div>
-                    )
+                        <div className='ml-auto flex w-fit items-center gap-2 rounded-md bg-[oklch(0.92_0.055_78)] px-3 py-2 text-xs text-muted-foreground shadow-sm'>
+                            <Smartphone className='h-4 w-4' />
+                            {t('history.mobileHint')}
+                        </div>
+                    </div>
                 ) : history.length === 0 ? (
                     <div className='text-muted-foreground flex min-h-24 items-center justify-center rounded-md border border-dashed border-border px-4 text-center text-sm'>
                         <p>{t('history.empty')}</p>

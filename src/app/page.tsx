@@ -11,6 +11,7 @@ import { PasswordDialog } from '@/components/password-dialog';
 import { ShareDialog, type ShareDialogValues } from '@/components/share-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
     buildApiErrorNotice,
     buildBatchPartialFailureMessage,
@@ -43,7 +44,7 @@ import {
 } from '@/lib/streaming-batch';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowDown, CircleCheck, Loader2, Lock, Terminal } from 'lucide-react';
+import { ArrowDown, CircleCheck, Heart, HelpCircle, Loader2, Lock, Settings2, Terminal } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -342,6 +343,89 @@ function mergeActualCostValues(costs: Array<ActualCostDetails | undefined>): Act
         upstreamProvider: 'new-api',
         reason: '批量请求中存在未匹配到实际扣费的子请求，未将估算值标记为实际扣费。'
     };
+}
+
+function WorkbenchProDock({
+    outputFormat,
+    quality,
+    model,
+    size,
+    streamMode
+}: {
+    outputFormat: GenerationFormData['output_format'];
+    quality: GenerationFormData['quality'];
+    model: GptImageModel;
+    size: GenerationFormData['size'];
+    streamMode: ImageStreamMode;
+}) {
+    const { t } = useI18n();
+    const qualityPercent = quality === 'high' ? 80 : quality === 'medium' ? 60 : quality === 'low' ? 38 : 70;
+    const resolution = getPresetDimensions(size, model) ?? (size === 'custom' ? 'custom' : '1024 px');
+
+    return (
+        <div className='hidden border-t border-border/70 bg-background/64 px-5 py-3 lg:block'>
+            <div className='mb-3 flex items-center gap-6 text-sm'>
+                <span className='text-muted-foreground'>{t('ux.easyMode')}</span>
+                <span className='border-b-2 border-primary px-3 pb-2 font-medium text-primary'>{t('ux.professionalMode')}</span>
+            </div>
+            <div className='overflow-hidden rounded-lg border border-border bg-card/76'>
+                <Tabs value='output' className='gap-0'>
+                    <TabsList className='grid h-10 w-full grid-cols-4 rounded-none border-b border-border bg-muted/35 p-0'>
+                        <TabsTrigger value='output' className='rounded-none'>
+                            {t('ux.output')}
+                        </TabsTrigger>
+                        <TabsTrigger value='model' className='rounded-none'>
+                            {t('ux.modelRoute')}
+                        </TabsTrigger>
+                        <TabsTrigger value='stream' className='rounded-none'>
+                            {t('ux.streaming')}
+                        </TabsTrigger>
+                        <TabsTrigger value='route' className='rounded-none'>
+                            {t('ux.route')}
+                        </TabsTrigger>
+                    </TabsList>
+                </Tabs>
+                <div className='grid grid-cols-5 gap-3 px-4 py-3 text-xs'>
+                    <div className='space-y-1'>
+                        <p className='text-muted-foreground'>{t('form.outputFormat')}</p>
+                        <div className='rounded-md border border-border bg-background/68 px-3 py-2 font-medium uppercase'>
+                            {outputFormat === 'jpeg' ? 'JPG' : outputFormat}
+                        </div>
+                    </div>
+                    <div className='space-y-1'>
+                        <p className='text-muted-foreground'>{t('ux.colorSpace')}</p>
+                        <div className='rounded-md border border-border bg-background/68 px-3 py-2 font-medium'>sRGB</div>
+                    </div>
+                    <div className='space-y-1'>
+                        <p className='text-muted-foreground'>{t('form.quality')}</p>
+                        <div className='flex items-center gap-2 pt-2'>
+                            <span className='h-1.5 flex-1 rounded-full bg-muted'>
+                                <span
+                                    className='block h-full rounded-full bg-primary'
+                                    style={{ width: `${qualityPercent}%` }}
+                                />
+                            </span>
+                            <span className='rounded-md border border-border bg-background/68 px-2 py-1'>
+                                {qualityPercent}%
+                            </span>
+                        </div>
+                    </div>
+                    <div className='space-y-1'>
+                        <p className='text-muted-foreground'>{t('ux.resolution')}</p>
+                        <div className='rounded-md border border-border bg-background/68 px-3 py-2 font-medium'>{resolution}</div>
+                    </div>
+                    <div className='grid grid-cols-[1fr_auto] gap-x-3 gap-y-2 border-l border-border pl-4'>
+                        <span className='text-muted-foreground'>{t('ux.watermark')}</span>
+                        <span className='h-4 w-8 rounded-full bg-muted' />
+                        <span className='text-muted-foreground'>EXIF</span>
+                        <span className='h-4 w-8 rounded-full bg-primary' />
+                        <span className='text-muted-foreground'>{streamMode}</span>
+                        <span className='h-4 w-8 rounded-full bg-primary' />
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 }
 
 export default function HomePage() {
@@ -1743,38 +1827,48 @@ export default function HomePage() {
             ) : null}
             {!showEntryLock && isPasswordRequiredByBackend !== null ? (
                 <>
-                    <div className='mx-auto flex min-h-screen w-full max-w-[1800px] flex-col px-3 py-3 sm:px-4 lg:h-full lg:min-h-0 lg:px-5 lg:py-4'>
-                        <header className='paper-soft-shadow mb-3 flex shrink-0 flex-col gap-3 border-b border-border/70 bg-background/80 px-3 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between lg:rounded-lg lg:border'>
-                            <div className='min-w-0'>
-                                <p className='text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase'>
-                                    {t('app.brand')}
-                                </p>
-                                <h1 className='mt-1 truncate text-xl font-semibold tracking-normal sm:text-2xl'>
+                    <div className='mx-auto flex min-h-screen w-full max-w-[1680px] flex-col px-4 py-3 lg:h-full lg:min-h-0 lg:px-7 lg:py-5'>
+                        <header className='mb-5 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                            <div className='flex min-w-0 items-center gap-3'>
+                                <h1 className='editorial-title truncate text-3xl font-semibold tracking-normal sm:text-4xl'>
                                     {t('app.studioTitle')}
                                 </h1>
-                                <p className='text-muted-foreground mt-1 text-sm'>{t('app.studioSubtitle')}</p>
+                                <Heart className='hidden h-7 w-7 text-primary sm:block' />
+                                <p className='text-muted-foreground text-sm'>{t('app.studioSubtitle')}</p>
                             </div>
-                            <div className='flex flex-col gap-2 sm:items-end'>
-                                <div className='flex flex-wrap gap-1.5 text-xs'>
-                                    <span className='rounded-full border border-border bg-card/75 px-2 py-1 text-muted-foreground'>
-                                        {mode === 'generate' ? genModel : editModel}
-                                    </span>
-                                    <span className='inline-flex items-center gap-1 rounded-full border border-secondary/50 bg-secondary/45 px-2 py-1 text-secondary-foreground'>
+                            <div className='flex flex-wrap items-center gap-4 sm:justify-end'>
+                                <div className='flex flex-wrap items-center gap-3 text-sm text-muted-foreground'>
+                                    <span className='inline-flex items-center gap-2'>
                                         <CircleCheck className='h-3.5 w-3.5' />
+                                        {t('app.apiConnected')}
+                                    </span>
+                                    <span className='hidden sm:inline'>{mode === 'generate' ? genModel : editModel}</span>
+                                    <span className='hidden sm:inline'>
                                         {streamMode === 'non_stream'
                                             ? t('streaming.modeNonStream')
                                             : streamMode === 'stream'
                                               ? t('streaming.modeStream')
                                               : t('streaming.modeAuto')}
                                     </span>
-                                    <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-primary'>
-                                        {t('workbench.estimatedCost')}
+                                </div>
+                                <div className='hidden items-center gap-4 text-muted-foreground sm:flex'>
+                                    <HelpCircle className='h-4 w-4' />
+                                    <button
+                                        type='button'
+                                        onClick={() => setIsApiSettingsDialogOpen(true)}
+                                        aria-label={t('app.apiSettings')}>
+                                        <Settings2 className='h-4 w-4' />
+                                    </button>
+                                    <span className='flex h-8 w-8 items-center justify-center rounded-full bg-[oklch(0.34_0.06_55)] text-sm text-white'>
+                                        M
                                     </span>
                                 </div>
-                                <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
+                                <div className='sm:hidden'>
+                                    <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
+                                </div>
                             </div>
                         </header>
-                        <div className='grid flex-1 grid-cols-1 gap-3 lg:min-h-0 lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)_minmax(250px,310px)] xl:grid-cols-[minmax(320px,390px)_minmax(0,1fr)_minmax(280px,340px)]'>
+                        <div className='grid flex-1 grid-cols-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(360px,410px)_minmax(0,1fr)_minmax(360px,430px)]'>
                             <section
                                 aria-label={t('app.creationControls')}
                                 className='order-1 min-h-[620px] lg:order-1 lg:min-h-0 lg:overflow-hidden'>
@@ -1900,7 +1994,7 @@ export default function HomePage() {
                             <section
                                 ref={outputPanelRef}
                                 aria-label={t('app.canvasPreview')}
-                                className='order-2 scroll-mt-4 flex min-h-[460px] flex-col rounded-lg border border-border bg-card/58 p-2 shadow-sm lg:order-2 lg:min-h-0'>
+                                className='order-2 scroll-mt-4 flex min-h-[460px] flex-col lg:order-2 lg:min-h-0'>
                                 {error && (
                                     <Alert
                                         variant='destructive'
@@ -1931,6 +2025,13 @@ export default function HomePage() {
                                     openLogsSignal={openLogsSignal}
                                     logClientRequestIds={activeLogClientRequestIds}
                                     logFilenames={activeLogFilenames}
+                                />
+                                <WorkbenchProDock
+                                    outputFormat={mode === 'generate' ? genOutputFormat : editOutputFormat}
+                                    quality={mode === 'generate' ? genQuality : editQuality}
+                                    model={mode === 'generate' ? genModel : editModel}
+                                    size={mode === 'generate' ? genSize : editSize}
+                                    streamMode={streamMode}
                                 />
                             </section>
                             <aside

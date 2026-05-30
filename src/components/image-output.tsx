@@ -12,7 +12,19 @@ import {
 import { useI18n } from '@/lib/i18n';
 import { filterLogsByScope, resolveLogClientRequestIds } from '@/lib/log-filter';
 import { cn } from '@/lib/utils';
-import { Copy, Download, GitCompare, Grid, Loader2, RefreshCcw, Send, Share2, Terminal, Trash2 } from 'lucide-react';
+import {
+    Copy,
+    Download,
+    GitCompare,
+    Grid,
+    Loader2,
+    MoreHorizontal,
+    RefreshCcw,
+    Send,
+    Share2,
+    Terminal,
+    Trash2
+} from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
 
@@ -233,26 +245,33 @@ export function ImageOutput({
     const canUseImageActions = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
 
     return (
-        <div className='bg-card/92 text-card-foreground flex h-full min-h-[300px] w-full flex-col gap-3 overflow-hidden rounded-md border border-border p-3 shadow-sm sm:p-4'>
-            <div className='flex shrink-0 items-center justify-between gap-3'>
-                <div>
-                    <p className='text-muted-foreground text-xs font-medium tracking-[0.16em] uppercase'>
-                        {t('output.previewEyebrow')}
-                    </p>
-                    <h2 className='text-lg font-medium'>{t('output.previewTitle')}</h2>
+        <div className='workbench-panel text-card-foreground flex h-full min-h-[300px] w-full flex-col overflow-hidden rounded-lg border border-border'>
+            <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/70 px-4 py-3'>
+                <h2 className='editorial-title text-xl font-semibold'>{t('output.previewTitle')}</h2>
+                <div className='text-muted-foreground flex flex-wrap items-center gap-3 text-xs'>
+                    <span className='inline-flex items-center gap-1.5'>
+                        {isLoading ? (
+                            <>
+                                <Loader2 className='h-3.5 w-3.5 animate-spin text-primary' />
+                                {t('output.progressDeveloping')}
+                            </>
+                        ) : (
+                            t('output.previewReady')
+                        )}
+                    </span>
+                    <span className='h-2 w-24 overflow-hidden rounded-full bg-muted'>
+                        <span className='block h-full w-[62%] rounded-full bg-[oklch(0.76_0.12_76)]' />
+                    </span>
+                    <span>{t('output.estimatedSeconds')}</span>
+                    <span>4:3</span>
+                    <span>1024 x 768</span>
                 </div>
-                {isLoading && (
-                    <div className='text-primary flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs'>
-                        <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                        {t('output.progressGenerating')}
-                    </div>
-                )}
             </div>
-            <div className='relative flex h-full w-full flex-grow items-center justify-center overflow-hidden rounded-sm border border-border/70 bg-background/45'>
+            <div className='relative flex min-h-[360px] flex-1 items-center justify-center overflow-hidden bg-[linear-gradient(180deg,oklch(0.995_0.007_85),oklch(0.972_0.016_80))] px-4 py-6 sm:px-8'>
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
                         // 展示流式预览图，单图时和最终视图一样居中。
-                        <div className='relative flex h-full w-full items-center justify-center'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[760px] items-center justify-center p-3'>
                             {/* 展示最新的预览图，也就是最大索引图片。 */}
                             {(() => {
                                 const entries = Array.from(streamingPreviewImages.entries());
@@ -265,7 +284,7 @@ export function ImageOutput({
                                         alt={t('output.streaming')}
                                         width={512}
                                         height={512}
-                                        className='max-h-full max-w-full object-contain'
+                                        className='h-full w-full object-contain'
                                         unoptimized
                                     />
                                 );
@@ -277,7 +296,7 @@ export function ImageOutput({
                             </div>
                         </div>
                     ) : currentMode === 'edit' && baseImagePreviewUrl ? (
-                        <div className='relative flex h-full w-full items-center justify-center'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[760px] items-center justify-center p-3'>
                             <Image
                                 src={baseImagePreviewUrl}
                                 alt={t('output.editing')}
@@ -300,11 +319,11 @@ export function ImageOutput({
                 ) : imageBatch && imageBatch.length > 0 ? (
                     viewMode === 'grid' ? (
                         <div
-                            className={`grid ${getGridColsClass(imageBatch.length)} max-h-full w-full max-w-full gap-1 p-1`}>
+                            className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[780px] gap-2`}>
                             {imageBatch.map((img, index) => (
                                 <div
                                     key={img.filename}
-                                    className='relative aspect-square overflow-hidden rounded border border-border'>
+                                    className='photo-paper relative aspect-square overflow-hidden p-2'>
                                     <Image
                                         src={img.path}
                                         alt={t('output.generatedImage', { index: index + 1 })}
@@ -317,23 +336,37 @@ export function ImageOutput({
                             ))}
                         </div>
                     ) : imageBatch[viewMode] ? (
-                        <Image
-                            src={imageBatch[viewMode].path}
-                            alt={altText}
-                            width={512}
-                            height={512}
-                            className='max-h-full max-w-full object-contain'
-                            unoptimized
-                        />
+                        <div className='photo-paper relative aspect-[4/3] w-full max-w-[760px] p-3'>
+                            <Image
+                                src={imageBatch[viewMode].path}
+                                alt={altText}
+                                fill
+                                sizes='(max-width: 768px) 92vw, 56vw'
+                                className='object-contain'
+                                unoptimized
+                            />
+                        </div>
                     ) : (
                         <div className='text-muted-foreground text-center'>
                             <p>{t('output.error')}</p>
                         </div>
                     )
                 ) : (
-                    <div className='mx-auto max-w-sm px-4 text-center'>
-                        <p className='text-foreground text-base font-medium'>{t('output.emptyTitle')}</p>
-                        <p className='text-muted-foreground mt-2 text-sm leading-6'>{t('output.emptyDescription')}</p>
+                    <div className='photo-paper relative aspect-[4/3] w-full max-w-[760px] p-3'>
+                        <Image
+                            src='/assets/workbench-sample.jpg'
+                            alt={t('output.sampleAlt')}
+                            fill
+                            sizes='(max-width: 768px) 92vw, 56vw'
+                            className='object-cover p-3'
+                            priority
+                        />
+                        <div className='absolute right-7 bottom-4 rotate-[-2deg] text-sm text-muted-foreground hand-note'>
+                            soft day :)
+                        </div>
+                        <div className='absolute left-6 bottom-5 rounded-full border border-border/70 bg-background/82 px-3 py-1 text-xs text-muted-foreground shadow-sm'>
+                            {t('output.sampleLabel')}
+                        </div>
                     </div>
                 )}
             </div>
@@ -411,9 +444,9 @@ export function ImageOutput({
                 </DialogContent>
             </Dialog>
 
-            <div className='flex min-h-10 w-full shrink-0 flex-wrap items-center justify-center gap-2'>
+            <div className='flex min-h-12 w-full shrink-0 flex-wrap items-center justify-center gap-1.5 border-t border-border/70 bg-background/72 px-3 py-3'>
                 {showCarousel && (
-                    <div className='bg-muted/70 flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border border-border p-1'>
+                    <div className='bg-card/80 flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border border-border p-1'>
                         <Button
                             variant='ghost'
                             size='icon'
@@ -525,6 +558,14 @@ export function ImageOutput({
                     )}>
                     <Share2 className='mr-2 h-4 w-4' />
                     {t('output.share')}
+                </Button>
+                <Button
+                    variant='outline'
+                    size='sm'
+                    disabled
+                    className='min-h-9 shrink-0 disabled:opacity-50'
+                    aria-label={t('output.more')}>
+                    <MoreHorizontal className='h-4 w-4' />
                 </Button>
             </div>
         </div>
