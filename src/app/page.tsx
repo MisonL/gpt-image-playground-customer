@@ -1,7 +1,6 @@
 'use client';
 
 import { ApiSettingsDialog, type ApiSettings } from '@/components/api-settings-dialog';
-import { AppControls } from '@/components/app-controls';
 import { EditingForm, type EditingFormData } from '@/components/editing-form';
 import { GenerationForm, type GenerationFormData } from '@/components/generation-form';
 import { HistoryPanel, type InspirationItem } from '@/components/history-panel';
@@ -1890,7 +1889,15 @@ export default function HomePage() {
                                     </span>
                                 </div>
                                 <div className='sm:hidden'>
-                                    <AppControls onOpenApiSettings={() => setIsApiSettingsDialogOpen(true)} />
+                                    <Button
+                                        type='button'
+                                        variant='outline'
+                                        size='icon'
+                                        onClick={() => setIsApiSettingsDialogOpen(true)}
+                                        className='h-9 w-9 bg-card/80 shadow-sm'
+                                        aria-label={t('app.apiSettings')}>
+                                        <Settings2 className='h-4 w-4' />
+                                    </Button>
                                 </div>
                             </div>
                         </header>

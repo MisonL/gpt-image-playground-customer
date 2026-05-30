@@ -48,7 +48,7 @@
         Arial, Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
     --font-geist-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
     --radius: 0.5rem;
-    --background: oklch(0.976 0.018 82);
+    --background: oklch(0.956 0.023 80);
     --foreground: oklch(0.225 0.026 56);
     --card: oklch(0.992 0.01 84);
     --card-foreground: oklch(0.225 0.026 56);
@@ -58,7 +58,7 @@
     --primary-foreground: oklch(0.99 0.016 84);
     --secondary: oklch(0.892 0.044 122);
     --secondary-foreground: oklch(0.255 0.034 66);
-    --muted: oklch(0.938 0.023 78);
+    --muted: oklch(0.922 0.027 78);
     --muted-foreground: oklch(0.505 0.031 58);
     --accent: oklch(0.925 0.052 35);
     --accent-foreground: oklch(0.285 0.037 52);
@@ -127,13 +127,18 @@
 @layer utilities {
     .studio-paper {
         background:
-            radial-gradient(circle at 20% 4%, oklch(0.99 0.025 82 / 0.9), transparent 24rem),
-            radial-gradient(circle at 84% 14%, oklch(0.94 0.04 40 / 0.34), transparent 26rem),
-            linear-gradient(90deg, oklch(0.995 0.008 86 / 0.9), oklch(0.97 0.02 79 / 0.78)),
+            radial-gradient(circle at 20% 4%, oklch(0.99 0.025 82 / 0.82), transparent 24rem),
+            radial-gradient(circle at 84% 14%, oklch(0.94 0.04 40 / 0.36), transparent 26rem),
+            linear-gradient(90deg, oklch(0.984 0.012 86 / 0.92), oklch(0.948 0.025 78 / 0.82)),
             repeating-linear-gradient(
                 90deg,
-                color-mix(in oklch, var(--border) 10%, transparent) 0 1px,
+                color-mix(in oklch, var(--border) 14%, transparent) 0 1px,
                 transparent 1px 14px
+            ),
+            repeating-linear-gradient(
+                0deg,
+                oklch(1 0 0 / 0.16) 0 1px,
+                transparent 1px 3px
             ),
             var(--background);
     }
@@ -149,9 +154,16 @@
 
     .workbench-panel {
         background:
-            linear-gradient(180deg, oklch(0.998 0.006 86 / 0.96), oklch(0.982 0.014 82 / 0.9)),
+            linear-gradient(180deg, oklch(0.998 0.007 86 / 0.98), oklch(0.976 0.017 82 / 0.92)),
+            repeating-linear-gradient(
+                90deg,
+                oklch(0.72 0.025 76 / 0.045) 0 1px,
+                transparent 1px 9px
+            ),
             var(--card);
-        box-shadow: 0 14px 35px oklch(0.37 0.036 54 / 0.08);
+        box-shadow:
+            0 1px 0 oklch(1 0 0 / 0.72) inset,
+            0 14px 35px oklch(0.37 0.036 54 / 0.1);
     }
 
     .photo-paper {

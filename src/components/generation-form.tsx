@@ -123,6 +123,10 @@ type GenerationFormProps = {
 };
 
 type AdvancedTab = 'route' | 'output' | 'stream';
+type PromptTagPattern = {
+    test: (value: string) => boolean;
+    remove: (value: string) => string;
+};
 
 const promptStyleTags = [
     'promptTag.film',
@@ -134,6 +138,27 @@ const promptStyleTags = [
     'promptTag.coffee',
     'promptTag.summerWindow'
 ];
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function createPromptTagPattern(label: string): PromptTagPattern {
+    const escapedLabel = escapeRegExp(label);
+    const tokenPattern = new RegExp(`(^|[，,、\\s])${escapedLabel}(?=$|[，,、\\s])`);
+    const removePattern = new RegExp(`(^|[，,、\\s]+)${escapedLabel}(?=$|[，,、\\s]+)`, 'g');
+
+    return {
+        test: (value) => tokenPattern.test(value),
+        remove: (value) =>
+            value
+                .replace(removePattern, '$1')
+                .replace(/[，,、\s]+$/g, '')
+                .replace(/^[，,、\s]+/g, '')
+                .replace(/\s*([，,、])\s*/g, '$1')
+                .replace(/([，,、]){2,}/g, '$1')
+    };
+}
 
 const RadioItemWithIcon = ({
     value,
@@ -313,8 +338,9 @@ export function GenerationForm({
         (label: string) => {
             setPrompt((current) => {
                 const trimmed = current.trim();
+                const pattern = createPromptTagPattern(label);
                 if (!trimmed) return label;
-                if (trimmed.includes(label)) return current;
+                if (pattern.test(trimmed)) return pattern.remove(trimmed);
                 return `${trimmed}，${label}`;
             });
         },
@@ -421,17 +447,18 @@ export function GenerationForm({
                         <div className='flex flex-wrap gap-1.5 pt-1.5'>
                             {promptStyleTags.map((key) => {
                                 const label = t(key);
-                                const selected = prompt.includes(label);
+                                const selected = createPromptTagPattern(label).test(prompt);
                                 return (
                                     <button
                                         key={key}
                                         type='button'
                                         onClick={() => applyPromptTag(label)}
                                         disabled={isLoading}
-                                        className={`rounded-full border px-2.5 py-0.5 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
+                                        aria-pressed={selected}
+                                        className={`rounded-full border px-2.5 py-0.5 text-xs shadow-sm transition-[background-color,border-color,color,transform,box-shadow] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
                                             selected
-                                                ? 'border-primary/45 bg-accent text-primary'
-                                                : 'border-border bg-background/68 text-muted-foreground hover:border-primary/25 hover:bg-accent/55 hover:text-foreground'
+                                                ? 'border-primary/55 bg-primary text-primary-foreground shadow-[0_4px_10px_oklch(0.5_0.12_30/0.14)]'
+                                                : 'border-border bg-background/78 text-muted-foreground hover:border-primary/25 hover:bg-accent/55 hover:text-foreground'
                                         }`}>
                                         {label}
                                     </button>
