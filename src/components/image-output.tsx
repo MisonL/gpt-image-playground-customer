@@ -69,10 +69,33 @@ type LogEntry = {
     filenames?: string[];
 };
 
+type ImageDimensions = {
+    width: number;
+    height: number;
+};
+
 function formatLogTime(value: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
     return date.toLocaleTimeString();
+}
+
+function readImageDimensionsFromSource(source: string): Promise<ImageDimensions | null> {
+    return new Promise((resolve) => {
+        const image = new window.Image();
+        image.onload = () => {
+            if (!image.naturalWidth || !image.naturalHeight) {
+                resolve(null);
+                return;
+            }
+            resolve({
+                width: image.naturalWidth,
+                height: image.naturalHeight
+            });
+        };
+        image.onerror = () => resolve(null);
+        image.src = source;
+    });
 }
 
 const getGridColsClass = (count: number): string => {
@@ -114,6 +137,7 @@ export function ImageOutput({
         selectedImageIndex: number;
         compareTargetIndex: number;
     } | null>(null);
+    const [imageDimensions, setImageDimensions] = React.useState<Record<string, ImageDimensions>>({});
     const logEndRef = React.useRef<HTMLDivElement | null>(null);
     const resolvedLogClientRequestIds = React.useMemo(
         () => resolveLogClientRequestIds({ logs, clientRequestIds: logClientRequestIds, filenames: logFilenames }),
@@ -142,6 +166,27 @@ export function ImageOutput({
         ? resolveCompareTargetIndex(imageBatch.length, selectedImageIndex)
         : null;
     const compareTargetImage = compareTargetIndex === null ? null : imageBatch?.[compareTargetIndex] || null;
+    const selectedImageDimensions = selectedImage ? imageDimensions[selectedImage.filename] : null;
+    const previewStateLabel = isLoading
+        ? t('output.progressDeveloping')
+        : imageBatch && imageBatch.length > 0
+          ? t('output.previewReady')
+          : t('output.emptyTitle');
+    const previewMetaItems = [
+        !isLoading && imageBatch && imageBatch.length > 0
+            ? t('output.selectedImageMeta', {
+                  index: selectedImageIndex === null ? 1 : selectedImageIndex + 1,
+                  count: imageBatch.length
+              })
+            : null,
+        !isLoading && selectedImageDimensions
+            ? t('output.imageDimensions', {
+                  width: selectedImageDimensions.width,
+                  height: selectedImageDimensions.height
+              })
+            : null,
+        isLoading ? (isStreamingRequest ? t('output.streaming') : t('output.progressGenerating')) : null
+    ].filter((item): item is string => Boolean(item));
     const canUseSelectedImageActions = !isLoading && !!selectedImage;
     const canCompareImages = !isLoading && !!selectedImage && !!compareTargetImage;
     const isCompareView =
@@ -174,6 +219,25 @@ export function ImageOutput({
             setCompareSelection({ imageBatch, selectedImageIndex, compareTargetIndex });
         }
     };
+
+    const handleImageLoad = React.useCallback((filename: string, event: React.SyntheticEvent<HTMLImageElement>) => {
+        const source = event.currentTarget.currentSrc || event.currentTarget.src;
+        if (!source) return;
+
+        void readImageDimensionsFromSource(source).then((nextDimensions) => {
+            if (!nextDimensions) return;
+            setImageDimensions((current) => {
+                const currentDimensions = current[filename];
+                if (
+                    currentDimensions?.width === nextDimensions.width &&
+                    currentDimensions.height === nextDimensions.height
+                ) {
+                    return current;
+                }
+                return { ...current, [filename]: nextDimensions };
+            });
+        });
+    }, []);
 
     const handleLogDialogOpenChange = (open: boolean) => {
         setIsLogDialogOpen(open);
@@ -271,20 +335,22 @@ export function ImageOutput({
                 <div className='text-muted-foreground flex flex-wrap items-center gap-3 text-xs'>
                     <span className='inline-flex items-center gap-1.5'>
                         {isLoading ? (
-                            <>
-                                <Loader2 className='h-3.5 w-3.5 animate-spin text-primary' />
-                                {t('output.progressDeveloping')}
-                            </>
+                            <Loader2 className='h-3.5 w-3.5 animate-spin text-primary' />
                         ) : (
-                            t('output.previewReady')
+                            <span
+                                className={cn(
+                                    'h-2 w-2 rounded-full',
+                                    imageBatch && imageBatch.length > 0
+                                        ? 'bg-[oklch(0.5_0.12_150)]'
+                                        : 'bg-muted-foreground/45'
+                                )}
+                            />
                         )}
+                        {previewStateLabel}
                     </span>
-                    <span className='h-2 w-24 overflow-hidden rounded-full bg-muted'>
-                        <span className='block h-full w-[62%] rounded-full bg-[oklch(0.76_0.12_76)]' />
-                    </span>
-                    <span>{t('output.estimatedSeconds')}</span>
-                    <span>4:3</span>
-                    <span>1024 x 768</span>
+                    {previewMetaItems.map((item) => (
+                        <span key={item}>{item}</span>
+                    ))}
                 </div>
             </div>
             <div className='relative flex min-h-[420px] flex-1 items-center justify-center overflow-hidden bg-[linear-gradient(180deg,oklch(0.995_0.007_85),oklch(0.972_0.016_80))] px-3 py-5 sm:px-6 lg:min-h-[520px]'>
@@ -364,6 +430,7 @@ export function ImageOutput({
                                         fill
                                         style={{ objectFit: 'contain' }}
                                         sizes='(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw'
+                                        onLoad={(event) => handleImageLoad(img.filename, event)}
                                         unoptimized
                                     />
                                 </button>
@@ -377,6 +444,7 @@ export function ImageOutput({
                                 fill
                                 sizes='(max-width: 768px) 92vw, 56vw'
                                 className='object-contain'
+                                onLoad={(event) => handleImageLoad(imageBatch[viewMode].filename, event)}
                                 unoptimized
                             />
                         </div>
@@ -478,132 +546,134 @@ export function ImageOutput({
                 </DialogContent>
             </Dialog>
 
-            <div className='flex w-full shrink-0 flex-wrap items-center justify-center gap-1 border-t border-border/40 bg-transparent px-3 py-2'>
-                {showCarousel && (
-                    <div className='bg-card/80 flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border border-border p-1'>
-                        <Button
-                            variant='ghost'
-                            size='icon'
-                            className={cn(
-                                'h-8 w-8 rounded p-1',
-                                viewMode === 'grid' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
-                            )}
-                            onClick={() => onViewChange('grid')}
-                            aria-label={t('output.showGrid')}>
-                            <Grid className='h-4 w-4' />
-                        </Button>
-                        {imageBatch.map((img, index) => (
+            {hasSelectedImageBatch ? (
+                <div className='flex w-full shrink-0 flex-wrap items-center justify-center gap-1 border-t border-border/40 bg-transparent px-3 py-2'>
+                    {showCarousel && (
+                        <div className='bg-card/80 flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border border-border p-1'>
                             <Button
-                                key={img.filename}
                                 variant='ghost'
                                 size='icon'
                                 className={cn(
-                                    'h-8 w-8 overflow-hidden rounded p-0.5',
-                                    viewMode === index
-                                        ? 'ring-2 ring-ring ring-offset-1 ring-offset-background'
-                                        : 'opacity-60 hover:opacity-100'
+                                    'h-8 w-8 rounded p-1',
+                                    viewMode === 'grid' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
                                 )}
-                                onClick={() => onViewChange(index)}
-                                aria-label={t('output.selectImage', { index: index + 1 })}>
-                                <Image
-                                    src={img.path}
-                                    alt={t('output.thumbnail', { index: index + 1 })}
-                                    width={28}
-                                    height={28}
-                                    className='h-full w-full object-cover'
-                                    unoptimized
-                                />
+                                onClick={() => onViewChange('grid')}
+                                aria-label={t('output.showGrid')}>
+                                <Grid className='h-4 w-4' />
                             </Button>
-                        ))}
-                    </div>
-                )}
+                            {imageBatch.map((img, index) => (
+                                <Button
+                                    key={img.filename}
+                                    variant='ghost'
+                                    size='icon'
+                                    className={cn(
+                                        'h-8 w-8 overflow-hidden rounded p-0.5',
+                                        viewMode === index
+                                            ? 'ring-2 ring-ring ring-offset-1 ring-offset-background'
+                                            : 'opacity-60 hover:opacity-100'
+                                    )}
+                                    onClick={() => onViewChange(index)}
+                                    aria-label={t('output.selectImage', { index: index + 1 })}>
+                                    <Image
+                                        src={img.path}
+                                        alt={t('output.thumbnail', { index: index + 1 })}
+                                        width={28}
+                                        height={28}
+                                        className='h-full w-full object-cover'
+                                        unoptimized
+                                    />
+                                </Button>
+                            ))}
+                        </div>
+                    )}
 
-                {canOpenLogs && (
+                    {canOpenLogs && (
+                        <Button
+                            variant='ghost'
+                            size='sm'
+                            onClick={() => setIsLogDialogOpen(true)}
+                            className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground'>
+                            <Activity className='mr-2 h-4 w-4' />
+                            {t('logs.open')}
+                        </Button>
+                    )}
+
                     <Button
                         variant='ghost'
                         size='sm'
-                        onClick={() => setIsLogDialogOpen(true)}
-                        className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground'>
-                        <Activity className='mr-2 h-4 w-4' />
-                        {t('logs.open')}
+                        onClick={handleSendClick}
+                        disabled={!canUseSelectedImageActions}
+                        className={cn(
+                            'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
+                            showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
+                        )}>
+                        <Send className='mr-2 h-4 w-4' />
+                        {t('output.continueEdit')}
                     </Button>
-                )}
-
-                <Button
-                    variant='ghost'
-                    size='sm'
-                    onClick={handleSendClick}
-                    disabled={!canUseSelectedImageActions}
-                    className={cn(
-                        'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
-                        showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
-                    )}>
-                    <Send className='mr-2 h-4 w-4' />
-                    {t('output.continueEdit')}
-                </Button>
-                <Button
-                    variant='ghost'
-                    size='sm'
-                    onClick={onCreateVariant}
-                    disabled={isLoading || !canCreateVariant}
-                    className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'>
-                    <RefreshCcw className='mr-2 h-4 w-4' />
-                    {t('output.createVariant')}
-                </Button>
-                <Button
-                    variant='ghost'
-                    size='sm'
-                    onClick={onReusePrompt}
-                    disabled={isLoading || !canReusePrompt}
-                    className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'>
-                    <Copy className='mr-2 h-4 w-4' />
-                    {t('output.reusePrompt')}
-                </Button>
-                <Button
-                    variant='ghost'
-                    size='sm'
-                    onClick={handleCompareClick}
-                    disabled={!canCompareImages}
-                    className={cn(
-                        'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
-                        isCompareView ? 'bg-accent text-accent-foreground hover:text-accent-foreground' : ''
-                    )}>
-                    <GitCompare className='mr-2 h-4 w-4' />
-                    {t('output.compare')}
-                </Button>
-                <Button
-                    variant='ghost'
-                    size='sm'
-                    onClick={handleDownloadClick}
-                    disabled={!canUseSelectedImageActions}
-                    className={cn(
-                        'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
-                        showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
-                    )}>
-                    <Download className='mr-2 h-4 w-4' />
-                    {t('output.download')}
-                </Button>
-                <Button
-                    variant='ghost'
-                    size='sm'
-                    onClick={handleShareClick}
-                    disabled={!canUseSelectedImageActions}
-                    className={cn(
-                        'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
-                        showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
-                    )}>
-                    <Share2 className='mr-2 h-4 w-4' />
-                    {t('output.share')}
-                </Button>
-                <Button
-                    variant='ghost'
-                    size='sm'
-                    disabled
-                    className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'
-                    aria-label={t('output.more')}>
-                    <MoreHorizontal className='h-4 w-4' />
-                </Button>
-            </div>
+                    <Button
+                        variant='ghost'
+                        size='sm'
+                        onClick={onCreateVariant}
+                        disabled={isLoading || !canCreateVariant}
+                        className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'>
+                        <RefreshCcw className='mr-2 h-4 w-4' />
+                        {t('output.createVariant')}
+                    </Button>
+                    <Button
+                        variant='ghost'
+                        size='sm'
+                        onClick={onReusePrompt}
+                        disabled={isLoading || !canReusePrompt}
+                        className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'>
+                        <Copy className='mr-2 h-4 w-4' />
+                        {t('output.reusePrompt')}
+                    </Button>
+                    <Button
+                        variant='ghost'
+                        size='sm'
+                        onClick={handleCompareClick}
+                        disabled={!canCompareImages}
+                        className={cn(
+                            'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
+                            isCompareView ? 'bg-accent text-accent-foreground hover:text-accent-foreground' : ''
+                        )}>
+                        <GitCompare className='mr-2 h-4 w-4' />
+                        {t('output.compare')}
+                    </Button>
+                    <Button
+                        variant='ghost'
+                        size='sm'
+                        onClick={handleDownloadClick}
+                        disabled={!canUseSelectedImageActions}
+                        className={cn(
+                            'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
+                            showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
+                        )}>
+                        <Download className='mr-2 h-4 w-4' />
+                        {t('output.download')}
+                    </Button>
+                    <Button
+                        variant='ghost'
+                        size='sm'
+                        onClick={handleShareClick}
+                        disabled={!canUseSelectedImageActions}
+                        className={cn(
+                            'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
+                            showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
+                        )}>
+                        <Share2 className='mr-2 h-4 w-4' />
+                        {t('output.share')}
+                    </Button>
+                    <Button
+                        variant='ghost'
+                        size='sm'
+                        disabled
+                        className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'
+                        aria-label={t('output.more')}>
+                        <MoreHorizontal className='h-4 w-4' />
+                    </Button>
+                </div>
+            ) : null}
         </div>
     );
 }

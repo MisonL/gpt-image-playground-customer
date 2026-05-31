@@ -373,7 +373,7 @@ function HistoryPanelImpl({
                     </Button>
                 )}
             </CardHeader>
-            <CardContent className='flex-grow overflow-y-auto p-3 lg:p-3'>
+            <CardContent className='flex-grow p-3 lg:overflow-y-auto lg:p-3'>
                 {activeTab === 'inspiration' ? (
                     <div className='space-y-3'>
                         {inspirations.length === 0 ? (
@@ -382,82 +382,89 @@ function HistoryPanelImpl({
                                 <p>{t('history.inspirationEmpty')}</p>
                             </div>
                         ) : (
-                            inspirations.map((item, index) => {
-                                const thumbnail = inspirationThumbnails[index % inspirationThumbnails.length];
-                                const title = inspirationTitles[index % inspirationTitles.length] || t('history.inspirationAlbum');
-                                const tags = inspirationTags.slice(index * 2, index * 2 + 2);
-                                return (
-                                    <div
-                                        key={item.id}
-                                        className='group flex items-stretch gap-3 overflow-hidden rounded-md border border-border/70 bg-card/58 p-2 shadow-sm transition-[border-color,box-shadow] hover:border-primary/30 hover:shadow-md'>
-                                        <button
-                                            type='button'
-                                            onClick={() => onApplyPrompt(item.prompt, { type: 'inspiration', title })}
-                                            className='relative min-h-24 w-36 shrink-0 overflow-hidden rounded border border-border bg-muted shadow-sm sm:w-40'>
-                                            <Image
-                                                src={thumbnail}
-                                                alt={title}
-                                                fill
-                                                sizes='160px'
-                                                className='object-cover'
-                                            />
-                                        </button>
-                                        <div className='flex min-w-0 flex-1 flex-col gap-1.5 pr-1'>
-                                            <div className='flex items-start justify-between gap-1.5'>
-                                                <div className='min-w-0'>
-                                                    <p className='truncate text-[15px] font-medium leading-5'>{title}</p>
-                                                    <div className='mt-1 flex gap-1 overflow-hidden'>
-                                                        {tags.map((tag) => (
-                                                            <span
-                                                                key={tag}
-                                                                className='shrink-0 rounded-sm bg-muted/80 px-1.5 py-0.5 text-[11px] text-muted-foreground'>
-                                                                {tag}
-                                                            </span>
-                                                        ))}
+                            <div className='-mx-3 flex snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-1 lg:mx-0 lg:block lg:space-y-3 lg:overflow-visible lg:px-0 lg:pb-0'>
+                                {inspirations.map((item, index) => {
+                                    const thumbnail = inspirationThumbnails[index % inspirationThumbnails.length];
+                                    const title =
+                                        inspirationTitles[index % inspirationTitles.length] || t('history.inspirationAlbum');
+                                    const tags = inspirationTags.slice(index * 2, index * 2 + 2);
+                                    return (
+                                        <div
+                                            key={item.id}
+                                            className='group flex w-[min(84vw,360px)] shrink-0 snap-start items-stretch gap-3 overflow-hidden rounded-md border border-border/70 bg-card/58 p-2 shadow-sm transition-[border-color,box-shadow] hover:border-primary/30 hover:shadow-md lg:w-auto'>
+                                            <button
+                                                type='button'
+                                                onClick={() => onApplyPrompt(item.prompt, { type: 'inspiration', title })}
+                                                className='relative min-h-24 w-36 shrink-0 overflow-hidden rounded border border-border bg-muted shadow-sm sm:w-40'>
+                                                <Image
+                                                    src={thumbnail}
+                                                    alt={title}
+                                                    fill
+                                                    sizes='160px'
+                                                    className='object-cover'
+                                                />
+                                            </button>
+                                            <div className='flex min-w-0 flex-1 flex-col gap-1.5 pr-1'>
+                                                <div className='flex items-start justify-between gap-1.5'>
+                                                    <div className='min-w-0'>
+                                                        <p className='truncate text-[15px] font-medium leading-5'>{title}</p>
+                                                        <div className='mt-1 flex gap-1 overflow-hidden'>
+                                                            {tags.map((tag) => (
+                                                                <span
+                                                                    key={tag}
+                                                                    className='shrink-0 rounded-sm bg-muted/80 px-1.5 py-0.5 text-[11px] text-muted-foreground'>
+                                                                    {tag}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    <div className='flex shrink-0 gap-0.5 opacity-65 transition-opacity group-hover:opacity-100'>
+                                                        <Button
+                                                            type='button'
+                                                            variant='ghost'
+                                                            size='icon'
+                                                            className='h-6 w-6 text-primary'
+                                                            aria-label={t('history.favorite')}>
+                                                            <Pin className='h-3.5 w-3.5 fill-current' />
+                                                        </Button>
+                                                        <Button
+                                                            type='button'
+                                                            variant='ghost'
+                                                            size='icon'
+                                                            className='h-6 w-6 text-muted-foreground hover:text-destructive'
+                                                            onClick={() => onDeleteInspiration(item.id)}
+                                                            aria-label={t('history.deleteInspiration')}>
+                                                            <Trash2 className='h-3.5 w-3.5' />
+                                                        </Button>
                                                     </div>
                                                 </div>
-                                                <div className='flex shrink-0 gap-0.5 opacity-65 transition-opacity group-hover:opacity-100'>
+                                                <p
+                                                    className='max-h-8 min-h-8 overflow-hidden text-xs leading-4 text-muted-foreground'
+                                                    title={item.prompt}>
+                                                    {item.prompt}
+                                                </p>
+                                                <div className='flex items-center justify-between gap-2'>
+                                                    <span className='text-muted-foreground text-[11px]'>
+                                                        {item.createdAt > 0
+                                                            ? formatTimestamp(item.createdAt)
+                                                            : t('history.template')}
+                                                    </span>
                                                     <Button
                                                         type='button'
+                                                        size='sm'
                                                         variant='ghost'
-                                                        size='icon'
-                                                        className='h-6 w-6 text-primary'
-                                                        aria-label={t('history.favorite')}>
-                                                        <Pin className='h-3.5 w-3.5 fill-current' />
-                                                    </Button>
-                                                    <Button
-                                                        type='button'
-                                                        variant='ghost'
-                                                        size='icon'
-                                                        className='h-6 w-6 text-muted-foreground hover:text-destructive'
-                                                        onClick={() => onDeleteInspiration(item.id)}
-                                                        aria-label={t('history.deleteInspiration')}>
-                                                        <Trash2 className='h-3.5 w-3.5' />
+                                                        className='h-6 px-1.5 text-xs'
+                                                        onClick={() =>
+                                                            onApplyPrompt(item.prompt, { type: 'inspiration', title })
+                                                        }>
+                                                        {t('history.applyInspiration')}
                                                     </Button>
                                                 </div>
                                             </div>
-                                            <p
-                                                className='max-h-8 min-h-8 overflow-hidden text-xs leading-4 text-muted-foreground'
-                                                title={item.prompt}>
-                                                {item.prompt}
-                                            </p>
-                                            <div className='flex items-center justify-between gap-2'>
-                                                <span className='text-muted-foreground text-[11px]'>
-                                                    {item.createdAt > 0 ? formatTimestamp(item.createdAt) : t('history.template')}
-                                                </span>
-                                                <Button
-                                                    type='button'
-                                                    size='sm'
-                                                    variant='ghost'
-                                                    className='h-6 px-1.5 text-xs'
-                                                    onClick={() => onApplyPrompt(item.prompt, { type: 'inspiration', title })}>
-                                                    {t('history.applyInspiration')}
-                                                </Button>
-                                            </div>
                                         </div>
-                                    </div>
-                                );
-                            })
+                                    );
+                                })}
+                            </div>
                         )}
                         <div className='flex items-center justify-between rounded-md px-1 text-sm'>
                             <button
@@ -571,7 +578,7 @@ function HistoryPanelImpl({
                         <p>{t('history.empty')}</p>
                     </div>
                 ) : (
-                    <div className='grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-1 2xl:grid-cols-2'>
+                    <div className='-mx-3 flex snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-1 lg:mx-0 lg:grid lg:grid-cols-1 lg:overflow-visible lg:px-0 lg:pb-0 2xl:grid-cols-2'>
                         {[...history].map((item) => {
                             const firstImage = item.images?.[0];
                             const imageCount = item.images?.length ?? 0;
@@ -605,8 +612,8 @@ function HistoryPanelImpl({
 	                            const isThumbnailUnavailable =
 	                                !thumbnailUrl || (firstImage ? failedThumbnails[firstImage.filename] : false);
 
-	                            return (
-	                                <div key={itemKey} className='flex flex-col'>
+                            return (
+                                <div key={itemKey} className='flex w-[min(76vw,280px)] shrink-0 snap-start flex-col lg:w-auto'>
 	                                    <div className='group relative'>
 	                                        <button
 	                                            type='button'
