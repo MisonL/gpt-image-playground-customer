@@ -72,4 +72,31 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /<button[^>]*disabled=""[^>]*>.*?对比.*?<\/button>/s);
     });
+
+    it('uses user-facing generation activity copy for the activity entry', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <ImageOutput
+                    imageBatch={[{ path: '/api/image/only.png', filename: 'only.png' }]}
+                    viewMode={0}
+                    onViewChange={noop}
+                    isLoading={false}
+                    onSendToEdit={noop}
+                    onDownloadImage={noop}
+                    onShareImage={noop}
+                    onCreateVariant={noop}
+                    onReusePrompt={noop}
+                    canCreateVariant
+                    canReusePrompt
+                    currentMode='generate'
+                    baseImagePreviewUrl={null}
+                    clientPasswordHash='test-hash'
+                    canOpenLogs
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /查看动态/);
+        assert.doesNotMatch(html, /查看日志/);
+    });
 });

@@ -23,7 +23,7 @@ import {
     RefreshCcw,
     Send,
     Share2,
-    Terminal,
+    Activity,
     Trash2
 } from 'lucide-react';
 import Image from 'next/image';
@@ -524,7 +524,7 @@ export function ImageOutput({
                         size='sm'
                         onClick={() => setIsLogDialogOpen(true)}
                         className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground'>
-                        <Terminal className='mr-2 h-4 w-4' />
+                        <Activity className='mr-2 h-4 w-4' />
                         {t('logs.open')}
                     </Button>
                 )}
