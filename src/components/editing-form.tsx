@@ -1,6 +1,7 @@
 'use client';
 
 import { ModeToggle } from '@/components/mode-toggle';
+import type { WorkbenchMode } from '@/components/mode-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -20,10 +21,9 @@ import type {
     ImageUpstreamFormThinking
 } from '@/lib/image-upstream-form';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
-import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
-import type { WorkbenchMode } from '@/components/mode-toggle';
+import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import {
     Eraser,
     Save,
@@ -44,7 +44,6 @@ import {
     LockOpen,
     HelpCircle,
     SquareDashed,
-    Info,
     FileImage,
     WandSparkles,
     Globe2,
@@ -146,10 +145,10 @@ type EditingFormProps = {
     editForceWeb: boolean;
     setEditForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
     initialAdvancedOpen?: boolean;
-    initialAdvancedTab?: 'route' | 'output' | 'stream';
+    initialAdvancedTab?: AdvancedTab;
 };
 
-type AdvancedTab = 'route' | 'output' | 'stream';
+type AdvancedTab = 'output' | 'model' | 'stream' | 'route';
 
 const RadioItemWithIcon = ({
     value,
@@ -174,7 +173,7 @@ const RadioItemWithIcon = ({
             aria-label={label}
             className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
             <Icon className='h-3 w-3 text-current opacity-50' />
-            <span className='min-w-0 max-w-full truncate text-center leading-4'>{label}</span>
+            <span className='max-w-full min-w-0 truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
 
@@ -278,7 +277,7 @@ export function EditingForm({
     editForceWeb,
     setEditForceWeb,
     initialAdvancedOpen = false,
-    initialAdvancedTab = 'route'
+    initialAdvancedTab = 'output'
 }: EditingFormProps) {
     const { locale, t } = useI18n();
     const [firstImagePreviewUrl, setFirstImagePreviewUrl] = React.useState<string | null>(null);
@@ -697,12 +696,16 @@ export function EditingForm({
                                     onClick={onOpenPasswordDialog}
                                     className='text-muted-foreground hover:text-foreground ml-auto h-7 px-2'
                                     aria-label={t('password.configure')}>
-                                    {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
+                                    {clientPasswordHash ? (
+                                        <Lock className='h-4 w-4' />
+                                    ) : (
+                                        <LockOpen className='h-4 w-4' />
+                                    )}
                                 </Button>
                             )}
                         </div>
                     </div>
-                    <div className='space-y-3 border-b border-dashed border-border/80 pb-4'>
+                    <div className='border-border/80 space-y-3 border-b border-dashed pb-4'>
                         <div className='flex items-start justify-between gap-3'>
                             <div className='space-y-1'>
                                 <div
@@ -710,11 +713,13 @@ export function EditingForm({
                                     className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
                                     {t('edit.referenceTitle')}
                                 </div>
-                                <p id='source-image-upload-description' className='text-muted-foreground text-xs leading-5'>
+                                <p
+                                    id='source-image-upload-description'
+                                    className='text-muted-foreground text-xs leading-5'>
                                     {t('edit.referenceHint', { count: maxImages })}
                                 </p>
                             </div>
-                            <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-xs text-primary'>
+                            <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1 text-xs'>
                                 {t('edit.referenceCount', { count: imageFiles.length, max: maxImages })}
                             </span>
                         </div>
@@ -724,13 +729,13 @@ export function EditingForm({
                             disabled={!canAddSourceImage}
                             aria-label={t('edit.referenceAction')}
                             aria-describedby='source-image-upload-description'
-                            className={`group flex w-full cursor-pointer rounded-md border border-dashed border-[oklch(0.78_0.035_75)] bg-[oklch(0.982_0.016_84)] text-center shadow-inner transition-[background-color,border-color,box-shadow,transform] hover:border-primary/35 hover:bg-[oklch(0.99_0.018_82)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60 enabled:active:scale-[0.995] ${
+                            className={`group hover:border-primary/35 focus-visible:ring-ring flex w-full cursor-pointer rounded-md border border-dashed border-[oklch(0.78_0.035_75)] bg-[oklch(0.982_0.016_84)] text-center shadow-inner transition-[background-color,border-color,box-shadow,transform] hover:bg-[oklch(0.99_0.018_82)] focus-visible:ring-2 focus-visible:outline-none enabled:active:scale-[0.995] disabled:cursor-not-allowed disabled:opacity-60 ${
                                 hasSourceImages
                                     ? 'min-h-11 flex-row items-center justify-start gap-2 px-3 py-2 text-left'
                                     : 'min-h-[116px] flex-col items-center justify-center gap-2 px-4 py-4'
                             }`}>
                             <span
-                                className={`flex items-center justify-center rounded-md border border-primary/20 bg-background/80 text-primary shadow-sm transition-transform group-hover:-translate-y-0.5 ${
+                                className={`border-primary/20 bg-background/80 text-primary flex items-center justify-center rounded-md border shadow-sm transition-transform group-hover:-translate-y-0.5 ${
                                     hasSourceImages ? 'h-8 w-8 shrink-0' : 'h-10 w-10'
                                 }`}>
                                 <UploadCloud className='h-5 w-5' />
@@ -761,7 +766,7 @@ export function EditingForm({
                             </div>
                         )}
                         {hasSourceImages && !hasSourcePreviews && (
-                            <div className='rounded-md border border-border/70 bg-background/60 px-3 py-2 text-xs leading-5 text-muted-foreground'>
+                            <div className='border-border/70 bg-background/60 text-muted-foreground rounded-md border px-3 py-2 text-xs leading-5'>
                                 {t('edit.referencePreparing')}
                             </div>
                         )}
@@ -783,7 +788,7 @@ export function EditingForm({
                                             type='button'
                                             variant='secondary'
                                             size='icon'
-                                            className='absolute top-1.5 right-1.5 h-7 w-7 rounded-full border border-background/80 bg-[oklch(0.36_0.02_62/0.74)] p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-[oklch(0.32_0.02_62/0.86)] hover:text-white sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100'
+                                            className='border-background/80 absolute top-1.5 right-1.5 h-7 w-7 rounded-full border bg-[oklch(0.36_0.02_62/0.74)] p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-[oklch(0.32_0.02_62/0.86)] hover:text-white sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100'
                                             onClick={() => handleRemoveImage(index)}
                                             aria-label={t('edit.removeImage', { index: index + 1 })}>
                                             <X className='h-3 w-3' />
@@ -794,7 +799,7 @@ export function EditingForm({
                         )}
                     </div>
 
-                    <div className='space-y-1.5 border-b border-dashed border-border/80 pb-4'>
+                    <div className='border-border/80 space-y-1.5 border-b border-dashed pb-4'>
                         <Label htmlFor='edit-prompt'>{t('edit.instructionTitle')}</Label>
                         <div className='relative'>
                             <Textarea
@@ -807,78 +812,9 @@ export function EditingForm({
                                 disabled={isLoading}
                                 className='min-h-[118px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-9 leading-7 shadow-inner'
                             />
-                            <span className='pointer-events-none absolute bottom-3 left-4 text-xs text-muted-foreground'>
+                            <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
                                 {editPrompt.trim().length} / 1000
                             </span>
-                        </div>
-                    </div>
-
-                    <div className='grid gap-3 border-b border-dashed border-border/80 pb-4'>
-                        <div className='flex items-center justify-between gap-2'>
-                            <div className='text-foreground text-sm font-medium'>{t('edit.routeSettings')}</div>
-                            {isGptImage2 && (
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <button
-                                            type='button'
-                                            className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
-                                            aria-label={t('edit.fidelityHint')}>
-                                            <Info className='h-4 w-4' />
-                                        </button>
-                                    </TooltipTrigger>
-                                    <TooltipContent className='max-w-[280px]'>{t('edit.fidelityHint')}</TooltipContent>
-                                </Tooltip>
-                            )}
-                        </div>
-                        <div className='grid gap-3 sm:grid-cols-2'>
-                            <div className='space-y-1.5'>
-                                <Label htmlFor='edit-model-select'>{t('form.model')}</Label>
-                                <Select
-                                    value={editModel}
-                                    onValueChange={(value) => setEditModel(value as EditingFormData['model'])}
-                                    disabled={isLoading}
-                                    name='edit-model'>
-                                    <SelectTrigger id='edit-model-select' className='w-full'>
-                                        <SelectValue placeholder={t('form.selectModel')} />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
-                                        <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
-                                        <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
-                                        <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className='space-y-1.5'>
-                                <Label htmlFor='edit-stream-mode-select'>{t('streaming.mode')}</Label>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <div>
-                                            <Select
-                                                value={streamMode}
-                                                onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
-                                                disabled={isLoading}
-                                                name='edit-stream_mode'>
-                                                <SelectTrigger id='edit-stream-mode-select' className='w-full'>
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
-                                                    <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
-                                                    <SelectItem value='non_stream'>
-                                                        {t('streaming.modeNonStream')}
-                                                    </SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent className='max-w-[250px]'>
-                                        {allowStreamingBatch && editN[0] > 1 && streamMode !== 'non_stream'
-                                            ? t('streaming.batchDescription')
-                                            : t('streaming.description')}
-                                    </TooltipContent>
-                                </Tooltip>
-                            </div>
                         </div>
                     </div>
 
@@ -1165,17 +1101,59 @@ export function EditingForm({
                                     value={advancedTab}
                                     onValueChange={(value) => setAdvancedTab(value as AdvancedTab)}
                                     className='gap-3'>
-                                    <TabsList className='grid h-auto w-full grid-cols-3 rounded-md'>
-                                        <TabsTrigger value='route' className='min-h-9'>
-                                            {t('ux.modelRoute')}
-                                        </TabsTrigger>
+                                    <TabsList className='grid h-auto w-full grid-cols-4 rounded-md'>
                                         <TabsTrigger value='output' className='min-h-9'>
                                             {t('ux.output')}
+                                        </TabsTrigger>
+                                        <TabsTrigger value='model' className='min-h-9'>
+                                            {t('ux.modelRoute')}
                                         </TabsTrigger>
                                         <TabsTrigger value='stream' className='min-h-9'>
                                             {t('ux.streaming')}
                                         </TabsTrigger>
+                                        <TabsTrigger value='route' className='min-h-9'>
+                                            {t('ux.route')}
+                                        </TabsTrigger>
                                     </TabsList>
+                                    <TabsContent value='model' className='space-y-5'>
+                                        <div className='space-y-1.5'>
+                                            <div className='flex items-center justify-between gap-2'>
+                                                <Label htmlFor='edit-model-select'>{t('form.model')}</Label>
+                                                {isGptImage2 && (
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <button
+                                                                type='button'
+                                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
+                                                                aria-label={t('edit.fidelityHint')}>
+                                                                <HelpCircle className='h-4 w-4' />
+                                                            </button>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent className='max-w-[280px]'>
+                                                            {t('edit.fidelityHint')}
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                )}
+                                            </div>
+                                            <Select
+                                                value={editModel}
+                                                onValueChange={(value) =>
+                                                    setEditModel(value as EditingFormData['model'])
+                                                }
+                                                disabled={isLoading}
+                                                name='edit-model'>
+                                                <SelectTrigger id='edit-model-select' className='w-full'>
+                                                    <SelectValue placeholder={t('form.selectModel')} />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
+                                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
+                                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
+                                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </TabsContent>
                                     <TabsContent value='route' className='space-y-5'>
                                         <div className='grid gap-3 sm:grid-cols-2'>
                                             <div className='space-y-1.5'>
@@ -1363,6 +1341,44 @@ export function EditingForm({
                                         )}
                                     </TabsContent>
                                     <TabsContent value='stream' className='space-y-5'>
+                                        <div className='space-y-1.5'>
+                                            <Label htmlFor='edit-stream-mode-select'>{t('streaming.mode')}</Label>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <div>
+                                                        <Select
+                                                            value={streamMode}
+                                                            onValueChange={(value) =>
+                                                                setStreamMode(value as ImageStreamMode)
+                                                            }
+                                                            disabled={isLoading}
+                                                            name='edit-stream_mode'>
+                                                            <SelectTrigger
+                                                                id='edit-stream-mode-select'
+                                                                className='w-full'>
+                                                                <SelectValue />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value='auto'>
+                                                                    {t('streaming.modeAuto')}
+                                                                </SelectItem>
+                                                                <SelectItem value='stream'>
+                                                                    {t('streaming.modeStream')}
+                                                                </SelectItem>
+                                                                <SelectItem value='non_stream'>
+                                                                    {t('streaming.modeNonStream')}
+                                                                </SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                </TooltipTrigger>
+                                                <TooltipContent className='max-w-[250px]'>
+                                                    {allowStreamingBatch && editN[0] > 1 && streamMode !== 'non_stream'
+                                                        ? t('streaming.batchDescription')
+                                                        : t('streaming.description')}
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </div>
                                         {streamMode !== 'non_stream' && (
                                             <div className='space-y-3'>
                                                 <div className='flex items-center gap-2'>
@@ -1569,13 +1585,13 @@ export function EditingForm({
                 <CardFooter className='border-border bg-card/80 hidden border-t p-4 lg:flex'>
                     <div className='w-full space-y-2'>
                         <div className='flex flex-wrap items-center gap-1.5 text-xs'>
-                            <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {editModel}
                             </span>
-                            <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {streamStatusLabel}
                             </span>
-                            <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-primary'>
+                            <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
                                 {t('workbench.estimatedCost')}
                             </span>
                         </div>
