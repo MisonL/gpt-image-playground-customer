@@ -7,14 +7,19 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 const noop = () => {};
 
-function renderGenerationForm(options: { defaultAdvancedTab?: 'output' | 'model' | 'stream' | 'route' } = {}) {
+function renderGenerationForm(
+    options: {
+        currentMode?: 'generate' | 'edit' | 'batch' | 'reuse';
+        defaultAdvancedTab?: 'output' | 'model' | 'stream' | 'route';
+    } = {}
+) {
     return renderToStaticMarkup(
         <I18nProvider>
             <GenerationForm
                 onSubmit={noop}
                 onSaveInspiration={noop}
                 isLoading={false}
-                currentMode='generate'
+                currentMode={options.currentMode ?? 'generate'}
                 onModeChange={noop}
                 reuseContext={null}
                 onClearReuseContext={noop}
@@ -25,6 +30,8 @@ function renderGenerationForm(options: { defaultAdvancedTab?: 'output' | 'model'
                 setModel={noop}
                 prompt='午后咖啡馆窗边，一束粉白花'
                 setPrompt={noop}
+                batchPromptText={'午后咖啡馆窗边\n奶油色卧室一角'}
+                setBatchPromptText={noop}
                 n={[1]}
                 setN={noop}
                 size='auto'
@@ -84,5 +91,21 @@ describe('GenerationForm advanced groups', () => {
 
         assert.match(html, /model-select/);
         assert.doesNotMatch(html, /image-backend-select/);
+    });
+});
+
+describe('GenerationForm batch mode', () => {
+    it('renders a real batch prompt list only in batch mode', () => {
+        const html = renderGenerationForm({ currentMode: 'batch' });
+
+        assert.match(html, /批量提示词列表/);
+        assert.match(html, /2 条任务/);
+        assert.match(html, /batch-prompt-list/);
+    });
+
+    it('keeps the batch prompt list out of the default generate mode', () => {
+        const html = renderGenerationForm();
+
+        assert.doesNotMatch(html, /batch-prompt-list/);
     });
 });
