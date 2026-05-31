@@ -1,6 +1,7 @@
 'use client';
 
 import { ModeToggle } from '@/components/mode-toggle';
+import type { WorkbenchMode } from '@/components/mode-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -24,10 +25,9 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
-import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
-import type { WorkbenchMode } from '@/components/mode-toggle';
+import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import {
     Square,
     RectangleHorizontal,
@@ -129,9 +129,11 @@ type GenerationFormProps = {
     setPromptOptimization: React.Dispatch<React.SetStateAction<GenerationFormData['promptOptimization']>>;
     forceWeb: boolean;
     setForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
+    defaultAdvancedOpen?: boolean;
+    defaultAdvancedTab?: AdvancedTab;
 };
 
-type AdvancedTab = 'route' | 'output' | 'stream';
+type AdvancedTab = 'output' | 'model' | 'stream' | 'route';
 type PromptTagPattern = {
     test: (value: string) => boolean;
     remove: (value: string) => string;
@@ -192,7 +194,7 @@ const RadioItemWithIcon = ({
             aria-label={label}
             className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
             <Icon className='h-3 w-3 text-current opacity-50' />
-            <span className='min-w-0 max-w-full truncate text-center leading-4'>{label}</span>
+            <span className='max-w-full min-w-0 truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
 
@@ -295,7 +297,9 @@ export function GenerationForm({
     promptOptimization,
     setPromptOptimization,
     forceWeb,
-    setForceWeb
+    setForceWeb,
+    defaultAdvancedOpen = false,
+    defaultAdvancedTab = 'output'
 }: GenerationFormProps) {
     const { locale, t } = useI18n();
     const showCompression = outputFormat === 'jpeg' || outputFormat === 'webp';
@@ -328,8 +332,8 @@ export function GenerationForm({
                 streamEnabled: streamMode !== 'non_stream'
             })
     );
-    const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
-    const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>('route');
+    const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(defaultAdvancedOpen);
+    const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>(defaultAdvancedTab);
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (!prompt.trim()) return t('ux.disabledPrompt');
@@ -426,7 +430,11 @@ export function GenerationForm({
                                     onClick={onOpenPasswordDialog}
                                     className='text-muted-foreground hover:text-foreground ml-auto h-7 px-2'
                                     aria-label={t('password.configure')}>
-                                    {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
+                                    {clientPasswordHash ? (
+                                        <Lock className='h-4 w-4' />
+                                    ) : (
+                                        <LockOpen className='h-4 w-4' />
+                                    )}
                                 </Button>
                             )}
                         </div>
@@ -457,7 +465,7 @@ export function GenerationForm({
                                 disabled={isLoading}
                                 className='min-h-[118px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-9 leading-7 shadow-inner'
                             />
-                            <span className='pointer-events-none absolute bottom-3 left-4 text-xs text-muted-foreground'>
+                            <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
                                 {prompt.trim().length} / 1000
                             </span>
                         </div>
@@ -475,7 +483,7 @@ export function GenerationForm({
                                         className={`rounded-full border px-2.5 py-0.5 text-xs shadow-sm transition-[background-color,border-color,color,transform,box-shadow] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
                                             selected
                                                 ? 'border-primary/50 bg-primary/90 text-primary-foreground shadow-[0_4px_10px_oklch(0.5_0.12_30/0.14)]'
-                                                : 'border-border bg-[oklch(0.982_0.012_84)] text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground'
+                                                : 'border-border text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground bg-[oklch(0.982_0.012_84)]'
                                         }`}>
                                         {label}
                                     </button>
@@ -488,15 +496,13 @@ export function GenerationForm({
                             </p>
                         )}
                         {isReuseMode && (
-                            <div className='rounded-md border border-primary/25 bg-[oklch(0.965_0.03_76)] px-3 py-2 text-xs leading-5 shadow-sm dark:bg-muted/40'>
+                            <div className='border-primary/25 dark:bg-muted/40 rounded-md border bg-[oklch(0.965_0.03_76)] px-3 py-2 text-xs leading-5 shadow-sm'>
                                 {reuseContext ? (
                                     <div className='space-y-2'>
                                         <div className='flex items-start justify-between gap-3'>
                                             <div className='min-w-0'>
-                                                <p className='text-foreground font-medium'>
-                                                    {t('reuse.appliedTitle')}
-                                                </p>
-                                                <p className='truncate text-muted-foreground'>
+                                                <p className='text-foreground font-medium'>{t('reuse.appliedTitle')}</p>
+                                                <p className='text-muted-foreground truncate'>
                                                     {reuseContext.sourceLabel}
                                                 </p>
                                             </div>
@@ -504,7 +510,7 @@ export function GenerationForm({
                                                 type='button'
                                                 onClick={onClearReuseContext}
                                                 disabled={isLoading}
-                                                className='shrink-0 text-muted-foreground hover:text-foreground disabled:opacity-50'>
+                                                className='text-muted-foreground hover:text-foreground shrink-0 disabled:opacity-50'>
                                                 {t('common.clear')}
                                             </button>
                                         </div>
@@ -512,12 +518,12 @@ export function GenerationForm({
                                             {reuseContext.restoredFields.map((field) => (
                                                 <span
                                                     key={field}
-                                                    className='rounded-full border border-primary/20 bg-background/70 px-2 py-0.5 text-primary'>
+                                                    className='border-primary/20 bg-background/70 text-primary rounded-full border px-2 py-0.5'>
                                                     {field}
                                                 </span>
                                             ))}
                                         </div>
-                                        <p className='max-h-10 overflow-hidden break-words text-muted-foreground'>
+                                        <p className='text-muted-foreground max-h-10 overflow-hidden break-words'>
                                             {reuseContext.promptPreview}
                                         </p>
                                     </div>
@@ -528,7 +534,7 @@ export function GenerationForm({
                         )}
                     </div>
 
-                    <div className='space-y-3 border-t border-border/70 pt-3'>
+                    <div className='border-border/70 space-y-3 border-t pt-3'>
                         <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('workbench.basicSettings')}
                         </div>
@@ -541,46 +547,46 @@ export function GenerationForm({
                                 name='size'
                                 aria-label={t('form.size')}
                                 className='grid grid-cols-5 gap-1.5'>
-                            <RadioItemWithIcon
-                                value='auto'
-                                id='size-auto'
-                                label={t('common.auto')}
-                                Icon={Sparkles}
-                                disabled={isLoading}
-                            />
-                            {isGptImage2 && (
                                 <RadioItemWithIcon
-                                    value='custom'
-                                    id='size-custom'
-                                    label={t('common.custom')}
-                                    Icon={SquareDashed}
+                                    value='auto'
+                                    id='size-auto'
+                                    label={t('common.auto')}
+                                    Icon={Sparkles}
                                     disabled={isLoading}
                                 />
-                            )}
-                            <RadioItemWithIcon
-                                value='square'
-                                id='size-square'
-                                label={t('common.square')}
-                                Icon={Square}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('square', model)}
-                            />
-                            <RadioItemWithIcon
-                                value='landscape'
-                                id='size-landscape'
-                                label={t('common.landscape')}
-                                Icon={RectangleHorizontal}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('landscape', model)}
-                            />
-                            <RadioItemWithIcon
-                                value='portrait'
-                                id='size-portrait'
-                                label={t('common.portrait')}
-                                Icon={RectangleVertical}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('portrait', model)}
-                            />
+                                {isGptImage2 && (
+                                    <RadioItemWithIcon
+                                        value='custom'
+                                        id='size-custom'
+                                        label={t('common.custom')}
+                                        Icon={SquareDashed}
+                                        disabled={isLoading}
+                                    />
+                                )}
+                                <RadioItemWithIcon
+                                    value='square'
+                                    id='size-square'
+                                    label={t('common.square')}
+                                    Icon={Square}
+                                    disabled={isLoading}
+                                    tooltip={getPresetTooltip('square', model)}
+                                />
+                                <RadioItemWithIcon
+                                    value='landscape'
+                                    id='size-landscape'
+                                    label={t('common.landscape')}
+                                    Icon={RectangleHorizontal}
+                                    disabled={isLoading}
+                                    tooltip={getPresetTooltip('landscape', model)}
+                                />
+                                <RadioItemWithIcon
+                                    value='portrait'
+                                    id='size-portrait'
+                                    label={t('common.portrait')}
+                                    Icon={RectangleVertical}
+                                    disabled={isLoading}
+                                    tooltip={getPresetTooltip('portrait', model)}
+                                />
                             </RadioGroup>
                         </div>
                         {isGptImage2 && size === 'custom' && (
@@ -659,9 +665,7 @@ export function GenerationForm({
                                 ))}
                             </RadioGroup>
                             {isBatchMode && (
-                                <p className='text-muted-foreground text-xs leading-5'>
-                                    {t('mode.batchHint')}
-                                </p>
+                                <p className='text-muted-foreground text-xs leading-5'>{t('mode.batchHint')}</p>
                             )}
                         </div>
 
@@ -758,37 +762,44 @@ export function GenerationForm({
                                     value={advancedTab}
                                     onValueChange={(value) => setAdvancedTab(value as AdvancedTab)}
                                     className='gap-3'>
-                                    <TabsList className='grid h-auto w-full grid-cols-3 rounded-md'>
-                                        <TabsTrigger value='route' className='min-h-9'>
-                                            {t('ux.modelRoute')}
-                                        </TabsTrigger>
+                                    <TabsList className='grid h-auto w-full grid-cols-4 rounded-md'>
                                         <TabsTrigger value='output' className='min-h-9'>
                                             {t('ux.output')}
+                                        </TabsTrigger>
+                                        <TabsTrigger value='model' className='min-h-9'>
+                                            {t('ux.modelRoute')}
                                         </TabsTrigger>
                                         <TabsTrigger value='stream' className='min-h-9'>
                                             {t('ux.streaming')}
                                         </TabsTrigger>
+                                        <TabsTrigger value='route' className='min-h-9'>
+                                            {t('ux.route')}
+                                        </TabsTrigger>
                                     </TabsList>
+                                    <TabsContent value='model' className='space-y-5'>
+                                        <div className='space-y-1.5'>
+                                            <Label htmlFor='model-select'>{t('form.model')}</Label>
+                                            <Select
+                                                value={model}
+                                                onValueChange={(value) =>
+                                                    setModel(value as GenerationFormData['model'])
+                                                }
+                                                disabled={isLoading}
+                                                name='model'>
+                                                <SelectTrigger id='model-select' className='w-full'>
+                                                    <SelectValue placeholder={t('form.selectModel')} />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
+                                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
+                                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
+                                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </TabsContent>
                                     <TabsContent value='route' className='space-y-5'>
                                         <div className='grid gap-3 sm:grid-cols-2'>
-                                            <div className='space-y-1.5'>
-                                                <Label htmlFor='model-select'>{t('form.model')}</Label>
-                                                <Select
-                                                    value={model}
-                                                    onValueChange={(value) => setModel(value as GenerationFormData['model'])}
-                                                    disabled={isLoading}
-                                                    name='model'>
-                                                    <SelectTrigger id='model-select' className='w-full'>
-                                                        <SelectValue placeholder={t('form.selectModel')} />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
-                                                        <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
-                                                        <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
-                                                        <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
-                                                    </SelectContent>
-                                                </Select>
-                                            </div>
                                             <div className='space-y-1.5'>
                                                 <Label htmlFor='image-backend-select'>{t('upstream.backend')}</Label>
                                                 <Select
@@ -977,15 +988,21 @@ export function GenerationForm({
                                                     <div>
                                                         <Select
                                                             value={streamMode}
-                                                            onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
+                                                            onValueChange={(value) =>
+                                                                setStreamMode(value as ImageStreamMode)
+                                                            }
                                                             disabled={isLoading || streamingDisabledByStrategy}
                                                             name='stream_mode'>
                                                             <SelectTrigger id='stream-mode-select' className='w-full'>
                                                                 <SelectValue />
                                                             </SelectTrigger>
                                                             <SelectContent>
-                                                                <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
-                                                                <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
+                                                                <SelectItem value='auto'>
+                                                                    {t('streaming.modeAuto')}
+                                                                </SelectItem>
+                                                                <SelectItem value='stream'>
+                                                                    {t('streaming.modeStream')}
+                                                                </SelectItem>
                                                                 <SelectItem value='non_stream'>
                                                                     {t('streaming.modeNonStream')}
                                                                 </SelectItem>
@@ -1229,13 +1246,13 @@ export function GenerationForm({
                 <CardFooter className='border-border bg-card/80 hidden border-t p-4 lg:flex'>
                     <div className='w-full space-y-2'>
                         <div className='flex flex-wrap items-center gap-1.5 text-xs'>
-                            <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {model}
                             </span>
-                            <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {streamStatusLabel}
                             </span>
-                            <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-primary'>
+                            <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
                                 {t('workbench.estimatedCost')}
                             </span>
                         </div>
@@ -1262,9 +1279,7 @@ export function GenerationForm({
                                 type='button'
                                 className='text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50'
                                 disabled={isLoading}
-                                onClick={() =>
-                                    setPrompt(t('workbench.randomPromptExample'))
-                                }>
+                                onClick={() => setPrompt(t('workbench.randomPromptExample'))}>
                                 {t('workbench.randomInspiration')}
                             </button>
                         </div>
