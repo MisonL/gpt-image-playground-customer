@@ -124,23 +124,31 @@ export function ImageOutput({
         () => (hasLogScope ? filteredLogs : []),
         [filteredLogs, hasLogScope]
     );
+    const showCarousel = imageBatch && imageBatch.length > 1;
+    const selectedImageIndex =
+        imageBatch && imageBatch.length > 0
+            ? typeof viewMode === 'number' && imageBatch[viewMode]
+                ? viewMode
+                : 0
+            : null;
+    const selectedImage = selectedImageIndex === null ? null : imageBatch?.[selectedImageIndex] || null;
+    const canUseSelectedImageActions = !isLoading && !!selectedImage;
 
     const handleSendClick = () => {
-        // 只有选中单张图片时才允许发送到编辑。
-        if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
-            onSendToEdit(imageBatch[viewMode].filename);
+        if (selectedImage) {
+            onSendToEdit(selectedImage.filename);
         }
     };
 
     const handleDownloadClick = () => {
-        if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
-            onDownloadImage(imageBatch[viewMode].filename);
+        if (selectedImage) {
+            onDownloadImage(selectedImage.filename);
         }
     };
 
     const handleShareClick = () => {
-        if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
-            onShareImage(imageBatch[viewMode].filename);
+        if (selectedImage) {
+            onShareImage(selectedImage.filename);
         }
     };
 
@@ -239,11 +247,6 @@ export function ImageOutput({
         queueMicrotask(() => setIsLogDialogOpen(true));
     }, [canOpenLogs, openLogsSignal]);
 
-    const showCarousel = imageBatch && imageBatch.length > 1;
-    const isSingleImageView = typeof viewMode === 'number';
-    const canSendToEdit = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
-    const canUseImageActions = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
-
     return (
         <div className='workbench-panel text-card-foreground flex h-full min-h-[300px] w-full flex-col overflow-hidden rounded-lg border border-border'>
             <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border/70 px-4 py-3'>
@@ -318,12 +321,19 @@ export function ImageOutput({
                     )
                 ) : imageBatch && imageBatch.length > 0 ? (
                     viewMode === 'grid' ? (
-                        <div
-                            className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[720px] gap-2`}>
+                        <div className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[720px] gap-2`}>
                             {imageBatch.map((img, index) => (
-                                <div
+                                <button
+                                    type='button'
                                     key={img.filename}
-                                    className='photo-paper relative aspect-square overflow-hidden p-2'>
+                                    onClick={() => onViewChange(index)}
+                                    className={cn(
+                                        'photo-paper relative aspect-square overflow-hidden p-2 text-left transition-[box-shadow,transform] enabled:motion-safe:hover:-translate-y-0.5',
+                                        selectedImageIndex === index
+                                            ? 'ring-2 ring-ring ring-offset-2 ring-offset-background'
+                                            : 'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+                                    )}
+                                    aria-label={t('output.selectImage', { index: index + 1 })}>
                                     <Image
                                         src={img.path}
                                         alt={t('output.generatedImage', { index: index + 1 })}
@@ -332,7 +342,7 @@ export function ImageOutput({
                                         sizes='(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw'
                                         unoptimized
                                     />
-                                </div>
+                                </button>
                             ))}
                         </div>
                     ) : imageBatch[viewMode] ? (
@@ -499,12 +509,11 @@ export function ImageOutput({
                     variant='ghost'
                     size='sm'
                     onClick={handleSendClick}
-                    disabled={!canSendToEdit}
+                    disabled={!canUseSelectedImageActions}
                     className={cn(
                         'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
-                        // 多图网格视图下完全隐藏按钮。
-                        showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
-                )}>
+                        showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
+                    )}>
                     <Send className='mr-2 h-4 w-4' />
                     {t('output.continueEdit')}
                 </Button>
@@ -539,10 +548,10 @@ export function ImageOutput({
                     variant='ghost'
                     size='sm'
                     onClick={handleDownloadClick}
-                    disabled={!canUseImageActions}
+                    disabled={!canUseSelectedImageActions}
                     className={cn(
                         'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
-                        showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
+                        showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
                     )}>
                     <Download className='mr-2 h-4 w-4' />
                     {t('output.download')}
@@ -551,10 +560,10 @@ export function ImageOutput({
                     variant='ghost'
                     size='sm'
                     onClick={handleShareClick}
-                    disabled={!canUseImageActions}
+                    disabled={!canUseSelectedImageActions}
                     className={cn(
                         'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
-                        showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
+                        showCarousel && viewMode === 'grid' ? 'border border-border/70 bg-card/80' : ''
                     )}>
                     <Share2 className='mr-2 h-4 w-4' />
                     {t('output.share')}
