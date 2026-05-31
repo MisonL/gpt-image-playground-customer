@@ -12,6 +12,7 @@ import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
 import type {
@@ -71,6 +72,7 @@ export type GenerationFormData = {
     thinking: ImageUpstreamFormThinking;
     promptOptimization: ImageUpstreamFormPromptOptimization;
     forceWeb: boolean;
+    batchPrompts?: string[];
 };
 
 export type WorkbenchReuseContext = {
@@ -94,6 +96,8 @@ type GenerationFormProps = {
     setModel: React.Dispatch<React.SetStateAction<GenerationFormData['model']>>;
     prompt: string;
     setPrompt: React.Dispatch<React.SetStateAction<string>>;
+    batchPromptText: string;
+    setBatchPromptText: React.Dispatch<React.SetStateAction<string>>;
     n: number[];
     setN: React.Dispatch<React.SetStateAction<number[]>>;
     size: GenerationFormData['size'];
@@ -263,6 +267,8 @@ export function GenerationForm({
     setModel,
     prompt,
     setPrompt,
+    batchPromptText,
+    setBatchPromptText,
     n,
     setN,
     size,
@@ -334,12 +340,16 @@ export function GenerationForm({
     );
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(defaultAdvancedOpen);
     const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>(defaultAdvancedTab);
+    const isBatchMode = currentMode === 'batch';
+    const isReuseMode = currentMode === 'reuse';
+    const batchPrompts = React.useMemo(() => readBatchPromptLines(batchPromptText), [batchPromptText]);
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
-        if (!prompt.trim()) return t('ux.disabledPrompt');
+        if (isBatchMode && batchPrompts.length === 0) return t('ux.disabledBatchPrompts');
+        if (!isBatchMode && !prompt.trim()) return t('ux.disabledPrompt');
         if (customSizeInvalid) return customSizeError || t('ux.disabledCustomSize');
         return '';
-    }, [customSizeError, customSizeInvalid, isLoading, prompt, t]);
+    }, [batchPrompts.length, customSizeError, customSizeInvalid, isBatchMode, isLoading, prompt, t]);
     const advancedSummary = [
         `${t('form.quality')}: ${getQualityLabel(quality, t)}`,
         `${t('form.outputFormat')}: ${getOutputFormatLabel(outputFormat, t)}`,
@@ -347,8 +357,6 @@ export function GenerationForm({
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
     const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
-    const isBatchMode = currentMode === 'batch';
-    const isReuseMode = currentMode === 'reuse';
 
     const applyPromptTag = React.useCallback(
         (label: string) => {
@@ -388,7 +396,7 @@ export function GenerationForm({
             return;
         }
         const formData: GenerationFormData = {
-            prompt,
+            prompt: isBatchMode && batchPrompts.length > 0 ? batchPrompts[0] : prompt,
             n: n[0],
             size,
             customWidth,
@@ -405,6 +413,9 @@ export function GenerationForm({
             promptOptimization,
             forceWeb
         };
+        if (isBatchMode) {
+            formData.batchPrompts = batchPrompts;
+        }
         if (showCompression) {
             formData.output_compression = compression[0];
         }
@@ -532,6 +543,25 @@ export function GenerationForm({
                                 )}
                             </div>
                         )}
+                        {isBatchMode && (
+                            <div className='border-border/75 bg-background/65 space-y-2 rounded-md border p-3 shadow-sm'>
+                                <div className='flex items-center justify-between gap-3'>
+                                    <Label htmlFor='batch-prompt-list'>{t('batch.promptList')}</Label>
+                                    <span className='text-muted-foreground shrink-0 text-xs'>
+                                        {t('batch.promptCount', { count: batchPrompts.length })}
+                                    </span>
+                                </div>
+                                <Textarea
+                                    id='batch-prompt-list'
+                                    name='batchPrompts'
+                                    value={batchPromptText}
+                                    onChange={(event) => setBatchPromptText(event.target.value)}
+                                    disabled={isLoading}
+                                    className='min-h-[132px] rounded-md bg-[oklch(0.978_0.016_82)] px-3 py-2 leading-6 shadow-inner'
+                                    placeholder={t('batch.promptPlaceholder')}
+                                />
+                            </div>
+                        )}
                     </div>
 
                     <div className='border-border/70 space-y-3 border-t pt-3'>
@@ -643,29 +673,32 @@ export function GenerationForm({
                         <div className='space-y-2'>
                             <div className='text-muted-foreground text-xs'>
                                 {isBatchMode
-                                    ? t('form.batchNumberOfImages', { count: n[0] })
+                                    ? t('form.batchNumberOfImages', { count: batchPrompts.length })
                                     : t('form.numberOfImages', { count: n[0] })}
                             </div>
-                            <RadioGroup
-                                value={String(n[0])}
-                                onValueChange={(value) => setN([Number(value)])}
-                                disabled={isLoading}
-                                name='n'
-                                aria-label={t('form.numberOfImages', { count: n[0] })}
-                                className='grid grid-cols-4 gap-1.5'>
-                                {[1, 2, 4, 8].map((value) => (
-                                    <RadioItemWithIcon
-                                        key={value}
-                                        value={String(value)}
-                                        id={`n-${value}`}
-                                        label={String(value)}
-                                        Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
-                                        disabled={isLoading}
-                                    />
-                                ))}
-                            </RadioGroup>
-                            {isBatchMode && (
-                                <p className='text-muted-foreground text-xs leading-5'>{t('mode.batchHint')}</p>
+                            {isBatchMode ? (
+                                <div className='border-border bg-muted/25 text-muted-foreground rounded-md border px-3 py-2 text-xs leading-5'>
+                                    {t('mode.batchHint')}
+                                </div>
+                            ) : (
+                                <RadioGroup
+                                    value={String(n[0])}
+                                    onValueChange={(value) => setN([Number(value)])}
+                                    disabled={isLoading}
+                                    name='n'
+                                    aria-label={t('form.numberOfImages', { count: n[0] })}
+                                    className='grid grid-cols-4 gap-1.5'>
+                                    {[1, 2, 4, 8].map((value) => (
+                                        <RadioItemWithIcon
+                                            key={value}
+                                            value={String(value)}
+                                            id={`n-${value}`}
+                                            label={String(value)}
+                                            Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                            disabled={isLoading}
+                                        />
+                                    ))}
+                                </RadioGroup>
                             )}
                         </div>
 

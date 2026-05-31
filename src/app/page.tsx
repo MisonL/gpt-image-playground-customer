@@ -18,6 +18,7 @@ import {
     buildUserFacingApiErrorMessage,
     type ApiErrorNotice
 } from '@/lib/api-error-guidance';
+import { formatBatchPromptHistory, readBatchPromptLines } from '@/lib/batch-prompts';
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { buildGenerationActivityItems } from '@/lib/generation-activity';
@@ -470,6 +471,7 @@ export default function HomePage() {
 
     const [genModel, setGenModel] = React.useState<GenerationFormData['model']>('gpt-image-2');
     const [genPrompt, setGenPrompt] = React.useState(defaultGenerationPrompt);
+    const [genBatchPromptText, setGenBatchPromptText] = React.useState(defaultGenerationPrompt);
     const [genN, setGenN] = React.useState([1]);
     const [genSize, setGenSize] = React.useState<GenerationFormData['size']>('auto');
     const [genCustomWidth, setGenCustomWidth] = React.useState<number>(1024);
@@ -511,7 +513,12 @@ export default function HomePage() {
         serverRecommendedConcurrency: runtimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
     });
     const streamingBatchEnabled = streamingBatchCapacity.enabled;
-    const currentPrompt = mode === 'generate' ? genPrompt : editPrompt;
+    const currentPrompt =
+        mode === 'generate' && workbenchMode === 'batch'
+            ? genBatchPromptText
+            : mode === 'generate'
+              ? genPrompt
+              : editPrompt;
     const hasEditSourceImage = editImageFiles.length > 0;
     const currentGenerateSizeValidation =
         genSize === 'custom' ? validateGptImage2Size(genCustomWidth, genCustomHeight) : { valid: true as const };
@@ -564,10 +571,11 @@ export default function HomePage() {
             return;
         }
         if (nextMode === 'batch') {
-            setGenN((current) => (current[0] > 1 ? current : [4]));
+            setGenN([1]);
+            setGenBatchPromptText((current) => (current.trim() ? current : genPrompt));
         }
         setMode('generate');
-    }, []);
+    }, [genPrompt]);
 
     const scrollToOutput = React.useCallback(() => {
         const outputTop = outputPanelRef.current?.getBoundingClientRect().top;
@@ -943,7 +951,8 @@ export default function HomePage() {
             images: ApiImageResponseItem[],
             usage: unknown,
             actualCost: ActualCostDetails | undefined,
-            durationMsValue: number
+            durationMsValue: number,
+            promptOverride?: string
         ): HistoryMetadata => {
             const isGenerateMode = mode === 'generate';
             const currentModel = isGenerateMode ? genModel : editModel;
@@ -968,7 +977,7 @@ export default function HomePage() {
                 background: isGenerateMode ? genBackground : 'auto',
                 moderation: isGenerateMode ? genModeration : 'auto',
                 output_format: isGenerateMode ? genOutputFormat : editOutputFormat,
-                prompt: isGenerateMode ? genPrompt : editPrompt,
+                prompt: isGenerateMode ? (promptOverride ?? genPrompt) : editPrompt,
                 mode,
                 costDetails,
                 ...(actualCost
@@ -1060,7 +1069,8 @@ export default function HomePage() {
             usage: unknown,
             actualCost: ActualCostDetails | undefined,
             durationMsValue: number,
-            clearStreaming = false
+            clearStreaming = false,
+            promptOverride?: string
         ) => {
             if (images.length === 0) {
                 throw new Error(t('error.noImages'));
@@ -1074,7 +1084,7 @@ export default function HomePage() {
                 setStreamingPreviewImages(new Map());
             }
             setHistory((prevHistory) => [
-                buildHistoryEntry(images, usage, actualCost, durationMsValue),
+                buildHistoryEntry(images, usage, actualCost, durationMsValue, promptOverride),
                 ...prevHistory
             ]);
         },
@@ -1366,18 +1376,42 @@ export default function HomePage() {
                 return;
             }
 
-            const imageCount =
-                requestMode === 'generate' ? (formData as GenerationFormData).n : (formData as EditingFormData).n;
+            const promptBatch =
+                requestMode === 'generate'
+                    ? ((formData as GenerationFormData).batchPrompts ?? [])
+                          .map((prompt) => prompt.trim())
+                          .filter((prompt) => prompt.length > 0)
+                    : [];
+            const isPromptBatch = promptBatch.length > 1;
+            const historyPromptOverride =
+                requestMode === 'generate' && promptBatch.length > 0
+                    ? formatBatchPromptHistory(promptBatch)
+                    : undefined;
+            const imageCount = isPromptBatch
+                ? promptBatch.length
+                : requestMode === 'generate'
+                  ? (formData as GenerationFormData).n
+                  : (formData as EditingFormData).n;
             const useStreamingBatch = shouldUseStreamingBatch({
                 enabled: currentStreamingBatchCapacity.enabled,
                 streaming: requestStreamMode !== 'non_stream',
                 imageCount
             });
             const executeImageRequestForCurrentOptions = async (
-                options: { forceSingleImage: boolean; previewIndexOffset?: number } = { forceSingleImage: false }
+                options: { forceSingleImage: boolean; previewIndexOffset?: number; promptOverride?: string } = {
+                    forceSingleImage: false
+                }
             ) => {
+                const requestFormData =
+                    requestMode === 'generate' && options.promptOverride
+                        ? {
+                              ...(formData as GenerationFormData),
+                              prompt: options.promptOverride,
+                              n: 1
+                          }
+                        : formData;
                 return executeImageRequest(
-                    buildApiFormData(formData, requestMode, {
+                    buildApiFormData(requestFormData, requestMode, {
                         forceSingleImage: options.forceSingleImage,
                         streamMode: requestStreamMode,
                         partialImages: requestPartialImages,
@@ -1392,6 +1426,60 @@ export default function HomePage() {
                     }
                 );
             };
+
+            if (isPromptBatch) {
+                const jobs = buildStreamingBatchJobs(promptBatch.length);
+                const batchResults = await scheduleStreamingBatch(
+                    jobs,
+                    useStreamingBatch ? currentStreamingBatchCapacity.concurrency : 1,
+                    async (job: StreamingBatchJob) => {
+                        return executeImageRequestForCurrentOptions({
+                            forceSingleImage: true,
+                            previewIndexOffset: job.outputIndex,
+                            promptOverride: promptBatch[job.outputIndex]
+                        });
+                    }
+                );
+                const errors = batchResults.filter((result): result is Error => result instanceof Error);
+                const successes = batchResults.filter(
+                    (
+                        result
+                    ): result is { images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails } =>
+                        !(result instanceof Error)
+                );
+                if (errors.some(hasPreservedDisplayedAuthError)) {
+                    return;
+                }
+                if (successes.length === 0) {
+                    throw errors[0] || new Error(t('error.noImages'));
+                }
+                const images = successes.flatMap((result) => result.images);
+                const usage = mergeUsageValues(successes.map((result) => result.usage));
+                const actualCost = mergeActualCostValues(successes.map((result) => result.actualCost));
+                durationMs = Date.now() - startTime;
+                await commitCompletedImages(
+                    images,
+                    usage,
+                    actualCost,
+                    durationMs,
+                    true,
+                    historyPromptOverride
+                );
+                if (errors.length > 0) {
+                    await refreshRuntimeCapabilities();
+                    setError(
+                        createErrorNotice(
+                            buildBatchPartialFailureMessage({
+                                failed: errors.length,
+                                total: jobs.length,
+                                errors: errors.map((error) => summarizeApiError(error, t('error.unexpected'))),
+                                t
+                            })
+                        )
+                    );
+                }
+                return;
+            }
 
             if (useStreamingBatch) {
                 const jobs = buildStreamingBatchJobs(imageCount);
@@ -1441,7 +1529,14 @@ export default function HomePage() {
 
             const result = await executeImageRequestForCurrentOptions();
             durationMs = Date.now() - startTime;
-            await commitCompletedImages(result.images || [], result.usage, result.actualCost, durationMs);
+            await commitCompletedImages(
+                result.images || [],
+                result.usage,
+                result.actualCost,
+                durationMs,
+                false,
+                historyPromptOverride
+            );
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
             console.error(`API 调用在 ${durationMs}ms 后失败：`, err);
@@ -1464,8 +1559,9 @@ export default function HomePage() {
 
     function handleMobilePrimaryAction() {
         if (mode === 'generate') {
+            const batchPrompts = workbenchMode === 'batch' ? readBatchPromptLines(genBatchPromptText) : undefined;
             void handleApiCall({
-                prompt: genPrompt,
+                prompt: batchPrompts && batchPrompts.length > 0 ? batchPrompts[0] : genPrompt,
                 n: genN[0],
                 size: genSize,
                 customWidth: genCustomWidth,
@@ -1483,7 +1579,8 @@ export default function HomePage() {
                 responsesModel: genResponsesModel,
                 thinking: genThinking,
                 promptOptimization: genPromptOptimization,
-                forceWeb: genForceWeb
+                forceWeb: genForceWeb,
+                ...(batchPrompts ? { batchPrompts } : {})
             });
             return;
         }
@@ -2110,6 +2207,8 @@ export default function HomePage() {
                                         setModel={setGenModel}
                                         prompt={genPrompt}
                                         setPrompt={setGenPrompt}
+                                        batchPromptText={genBatchPromptText}
+                                        setBatchPromptText={setGenBatchPromptText}
                                         n={genN}
                                         setN={setGenN}
                                         size={genSize}
