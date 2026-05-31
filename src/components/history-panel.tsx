@@ -31,8 +31,7 @@ import {
     Trash2,
     WandSparkles,
     Pin,
-    Plus,
-    Smartphone
+    Plus
 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
@@ -472,9 +471,12 @@ function HistoryPanelImpl({
                                 {t('history.manage')}
                             </button>
                         </div>
-                        <div className='space-y-1.5 rounded-md border border-border bg-background/68 p-2.5'>
+                        <div className='space-y-2 rounded-md border border-[oklch(0.86_0.035_78)] bg-[oklch(0.982_0.014_84)] p-3 shadow-[0_6px_16px_oklch(0.42_0.035_58/0.08)]'>
                             <div className='flex items-center justify-between'>
-                                <p className='text-sm font-medium'>{t('history.generationStatus')}</p>
+                                <div className='flex items-center gap-2'>
+                                    <span className='h-2 w-2 rounded-full bg-[oklch(0.62_0.13_38)]' />
+                                    <p className='text-sm font-medium'>{t('history.generationStatus')}</p>
+                                </div>
                                 {history.length > 0 ? (
                                     <button
                                         type='button'
@@ -486,25 +488,46 @@ function HistoryPanelImpl({
                             </div>
                             {history.length > 0 ? (
                                 <div className='space-y-1.5 text-xs'>
-                                    {history.slice(0, 3).map((item) => (
+                                    {history.slice(0, 4).map((item, index) => (
                                         <button
                                             key={item.timestamp}
                                             type='button'
                                             onClick={() => onSelectImage(item)}
-                                            className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-muted-foreground transition-colors hover:bg-[oklch(0.95_0.035_80)] hover:text-foreground'>
-                                            <span className='h-2 w-2 shrink-0 rounded-full bg-[oklch(0.58_0.12_150)]' />
-                                            <span className='shrink-0'>{formatStatusTime(item.timestamp)}</span>
-                                            <span className='min-w-0 flex-1 truncate'>
-                                                {item.mode === 'edit' ? t('history.modeEdit') : t('history.modeCreate')}
-                                                {t('history.statusDone')}
+                                            className={cn(
+                                                'grid w-full grid-cols-[auto_1fr_auto] items-start gap-2 rounded-md px-2 py-2 text-left transition-[background-color,color,transform] hover:-translate-y-0.5 active:translate-y-0',
+                                                index === 0
+                                                    ? 'bg-[oklch(0.95_0.04_86)] text-foreground'
+                                                    : 'text-muted-foreground hover:bg-[oklch(0.965_0.025_84)] hover:text-foreground'
+                                            )}>
+                                            <span className='flex h-full w-3 justify-center pt-1.5'>
+                                                <span
+                                                    className={cn(
+                                                        'h-2 w-2 rounded-full',
+                                                        index === 0
+                                                            ? 'bg-[oklch(0.62_0.13_38)]'
+                                                            : 'bg-[oklch(0.66_0.08_145)]'
+                                                    )}
+                                                />
                                             </span>
-                                            <span className='shrink-0'>
-                                                {t('history.statusBatchSummary', {
-                                                    count: item.images.length,
-                                                    duration: formatDuration(item.durationMs)
-                                                })}
+                                            <span className='min-w-0'>
+                                                <span className='flex min-w-0 items-center gap-2'>
+                                                    <span className='text-muted-foreground shrink-0 text-[11px] tabular-nums'>
+                                                        {formatStatusTime(item.timestamp)}
+                                                    </span>
+                                                    <span className='text-foreground truncate text-xs font-medium'>
+                                                        {item.mode === 'edit'
+                                                            ? t('history.statusEditDone')
+                                                            : t('history.statusCreateDone')}
+                                                    </span>
+                                                </span>
+                                                <span className='text-muted-foreground mt-0.5 block truncate text-[11px]'>
+                                                    {t('history.statusBatchSummary', {
+                                                        count: item.images.length,
+                                                        duration: formatDuration(item.durationMs)
+                                                    })}
+                                                </span>
                                             </span>
-                                            <span className='ml-auto hidden shrink-0 gap-1 sm:flex'>
+                                            <span className='hidden shrink-0 gap-1 sm:flex'>
                                                 {item.images.slice(0, 3).map((image) => {
                                                     const source =
                                                         item.storageModeUsed === 'indexeddb'
@@ -513,12 +536,12 @@ function HistoryPanelImpl({
                                                     return source ? (
                                                         <span
                                                             key={image.filename}
-                                                            className='relative h-6 w-6 overflow-hidden rounded-sm border border-border'>
+                                                            className='relative h-7 w-7 overflow-hidden rounded-sm border border-background bg-muted shadow-sm'>
                                                             <Image
                                                                 src={source}
                                                                 alt={image.filename}
                                                                 fill
-                                                                sizes='24px'
+                                                                sizes='28px'
                                                                 className='object-cover'
                                                                 unoptimized
                                                             />
@@ -530,15 +553,11 @@ function HistoryPanelImpl({
                                     ))}
                                 </div>
                             ) : (
-                                <div className='flex items-center gap-2 rounded-md border border-dashed border-border px-2 py-2 text-xs text-muted-foreground'>
-                                    <span className='h-2 w-2 rounded-full bg-muted-foreground/45' />
+                                <div className='flex items-center gap-2 rounded-md border border-dashed border-[oklch(0.84_0.035_78)] bg-background/58 px-2 py-2 text-xs text-muted-foreground'>
+                                    <span className='h-2 w-2 rounded-full bg-[oklch(0.72_0.05_86)]' />
                                     <span>{t('history.statusEmpty')}</span>
                                 </div>
                             )}
-                        </div>
-                        <div className='ml-auto flex w-fit items-center gap-2 rounded-md bg-[oklch(0.92_0.055_78)] px-3 py-2 text-xs text-muted-foreground shadow-sm'>
-                            <Smartphone className='h-4 w-4' />
-                            {t('history.mobileHint')}
                         </div>
                     </div>
                 ) : history.length === 0 ? (
