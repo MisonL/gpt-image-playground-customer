@@ -20,6 +20,7 @@ import type {
     ImageUpstreamFormThinking
 } from '@/lib/image-upstream-form';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
+import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
 import type { WorkbenchMode } from '@/components/mode-toggle';
@@ -328,6 +329,7 @@ export function EditingForm({
         getBackendLabel(editImageBackend, t)
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
+    const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
 
     // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
@@ -1571,7 +1573,7 @@ export function EditingForm({
                                 {editModel}
                             </span>
                             <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
-                                {streamModeLabel}
+                                {streamStatusLabel}
                             </span>
                             <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-primary'>
                                 {t('workbench.estimatedCost')}

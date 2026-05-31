@@ -24,6 +24,7 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
+import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
 import type { WorkbenchMode } from '@/components/mode-toggle';
@@ -341,6 +342,7 @@ export function GenerationForm({
         getBackendLabel(imageBackend, t)
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
+    const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
     const isBatchMode = currentMode === 'batch';
     const isReuseMode = currentMode === 'reuse';
 
@@ -1231,7 +1233,7 @@ export function GenerationForm({
                                 {model}
                             </span>
                             <span className='rounded-full border border-border bg-background/65 px-2 py-1 text-muted-foreground'>
-                                {streamModeLabel}
+                                {streamStatusLabel}
                             </span>
                             <span className='rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-primary'>
                                 {t('workbench.estimatedCost')}

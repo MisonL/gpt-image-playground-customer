@@ -45,6 +45,7 @@ import {
     type StreamingClientEvent,
     type StreamingClientState
 } from '@/lib/streaming-batch';
+import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
@@ -1974,13 +1975,7 @@ export default function HomePage() {
                                         {t('app.apiConnected')}
                                     </span>
                                     <span className='hidden sm:inline'>{mode === 'generate' ? genModel : editModel}</span>
-                                    <span className='hidden sm:inline'>
-                                        {streamMode === 'non_stream'
-                                            ? t('streaming.modeNonStream')
-                                            : streamMode === 'stream'
-                                              ? t('streaming.modeStream')
-                                              : t('streaming.modeAuto')}
-                                    </span>
+                                    <span className='hidden sm:inline'>{getStreamingStatusLabel(streamMode, t)}</span>
                                 </div>
                                 <div className='hidden items-center gap-4 text-muted-foreground sm:flex'>
                                     <HelpCircle className='h-4 w-4' />
