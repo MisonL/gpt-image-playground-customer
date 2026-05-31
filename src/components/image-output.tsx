@@ -46,6 +46,8 @@ type ImageOutputProps = {
     onShareImage: (filename: string) => void;
     onCreateVariant: () => void;
     onReusePrompt: () => void;
+    compareImage?: ImageInfo | null;
+    compareImageLabel?: string;
     canCreateVariant: boolean;
     canReusePrompt: boolean;
     currentMode: 'generate' | 'edit';
@@ -116,6 +118,8 @@ export function ImageOutput({
     onShareImage,
     onCreateVariant,
     onReusePrompt,
+    compareImage = null,
+    compareImageLabel,
     canCreateVariant,
     canReusePrompt,
     currentMode,
@@ -135,7 +139,7 @@ export function ImageOutput({
     const [compareSelection, setCompareSelection] = React.useState<{
         imageBatch: ImageInfo[];
         selectedImageIndex: number;
-        compareTargetIndex: number;
+        compareTargetFilename: string;
     } | null>(null);
     const [imageDimensions, setImageDimensions] = React.useState<Record<string, ImageDimensions>>({});
     const logEndRef = React.useRef<HTMLDivElement | null>(null);
@@ -162,10 +166,12 @@ export function ImageOutput({
                 : 0
             : null;
     const selectedImage = selectedImageIndex === null ? null : imageBatch?.[selectedImageIndex] || null;
-    const compareTargetIndex = imageBatch
+    const sameBatchCompareTargetIndex = imageBatch
         ? resolveCompareTargetIndex(imageBatch.length, selectedImageIndex)
         : null;
-    const compareTargetImage = compareTargetIndex === null ? null : imageBatch?.[compareTargetIndex] || null;
+    const sameBatchCompareTargetImage =
+        sameBatchCompareTargetIndex === null ? null : imageBatch?.[sameBatchCompareTargetIndex] || null;
+    const compareTargetImage = sameBatchCompareTargetImage || compareImage || null;
     const selectedImageDimensions = selectedImage ? imageDimensions[selectedImage.filename] : null;
     const previewStateLabel = isLoading
         ? t('output.progressDeveloping')
@@ -193,8 +199,12 @@ export function ImageOutput({
         !!compareSelection &&
         compareSelection.imageBatch === imageBatch &&
         compareSelection.selectedImageIndex === selectedImageIndex &&
-        compareSelection.compareTargetIndex === compareTargetIndex;
-    const compareReferenceLabel = selectedImageIndex === 0 ? t('output.compareOther') : t('output.compareReference');
+        compareSelection.compareTargetFilename === compareTargetImage?.filename;
+    const compareReferenceLabel = sameBatchCompareTargetImage
+        ? selectedImageIndex === 0
+            ? t('output.compareOther')
+            : t('output.compareReference')
+        : (compareImageLabel ?? t('output.compareReference'));
 
     const handleSendClick = () => {
         if (selectedImage) {
@@ -215,8 +225,8 @@ export function ImageOutput({
     };
 
     const handleCompareClick = () => {
-        if (canCompareImages && imageBatch && selectedImageIndex !== null && compareTargetIndex !== null) {
-            setCompareSelection({ imageBatch, selectedImageIndex, compareTargetIndex });
+        if (canCompareImages && imageBatch && selectedImageIndex !== null && compareTargetImage) {
+            setCompareSelection({ imageBatch, selectedImageIndex, compareTargetFilename: compareTargetImage.filename });
         }
     };
 
