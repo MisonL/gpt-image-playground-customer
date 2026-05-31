@@ -46,4 +46,30 @@ describe('ImageOutput result actions', () => {
             assert.doesNotMatch(html, new RegExp(`<button[^>]*disabled=""[^>]*>.*?${action}.*?</button>`, 's'));
         }
     });
+
+    it('keeps compare disabled for single-image results', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <ImageOutput
+                    imageBatch={[{ path: '/api/image/only.png', filename: 'only.png' }]}
+                    viewMode={0}
+                    onViewChange={noop}
+                    isLoading={false}
+                    onSendToEdit={noop}
+                    onDownloadImage={noop}
+                    onShareImage={noop}
+                    onCreateVariant={noop}
+                    onReusePrompt={noop}
+                    canCreateVariant
+                    canReusePrompt
+                    currentMode='generate'
+                    baseImagePreviewUrl={null}
+                    clientPasswordHash={null}
+                    canOpenLogs={false}
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /<button[^>]*disabled=""[^>]*>.*?对比.*?<\/button>/s);
+    });
 });
