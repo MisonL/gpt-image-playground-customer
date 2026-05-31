@@ -91,7 +91,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'form.numberOfImages': '数量：{count}',
         'form.batchNumberOfImages': '批量张数：{count}',
         'form.size': '尺寸',
-        'form.quality': '质量',
+        'form.quality': '清晰度',
         'form.background': '背景',
         'form.backgroundOpaque': '不透明',
         'form.backgroundTransparent': '透明',

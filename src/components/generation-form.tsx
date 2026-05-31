@@ -417,6 +417,23 @@ export function GenerationForm({
                             <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
                                 {t('workbench.creationSheet')}
                             </CardTitle>
+                            {isPasswordRequiredByBackend && (
+                                <Button
+                                    variant='ghost'
+                                    size='sm'
+                                    onClick={onOpenPasswordDialog}
+                                    className='text-muted-foreground hover:text-foreground ml-auto h-7 px-2'
+                                    aria-label={t('password.configure')}>
+                                    {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
+                                </Button>
+                            )}
+                        </div>
+                    </div>
+                    <div className='space-y-1.5'>
+                        <div className='flex items-center'>
+                            <Label htmlFor='prompt' className='text-foreground text-sm font-medium'>
+                                {t('workbench.promptTitle')}
+                            </Label>
                             {prompt.trim() && (
                                 <button
                                     type='button'
@@ -426,19 +443,7 @@ export function GenerationForm({
                                     {t('common.clear')}
                                 </button>
                             )}
-                            {isPasswordRequiredByBackend && (
-                                <Button
-                                    variant='ghost'
-                                    size='sm'
-                                    onClick={onOpenPasswordDialog}
-                                    className='text-muted-foreground hover:text-foreground ml-2 h-7 px-2'
-                                    aria-label={t('password.configure')}>
-                                    {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
-                                </Button>
-                            )}
                         </div>
-                    </div>
-                    <div className='space-y-1.5'>
                         <div className='relative'>
                             <Textarea
                                 id='prompt'
