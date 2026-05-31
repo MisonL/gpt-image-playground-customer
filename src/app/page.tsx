@@ -1746,28 +1746,32 @@ export default function HomePage() {
         [refreshImageAccessCookie, resolveImageBlob, shareTargetFilename, t]
     );
 
-    const handleSendToEdit = async (filename: string) => {
-        if (isSendingToEdit) return;
+    const handleSendToEdit = async (
+        filename: string,
+        storageMode: HistoryMetadata['storageModeUsed'] = effectiveStorageModeClient
+    ): Promise<boolean> => {
+        if (isSendingToEdit) return false;
+        const sourceStorageMode = storageMode || 'fs';
         setIsSendingToEdit(true);
         setError(null);
 
         const alreadyExists = editImageFiles.some((file) => file.name === filename);
         if (mode === 'edit' && alreadyExists) {
             setIsSendingToEdit(false);
-            return;
+            return true;
         }
 
         if (mode === 'edit' && editImageFiles.length >= MAX_EDIT_IMAGES) {
             setError(createErrorNotice(t('error.maxEditImages', { count: MAX_EDIT_IMAGES })));
             setIsSendingToEdit(false);
-            return;
+            return false;
         }
 
         try {
             let blob: Blob | undefined;
             let mimeType: string = 'image/png';
 
-            if (effectiveStorageModeClient === 'indexeddb') {
+            if (sourceStorageMode === 'indexeddb') {
                 const record = allDbImages?.find((img) => img.filename === filename);
                 if (record?.blob) {
                     blob = record.blob;
@@ -1777,7 +1781,7 @@ export default function HomePage() {
                 }
             } else {
                 if (!(await refreshImageAccessCookie())) {
-                    return;
+                    return false;
                 }
                 const response = await fetch(`/api/image/${filename}`);
                 if (response.status === 401 && isPasswordRequiredByBackend) {
@@ -1792,7 +1796,7 @@ export default function HomePage() {
                     } else {
                         setError(createErrorNotice(t('error.authVerifyUnavailable')));
                     }
-                    return;
+                    return false;
                 }
                 if (!response.ok) {
                     throw new Error(t('error.fetchImage', { statusText: response.statusText }));
@@ -1817,13 +1821,49 @@ export default function HomePage() {
                 setMode('edit');
                 setWorkbenchMode('edit');
             }
+            return true;
         } catch (err: unknown) {
             console.error('发送图片到编辑模式失败：', err);
             const errorMessage = err instanceof Error ? err.message : t('error.sendToEdit');
             setError(createErrorNotice(errorMessage));
+            return false;
         } finally {
             setIsSendingToEdit(false);
         }
+    };
+
+    const handleSendHistoryToEdit = async (item: HistoryMetadata) => {
+        const firstImage = item.images[0];
+        if (!firstImage) {
+            setError(createErrorNotice(t('error.historyMissingImage')));
+            return;
+        }
+
+        const sent = await handleSendToEdit(firstImage.filename, item.storageModeUsed || 'fs');
+        if (!sent) return;
+
+        const nextModel = item.model ?? editModel;
+        const sizeSelection = readHistorySizeSelection(item, nextModel);
+        setEditPrompt(item.prompt);
+        setEditModel(nextModel);
+        setEditSize(sizeSelection.size);
+        if (typeof sizeSelection.customWidth === 'number') {
+            setEditCustomWidth(sizeSelection.customWidth);
+        }
+        if (typeof sizeSelection.customHeight === 'number') {
+            setEditCustomHeight(sizeSelection.customHeight);
+        }
+        setEditQuality(item.quality);
+        setEditModeration(item.moderation);
+        const imageCount = readHistoryImageCountSelection(item.images.length);
+        if (imageCount !== null) {
+            setEditN([imageCount]);
+        }
+        if (item.output_format) {
+            setEditOutputFormat(item.output_format);
+        }
+        setMode('edit');
+        setWorkbenchMode('edit');
     };
 
     const executeDeleteItem = React.useCallback(
@@ -2176,6 +2216,8 @@ export default function HomePage() {
                                     inspirations={inspirations}
                                     onSelectImage={handleHistorySelect}
                                     onApplyPrompt={handleApplyPrompt}
+                                    onSaveInspiration={handleSaveInspiration}
+                                    onSendHistoryToEdit={handleSendHistoryToEdit}
                                     onDeleteInspiration={handleDeleteInspiration}
                                     onClearHistory={handleClearHistory}
                                     getImageSrc={getImageSrc}

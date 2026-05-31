@@ -41,6 +41,8 @@ type HistoryPanelProps = {
     inspirations: InspirationItem[];
     onSelectImage: (item: HistoryMetadata) => void;
     onApplyPrompt: (prompt: string, source: PromptApplySource) => void;
+    onSaveInspiration: (prompt: string) => void;
+    onSendHistoryToEdit: (item: HistoryMetadata) => void | Promise<void>;
     onDeleteInspiration: (id: number) => void;
     onClearHistory: () => void;
     getImageSrc: (filename: string) => string | undefined;
@@ -155,6 +157,8 @@ function HistoryPanelImpl({
     inspirations,
     onSelectImage,
     onApplyPrompt,
+    onSaveInspiration,
+    onSendHistoryToEdit,
     onDeleteInspiration,
     onClearHistory,
     getImageSrc,
@@ -166,7 +170,9 @@ function HistoryPanelImpl({
     onDeletePreferenceDialogChange
 }: HistoryPanelProps) {
     const { locale, t } = useI18n();
-    const [activeTab, setActiveTab] = React.useState<'inspiration' | 'history'>('inspiration');
+    const [activeTab, setActiveTab] = React.useState<'inspiration' | 'history'>(() =>
+        history.length > 0 && inspirations.length === 0 ? 'history' : 'inspiration'
+    );
     const [openPromptDialogTimestamp, setOpenPromptDialogTimestamp] = React.useState<number | null>(null);
     const [openCostDialogTimestamp, setOpenCostDialogTimestamp] = React.useState<number | null>(null);
     const [isTotalCostDialogOpen, setIsTotalCostDialogOpen] = React.useState(false);
@@ -571,6 +577,7 @@ function HistoryPanelImpl({
                             const imageCount = item.images?.length ?? 0;
                             const isMultiImage = imageCount > 1;
                             const itemKey = item.timestamp;
+                            const hasPrompt = item.prompt.trim().length > 0;
 	                            const originalStorageMode = item.storageModeUsed || 'fs';
 	                            const outputFormat = item.output_format || 'png';
 	                            const costBadge = getCostBadge(item, {
@@ -844,11 +851,16 @@ function HistoryPanelImpl({
                                         )}
                                     </div>
 
-                                    <div className='text-muted-foreground bg-card/70 space-y-1 rounded-b-md border border-t-0 border-border p-2 text-xs'>
-                                        <p title={t('history.generatedOn', { time: formatTimestamp(item.timestamp) })}>
-                                            <span className='text-foreground font-medium'>{t('history.time')}</span>{' '}
-                                            {formatDuration(item.durationMs)}
-                                        </p>
+	                                    <div className='text-muted-foreground bg-card/70 space-y-1 rounded-b-md border border-t-0 border-border p-2 text-xs'>
+	                                        <p title={t('history.generatedOn', { time: formatTimestamp(item.timestamp) })}>
+	                                            <span className='text-foreground font-medium'>{t('history.generatedAt')}</span>{' '}
+	                                            {formatStatusTime(item.timestamp)}
+	                                            <span className='px-1 text-muted-foreground/70'>/</span>
+	                                            {t('history.statusBatchSummary', {
+	                                                count: imageCount,
+	                                                duration: formatDuration(item.durationMs)
+	                                            })}
+	                                        </p>
                                         <p>
                                             <span className='text-foreground font-medium'>{t('history.model')}</span>{' '}
                                             {item.model || 'gpt-image-1'}
@@ -865,20 +877,51 @@ function HistoryPanelImpl({
                                             <span className='text-foreground font-medium'>{t('history.bg')}</span>{' '}
                                             {item.background}
                                         </p>
-                                        <p>
-                                            <span className='text-foreground font-medium'>{t('history.mod')}</span>{' '}
-                                            {item.moderation}
+	                                        <p>
+	                                            <span className='text-foreground font-medium'>{t('history.mod')}</span>{' '}
+	                                            {item.moderation}
+	                                        </p>
+                                        <p
+                                            className='mt-2 max-h-8 min-h-8 overflow-hidden break-words leading-4'
+                                            title={item.prompt || t('history.noPrompt')}>
+                                            {item.prompt || t('history.noPrompt')}
                                         </p>
-                                        <div className='mt-2 flex items-center gap-1'>
+                                        <div className='mt-2 grid grid-cols-3 gap-1'>
                                             <Button
                                                 type='button'
                                                 variant='outline'
                                                 size='sm'
-                                                className='h-6 px-2 py-1 text-xs'
-                                                disabled={!item.prompt.trim()}
-                                                onClick={() => onApplyPrompt(item.prompt, { type: 'history', item })}>
-                                                {t('history.applyHistory')}
+                                                className='h-7 min-w-0 px-1 text-[11px]'
+                                                disabled={!hasPrompt}
+                                                onClick={() => onSaveInspiration(item.prompt)}
+                                                aria-label={t('history.saveHistoryPrompt')}>
+                                                <Pin className='h-3.5 w-3.5' />
+                                                <span className='truncate'>{t('history.saveToInspiration')}</span>
                                             </Button>
+                                            <Button
+                                                type='button'
+                                                variant='outline'
+                                                size='sm'
+                                                className='h-7 min-w-0 px-1 text-[11px]'
+                                                disabled={!hasPrompt}
+                                                onClick={() => onApplyPrompt(item.prompt, { type: 'history', item })}
+                                                aria-label={t('history.reuseHistoryPrompt')}>
+                                                <WandSparkles className='h-3.5 w-3.5' />
+                                                <span className='truncate'>{t('history.reuseHistory')}</span>
+                                            </Button>
+                                            <Button
+                                                type='button'
+                                                variant='outline'
+                                                size='sm'
+                                                className='h-7 min-w-0 px-1 text-[11px]'
+                                                disabled={!firstImage}
+                                                onClick={() => onSendHistoryToEdit(item)}
+                                                aria-label={t('history.continueHistoryEdit')}>
+                                                <Pencil className='h-3.5 w-3.5' />
+                                                <span className='truncate'>{t('history.continueEdit')}</span>
+                                            </Button>
+                                        </div>
+                                        <div className='mt-1 flex items-center gap-1'>
                                             <Dialog
                                                 open={openPromptDialogTimestamp === itemKey}
                                                 onOpenChange={(isOpen) =>
