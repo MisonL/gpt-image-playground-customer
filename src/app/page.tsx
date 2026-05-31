@@ -20,6 +20,7 @@ import {
 } from '@/lib/api-error-guidance';
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
+import { buildGenerationActivityItems } from '@/lib/generation-activity';
 import { useI18n } from '@/lib/i18n';
 import { IMAGE_UPSTREAM_FORM_SERVER_DEFAULT, appendImageUpstreamOverrideFields } from '@/lib/image-upstream-form';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
@@ -403,6 +404,7 @@ export default function HomePage() {
     const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
     const [error, setError] = React.useState<ApiErrorNotice | null>(null);
     const [latestImageBatch, setLatestImageBatch] = React.useState<ApiImageResult[] | null>(null);
+    const [completedGenerationCount, setCompletedGenerationCount] = React.useState<number | null>(null);
     const [imageOutputView, setImageOutputView] = React.useState<'grid' | number>('grid');
     const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
     const [inspirations, setInspirations] = React.useState<InspirationItem[]>([]);
@@ -529,6 +531,19 @@ export default function HomePage() {
         }
         return uniqueStrings(latestImageBatch.map((image) => image.filename));
     }, [imageOutputView, latestImageBatch]);
+    const generationActivityItems = React.useMemo(
+        () =>
+            buildGenerationActivityItems({
+                isLoading,
+                isSendingToEdit,
+                mode,
+                streamingPreviewCount: streamingPreviewImages.size,
+                errorMessage: error?.message,
+                completedGenerationCount,
+                t
+            }),
+        [completedGenerationCount, error?.message, isLoading, isSendingToEdit, mode, streamingPreviewImages.size, t]
+    );
     const mobilePrimaryDisabled =
         isLoading ||
         isSendingToEdit ||
@@ -1043,6 +1058,7 @@ export default function HomePage() {
 
             const processedImages = await materializeImages(images);
             setLatestImageBatch(processedImages);
+            setCompletedGenerationCount(processedImages.length);
             setImageOutputView(processedImages.length > 1 ? 'grid' : 0);
             if (clearStreaming) {
                 setStreamingPreviewImages(new Map());
@@ -1311,6 +1327,7 @@ export default function HomePage() {
         setActiveRequestStreaming(requestStreamMode !== 'non_stream');
         setError(null);
         setLatestImageBatch(null);
+        setCompletedGenerationCount(null);
         setImageOutputView('grid');
         setStreamingPreviewImages(new Map());
         if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
@@ -1509,6 +1526,7 @@ export default function HomePage() {
             if (originalStorageMode === 'fs' && !(await refreshImageAccessCookie())) {
                 return;
             }
+            setCompletedGenerationCount(null);
 
             const selectedBatchPromises = item.images.map(async (imgInfo, imageIndex) => {
                 let path: string | undefined;
@@ -1635,6 +1653,7 @@ export default function HomePage() {
         if (window.confirm(confirmationMessage)) {
             setHistory([]);
             setLatestImageBatch(null);
+            setCompletedGenerationCount(null);
             setImageOutputView('grid');
             setError(null);
 
@@ -2252,6 +2271,7 @@ export default function HomePage() {
                                 <HistoryPanel
                                     history={history}
                                     inspirations={inspirations}
+                                    activityItems={generationActivityItems}
                                     onSelectImage={handleHistorySelect}
                                     onApplyPrompt={handleApplyPrompt}
                                     onSaveInspiration={handleSaveInspiration}

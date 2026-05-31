@@ -1,4 +1,4 @@
-import { HistoryPanel, type InspirationItem } from './history-panel';
+import { HistoryPanel, type GenerationActivityItem, type InspirationItem } from './history-panel';
 import type { HistoryMetadata } from '@/app/page';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
@@ -28,12 +28,17 @@ const inspirationItem: InspirationItem = {
     prompt: '午后窗边花束，奶油色桌面，日杂胶片感'
 };
 
-function renderHistoryPanel(history: HistoryMetadata[], inspirations: InspirationItem[] = []): string {
+function renderHistoryPanel(
+    history: HistoryMetadata[],
+    inspirations: InspirationItem[] = [],
+    activityItems: GenerationActivityItem[] = []
+): string {
     return renderToStaticMarkup(
         <I18nProvider>
             <HistoryPanel
                 history={history}
                 inspirations={inspirations}
+                activityItems={activityItems}
                 onSelectImage={noop}
                 onApplyPrompt={noop}
                 onSaveInspiration={noop}
@@ -75,5 +80,24 @@ describe('HistoryPanel recent history actions', () => {
 
         assert.match(html, /snap-x snap-mandatory/);
         assert.match(html, /w-\[min\(84vw,360px\)\]/);
+    });
+
+    it('renders live generation activity before completed history', () => {
+        const html = renderHistoryPanel(
+            [historyItem],
+            [inspirationItem],
+            [
+                {
+                    id: 'generating',
+                    label: '正在生成',
+                    detail: '正在把当前创作单送去生成，完成后会进入最近生成。',
+                    tone: 'progress'
+                }
+            ]
+        );
+
+        assert.match(html, /正在生成/);
+        assert.match(html, /正在把当前创作单送去生成/);
+        assert.match(html, /新图已入册/);
     });
 });
