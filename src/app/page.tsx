@@ -21,6 +21,7 @@ import {
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { buildGenerationActivityItems } from '@/lib/generation-activity';
+import { resolveHistoryCompareImage } from '@/lib/history-compare';
 import { useI18n } from '@/lib/i18n';
 import { IMAGE_UPSTREAM_FORM_SERVER_DEFAULT, appendImageUpstreamOverrideFields } from '@/lib/image-upstream-form';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
@@ -637,6 +638,15 @@ export default function HomePage() {
             return undefined;
         },
         [allDbImages]
+    );
+    const historyCompareImage = React.useMemo(
+        () =>
+            resolveHistoryCompareImage({
+                history,
+                currentFilenames: latestImageBatch?.map((image) => image.filename) ?? [],
+                getIndexedDbImageSrc: getImageSrc
+            }),
+        [getImageSrc, history, latestImageBatch]
     );
 
     React.useEffect(() => {
@@ -2228,6 +2238,7 @@ export default function HomePage() {
                                     onShareImage={handleOpenShareImage}
                                     onCreateVariant={handleCreateVariant}
                                     onReusePrompt={handleReuseCurrentPrompt}
+                                    compareImage={historyCompareImage}
                                     canCreateVariant={Boolean(currentPrompt.trim()) && !!latestImageBatch}
                                     canReusePrompt={Boolean(currentPrompt.trim())}
                                     currentMode={mode}
