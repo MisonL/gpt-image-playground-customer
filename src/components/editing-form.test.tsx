@@ -8,12 +8,18 @@ import { renderToStaticMarkup } from 'react-dom/server';
 type RenderOptions = {
     backend: EditingFormData['image_backend'];
     outputFormat?: EditingFormData['output_format'];
-    advancedTab?: 'route' | 'output' | 'stream';
+    advancedOpen?: boolean;
+    advancedTab?: 'output' | 'model' | 'stream' | 'route';
 };
 
 const noop = () => {};
 
-function renderEditingForm({ backend, outputFormat = 'png', advancedTab = 'route' }: RenderOptions): string {
+function renderEditingForm({
+    backend,
+    outputFormat = 'png',
+    advancedOpen = true,
+    advancedTab = 'route'
+}: RenderOptions): string {
     return renderToStaticMarkup(
         <I18nProvider>
             <EditingForm
@@ -80,7 +86,7 @@ function renderEditingForm({ backend, outputFormat = 'png', advancedTab = 'route
                 setEditPromptOptimization={noop}
                 editForceWeb={false}
                 setEditForceWeb={noop}
-                initialAdvancedOpen
+                initialAdvancedOpen={advancedOpen}
                 initialAdvancedTab={advancedTab}
             />
         </I18nProvider>
@@ -88,6 +94,32 @@ function renderEditingForm({ backend, outputFormat = 'png', advancedTab = 'route
 }
 
 describe('EditingForm advanced upstream controls', () => {
+    it('keeps model and streaming controls out of the default edit form surface', () => {
+        const html = renderEditingForm({ backend: 'server-default', advancedOpen: false });
+
+        assert.match(html, /参考图/);
+        assert.match(html, /修改想法/);
+        assert.match(html, /专业模式/);
+        assert.doesNotMatch(html, /edit-model-select/);
+        assert.doesNotMatch(html, /edit-stream-mode-select/);
+    });
+
+    it('renders edit model controls only in the professional model tab', () => {
+        const html = renderEditingForm({ backend: 'server-default', advancedTab: 'model' });
+
+        assert.match(html, /edit-model-select/);
+        assert.match(html, /gpt-image-2 始终以高保真方式处理参考图/);
+        assert.doesNotMatch(html, /edit-image-backend-select/);
+    });
+
+    it('renders edit stream controls only in the professional stream tab', () => {
+        const html = renderEditingForm({ backend: 'server-default', advancedTab: 'stream' });
+
+        assert.match(html, /edit-stream-mode-select/);
+        assert.match(html, /edit-partial-1/);
+        assert.doesNotMatch(html, /edit-model-select/);
+    });
+
     it('renders Responses-specific edit controls when the Responses backend is selected', () => {
         const html = renderEditingForm({ backend: 'responses-image-generation' });
 
