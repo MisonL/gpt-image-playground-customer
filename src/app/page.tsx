@@ -15,6 +15,7 @@ import { ShareDialog, type ShareDialogValues } from '@/components/share-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { WorkbenchStatusStrip } from '@/components/workbench-status-strip';
 import {
     buildApiErrorNotice,
     buildBatchPartialFailureMessage,
@@ -50,14 +51,13 @@ import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
     ArrowUp,
-    CircleCheck,
     Flower2,
     HelpCircle,
     Loader2,
     Lock,
     PenLine,
     Settings2,
-    Terminal
+    Activity
 } from 'lucide-react';
 import * as React from 'react';
 
@@ -1969,14 +1969,11 @@ export default function HomePage() {
                                 <p className='text-muted-foreground text-sm'>{t('app.studioSubtitle')}</p>
                             </div>
                             <div className='flex flex-wrap items-center gap-4 sm:justify-end'>
-                                <div className='flex flex-wrap items-center gap-3 text-sm text-muted-foreground'>
-                                    <span className='inline-flex items-center gap-2'>
-                                        <CircleCheck className='h-3.5 w-3.5 text-[oklch(0.5_0.12_150)]' />
-                                        {t('app.apiConnected')}
-                                    </span>
-                                    <span className='hidden sm:inline'>{mode === 'generate' ? genModel : editModel}</span>
-                                    <span className='hidden sm:inline'>{getStreamingStatusLabel(streamMode, t)}</span>
-                                </div>
+                                <WorkbenchStatusStrip
+                                    model={mode === 'generate' ? genModel : editModel}
+                                    streamStatus={getStreamingStatusLabel(streamMode, t)}
+                                    costLabel={t('workbench.estimatedCost')}
+                                />
                                 <div className='hidden items-center gap-4 text-muted-foreground sm:flex'>
                                     <HelpCircle className='h-4 w-4' />
                                     <button
@@ -2234,7 +2231,7 @@ export default function HomePage() {
                                     onClick={() => setOpenLogsSignal((value) => value + 1)}
                                     className='text-muted-foreground hover:text-foreground'
                                     aria-label={t('logs.open')}>
-                                    <Terminal className='h-4 w-4' />
+                                    <Activity className='h-4 w-4' />
                                 </Button>
                             )}
                         </div>
