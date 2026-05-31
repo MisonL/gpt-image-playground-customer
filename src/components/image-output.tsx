@@ -1,6 +1,7 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
+import { ImageCompareView, resolveCompareTargetIndex } from '@/components/image-compare-view';
 import {
     Dialog,
     DialogContent,
@@ -108,6 +109,11 @@ export function ImageOutput({
     const [isLogDialogOpen, setIsLogDialogOpen] = React.useState(false);
     const [logs, setLogs] = React.useState<LogEntry[]>([]);
     const [logConnectionState, setLogConnectionState] = React.useState<'idle' | 'connected' | 'error'>('idle');
+    const [compareSelection, setCompareSelection] = React.useState<{
+        imageBatch: ImageInfo[];
+        selectedImageIndex: number;
+        compareTargetIndex: number;
+    } | null>(null);
     const logEndRef = React.useRef<HTMLDivElement | null>(null);
     const resolvedLogClientRequestIds = React.useMemo(
         () => resolveLogClientRequestIds({ logs, clientRequestIds: logClientRequestIds, filenames: logFilenames }),
@@ -132,7 +138,18 @@ export function ImageOutput({
                 : 0
             : null;
     const selectedImage = selectedImageIndex === null ? null : imageBatch?.[selectedImageIndex] || null;
+    const compareTargetIndex = imageBatch
+        ? resolveCompareTargetIndex(imageBatch.length, selectedImageIndex)
+        : null;
+    const compareTargetImage = compareTargetIndex === null ? null : imageBatch?.[compareTargetIndex] || null;
     const canUseSelectedImageActions = !isLoading && !!selectedImage;
+    const canCompareImages = !isLoading && !!selectedImage && !!compareTargetImage;
+    const isCompareView =
+        !!compareSelection &&
+        compareSelection.imageBatch === imageBatch &&
+        compareSelection.selectedImageIndex === selectedImageIndex &&
+        compareSelection.compareTargetIndex === compareTargetIndex;
+    const compareReferenceLabel = selectedImageIndex === 0 ? t('output.compareOther') : t('output.compareReference');
 
     const handleSendClick = () => {
         if (selectedImage) {
@@ -153,8 +170,8 @@ export function ImageOutput({
     };
 
     const handleCompareClick = () => {
-        if (imageBatch && imageBatch.length > 1) {
-            onViewChange('grid');
+        if (canCompareImages && imageBatch && selectedImageIndex !== null && compareTargetIndex !== null) {
+            setCompareSelection({ imageBatch, selectedImageIndex, compareTargetIndex });
         }
     };
 
@@ -319,6 +336,13 @@ export function ImageOutput({
                             <p>{isStreamingRequest ? t('output.keepalive') : t('output.generating')}</p>
                         </div>
                     )
+                ) : isCompareView && selectedImage && compareTargetImage ? (
+                    <ImageCompareView
+                        leftImage={compareTargetImage}
+                        leftLabel={compareReferenceLabel}
+                        rightImage={selectedImage}
+                        rightLabel={t('output.compareCurrent')}
+                    />
                 ) : imageBatch && imageBatch.length > 0 ? (
                     viewMode === 'grid' ? (
                         <div className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[720px] gap-2`}>
@@ -539,8 +563,11 @@ export function ImageOutput({
                     variant='ghost'
                     size='sm'
                     onClick={handleCompareClick}
-                    disabled={!imageBatch || imageBatch.length <= 1}
-                    className='h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50'>
+                    disabled={!canCompareImages}
+                    className={cn(
+                        'h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50',
+                        isCompareView ? 'bg-accent text-accent-foreground hover:text-accent-foreground' : ''
+                    )}>
                     <GitCompare className='mr-2 h-4 w-4' />
                     {t('output.compare')}
                 </Button>
