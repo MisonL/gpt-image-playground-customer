@@ -1,4 +1,4 @@
-import { HistoryPanel } from './history-panel';
+import { HistoryPanel, type InspirationItem } from './history-panel';
 import type { HistoryMetadata } from '@/app/page';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
@@ -22,13 +22,18 @@ const historyItem: HistoryMetadata = {
     model: 'gpt-image-2',
     size: '2048x2048'
 };
+const inspirationItem: InspirationItem = {
+    id: 1,
+    createdAt: Date.UTC(2026, 4, 31, 12, 20),
+    prompt: '午后窗边花束，奶油色桌面，日杂胶片感'
+};
 
-function renderHistoryPanel(history: HistoryMetadata[]): string {
+function renderHistoryPanel(history: HistoryMetadata[], inspirations: InspirationItem[] = []): string {
     return renderToStaticMarkup(
         <I18nProvider>
             <HistoryPanel
                 history={history}
-                inspirations={[]}
+                inspirations={inspirations}
                 onSelectImage={noop}
                 onApplyPrompt={noop}
                 onSaveInspiration={noop}
@@ -56,5 +61,19 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /收藏这条历史提示词/);
         assert.match(html, /复用这条历史记录到创作单/);
         assert.match(html, /用这条历史记录的首张图片继续编辑/);
+    });
+
+    it('renders recent history as a mobile horizontal snap album', () => {
+        const html = renderHistoryPanel([historyItem]);
+
+        assert.match(html, /snap-x snap-mandatory/);
+        assert.match(html, /w-\[min\(76vw,280px\)\]/);
+    });
+
+    it('renders inspirations as a mobile horizontal snap album', () => {
+        const html = renderHistoryPanel([], [inspirationItem]);
+
+        assert.match(html, /snap-x snap-mandatory/);
+        assert.match(html, /w-\[min\(84vw,360px\)\]/);
     });
 });

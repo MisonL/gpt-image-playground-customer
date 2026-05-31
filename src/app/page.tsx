@@ -2,11 +2,7 @@
 
 import { ApiSettingsDialog, type ApiSettings } from '@/components/api-settings-dialog';
 import { EditingForm, type EditingFormData } from '@/components/editing-form';
-import {
-    GenerationForm,
-    type GenerationFormData,
-    type WorkbenchReuseContext
-} from '@/components/generation-form';
+import { GenerationForm, type GenerationFormData, type WorkbenchReuseContext } from '@/components/generation-form';
 import { HistoryPanel, type InspirationItem, type PromptApplySource } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
 import type { WorkbenchMode } from '@/components/mode-toggle';
@@ -14,7 +10,7 @@ import { PasswordDialog } from '@/components/password-dialog';
 import { ShareDialog, type ShareDialogValues } from '@/components/share-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { WorkbenchProDock } from '@/components/workbench-pro-dock';
 import { WorkbenchStatusStrip } from '@/components/workbench-status-strip';
 import {
     buildApiErrorNotice,
@@ -25,14 +21,12 @@ import {
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import { useI18n } from '@/lib/i18n';
-import {
-    IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
-    appendImageUpstreamOverrideFields
-} from '@/lib/image-upstream-form';
+import { IMAGE_UPSTREAM_FORM_SERVER_DEFAULT, appendImageUpstreamOverrideFields } from '@/lib/image-upstream-form';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
+import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
-import { createImageShareFromBlob } from '@/lib/share-client';
 import { sha256Hex } from '@/lib/sha256';
+import { createImageShareFromBlob } from '@/lib/share-client';
 import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
@@ -49,16 +43,7 @@ import {
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
-import {
-    ArrowUp,
-    Flower2,
-    HelpCircle,
-    Loader2,
-    Lock,
-    PenLine,
-    Settings2,
-    Activity
-} from 'lucide-react';
+import { ArrowUp, Flower2, HelpCircle, Loader2, Lock, PenLine, Settings2, Activity, X } from 'lucide-react';
 import * as React from 'react';
 
 type HistoryImage = {
@@ -88,6 +73,11 @@ type DrawnPoint = {
     x: number;
     y: number;
     size: number;
+};
+
+type MobileDrawerPointerStart = {
+    x: number;
+    y: number;
 };
 
 const MAX_EDIT_IMAGES = 10;
@@ -126,7 +116,9 @@ function createClientRequestId(): string {
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
-    return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0)));
+    return Array.from(
+        new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))
+    );
 }
 
 function resolveHistoryImageClientRequestId(item: HistoryMetadata, imageIndex: number): string | undefined {
@@ -221,7 +213,9 @@ function readHistorySizeSelection(
     }
 
     const presets: Array<Exclude<GenerationFormData['size'], 'auto' | 'custom'>> = ['square', 'landscape', 'portrait'];
-    const matchedPreset = presets.find((preset) => rawSize === preset || rawSize === getPresetDimensions(preset, model));
+    const matchedPreset = presets.find(
+        (preset) => rawSize === preset || rawSize === getPresetDimensions(preset, model)
+    );
     if (matchedPreset) {
         return { size: matchedPreset, customWidth: null, customHeight: null, restored: true };
     }
@@ -323,12 +317,11 @@ function renderErrorDescription(error: ApiErrorNotice): React.ReactNode {
             <p>{error.message}</p>
             {error.links.map((link) => (
                 <a
-                    className='w-fit rounded-md border border-destructive/45 px-2 py-1 font-medium text-destructive underline-offset-2 hover:bg-destructive/10 hover:underline'
+                    className='border-destructive/45 text-destructive hover:bg-destructive/10 w-fit rounded-md border px-2 py-1 font-medium underline-offset-2 hover:underline'
                     href={link.url}
                     key={link.url}
                     rel='noreferrer'
-                    target='_blank'
-                >
+                    target='_blank'>
                     {link.label}
                 </a>
             ))}
@@ -397,89 +390,6 @@ function mergeActualCostValues(costs: Array<ActualCostDetails | undefined>): Act
     };
 }
 
-function WorkbenchProDock({
-    outputFormat,
-    quality,
-    model,
-    size,
-    streamMode
-}: {
-    outputFormat: GenerationFormData['output_format'];
-    quality: GenerationFormData['quality'];
-    model: GptImageModel;
-    size: GenerationFormData['size'];
-    streamMode: ImageStreamMode;
-}) {
-    const { t } = useI18n();
-    const qualityPercent = quality === 'high' ? 80 : quality === 'medium' ? 60 : quality === 'low' ? 38 : 70;
-    const resolution = getPresetDimensions(size, model) ?? (size === 'custom' ? 'custom' : '1024 px');
-
-    return (
-        <div className='hidden border-t border-border/70 bg-background/64 px-5 py-3 lg:block'>
-            <div className='mb-3 flex items-center gap-6 text-sm'>
-                <span className='text-muted-foreground'>{t('ux.easyMode')}</span>
-                <span className='border-b-2 border-primary px-3 pb-2 font-medium text-primary'>{t('ux.professionalMode')}</span>
-            </div>
-            <div className='overflow-hidden rounded-lg border border-border bg-card/76'>
-                <Tabs value='output' className='gap-0'>
-                    <TabsList className='grid h-10 w-full grid-cols-4 rounded-none border-b border-border bg-muted/35 p-0'>
-                        <TabsTrigger value='output' className='rounded-none'>
-                            {t('ux.output')}
-                        </TabsTrigger>
-                        <TabsTrigger value='model' className='rounded-none'>
-                            {t('ux.modelRoute')}
-                        </TabsTrigger>
-                        <TabsTrigger value='stream' className='rounded-none'>
-                            {t('ux.streaming')}
-                        </TabsTrigger>
-                        <TabsTrigger value='route' className='rounded-none'>
-                            {t('ux.route')}
-                        </TabsTrigger>
-                    </TabsList>
-                </Tabs>
-                <div className='grid grid-cols-5 gap-3 px-4 py-3 text-xs'>
-                    <div className='space-y-1'>
-                        <p className='text-muted-foreground'>{t('form.outputFormat')}</p>
-                        <div className='rounded-md border border-border bg-background/68 px-3 py-2 font-medium uppercase'>
-                            {outputFormat === 'jpeg' ? 'JPG' : outputFormat}
-                        </div>
-                    </div>
-                    <div className='space-y-1'>
-                        <p className='text-muted-foreground'>{t('ux.colorSpace')}</p>
-                        <div className='rounded-md border border-border bg-background/68 px-3 py-2 font-medium'>sRGB</div>
-                    </div>
-                    <div className='space-y-1'>
-                        <p className='text-muted-foreground'>{t('form.quality')}</p>
-                        <div className='flex items-center gap-2 pt-2'>
-                            <span className='h-1.5 flex-1 rounded-full bg-muted'>
-                                <span
-                                    className='block h-full rounded-full bg-primary'
-                                    style={{ width: `${qualityPercent}%` }}
-                                />
-                            </span>
-                            <span className='rounded-md border border-border bg-background/68 px-2 py-1'>
-                                {qualityPercent}%
-                            </span>
-                        </div>
-                    </div>
-                    <div className='space-y-1'>
-                        <p className='text-muted-foreground'>{t('ux.resolution')}</p>
-                        <div className='rounded-md border border-border bg-background/68 px-3 py-2 font-medium'>{resolution}</div>
-                    </div>
-                    <div className='grid grid-cols-[1fr_auto] gap-x-3 gap-y-2 border-l border-border pl-4'>
-                        <span className='text-muted-foreground'>{t('ux.watermark')}</span>
-                        <span className='h-4 w-8 rounded-full bg-muted' />
-                        <span className='text-muted-foreground'>EXIF</span>
-                        <span className='h-4 w-8 rounded-full bg-primary' />
-                        <span className='text-muted-foreground'>{streamMode}</span>
-                        <span className='h-4 w-8 rounded-full bg-primary' />
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
-
 export default function HomePage() {
     const { locale, t } = useI18n();
     const createErrorNotice = React.useCallback((message: string) => buildApiErrorNotice(message), []);
@@ -513,8 +423,10 @@ export default function HomePage() {
     const [shareUrl, setShareUrl] = React.useState<string | null>(null);
     const [shareError, setShareError] = React.useState<string | null>(null);
     const [isCreatingShare, setIsCreatingShare] = React.useState(false);
+    const [isMobileCreationDrawerOpen, setIsMobileCreationDrawerOpen] = React.useState(false);
     const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
-    const creationPanelRef = React.useRef<HTMLElement | null>(null);
+    const mobileDrawerPointerStartRef = React.useRef<MobileDrawerPointerStart | null>(null);
+    const mobileDrawerGestureHandledAtRef = React.useRef(0);
 
     const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
 
@@ -538,15 +450,19 @@ export default function HomePage() {
     );
     const [editDrawnPoints, setEditDrawnPoints] = React.useState<DrawnPoint[]>([]);
     const [editMaskPreviewUrl, setEditMaskPreviewUrl] = React.useState<string | null>(null);
-    const [editImageBackend, setEditImageBackend] =
-        React.useState<EditingFormData['image_backend']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
-    const [editStreamingStrategy, setEditStreamingStrategy] =
-        React.useState<EditingFormData['streaming_strategy']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [editImageBackend, setEditImageBackend] = React.useState<EditingFormData['image_backend']>(
+        IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+    );
+    const [editStreamingStrategy, setEditStreamingStrategy] = React.useState<EditingFormData['streaming_strategy']>(
+        IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+    );
     const [editResponsesModel, setEditResponsesModel] = React.useState('');
-    const [editThinking, setEditThinking] =
-        React.useState<EditingFormData['thinking']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
-    const [editPromptOptimization, setEditPromptOptimization] =
-        React.useState<EditingFormData['promptOptimization']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [editThinking, setEditThinking] = React.useState<EditingFormData['thinking']>(
+        IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+    );
+    const [editPromptOptimization, setEditPromptOptimization] = React.useState<EditingFormData['promptOptimization']>(
+        IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+    );
     const [editForceWeb, setEditForceWeb] = React.useState(false);
 
     const [genModel, setGenModel] = React.useState<GenerationFormData['model']>('gpt-image-2');
@@ -560,15 +476,19 @@ export default function HomePage() {
     const [genCompression, setGenCompression] = React.useState([100]);
     const [genBackground, setGenBackground] = React.useState<GenerationFormData['background']>('auto');
     const [genModeration, setGenModeration] = React.useState<GenerationFormData['moderation']>('auto');
-    const [genImageBackend, setGenImageBackend] =
-        React.useState<GenerationFormData['image_backend']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
-    const [genStreamingStrategy, setGenStreamingStrategy] =
-        React.useState<GenerationFormData['streaming_strategy']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [genImageBackend, setGenImageBackend] = React.useState<GenerationFormData['image_backend']>(
+        IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+    );
+    const [genStreamingStrategy, setGenStreamingStrategy] = React.useState<GenerationFormData['streaming_strategy']>(
+        IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+    );
     const [genResponsesModel, setGenResponsesModel] = React.useState('');
-    const [genThinking, setGenThinking] =
-        React.useState<GenerationFormData['thinking']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
-    const [genPromptOptimization, setGenPromptOptimization] =
-        React.useState<GenerationFormData['promptOptimization']>(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+    const [genThinking, setGenThinking] = React.useState<GenerationFormData['thinking']>(
+        IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+    );
+    const [genPromptOptimization, setGenPromptOptimization] = React.useState<GenerationFormData['promptOptimization']>(
+        IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+    );
     const [genForceWeb, setGenForceWeb] = React.useState(false);
 
     const [editModel, setEditModel] = React.useState<EditingFormData['model']>('gpt-image-2');
@@ -618,23 +538,20 @@ export default function HomePage() {
         (mode === 'edit' && !currentEditSizeValidation.valid) ||
         (mode === 'edit' && editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved);
 
-    const handleWorkbenchModeChange = React.useCallback(
-        (nextMode: WorkbenchMode) => {
-            setWorkbenchMode(nextMode);
-            if (nextMode !== 'reuse') {
-                setReuseContext(null);
-            }
-            if (nextMode === 'edit') {
-                setMode('edit');
-                return;
-            }
-            if (nextMode === 'batch') {
-                setGenN((current) => (current[0] > 1 ? current : [4]));
-            }
-            setMode('generate');
-        },
-        []
-    );
+    const handleWorkbenchModeChange = React.useCallback((nextMode: WorkbenchMode) => {
+        setWorkbenchMode(nextMode);
+        if (nextMode !== 'reuse') {
+            setReuseContext(null);
+        }
+        if (nextMode === 'edit') {
+            setMode('edit');
+            return;
+        }
+        if (nextMode === 'batch') {
+            setGenN((current) => (current[0] > 1 ? current : [4]));
+        }
+        setMode('generate');
+    }, []);
 
     const scrollToOutput = React.useCallback(() => {
         const outputTop = outputPanelRef.current?.getBoundingClientRect().top;
@@ -645,14 +562,50 @@ export default function HomePage() {
         });
     }, []);
 
-    const scrollToCreation = React.useCallback(() => {
-        const creationTop = creationPanelRef.current?.getBoundingClientRect().top;
-        if (typeof creationTop !== 'number') return;
-        window.scrollTo({
-            top: window.scrollY + creationTop - 12,
-            behavior: 'smooth'
-        });
+    const toggleMobileCreationDrawer = React.useCallback(() => {
+        setIsMobileCreationDrawerOpen((isOpen) => !isOpen);
     }, []);
+
+    const beginMobileCreationDrawerGesture = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        mobileDrawerPointerStartRef.current = {
+            x: event.clientX,
+            y: event.clientY
+        };
+    }, []);
+
+    const finishMobileCreationDrawerGesture = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+        const start = mobileDrawerPointerStartRef.current;
+        mobileDrawerPointerStartRef.current = null;
+        if (!start) return;
+
+        const gesture = resolveMobileCreationSheetGesture({
+            startX: start.x,
+            startY: start.y,
+            currentX: event.clientX,
+            currentY: event.clientY
+        });
+        if (gesture === 'open') {
+            mobileDrawerGestureHandledAtRef.current = Date.now();
+            setIsMobileCreationDrawerOpen(true);
+        } else if (gesture === 'close') {
+            mobileDrawerGestureHandledAtRef.current = Date.now();
+            setIsMobileCreationDrawerOpen(false);
+        }
+    }, []);
+
+    const cancelMobileCreationDrawerGesture = React.useCallback(() => {
+        mobileDrawerPointerStartRef.current = null;
+    }, []);
+
+    const handleMobileCreationDrawerHandleClick = React.useCallback(() => {
+        if (Date.now() - mobileDrawerGestureHandledAtRef.current < 500) {
+            mobileDrawerGestureHandledAtRef.current = 0;
+            return;
+        }
+        toggleMobileCreationDrawer();
+    }, [toggleMobileCreationDrawer]);
 
     const getImageSrc = React.useCallback(
         (filename: string): string | undefined => {
@@ -693,31 +646,34 @@ export default function HomePage() {
         };
     }, [editSourceImagePreviewUrls]);
 
-    const verifyEntryPasswordHash = React.useCallback(async (passwordHash: string): Promise<PasswordVerificationResult> => {
-        try {
-            const response = await fetch('/api/auth-verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ passwordHash })
-            });
+    const verifyEntryPasswordHash = React.useCallback(
+        async (passwordHash: string): Promise<PasswordVerificationResult> => {
+            try {
+                const response = await fetch('/api/auth-verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ passwordHash })
+                });
 
-            if (response.ok) {
-                return 'valid';
-            }
-            if (response.status === 401) {
-                try {
-                    const result = (await response.json()) as { code?: string };
-                    return isPagePasswordAuthErrorCode(result.code) ? 'invalid' : 'unavailable';
-                } catch {
-                    return 'unavailable';
+                if (response.ok) {
+                    return 'valid';
                 }
+                if (response.status === 401) {
+                    try {
+                        const result = (await response.json()) as { code?: string };
+                        return isPagePasswordAuthErrorCode(result.code) ? 'invalid' : 'unavailable';
+                    } catch {
+                        return 'unavailable';
+                    }
+                }
+                return 'unavailable';
+            } catch (error) {
+                console.error('验证入口访问码失败：', error);
+                return 'unavailable';
             }
-            return 'unavailable';
-        } catch (error) {
-            console.error('验证入口访问码失败：', error);
-            return 'unavailable';
-        }
-    }, []);
+        },
+        []
+    );
 
     const promptForExpiredPassword = React.useCallback(() => {
         localStorage.removeItem('clientPasswordHash');
@@ -728,35 +684,38 @@ export default function HomePage() {
         setError(createErrorNotice(t('error.passwordExpired')));
     }, [createErrorNotice, t]);
 
-    const refreshImageAccessCookie = React.useCallback(async (passwordHash = clientPasswordHash): Promise<boolean> => {
-        if (!isPasswordRequiredByBackend) {
-            return true;
-        }
-        if (!passwordHash) {
+    const refreshImageAccessCookie = React.useCallback(
+        async (passwordHash = clientPasswordHash): Promise<boolean> => {
+            if (!isPasswordRequiredByBackend) {
+                return true;
+            }
+            if (!passwordHash) {
+                promptForExpiredPassword();
+                return false;
+            }
+
+            const verificationResult = await verifyEntryPasswordHash(passwordHash);
+            if (verificationResult === 'valid') {
+                setIsEntryAuthenticated(true);
+                return true;
+            }
+            if (verificationResult === 'unavailable') {
+                setError(createErrorNotice(t('error.authVerifyUnavailable')));
+                return false;
+            }
+
             promptForExpiredPassword();
             return false;
-        }
-
-        const verificationResult = await verifyEntryPasswordHash(passwordHash);
-        if (verificationResult === 'valid') {
-            setIsEntryAuthenticated(true);
-            return true;
-        }
-        if (verificationResult === 'unavailable') {
-            setError(createErrorNotice(t('error.authVerifyUnavailable')));
-            return false;
-        }
-
-        promptForExpiredPassword();
-        return false;
-    }, [
-        clientPasswordHash,
-        createErrorNotice,
-        isPasswordRequiredByBackend,
-        promptForExpiredPassword,
-        t,
-        verifyEntryPasswordHash
-    ]);
+        },
+        [
+            clientPasswordHash,
+            createErrorNotice,
+            isPasswordRequiredByBackend,
+            promptForExpiredPassword,
+            t,
+            verifyEntryPasswordHash
+        ]
+    );
 
     React.useEffect(() => {
         const fetchAuthStatus = async () => {
@@ -1045,7 +1004,11 @@ export default function HomePage() {
                         }
                         const blobUrl = URL.createObjectURL(blob);
                         blobUrlCacheRef.current.set(img.filename, blobUrl);
-                        return { filename: img.filename, path: blobUrl, ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {}) };
+                        return {
+                            filename: img.filename,
+                            path: blobUrl,
+                            ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {})
+                        };
                     })
                 );
                 return indexedDbImages;
@@ -1053,7 +1016,11 @@ export default function HomePage() {
 
             const fsImages = images
                 .filter((img) => !!img.path)
-                .map((img) => ({ path: img.path!, filename: img.filename, ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {}) }));
+                .map((img) => ({
+                    path: img.path!,
+                    filename: img.filename,
+                    ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {})
+                }));
             if (fsImages.length !== images.length) {
                 throw new Error(t('error.apiOmittedPaths'));
             }
@@ -1080,7 +1047,10 @@ export default function HomePage() {
             if (clearStreaming) {
                 setStreamingPreviewImages(new Map());
             }
-            setHistory((prevHistory) => [buildHistoryEntry(images, usage, actualCost, durationMsValue), ...prevHistory]);
+            setHistory((prevHistory) => [
+                buildHistoryEntry(images, usage, actualCost, durationMsValue),
+                ...prevHistory
+            ]);
         },
         [buildHistoryEntry, materializeImages, t]
     );
@@ -1183,13 +1153,7 @@ export default function HomePage() {
 
             return apiFormData;
         },
-        [
-            apiSettings.apiKey,
-            apiSettings.baseUrl,
-            clientPasswordHash,
-            isPasswordRequiredByBackend,
-            t
-        ]
+        [apiSettings.apiKey, apiSettings.baseUrl, clientPasswordHash, isPasswordRequiredByBackend, t]
     );
 
     const executeImageRequest = React.useCallback(
@@ -1265,7 +1229,9 @@ export default function HomePage() {
                 return {
                     images: streamingState.completedImages.map((image) => ({
                         ...image,
-                        ...(image.clientRequestId || !formClientRequestId ? {} : { clientRequestId: formClientRequestId })
+                        ...(image.clientRequestId || !formClientRequestId
+                            ? {}
+                            : { clientRequestId: formClientRequestId })
                     })),
                     usage: streamingState.usage,
                     actualCost: streamingState.actualCost ?? undefined
@@ -1290,7 +1256,11 @@ export default function HomePage() {
             }
 
             if (!response.ok) {
-                if (response.status === 401 && isPasswordRequiredByBackend && isPagePasswordAuthErrorCode(result.code)) {
+                if (
+                    response.status === 401 &&
+                    isPasswordRequiredByBackend &&
+                    isPagePasswordAuthErrorCode(result.code)
+                ) {
                     if (
                         options.retryFormData &&
                         options.retryMode &&
@@ -1307,7 +1277,10 @@ export default function HomePage() {
                     promptForExpiredPassword();
                     throw new ApiRequestError(t('error.passwordExpired'), 401, { preserveDisplayedError: true });
                 }
-                throw new ApiRequestError(result.error || t('error.apiFailed', { status: response.status }), response.status);
+                throw new ApiRequestError(
+                    result.error || t('error.apiFailed', { status: response.status }),
+                    response.status
+                );
             }
 
             return {
@@ -1341,6 +1314,7 @@ export default function HomePage() {
         setImageOutputView('grid');
         setStreamingPreviewImages(new Map());
         if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+            setIsMobileCreationDrawerOpen(false);
             window.setTimeout(scrollToOutput, 80);
         }
 
@@ -1351,7 +1325,8 @@ export default function HomePage() {
                     serverEnabled: latestRuntimeCapabilities?.streamingBatch.enabled
                 }),
                 hasRequestApiKey: apiSettings.apiKey.trim().length > 0,
-                requestCredentialConcurrency: latestRuntimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
+                requestCredentialConcurrency:
+                    latestRuntimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
                 serverRecommendedConcurrency: latestRuntimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
             });
             if (isPasswordRequiredByBackend && !requestPasswordHash) {
@@ -1397,12 +1372,17 @@ export default function HomePage() {
                     jobs,
                     currentStreamingBatchCapacity.concurrency,
                     async (job: StreamingBatchJob) => {
-                        return executeImageRequestForCurrentOptions({ forceSingleImage: true, previewIndexOffset: job.outputIndex });
+                        return executeImageRequestForCurrentOptions({
+                            forceSingleImage: true,
+                            previewIndexOffset: job.outputIndex
+                        });
                     }
                 );
                 const errors = batchResults.filter((result): result is Error => result instanceof Error);
                 const successes = batchResults.filter(
-                    (result): result is { images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails } =>
+                    (
+                        result
+                    ): result is { images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails } =>
                         !(result instanceof Error)
                 );
                 if (errors.some(hasPreservedDisplayedAuthError)) {
@@ -1668,7 +1648,9 @@ export default function HomePage() {
                 }
             } catch (e) {
                 console.error('清空历史记录失败：', e);
-                setError(createErrorNotice(t('error.clearHistory', { message: e instanceof Error ? e.message : String(e) })));
+                setError(
+                    createErrorNotice(t('error.clearHistory', { message: e instanceof Error ? e.message : String(e) }))
+                );
             }
         }
     }, [createErrorNotice, t]);
@@ -1708,7 +1690,9 @@ export default function HomePage() {
                 link.remove();
                 window.setTimeout(() => URL.revokeObjectURL(url), 150);
             } catch (error) {
-                setError(createErrorNotice(error instanceof Error ? error.message : t('error.retrieveImage', { filename })));
+                setError(
+                    createErrorNotice(error instanceof Error ? error.message : t('error.retrieveImage', { filename }))
+                );
             }
         },
         [createErrorNotice, resolveImageBlob, t]
@@ -1942,7 +1926,7 @@ export default function HomePage() {
     const showEntryLock = isPasswordRequiredByBackend === true && !isEntryAuthenticated;
 
     return (
-        <main className='studio-paper text-foreground min-h-screen pb-[calc(6rem+env(safe-area-inset-bottom))] lg:h-dvh lg:overflow-hidden lg:pb-0'>
+        <main className='studio-paper text-foreground min-h-screen pb-[calc(7rem+env(safe-area-inset-bottom))] lg:h-dvh lg:overflow-hidden lg:pb-0'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -1972,7 +1956,7 @@ export default function HomePage() {
             />
             {showEntryLock ? (
                 <div className='mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-6 px-4 text-center'>
-                    <div className='bg-primary text-primary-foreground flex size-14 items-center justify-center rounded-full border border-primary/20 shadow-sm'>
+                    <div className='bg-primary text-primary-foreground border-primary/20 flex size-14 items-center justify-center rounded-full border shadow-sm'>
                         <Lock className='h-6 w-6' />
                     </div>
                     <div className='space-y-2'>
@@ -1980,7 +1964,9 @@ export default function HomePage() {
                         <p className='text-muted-foreground text-sm'>{t('password.entryDescription')}</p>
                     </div>
                     {error && (
-                        <Alert variant='destructive' className='border-destructive/45 bg-destructive/10 text-left text-destructive'>
+                        <Alert
+                            variant='destructive'
+                            className='border-destructive/45 bg-destructive/10 text-destructive text-left'>
                             <AlertTitle>{t('common.error')}</AlertTitle>
                             <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                         </Alert>
@@ -1999,6 +1985,14 @@ export default function HomePage() {
             ) : null}
             {!showEntryLock && isPasswordRequiredByBackend !== null ? (
                 <>
+                    {isMobileCreationDrawerOpen && (
+                        <button
+                            type='button'
+                            aria-label={t('ux.closeCreationSheet')}
+                            className='bg-foreground/25 fixed inset-0 z-40 lg:hidden'
+                            onClick={() => setIsMobileCreationDrawerOpen(false)}
+                        />
+                    )}
                     <div className='mx-auto flex min-h-screen w-full max-w-[1760px] flex-col px-4 py-3 lg:h-full lg:min-h-0 lg:px-7 lg:py-5'>
                         <header className='mb-5 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
                             <div className='flex min-w-0 items-center gap-3'>
@@ -2014,7 +2008,7 @@ export default function HomePage() {
                                     streamStatus={getStreamingStatusLabel(streamMode, t)}
                                     costLabel={t('workbench.estimatedCost')}
                                 />
-                                <div className='hidden items-center gap-4 text-muted-foreground sm:flex'>
+                                <div className='text-muted-foreground hidden items-center gap-4 sm:flex'>
                                     <HelpCircle className='h-4 w-4' />
                                     <button
                                         type='button'
@@ -2032,7 +2026,7 @@ export default function HomePage() {
                                         variant='outline'
                                         size='icon'
                                         onClick={() => setIsApiSettingsDialogOpen(true)}
-                                        className='h-9 w-9 bg-card/80 shadow-sm'
+                                        className='bg-card/80 h-9 w-9 shadow-sm'
                                         aria-label={t('app.apiSettings')}>
                                         <Settings2 className='h-4 w-4' />
                                     </Button>
@@ -2041,9 +2035,36 @@ export default function HomePage() {
                         </header>
                         <div className='grid flex-1 grid-cols-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(360px,410px)_minmax(0,1fr)_minmax(390px,460px)]'>
                             <section
-                                ref={creationPanelRef}
+                                id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
-                                className='order-2 min-h-[620px] lg:order-1 lg:min-h-0 lg:overflow-hidden'>
+                                className={`order-2 lg:static lg:order-1 lg:block lg:min-h-0 lg:overflow-hidden lg:p-0 lg:shadow-none ${
+                                    isMobileCreationDrawerOpen
+                                        ? 'border-border bg-background/95 supports-[backdrop-filter]:bg-background/88 fixed inset-x-0 bottom-0 z-50 max-h-[82vh] min-h-0 overflow-y-auto rounded-t-lg border-t px-3 pt-3 pb-[calc(6.75rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(73,50,25,0.18)] backdrop-blur lg:max-h-none lg:rounded-none'
+                                        : 'hidden min-h-[620px]'
+                                }`}>
+                                {isMobileCreationDrawerOpen && (
+                                    <div className='sticky top-0 z-10 mb-2 flex items-center justify-center lg:hidden'>
+                                        <button
+                                            type='button'
+                                            className='flex h-11 w-24 touch-none items-center justify-center rounded-full select-none'
+                                            onPointerDown={beginMobileCreationDrawerGesture}
+                                            onPointerUp={finishMobileCreationDrawerGesture}
+                                            onPointerCancel={cancelMobileCreationDrawerGesture}
+                                            onClick={handleMobileCreationDrawerHandleClick}
+                                            aria-label={t('ux.closeCreationSheet')}>
+                                            <span className='bg-border h-1 w-10 rounded-full' aria-hidden='true' />
+                                        </button>
+                                        <Button
+                                            type='button'
+                                            variant='outline'
+                                            size='icon'
+                                            onClick={() => setIsMobileCreationDrawerOpen(false)}
+                                            className='bg-card/95 absolute top-0 right-0 h-11 w-11 shadow-sm'
+                                            aria-label={t('ux.closeCreationSheet')}>
+                                            <X className='h-4 w-4' />
+                                        </Button>
+                                    </div>
+                                )}
                                 <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
                                     <GenerationForm
                                         onSubmit={handleApiCall}
@@ -2168,11 +2189,11 @@ export default function HomePage() {
                             <section
                                 ref={outputPanelRef}
                                 aria-label={t('app.canvasPreview')}
-                                className='order-1 scroll-mt-4 flex min-h-[460px] flex-col lg:order-2 lg:min-h-0'>
+                                className='order-1 flex min-h-[460px] scroll-mt-4 flex-col lg:order-2 lg:min-h-0'>
                                 {error && (
                                     <Alert
                                         variant='destructive'
-                                        className='mb-4 border-destructive/45 bg-destructive/10 text-destructive'>
+                                        className='border-destructive/45 bg-destructive/10 text-destructive mb-4'>
                                         <AlertTitle>{t('common.error')}</AlertTitle>
                                         <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                                     </Alert>
@@ -2202,10 +2223,27 @@ export default function HomePage() {
                                 />
                                 <WorkbenchProDock
                                     outputFormat={mode === 'generate' ? genOutputFormat : editOutputFormat}
+                                    onOutputFormatChange={
+                                        mode === 'generate' ? setGenOutputFormat : setEditOutputFormat
+                                    }
                                     quality={mode === 'generate' ? genQuality : editQuality}
+                                    onQualityChange={mode === 'generate' ? setGenQuality : setEditQuality}
                                     model={mode === 'generate' ? genModel : editModel}
+                                    onModelChange={mode === 'generate' ? setGenModel : setEditModel}
                                     size={mode === 'generate' ? genSize : editSize}
                                     streamMode={streamMode}
+                                    onStreamModeChange={setStreamMode}
+                                    imageBackend={mode === 'generate' ? genImageBackend : editImageBackend}
+                                    onImageBackendChange={
+                                        mode === 'generate' ? setGenImageBackend : setEditImageBackend
+                                    }
+                                    streamingStrategy={
+                                        mode === 'generate' ? genStreamingStrategy : editStreamingStrategy
+                                    }
+                                    onStreamingStrategyChange={
+                                        mode === 'generate' ? setGenStreamingStrategy : setEditStreamingStrategy
+                                    }
+                                    disabled={isLoading || isSendingToEdit}
                                 />
                             </section>
                             <aside
@@ -2231,22 +2269,43 @@ export default function HomePage() {
                             </aside>
                         </div>
                     </div>
-                    <div className='bg-background/92 border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] backdrop-blur lg:hidden supports-[backdrop-filter]:bg-background/85'>
+                    <div
+                        className={`bg-background/92 border-border supports-[backdrop-filter]:bg-background/85 fixed right-0 bottom-0 left-0 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] backdrop-blur lg:hidden ${
+                            isMobileCreationDrawerOpen ? 'z-[60]' : 'z-40'
+                        }`}>
+                        <button
+                            type='button'
+                            className='mx-auto mb-2 flex h-4 w-24 touch-none items-center justify-center rounded-full select-none'
+                            onPointerDown={beginMobileCreationDrawerGesture}
+                            onPointerUp={finishMobileCreationDrawerGesture}
+                            onPointerCancel={cancelMobileCreationDrawerGesture}
+                            onClick={handleMobileCreationDrawerHandleClick}
+                            aria-label={
+                                isMobileCreationDrawerOpen ? t('ux.closeCreationSheet') : t('ux.openCreationSheet')
+                            }
+                            aria-controls='mobile-creation-sheet'
+                            aria-expanded={isMobileCreationDrawerOpen}>
+                            <span className='bg-border h-1 w-10 rounded-full' aria-hidden='true' />
+                        </button>
                         <div className='mx-auto grid max-w-screen-sm grid-cols-[auto_1fr_auto_auto] gap-2'>
                             <Button
                                 type='button'
                                 variant='outline'
                                 size='icon'
-                                onClick={scrollToCreation}
-                                className='text-muted-foreground hover:text-foreground'
-                                aria-label={t('ux.openCreationSheet')}>
+                                onClick={toggleMobileCreationDrawer}
+                                className='text-muted-foreground hover:text-foreground h-11 w-11'
+                                aria-label={
+                                    isMobileCreationDrawerOpen ? t('ux.closeCreationSheet') : t('ux.openCreationSheet')
+                                }
+                                aria-controls='mobile-creation-sheet'
+                                aria-expanded={isMobileCreationDrawerOpen}>
                                 <PenLine className='h-4 w-4' />
                             </Button>
                             <Button
                                 type='button'
                                 onClick={handleMobilePrimaryAction}
                                 disabled={mobilePrimaryDisabled}
-                                className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground'>
+                                className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground min-h-11'>
                                 {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
                                 {mode === 'generate'
                                     ? isLoading
@@ -2261,7 +2320,7 @@ export default function HomePage() {
                                 variant='outline'
                                 size='icon'
                                 onClick={scrollToOutput}
-                                className='text-muted-foreground hover:text-foreground'
+                                className='text-muted-foreground hover:text-foreground h-11 w-11'
                                 aria-label={t('ux.jumpToResult')}>
                                 <ArrowUp className='h-4 w-4' />
                             </Button>
@@ -2271,7 +2330,7 @@ export default function HomePage() {
                                     variant='outline'
                                     size='icon'
                                     onClick={() => setOpenLogsSignal((value) => value + 1)}
-                                    className='text-muted-foreground hover:text-foreground'
+                                    className='text-muted-foreground hover:text-foreground h-11 w-11'
                                     aria-label={t('logs.open')}>
                                     <Activity className='h-4 w-4' />
                                 </Button>

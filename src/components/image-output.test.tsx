@@ -35,6 +35,44 @@ function renderImageOutput(viewMode: 'grid' | number): string {
 }
 
 describe('ImageOutput result actions', () => {
+    it('does not show fixed preview timing or dimensions before real image metadata is known', () => {
+        const html = renderImageOutput(0);
+
+        assert.match(html, /第 1 张 \/ 共 2 张/);
+        assert.doesNotMatch(html, /预计 8-12 秒/);
+        assert.doesNotMatch(html, /1024 x 768/);
+    });
+
+    it('uses the no-image state in the preview header before generation', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <ImageOutput
+                    imageBatch={null}
+                    viewMode='grid'
+                    onViewChange={noop}
+                    isLoading={false}
+                    onSendToEdit={noop}
+                    onDownloadImage={noop}
+                    onShareImage={noop}
+                    onCreateVariant={noop}
+                    onReusePrompt={noop}
+                    canCreateVariant={false}
+                    canReusePrompt={false}
+                    currentMode='generate'
+                    baseImagePreviewUrl={null}
+                    clientPasswordHash={null}
+                    canOpenLogs={false}
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /还没有生成图像/);
+        assert.doesNotMatch(html, /1024 x 768/);
+        for (const action of ['继续编辑', '做变体', '复用提示词', '对比', '下载']) {
+            assert.doesNotMatch(html, new RegExp(action));
+        }
+    });
+
     it('keeps selected-image actions available in the multi-image grid view', () => {
         const html = renderImageOutput('grid');
 
