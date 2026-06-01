@@ -769,7 +769,7 @@ export function GenerationForm({
                         </div>
                     </div>
 
-                    <div className='border-border bg-muted/20 rounded-md border'>
+                    <div className='border-border bg-muted/20 rounded-md border lg:hidden'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}

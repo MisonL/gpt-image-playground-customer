@@ -94,6 +94,15 @@ function renderEditingForm({
 }
 
 describe('EditingForm advanced upstream controls', () => {
+    it('keeps the left-side professional accordion mobile-only', () => {
+        const html = renderEditingForm({ backend: 'server-default', advancedTab: 'route' });
+
+        assert.match(
+            html,
+            /<div class="[^"]*lg:hidden[^"]*"><button[^>]*aria-controls="editing-advanced-panel"/
+        );
+    });
+
     it('keeps model and streaming controls out of the default edit form surface', () => {
         const html = renderEditingForm({ backend: 'server-default', advancedOpen: false });
 
