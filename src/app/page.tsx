@@ -21,7 +21,11 @@ import {
 import { formatBatchPromptHistory, readBatchPromptLines } from '@/lib/batch-prompts';
 import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
-import { buildGenerationActivityItems } from '@/lib/generation-activity';
+import {
+    advanceGenerationBatchProgress,
+    buildGenerationActivityItems,
+    type GenerationBatchProgress
+} from '@/lib/generation-activity';
 import { resolveHistoryCompareImage } from '@/lib/history-compare';
 import { useI18n } from '@/lib/i18n';
 import { IMAGE_UPSTREAM_FORM_SERVER_DEFAULT, appendImageUpstreamOverrideFields } from '@/lib/image-upstream-form';
@@ -504,6 +508,7 @@ export default function HomePage() {
     const [activeRequestStreaming, setActiveRequestStreaming] = React.useState(false);
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
+    const [batchProgress, setBatchProgress] = React.useState<GenerationBatchProgress | null>(null);
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
         featureEnabled: isRuntimeStreamingBatchEnabled({
             serverEnabled: runtimeCapabilities?.streamingBatch.enabled
@@ -548,9 +553,19 @@ export default function HomePage() {
                 streamingPreviewCount: streamingPreviewImages.size,
                 errorMessage: error?.message,
                 completedGenerationCount,
+                batchProgress,
                 t
             }),
-        [completedGenerationCount, error?.message, isLoading, isSendingToEdit, mode, streamingPreviewImages.size, t]
+        [
+            batchProgress,
+            completedGenerationCount,
+            error?.message,
+            isLoading,
+            isSendingToEdit,
+            mode,
+            streamingPreviewImages.size,
+            t
+        ]
     );
     const mobilePrimaryDisabled =
         isLoading ||
@@ -1350,6 +1365,7 @@ export default function HomePage() {
         setCompletedGenerationCount(null);
         setImageOutputView('grid');
         setStreamingPreviewImages(new Map());
+        setBatchProgress(null);
         if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
             setIsMobileCreationDrawerOpen(false);
             window.setTimeout(scrollToOutput, 80);
@@ -1429,15 +1445,31 @@ export default function HomePage() {
 
             if (isPromptBatch) {
                 const jobs = buildStreamingBatchJobs(promptBatch.length);
+                setBatchProgress({
+                    completed: 0,
+                    failed: 0,
+                    total: jobs.length
+                });
                 const batchResults = await scheduleStreamingBatch(
                     jobs,
                     useStreamingBatch ? currentStreamingBatchCapacity.concurrency : 1,
                     async (job: StreamingBatchJob) => {
-                        return executeImageRequestForCurrentOptions({
-                            forceSingleImage: true,
-                            previewIndexOffset: job.outputIndex,
-                            promptOverride: promptBatch[job.outputIndex]
-                        });
+                        try {
+                            const result = await executeImageRequestForCurrentOptions({
+                                forceSingleImage: true,
+                                previewIndexOffset: job.outputIndex,
+                                promptOverride: promptBatch[job.outputIndex]
+                            });
+                            setBatchProgress((current) =>
+                                advanceGenerationBatchProgress(current, jobs.length, false)
+                            );
+                            return result;
+                        } catch (error) {
+                            setBatchProgress((current) =>
+                                advanceGenerationBatchProgress(current, jobs.length, true)
+                            );
+                            throw error;
+                        }
                     }
                 );
                 const errors = batchResults.filter((result): result is Error => result instanceof Error);

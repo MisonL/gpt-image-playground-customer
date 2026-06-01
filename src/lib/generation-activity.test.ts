@@ -1,4 +1,5 @@
 import {
+    advanceGenerationBatchProgress,
     buildFailureActivityDetail,
     buildGenerationActivityItems,
     type GenerationActivityItem
@@ -11,6 +12,9 @@ const messages: Record<string, string> = {
     'history.activityEditingDetail': '正在根据参考图生成新画面，完成后会进入最近生成。',
     'history.activityFailed': '生成失败',
     'history.activityFailedDetail': '{message} 建议检查 API 设置后重试，或切换可用渠道。',
+    'history.activityBatchProgress': '批量进度',
+    'history.activityBatchProgressDetail': '已完成 {completed}/{total} 条任务。',
+    'history.activityBatchProgressWithFailures': '已完成 {completed}/{total} 条任务，失败 {failed} 条。',
     'history.activityGenerating': '正在生成',
     'history.activityGeneratingDetail': '正在把当前创作单送去生成，完成后会进入最近生成。',
     'history.activityPreparingEdit': '正在准备编辑素材',
@@ -75,9 +79,62 @@ describe('buildGenerationActivityItems', () => {
         assert.deepEqual(items, []);
     });
 
+    it('reports live batch progress while a prompt batch is running', () => {
+        const items = buildGenerationActivityItems({
+            isLoading: true,
+            isSendingToEdit: false,
+            mode: 'generate',
+            streamingPreviewCount: 0,
+            completedGenerationCount: null,
+            batchProgress: {
+                completed: 2,
+                failed: 0,
+                total: 3
+            },
+            t
+        });
+
+        assert.deepEqual(ids(items), ['generating', 'batch-progress']);
+        assert.match(items[1].detail, /2\/3 条任务/);
+        assert.equal(items[1].tone, 'progress');
+    });
+
+    it('keeps a batch failure summary after loading ends', () => {
+        const items = buildGenerationActivityItems({
+            isLoading: false,
+            isSendingToEdit: false,
+            mode: 'generate',
+            streamingPreviewCount: 0,
+            errorMessage: '上游服务不可用',
+            completedGenerationCount: 2,
+            batchProgress: {
+                completed: 3,
+                failed: 1,
+                total: 3
+            },
+            t
+        });
+
+        assert.deepEqual(ids(items), ['batch-progress', 'failed', 'saved']);
+        assert.match(items[0].detail, /失败 1 条/);
+        assert.equal(items[0].tone, 'warning');
+    });
+
     it('keeps existing API advice instead of appending a second retry suggestion', () => {
         const detail = buildFailureActivityDetail('API 请求失败。建议：稍后重试。', t);
 
         assert.equal(detail, 'API 请求失败。建议：稍后重试。');
+    });
+});
+
+describe('advanceGenerationBatchProgress', () => {
+    it('increments completed and failed counts without exceeding total', () => {
+        const first = advanceGenerationBatchProgress(null, 2, false);
+        const second = advanceGenerationBatchProgress(first, 2, true);
+        const third = advanceGenerationBatchProgress(second, 2, true);
+
+        assert.deepEqual(first, { completed: 1, failed: 0, total: 2 });
+        assert.deepEqual(second, { completed: 2, failed: 1, total: 2 });
+        assert.deepEqual(third, { completed: 2, failed: 1, total: 2 });
     });
 });
