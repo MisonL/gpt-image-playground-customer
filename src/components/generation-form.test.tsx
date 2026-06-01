@@ -75,6 +75,15 @@ function renderGenerationForm(
 }
 
 describe('GenerationForm advanced groups', () => {
+    it('keeps the left-side professional accordion mobile-only', () => {
+        const html = renderGenerationForm({ defaultAdvancedTab: 'route' });
+
+        assert.match(
+            html,
+            /<div class="[^"]*lg:hidden[^"]*"><button[^>]*aria-controls="generation-advanced-panel"/
+        );
+    });
+
     it('renders route controls in a separate professional tab', () => {
         const html = renderGenerationForm({ defaultAdvancedTab: 'route' });
 
