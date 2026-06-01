@@ -100,4 +100,22 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /正在把当前创作单送去生成/);
         assert.match(html, /新图已入册/);
     });
+
+    it('renders batch progress activity as user-facing copy', () => {
+        const html = renderHistoryPanel(
+            [historyItem],
+            [inspirationItem],
+            [
+                {
+                    id: 'batch-progress',
+                    label: '批量进度',
+                    detail: '已完成 2/3 条任务。',
+                    tone: 'progress'
+                }
+            ]
+        );
+
+        assert.match(html, /批量进度/);
+        assert.match(html, /已完成 2\/3 条任务。/);
+    });
 });

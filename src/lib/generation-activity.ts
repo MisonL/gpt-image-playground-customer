@@ -7,6 +7,12 @@ export type GenerationActivityItem = {
     tone: 'progress' | 'success' | 'warning' | 'neutral';
 };
 
+export type GenerationBatchProgress = {
+    completed: number;
+    failed: number;
+    total: number;
+};
+
 type GenerationActivityOptions = {
     isLoading: boolean;
     isSendingToEdit: boolean;
@@ -14,6 +20,7 @@ type GenerationActivityOptions = {
     streamingPreviewCount: number;
     errorMessage?: string;
     completedGenerationCount: number | null;
+    batchProgress?: GenerationBatchProgress | null;
     t: Translate;
 };
 
@@ -36,6 +43,19 @@ export function buildGenerationActivityItems(options: GenerationActivityOptions)
             label: options.t('history.activityPreparingEdit'),
             detail: options.t('history.activityPreparingEditDetail'),
             tone: 'progress'
+        });
+    }
+
+    if (
+        options.batchProgress &&
+        options.batchProgress.total > 1 &&
+        (options.isLoading || options.batchProgress.failed > 0)
+    ) {
+        items.push({
+            id: 'batch-progress',
+            label: options.t('history.activityBatchProgress'),
+            detail: buildBatchProgressDetail(options.batchProgress, options.t),
+            tone: options.batchProgress.failed > 0 ? 'warning' : 'progress'
         });
     }
 
@@ -69,6 +89,30 @@ export function buildGenerationActivityItems(options: GenerationActivityOptions)
     return items;
 }
 
+export function advanceGenerationBatchProgress(
+    current: GenerationBatchProgress | null,
+    total: number,
+    didFail: boolean
+): GenerationBatchProgress {
+    const safeTotal = Math.max(0, Math.floor(total));
+    const base =
+        current && current.total === safeTotal
+            ? current
+            : {
+                  completed: 0,
+                  failed: 0,
+                  total: safeTotal
+              };
+    if (base.completed >= safeTotal) {
+        return base;
+    }
+    return {
+        completed: Math.min(safeTotal, base.completed + 1),
+        failed: Math.min(safeTotal, base.failed + (didFail ? 1 : 0)),
+        total: safeTotal
+    };
+}
+
 export function buildFailureActivityDetail(message: string, t: Translate): string {
     const trimmedMessage = message.trim();
     const effectiveMessage = trimmedMessage || t('error.unexpected');
@@ -77,4 +121,19 @@ export function buildFailureActivityDetail(message: string, t: Translate): strin
     }
 
     return t('history.activityFailedDetail', { message: effectiveMessage });
+}
+
+function buildBatchProgressDetail(progress: GenerationBatchProgress, t: Translate): string {
+    if (progress.failed > 0) {
+        return t('history.activityBatchProgressWithFailures', {
+            completed: progress.completed,
+            failed: progress.failed,
+            total: progress.total
+        });
+    }
+
+    return t('history.activityBatchProgressDetail', {
+        completed: progress.completed,
+        total: progress.total
+    });
 }
