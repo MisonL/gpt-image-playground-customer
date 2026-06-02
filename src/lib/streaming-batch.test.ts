@@ -1,5 +1,6 @@
 import {
     applyStreamingClientEvent,
+    BatchPausedError,
     buildStreamingBatchJobs,
     computeStreamingConcurrency,
     computeStreamingBatchRecommendation,
@@ -391,33 +392,53 @@ describe('scheduleStreamingBatch', () => {
         const running: string[] = [];
         const maxRunningSnapshots: number[] = [];
 
-        const results = await scheduleStreamingBatch(
-            buildStreamingBatchJobs(5),
-            2,
-            async (job) => {
+        const results = await scheduleStreamingBatch(buildStreamingBatchJobs(5), {
+            concurrency: 2,
+            runJob: async (job) => {
                 running.push(job.id);
                 maxRunningSnapshots.push(running.length);
                 await Promise.resolve();
                 running.splice(running.indexOf(job.id), 1);
                 return `result-${job.outputIndex}`;
             }
-        );
+        });
 
         assert.deepEqual(results, ['result-0', 'result-1', 'result-2', 'result-3', 'result-4']);
         assert.equal(Math.max(...maxRunningSnapshots), 2);
     });
 
     it('keeps successful jobs when one job fails', async () => {
-        const results = await scheduleStreamingBatch(buildStreamingBatchJobs(3), 2, async (job) => {
-            if (job.outputIndex === 1) {
-                throw new Error('upstream failed');
+        const results = await scheduleStreamingBatch(buildStreamingBatchJobs(3), {
+            concurrency: 2,
+            runJob: async (job) => {
+                if (job.outputIndex === 1) {
+                    throw new Error('upstream failed');
+                }
+                return `result-${job.outputIndex}`;
             }
-            return `result-${job.outputIndex}`;
         });
 
         assert.equal(results[0], 'result-0');
         assert.equal(results[2], 'result-2');
         assert.ok(results[1] instanceof Error);
         assert.equal((results[1] as Error).message, 'upstream failed');
+    });
+
+    it('stops assigning new jobs after a pause request', async () => {
+        let started = 0;
+        const results = await scheduleStreamingBatch(buildStreamingBatchJobs(4), {
+            concurrency: 1,
+            runJob: async (job) => {
+                started += 1;
+                return `result-${job.outputIndex}`;
+            },
+            shouldPause: () => started >= 2
+        });
+
+        assert.deepEqual(results.slice(0, 2), ['result-0', 'result-1']);
+        assert.ok(results[2] instanceof BatchPausedError);
+        assert.ok(results[3] instanceof BatchPausedError);
+        assert.equal((results[2] as Error).message, '批量生成已暂停，任务尚未开始。');
+        assert.equal(started, 2);
     });
 });

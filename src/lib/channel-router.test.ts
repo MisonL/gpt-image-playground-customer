@@ -88,6 +88,16 @@ describe('parseChannelPoolConfig', () => {
         ]);
     });
 
+    it('accepts HTTP-compatible upstream base URLs in server channels', () => {
+        const config = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'j3gb',
+            OPENAI_CHANNEL_1_BASE_URL: 'http://api.j3gb.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sk-one'
+        });
+
+        assert.equal(config.credentials[0]?.baseUrl, 'http://api.j3gb.com/v1');
+    });
+
     it('rejects a channel with missing API keys instead of silently falling back', () => {
         assert.throws(
             () =>

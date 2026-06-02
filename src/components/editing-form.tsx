@@ -85,6 +85,8 @@ type EditingFormProps = {
     isLoading: boolean;
     currentMode: WorkbenchMode;
     onModeChange: (mode: WorkbenchMode) => void;
+    reuseContext: EditingReuseContext | null;
+    onClearReuseContext: () => void;
     isPasswordRequiredByBackend: boolean | null;
     clientPasswordHash: string | null;
     onOpenPasswordDialog: () => void;
@@ -148,6 +150,12 @@ type EditingFormProps = {
     initialAdvancedTab?: AdvancedTab;
 };
 
+export type EditingReuseContext = {
+    sourceLabel: string;
+    restoredFields: string[];
+    promptPreview: string;
+};
+
 type AdvancedTab = 'output' | 'model' | 'stream' | 'route';
 
 const RadioItemWithIcon = ({
@@ -193,6 +201,35 @@ function getBackendLabel(backend: EditingFormData['image_backend'], t: (key: str
     return t('upstream.serverDefault');
 }
 
+function getWorkbenchBackendLabel(backend: EditingFormData['image_backend'], t: (key: string) => string): string {
+    if (backend === 'images-api') return t('upstream.backendImages');
+    if (backend === 'responses-image-generation') return t('upstream.backendResponses');
+    return t('upstream.workbenchDefaultRoute');
+}
+
+function getRouteImpactDetails(input: {
+    backend: EditingFormData['image_backend'];
+    streamingStrategy: EditingFormData['streaming_strategy'];
+    t: (key: string) => string;
+}): string[] {
+    const backendKey =
+        input.backend === 'images-api'
+            ? 'upstream.backendImpactImages'
+            : input.backend === 'responses-image-generation'
+              ? 'upstream.backendImpactResponses'
+              : 'upstream.backendImpactServerDefault';
+    const strategyKey =
+        input.streamingStrategy === 'off'
+            ? 'upstream.strategyImpactOff'
+            : input.streamingStrategy === 'force-sse'
+              ? 'upstream.strategyImpactForceSse'
+              : input.streamingStrategy === 'server-default' || input.streamingStrategy === 'auto'
+                ? 'upstream.strategyImpactAuto'
+                : 'upstream.strategyImpactSse';
+
+    return [input.t(backendKey), input.t(strategyKey), input.t('upstream.routeImpactCost')];
+}
+
 function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => string): string {
     if (streamMode === 'stream') return t('streaming.modeStream');
     if (streamMode === 'non_stream') return t('streaming.modeNonStream');
@@ -217,6 +254,8 @@ export function EditingForm({
     isLoading,
     currentMode,
     onModeChange,
+    reuseContext,
+    onClearReuseContext,
     isPasswordRequiredByBackend,
     clientPasswordHash,
     onOpenPasswordDialog,
@@ -329,6 +368,7 @@ export function EditingForm({
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
     const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
+    const workbenchBackendLabel = getWorkbenchBackendLabel(editImageBackend, t);
 
     // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
@@ -705,6 +745,38 @@ export function EditingForm({
                             )}
                         </div>
                     </div>
+                    {reuseContext && (
+                        <div className='border-primary/25 dark:bg-muted/40 rounded-md border bg-[oklch(0.965_0.03_76)] px-3 py-2 text-xs leading-5 shadow-sm'>
+                            <div className='space-y-2'>
+                                <div className='flex items-start justify-between gap-3'>
+                                    <div className='min-w-0'>
+                                        <p className='text-foreground font-medium'>{t('reuse.editAppliedTitle')}</p>
+                                        <p className='text-muted-foreground truncate'>{reuseContext.sourceLabel}</p>
+                                    </div>
+                                    <button
+                                        type='button'
+                                        onClick={onClearReuseContext}
+                                        disabled={isLoading}
+                                        className='text-muted-foreground hover:text-foreground shrink-0 disabled:opacity-50'>
+                                        {t('common.clear')}
+                                    </button>
+                                </div>
+                                <div className='flex flex-wrap gap-1'>
+                                    {reuseContext.restoredFields.map((field) => (
+                                        <span
+                                            key={field}
+                                            className='border-primary/20 bg-background/70 text-primary rounded-full border px-2 py-0.5'>
+                                            {field}
+                                        </span>
+                                    ))}
+                                </div>
+                                <p className='text-muted-foreground max-h-10 overflow-hidden break-words'>
+                                    {reuseContext.promptPreview}
+                                </p>
+                                <p className='text-muted-foreground'>{t('reuse.editMutableHint')}</p>
+                            </div>
+                        </div>
+                    )}
                     <div className='border-border/80 space-y-3 border-b border-dashed pb-4'>
                         <div className='flex items-start justify-between gap-3'>
                             <div className='space-y-1'>
@@ -1223,6 +1295,19 @@ export function EditingForm({
                                                 </Select>
                                             </div>
                                         </div>
+                                        <div className='border-border bg-muted/20 text-muted-foreground space-y-1.5 rounded-md border p-3 text-xs leading-5'>
+                                            <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                <ShieldAlert className='text-muted-foreground h-4 w-4' />
+                                                {t('upstream.routeImpactTitle')}
+                                            </div>
+                                            {getRouteImpactDetails({
+                                                backend: editImageBackend,
+                                                streamingStrategy: editStreamingStrategy,
+                                                t
+                                            }).map((detail) => (
+                                                <p key={detail}>{detail}</p>
+                                            ))}
+                                        </div>
 
                                         {editImageBackend === 'responses-image-generation' && (
                                             <div className='border-border bg-muted/20 space-y-3 rounded-md border p-3'>
@@ -1587,6 +1672,9 @@ export function EditingForm({
                         <div className='flex flex-wrap items-center gap-1.5 text-xs'>
                             <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {editModel}
+                            </span>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
+                                {workbenchBackendLabel}
                             </span>
                             <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {streamStatusLabel}

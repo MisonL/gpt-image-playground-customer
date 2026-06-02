@@ -2,6 +2,8 @@ import {
     advanceGenerationBatchProgress,
     buildFailureActivityDetail,
     buildGenerationActivityItems,
+    collectFailedBatchPrompts,
+    countCompletedBatchResults,
     type GenerationActivityItem
 } from './generation-activity';
 import assert from 'node:assert/strict';
@@ -136,5 +138,29 @@ describe('advanceGenerationBatchProgress', () => {
         assert.deepEqual(first, { completed: 1, failed: 0, total: 2 });
         assert.deepEqual(second, { completed: 2, failed: 1, total: 2 });
         assert.deepEqual(third, { completed: 2, failed: 1, total: 2 });
+    });
+});
+
+describe('collectFailedBatchPrompts', () => {
+    it('keeps the prompts whose batch jobs returned errors', () => {
+        const failedPrompts = collectFailedBatchPrompts(
+            ['窗边花束', '奶油色卧室', '海边下午'],
+            [{ images: [] }, new Error('upstream failed'), new Error('timeout')]
+        );
+
+        assert.deepEqual(failedPrompts, ['奶油色卧室', '海边下午']);
+    });
+});
+
+describe('countCompletedBatchResults', () => {
+    it('counts only jobs that actually returned a successful result', () => {
+        const completed = countCompletedBatchResults([
+            { images: [] },
+            { images: [] },
+            new Error('批量生成已暂停，任务尚未开始。'),
+            new Error('批量生成已暂停，任务尚未开始。')
+        ]);
+
+        assert.equal(completed, 2);
     });
 });

@@ -40,6 +40,29 @@ function getStreamingStrategyLabel(strategy: ImageUpstreamFormStreamingStrategy,
     return t('upstream.serverDefault');
 }
 
+function getRouteImpactDetails(input: {
+    backend: ImageUpstreamFormBackend;
+    streamingStrategy: ImageUpstreamFormStreamingStrategy;
+    t: Translation;
+}): string[] {
+    const backendKey =
+        input.backend === 'images-api'
+            ? 'upstream.backendImpactImages'
+            : input.backend === 'responses-image-generation'
+              ? 'upstream.backendImpactResponses'
+              : 'upstream.backendImpactServerDefault';
+    const strategyKey =
+        input.streamingStrategy === 'off'
+            ? 'upstream.strategyImpactOff'
+            : input.streamingStrategy === 'force-sse'
+              ? 'upstream.strategyImpactForceSse'
+              : input.streamingStrategy === 'server-default' || input.streamingStrategy === 'auto'
+                ? 'upstream.strategyImpactAuto'
+                : 'upstream.strategyImpactSse';
+
+    return [input.t(backendKey), input.t(strategyKey), input.t('upstream.routeImpactCost')];
+}
+
 export function WorkbenchProRoutePanel({
     imageBackend,
     onImageBackendChange,
@@ -86,6 +109,12 @@ export function WorkbenchProRoutePanel({
                         ))}
                     </SelectContent>
                 </Select>
+            </div>
+            <div className='border-border bg-muted/20 text-muted-foreground col-span-2 grid gap-2 rounded-md border px-3 py-2 leading-5 md:grid-cols-[auto_1fr_1fr_1fr]'>
+                <p className='text-foreground font-medium'>{t('upstream.routeImpactTitle')}</p>
+                {getRouteImpactDetails({ backend: imageBackend, streamingStrategy, t }).map((detail) => (
+                    <p key={detail}>{detail}</p>
+                ))}
             </div>
         </TabsContent>
     );

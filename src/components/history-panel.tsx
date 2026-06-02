@@ -1,6 +1,6 @@
 'use client';
 
-import type { HistoryMetadata } from '@/app/page';
+import { ActivityTimeline } from '@/components/generation-activity-timeline';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -17,6 +17,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { getModelRates, type GptImageModel } from '@/lib/cost-utils';
 import type { GenerationActivityItem } from '@/lib/generation-activity';
+import type { HistoryMetadata } from '@/lib/history-metadata';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
@@ -31,8 +32,10 @@ import {
     FileImage,
     Trash2,
     WandSparkles,
-    Pin,
-    Plus
+    Bookmark,
+    Plus,
+    ChevronDown,
+    AlertTriangle
 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
@@ -108,6 +111,10 @@ const inspirationThumbnails = [
 ];
 const inspirationTitles = ['窗边的花与书', '复古桌面时光', '海边的夏日下午'];
 const inspirationTags = ['奶油色', '花束', '日杂', '胶片感', '复古', '咖啡', '清透', '夏日'];
+const storageDisplayLabels = {
+    fs: 'Local',
+    indexeddb: 'Album'
+} as const;
 
 function getCostBadge(
     item: HistoryMetadata,
@@ -151,31 +158,33 @@ function getHistoryClientRequestIds(item: HistoryMetadata): string[] {
     );
 }
 
-function getActivityToneClass(tone: GenerationActivityItem['tone']): string {
-    if (tone === 'progress') return 'bg-[oklch(0.58_0.1_220)]';
-    if (tone === 'success') return 'bg-[oklch(0.58_0.1_145)]';
-    if (tone === 'warning') return 'bg-[oklch(0.62_0.13_38)]';
-    return 'bg-[oklch(0.72_0.05_86)]';
-}
-
-function GenerationActivityRows({ items }: { items: GenerationActivityItem[] }) {
-    return (
-        <>
-            {items.map((item) => (
-                <div
-                    key={item.id}
-                    className='bg-background/58 grid grid-cols-[auto_1fr] items-start gap-2 rounded-md px-2 py-2 text-left'>
-                    <span className='flex h-full w-3 justify-center pt-1.5'>
-                        <span className={cn('h-2 w-2 rounded-full', getActivityToneClass(item.tone))} />
-                    </span>
-                    <span className='min-w-0'>
-                        <span className='text-foreground block truncate text-xs font-medium'>{item.label}</span>
-                        <span className='text-muted-foreground mt-0.5 block truncate text-[11px]'>{item.detail}</span>
-                    </span>
-                </div>
-            ))}
-        </>
-    );
+function buildPendingActivityItems(t: (key: string) => string): GenerationActivityItem[] {
+    return [
+        {
+            id: 'pending-request',
+            label: t('history.pendingRequest'),
+            detail: t('history.pendingRequestDetail'),
+            tone: 'neutral'
+        },
+        {
+            id: 'pending-streaming',
+            label: t('history.pendingStreaming'),
+            detail: t('history.pendingStreamingDetail'),
+            tone: 'neutral'
+        },
+        {
+            id: 'pending-saved',
+            label: t('history.pendingSaved'),
+            detail: t('history.pendingSavedDetail'),
+            tone: 'neutral'
+        },
+        {
+            id: 'pending-failed',
+            label: t('history.pendingFailed'),
+            detail: t('history.pendingFailedDetail'),
+            tone: 'neutral'
+        }
+    ];
 }
 
 function getCostStatusLabel(
@@ -208,6 +217,7 @@ function HistoryPanelImpl({
     onDeletePreferenceDialogChange
 }: HistoryPanelProps) {
     const { locale, t } = useI18n();
+    const pendingActivityItems = React.useMemo(() => buildPendingActivityItems(t), [t]);
     const [activeTab, setActiveTab] = React.useState<'inspiration' | 'history'>(() =>
         history.length > 0 && inspirations.length === 0 ? 'history' : 'inspiration'
     );
@@ -217,6 +227,7 @@ function HistoryPanelImpl({
     const [copiedTimestamp, setCopiedTimestamp] = React.useState<number | null>(null);
     const [imageResolutions, setImageResolutions] = React.useState<Record<string, string>>({});
     const [failedThumbnails, setFailedThumbnails] = React.useState<Record<string, boolean>>({});
+    const [expandedBatchTimestamp, setExpandedBatchTimestamp] = React.useState<number | null>(null);
 
     const { totalCost, totalImages } = React.useMemo(() => {
         let cost = 0;
@@ -408,16 +419,16 @@ function HistoryPanelImpl({
                     </Button>
                 )}
             </CardHeader>
-            <CardContent className='flex-grow p-3 lg:overflow-y-auto lg:p-3'>
+            <CardContent className='literary-scrollbar min-h-0 p-3 lg:max-h-[calc(100%-17.5rem)] lg:overflow-y-auto lg:p-3 xl:flex-none'>
                 {activeTab === 'inspiration' ? (
-                    <div className='space-y-3'>
+                    <div className='space-y-3 lg:space-y-2'>
                         {inspirations.length === 0 ? (
                             <div className='text-muted-foreground border-border bg-muted/20 flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 text-center text-sm'>
                                 <WandSparkles className='h-5 w-5 opacity-70' />
                                 <p>{t('history.inspirationEmpty')}</p>
                             </div>
                         ) : (
-                            <div className='-mx-3 flex snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-1 lg:mx-0 lg:block lg:space-y-3 lg:overflow-visible lg:px-0 lg:pb-0'>
+                            <div className='-mx-3 flex snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-1 lg:mx-0 lg:block lg:space-y-2 lg:overflow-visible lg:px-0 lg:pb-0'>
                                 {inspirations.map((item, index) => {
                                     const thumbnail = inspirationThumbnails[index % inspirationThumbnails.length];
                                     const title =
@@ -427,28 +438,29 @@ function HistoryPanelImpl({
                                     return (
                                         <div
                                             key={item.id}
-                                            className='group border-border/70 bg-card/58 hover:border-primary/30 flex w-[min(84vw,360px)] shrink-0 snap-start items-stretch gap-3 overflow-hidden rounded-md border p-2 shadow-sm transition-[border-color,box-shadow] hover:shadow-md lg:w-auto'>
+                                            className='group border-border/70 bg-card/58 hover:border-primary/30 flex w-[min(84vw,360px)] shrink-0 snap-start items-stretch gap-3 overflow-hidden rounded-md border p-2 shadow-sm transition-[border-color,box-shadow] hover:shadow-md lg:w-auto lg:gap-2 lg:p-1.5 2xl:p-1'>
                                             <button
                                                 type='button'
                                                 onClick={() =>
                                                     onApplyPrompt(item.prompt, { type: 'inspiration', title })
                                                 }
-                                                className='border-border bg-muted relative min-h-24 w-36 shrink-0 overflow-hidden rounded border shadow-sm sm:w-40'>
+                                                className='border-border bg-muted relative min-h-24 w-36 shrink-0 overflow-hidden rounded border shadow-sm sm:w-40 lg:min-h-20 lg:w-32 2xl:min-h-18 2xl:w-28'>
                                                 <Image
                                                     src={thumbnail}
                                                     alt={title}
                                                     fill
                                                     sizes='160px'
                                                     className='object-cover'
+                                                    loading={index === 0 ? 'eager' : 'lazy'}
                                                 />
                                             </button>
-                                            <div className='flex min-w-0 flex-1 flex-col gap-1.5 pr-1'>
+                                            <div className='flex min-w-0 flex-1 flex-col gap-1.5 pr-1 2xl:gap-1'>
                                                 <div className='flex items-start justify-between gap-1.5'>
                                                     <div className='min-w-0'>
-                                                        <p className='truncate text-[15px] leading-5 font-medium'>
+                                                        <p className='truncate text-[15px] leading-5 font-medium 2xl:text-sm'>
                                                             {title}
                                                         </p>
-                                                        <div className='mt-1 flex gap-1 overflow-hidden'>
+                                                        <div className='mt-1 flex gap-1 overflow-hidden 2xl:mt-0.5'>
                                                             {tags.map((tag) => (
                                                                 <span
                                                                     key={tag}
@@ -463,15 +475,15 @@ function HistoryPanelImpl({
                                                             type='button'
                                                             variant='ghost'
                                                             size='icon'
-                                                            className='text-primary h-6 w-6'
+                                                            className='text-primary h-7 w-7'
                                                             aria-label={t('history.favorite')}>
-                                                            <Pin className='h-3.5 w-3.5 fill-current' />
+                                                            <Bookmark className='h-3.5 w-3.5 fill-current' />
                                                         </Button>
                                                         <Button
                                                             type='button'
                                                             variant='ghost'
                                                             size='icon'
-                                                            className='text-muted-foreground hover:text-destructive h-6 w-6'
+                                                            className='text-muted-foreground hover:text-destructive h-7 w-7'
                                                             onClick={() => onDeleteInspiration(item.id)}
                                                             aria-label={t('history.deleteInspiration')}>
                                                             <Trash2 className='h-3.5 w-3.5' />
@@ -479,7 +491,7 @@ function HistoryPanelImpl({
                                                     </div>
                                                 </div>
                                                 <p
-                                                    className='text-muted-foreground max-h-8 min-h-8 overflow-hidden text-xs leading-4'
+                                                    className='text-muted-foreground max-h-8 min-h-8 overflow-hidden text-xs leading-4 2xl:max-h-4 2xl:min-h-4'
                                                     title={item.prompt}>
                                                     {item.prompt}
                                                 </p>
@@ -493,7 +505,7 @@ function HistoryPanelImpl({
                                                         type='button'
                                                         size='sm'
                                                         variant='ghost'
-                                                        className='h-6 px-1.5 text-xs'
+                                                        className='h-7 px-2 text-xs'
                                                         onClick={() =>
                                                             onApplyPrompt(item.prompt, { type: 'inspiration', title })
                                                         }>
@@ -524,95 +536,6 @@ function HistoryPanelImpl({
                                 {t('history.manage')}
                             </button>
                         </div>
-                        <div className='space-y-2 rounded-md border border-[oklch(0.86_0.035_78)] bg-[oklch(0.982_0.014_84)] p-3 shadow-[0_6px_16px_oklch(0.42_0.035_58/0.08)]'>
-                            <div className='flex items-center justify-between'>
-                                <div className='flex items-center gap-2'>
-                                    <span className='h-2 w-2 rounded-full bg-[oklch(0.62_0.13_38)]' />
-                                    <p className='text-sm font-medium'>{t('history.generationStatus')}</p>
-                                </div>
-                                {history.length > 0 ? (
-                                    <button
-                                        type='button'
-                                        className='text-muted-foreground hover:text-foreground text-xs'
-                                        onClick={onClearHistory}>
-                                        {t('history.clear')}
-                                    </button>
-                                ) : null}
-                            </div>
-                            {activityItems.length > 0 || history.length > 0 ? (
-                                <div className='space-y-2 text-xs'>
-                                    <GenerationActivityRows items={activityItems} />
-                                    {history.slice(0, 4).map((item, index) => (
-                                        <button
-                                            key={item.timestamp}
-                                            type='button'
-                                            onClick={() => onSelectImage(item)}
-                                            className={cn(
-                                                'grid w-full grid-cols-[auto_1fr_auto] items-start gap-2 rounded-md px-2 py-2 text-left transition-[background-color,color,transform] hover:-translate-y-0.5 active:translate-y-0',
-                                                index === 0 && activityItems.length === 0
-                                                    ? 'text-foreground bg-[oklch(0.95_0.04_86)]'
-                                                    : 'text-muted-foreground hover:text-foreground hover:bg-[oklch(0.965_0.025_84)]'
-                                            )}>
-                                            <span className='flex h-full w-3 justify-center pt-1.5'>
-                                                <span
-                                                    className={cn(
-                                                        'h-2 w-2 rounded-full',
-                                                        index === 0 && activityItems.length === 0
-                                                            ? 'bg-[oklch(0.62_0.13_38)]'
-                                                            : 'bg-[oklch(0.66_0.08_145)]'
-                                                    )}
-                                                />
-                                            </span>
-                                            <span className='min-w-0'>
-                                                <span className='flex min-w-0 items-center gap-2'>
-                                                    <span className='text-muted-foreground shrink-0 text-[11px] tabular-nums'>
-                                                        {formatStatusTime(item.timestamp)}
-                                                    </span>
-                                                    <span className='text-foreground truncate text-xs font-medium'>
-                                                        {item.mode === 'edit'
-                                                            ? t('history.statusEditDone')
-                                                            : t('history.statusCreateDone')}
-                                                    </span>
-                                                </span>
-                                                <span className='text-muted-foreground mt-0.5 block truncate text-[11px]'>
-                                                    {t('history.statusBatchSummary', {
-                                                        count: item.images.length,
-                                                        duration: formatDuration(item.durationMs)
-                                                    })}
-                                                </span>
-                                            </span>
-                                            <span className='hidden shrink-0 gap-1 sm:flex'>
-                                                {item.images.slice(0, 3).map((image) => {
-                                                    const source =
-                                                        item.storageModeUsed === 'indexeddb'
-                                                            ? getImageSrc(image.filename)
-                                                            : `/api/image/${image.filename}`;
-                                                    return source ? (
-                                                        <span
-                                                            key={image.filename}
-                                                            className='border-background bg-muted relative h-7 w-7 overflow-hidden rounded-sm border shadow-sm'>
-                                                            <Image
-                                                                src={source}
-                                                                alt={image.filename}
-                                                                fill
-                                                                sizes='28px'
-                                                                className='object-cover'
-                                                                unoptimized
-                                                            />
-                                                        </span>
-                                                    ) : null;
-                                                })}
-                                            </span>
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className='bg-background/58 text-muted-foreground flex items-center gap-2 rounded-md border border-dashed border-[oklch(0.84_0.035_78)] px-2 py-2 text-xs'>
-                                    <span className='h-2 w-2 rounded-full bg-[oklch(0.72_0.05_86)]' />
-                                    <span>{t('history.statusEmpty')}</span>
-                                </div>
-                            )}
-                        </div>
                     </div>
                 ) : history.length === 0 ? (
                     <div className='text-muted-foreground border-border flex min-h-24 items-center justify-center rounded-md border border-dashed px-4 text-center text-sm'>
@@ -623,6 +546,8 @@ function HistoryPanelImpl({
                         {[...history].map((item) => {
                             const firstImage = item.images?.[0];
                             const imageCount = item.images?.length ?? 0;
+                            const isFailedItem = item.status === 'failed';
+                            const failureMessage = item.failureMessage?.trim();
                             const isMultiImage = imageCount > 1;
                             const itemKey = item.timestamp;
                             const hasPrompt = item.prompt.trim().length > 0;
@@ -635,6 +560,7 @@ function HistoryPanelImpl({
                             });
                             const requestIds = getHistoryClientRequestIds(item);
                             const filenames = item.images.map((image) => image.filename);
+                            const isBatchExpanded = expandedBatchTimestamp === item.timestamp;
                             const costStatus = getCostStatusLabel(item, {
                                 actual: t('history.actualCostShort'),
                                 pending: t('history.actualCostPending'),
@@ -661,11 +587,31 @@ function HistoryPanelImpl({
                                         <button
                                             type='button'
                                             onClick={() => onSelectImage(item)}
-                                            className='focus:ring-ring focus:ring-offset-background border-border hover:border-foreground/20 relative block aspect-square w-full cursor-pointer overflow-hidden rounded-t-md border transition-[border-color,filter,transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:brightness-110 focus:ring-2 focus:ring-offset-2 focus:outline-none active:translate-y-0'
+                                            disabled={isFailedItem}
+                                            className={cn(
+                                                'focus:ring-ring focus:ring-offset-background border-border relative block aspect-square w-full overflow-hidden rounded-t-md border transition-[border-color,filter,transform,box-shadow] duration-150 focus:ring-2 focus:ring-offset-2 focus:outline-none active:translate-y-0',
+                                                isFailedItem
+                                                    ? 'cursor-default'
+                                                    : 'hover:border-foreground/20 cursor-pointer hover:-translate-y-0.5 hover:brightness-110'
+                                            )}
                                             aria-label={t('history.viewBatch', {
                                                 time: formatTimestamp(item.timestamp)
                                             })}>
-                                            {!isThumbnailUnavailable && thumbnailUrl && firstImage ? (
+                                            {isFailedItem ? (
+                                                <div className='bg-destructive/5 text-muted-foreground flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-center text-xs'>
+                                                    <AlertTriangle
+                                                        size={20}
+                                                        className='text-destructive'
+                                                        aria-hidden='true'
+                                                    />
+                                                    <span className='text-foreground font-medium'>
+                                                        {t('history.failedStatus')}
+                                                    </span>
+                                                    <span className='line-clamp-2'>
+                                                        {failureMessage || t('history.failedReasonUnavailable')}
+                                                    </span>
+                                                </div>
+                                            ) : !isThumbnailUnavailable && thumbnailUrl && firstImage ? (
                                                 <Image
                                                     src={thumbnailUrl}
                                                     alt={t('history.previewBatch', {
@@ -686,39 +632,43 @@ function HistoryPanelImpl({
                                             )}
                                             <div
                                                 className={cn(
-                                                    'pointer-events-none absolute top-1 left-1 z-10 flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px]',
-                                                    item.mode === 'edit'
-                                                        ? 'border-primary/30 bg-primary/88 text-primary-foreground'
-                                                        : 'border-secondary/40 bg-secondary/90 text-secondary-foreground'
+                                                    'pointer-events-none absolute top-1 left-1 z-10 flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[11px]',
+                                                    isFailedItem
+                                                        ? 'border-destructive/35 bg-destructive/90 text-destructive-foreground'
+                                                        : item.mode === 'edit'
+                                                          ? 'border-primary/30 bg-primary/88 text-primary-foreground'
+                                                          : 'border-secondary/40 bg-secondary/90 text-secondary-foreground'
                                                 )}>
-                                                {item.mode === 'edit' ? (
+                                                {isFailedItem ? (
+                                                    <AlertTriangle size={12} />
+                                                ) : item.mode === 'edit' ? (
                                                     <Pencil size={12} />
                                                 ) : (
                                                     <SparklesIcon size={12} />
                                                 )}
-                                                {item.mode === 'edit' ? t('history.modeEdit') : t('history.modeCreate')}
+                                                {isFailedItem
+                                                    ? t('history.failedStatus')
+                                                    : item.mode === 'edit'
+                                                      ? t('history.modeEdit')
+                                                      : t('history.modeCreate')}
                                             </div>
                                             {isMultiImage && (
-                                                <div className='pointer-events-none absolute right-1 bottom-1 z-10 flex items-center gap-1 rounded-full bg-black/70 px-1.5 py-0.5 text-[12px] text-white'>
+                                                <div className='pointer-events-none absolute right-1 bottom-1 z-10 flex items-center gap-1 rounded-sm bg-[oklch(0.28_0.028_58/0.78)] px-1.5 py-0.5 text-[12px] text-white'>
                                                     <Layers size={16} />
                                                     {imageCount}
                                                 </div>
                                             )}
                                             <div className='pointer-events-none absolute bottom-1 left-1 z-10 flex items-center gap-1'>
-                                                <div className='bg-background/85 text-muted-foreground border-border flex items-center gap-1 rounded-full border px-1 py-0.5 text-[11px]'>
+                                                <div className='bg-background/85 text-muted-foreground border-border flex items-center gap-1 rounded-sm border px-1 py-0.5 text-[11px]'>
                                                     {originalStorageMode === 'fs' ? (
                                                         <HardDrive size={12} className='text-muted-foreground' />
                                                     ) : (
                                                         <Database size={12} className='text-primary' />
                                                     )}
-                                                    <span>
-                                                        {originalStorageMode === 'fs'
-                                                            ? t('history.storageFile')
-                                                            : t('history.storageDb')}
-                                                    </span>
+                                                    <span>{storageDisplayLabels[originalStorageMode]}</span>
                                                 </div>
                                                 {item.output_format && (
-                                                    <div className='bg-background/85 text-muted-foreground border-border flex items-center gap-1 rounded-full border px-1 py-0.5 text-[11px]'>
+                                                    <div className='bg-background/85 text-muted-foreground border-border flex items-center gap-1 rounded-sm border px-1 py-0.5 text-[11px]'>
                                                         <FileImage size={12} className='text-muted-foreground' />
                                                         <span>{outputFormat.toUpperCase()}</span>
                                                     </div>
@@ -737,7 +687,7 @@ function HistoryPanelImpl({
                                                             setOpenCostDialogTimestamp(itemKey);
                                                         }}
                                                         className={cn(
-                                                            'absolute top-7 right-1 z-20 flex min-h-6 cursor-pointer items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] text-white shadow-sm transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0',
+                                                            'absolute top-7 right-1 z-20 flex min-h-6 cursor-pointer items-center gap-0.5 rounded-sm px-2 py-0.5 text-[11px] text-white shadow-sm transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0',
                                                             costBadge.actual
                                                                 ? 'bg-secondary text-secondary-foreground hover:bg-secondary/85'
                                                                 : 'bg-foreground/80 text-background hover:bg-foreground/70'
@@ -936,11 +886,19 @@ function HistoryPanelImpl({
                                             </span>{' '}
                                             {formatStatusTime(item.timestamp)}
                                             <span className='text-muted-foreground/70 px-1'>/</span>
-                                            {t('history.statusBatchSummary', {
-                                                count: imageCount,
-                                                duration: formatDuration(item.durationMs)
-                                            })}
+                                            {isFailedItem
+                                                ? `${t('history.failedStatus')}，${formatDuration(item.durationMs)}`
+                                                : t('history.statusBatchSummary', {
+                                                      count: imageCount,
+                                                      duration: formatDuration(item.durationMs)
+                                                  })}
                                         </p>
+                                        {isFailedItem && (
+                                            <p className='border-destructive/25 bg-destructive/5 text-destructive rounded-sm border px-2 py-1 leading-4'>
+                                                <span className='font-medium'>{t('history.failureReason')}</span>{' '}
+                                                {failureMessage || t('history.failedReasonUnavailable')}
+                                            </p>
+                                        )}
                                         <p>
                                             <span className='text-foreground font-medium'>{t('history.model')}</span>{' '}
                                             {item.model || 'gpt-image-1'}
@@ -977,7 +935,7 @@ function HistoryPanelImpl({
                                                 disabled={!hasPrompt}
                                                 onClick={() => onSaveInspiration(item.prompt)}
                                                 aria-label={t('history.saveHistoryPrompt')}>
-                                                <Pin className='h-3.5 w-3.5' />
+                                                <Bookmark className='h-3.5 w-3.5' />
                                                 <span className='truncate'>{t('history.saveToInspiration')}</span>
                                             </Button>
                                             <Button
@@ -996,13 +954,96 @@ function HistoryPanelImpl({
                                                 variant='outline'
                                                 size='sm'
                                                 className='h-7 min-w-0 px-1 text-[11px]'
-                                                disabled={!firstImage}
+                                                disabled={!firstImage || isFailedItem}
                                                 onClick={() => onSendHistoryToEdit(item)}
                                                 aria-label={t('history.continueHistoryEdit')}>
                                                 <Pencil className='h-3.5 w-3.5' />
                                                 <span className='truncate'>{t('history.continueEdit')}</span>
                                             </Button>
                                         </div>
+                                        {isMultiImage && (
+                                            <div className='mt-2 space-y-1.5'>
+                                                <Button
+                                                    type='button'
+                                                    variant='ghost'
+                                                    size='sm'
+                                                    className='text-muted-foreground hover:text-foreground h-7 w-full justify-between px-2 text-[11px]'
+                                                    aria-expanded={isBatchExpanded}
+                                                    aria-controls={`history-batch-${item.timestamp}`}
+                                                    onClick={() =>
+                                                        setExpandedBatchTimestamp((current) =>
+                                                            current === item.timestamp ? null : item.timestamp
+                                                        )
+                                                    }>
+                                                    <span>
+                                                        {isBatchExpanded
+                                                            ? t('history.collapseBatch')
+                                                            : t('history.expandBatch')}
+                                                    </span>
+                                                    <span className='inline-flex items-center gap-1'>
+                                                        {t('history.batchImageCount', { count: imageCount })}
+                                                        <ChevronDown
+                                                            className={cn(
+                                                                'h-3.5 w-3.5 transition-transform',
+                                                                isBatchExpanded && 'rotate-180'
+                                                            )}
+                                                        />
+                                                    </span>
+                                                </Button>
+                                                {isBatchExpanded && (
+                                                    <div
+                                                        id={`history-batch-${item.timestamp}`}
+                                                        className='batch-thumbnail-strip grid grid-cols-3 gap-1.5'
+                                                        aria-label={t('history.batchThumbnails')}>
+                                                        {item.images.map((image, index) => {
+                                                            const imageSrc =
+                                                                originalStorageMode === 'indexeddb'
+                                                                    ? getImageSrc(image.filename)
+                                                                    : `/api/image/${image.filename}`;
+                                                            const unavailable =
+                                                                !imageSrc || failedThumbnails[image.filename];
+
+                                                            return (
+                                                                <button
+                                                                    key={`${item.timestamp}-${image.filename}`}
+                                                                    type='button'
+                                                                    onClick={() => onSelectImage(item)}
+                                                                    className='border-border bg-muted relative aspect-square overflow-hidden rounded-sm border'
+                                                                    aria-label={t('history.batchThumbnail', {
+                                                                        index: index + 1
+                                                                    })}>
+                                                                    {!unavailable ? (
+                                                                        <Image
+                                                                            src={imageSrc}
+                                                                            alt={t('history.batchThumbnail', {
+                                                                                index: index + 1
+                                                                            })}
+                                                                            fill
+                                                                            sizes='88px'
+                                                                            className='object-cover'
+                                                                            onLoad={(event) =>
+                                                                                handleThumbnailLoad(
+                                                                                    image.filename,
+                                                                                    event
+                                                                                )
+                                                                            }
+                                                                            onError={() =>
+                                                                                handleThumbnailError(image.filename)
+                                                                            }
+                                                                            unoptimized
+                                                                        />
+                                                                    ) : (
+                                                                        <span className='text-muted-foreground flex h-full items-center justify-center px-1 text-center text-[10px] leading-3'>
+                                                                            {t('history.previewUnavailable')}
+                                                                        </span>
+                                                                    )}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                         <div className='mt-1 flex items-center gap-1'>
                                             <Dialog
                                                 open={openPromptDialogTimestamp === itemKey}
@@ -1127,6 +1168,16 @@ function HistoryPanelImpl({
                                                                     {costStatus}
                                                                 </dd>
                                                             </div>
+                                                            {isFailedItem && (
+                                                                <div>
+                                                                    <dt className='text-muted-foreground'>
+                                                                        {t('history.status')}
+                                                                    </dt>
+                                                                    <dd className='text-destructive font-medium'>
+                                                                        {t('history.failedStatus')}
+                                                                    </dd>
+                                                                </div>
+                                                            )}
                                                             <div>
                                                                 <dt className='text-muted-foreground'>
                                                                     {t('history.actualCost')}
@@ -1150,6 +1201,17 @@ function HistoryPanelImpl({
                                                                 </dd>
                                                             </div>
                                                         </dl>
+                                                        {isFailedItem && (
+                                                            <div>
+                                                                <p className='mb-1 text-sm font-medium'>
+                                                                    {t('history.failureReason')}
+                                                                </p>
+                                                                <div className='border-destructive/25 bg-destructive/5 text-destructive max-h-[180px] overflow-y-auto rounded-md border p-3 text-sm break-words whitespace-pre-wrap'>
+                                                                    {failureMessage ||
+                                                                        t('history.failedReasonUnavailable')}
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                         <dl className='border-border bg-card/70 space-y-2 rounded-md border p-3 text-sm'>
                                                             <div>
                                                                 <dt className='text-muted-foreground'>
@@ -1271,6 +1333,17 @@ function HistoryPanelImpl({
                     </div>
                 )}
             </CardContent>
+            <ActivityTimeline
+                activityItems={activityItems}
+                history={history}
+                pendingActivityItems={pendingActivityItems}
+                onSelectImage={onSelectImage}
+                onClearHistory={onClearHistory}
+                getImageSrc={getImageSrc}
+                formatStatusTime={formatStatusTime}
+                formatDuration={formatDuration}
+                t={t}
+            />
         </Card>
     );
 }

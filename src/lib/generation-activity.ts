@@ -13,6 +13,8 @@ export type GenerationBatchProgress = {
     total: number;
 };
 
+export type GenerationBatchResult = unknown | Error;
+
 type GenerationActivityOptions = {
     isLoading: boolean;
     isSendingToEdit: boolean;
@@ -111,6 +113,14 @@ export function advanceGenerationBatchProgress(
         failed: Math.min(safeTotal, base.failed + (didFail ? 1 : 0)),
         total: safeTotal
     };
+}
+
+export function collectFailedBatchPrompts(prompts: string[], results: GenerationBatchResult[]): string[] {
+    return results.flatMap((result, index) => (result instanceof Error ? [prompts[index]] : []));
+}
+
+export function countCompletedBatchResults(results: GenerationBatchResult[]): number {
+    return results.filter((result) => !(result instanceof Error)).length;
 }
 
 export function buildFailureActivityDetail(message: string, t: Translate): string {

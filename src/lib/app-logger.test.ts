@@ -7,18 +7,23 @@ import {
     subscribeAppLogs
 } from './app-logger';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 const originalLogLevel = process.env.APP_LOG_LEVEL;
 const originalNodeEnv = process.env.NODE_ENV;
+const originalTestLogFileName = process.env.APP_LOG_TEST_FILE_NAME;
 const originalDebug = console.debug;
 const originalInfo = console.info;
 const originalWarn = console.warn;
 const originalError = console.error;
 const nodeEnvKey: string = 'NODE_ENV';
+const testLogFileNameKey = 'APP_LOG_TEST_FILE_NAME';
 
 beforeEach(async () => {
     process.env[nodeEnvKey] = 'test';
+    process.env[testLogFileNameKey] =
+        `app-logger-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`;
     setAppLogPersistenceForTest(true);
     clearAppLogEntriesForTest();
 });
@@ -36,10 +41,24 @@ afterEach(async () => {
     } else {
         process.env[nodeEnvKey] = originalNodeEnv;
     }
+    if (originalTestLogFileName === undefined) {
+        delete process.env[testLogFileNameKey];
+    } else {
+        process.env[testLogFileNameKey] = originalTestLogFileName;
+    }
     console.debug = originalDebug;
     console.info = originalInfo;
     console.warn = originalWarn;
     console.error = originalError;
+});
+
+it('keeps the test log override scoped to the fixed app log directory', () => {
+    process.env[testLogFileNameKey] = path.join('..', 'outside.jsonl');
+    clearAppLogEntriesForTest();
+
+    appLogger.info('scoped test log override');
+
+    assert.equal(readAppLogEntries().at(-1)?.message, 'scoped test log override');
 });
 
 describe('appLogger', { concurrency: false }, () => {

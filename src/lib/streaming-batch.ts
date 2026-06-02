@@ -21,6 +21,18 @@ export type StreamingBatchDecision = {
 };
 
 export type StreamingBatchResult<T> = T | Error;
+export type StreamingBatchScheduleOptions<T> = {
+    concurrency: number;
+    runJob: (job: StreamingBatchJob) => Promise<T>;
+    shouldPause?: () => boolean;
+};
+
+export class BatchPausedError extends Error {
+    constructor() {
+        super('批量生成已暂停，任务尚未开始。');
+        this.name = 'BatchPausedError';
+    }
+}
 
 export type RuntimeStreamingBatchOptions = {
     clientFeatureFlag?: string;
@@ -79,7 +91,10 @@ function isActualCostDetails(value: unknown): value is ActualCostDetails {
         record.source === 'pending' ||
         record.source === 'unavailable';
     const validConfidence =
-        record.confidence === 'exact' || record.confidence === 'high' || record.confidence === 'low' || record.confidence === 'none';
+        record.confidence === 'exact' ||
+        record.confidence === 'high' ||
+        record.confidence === 'low' ||
+        record.confidence === 'none';
     const validProvider =
         record.upstreamProvider === 'new-api' ||
         record.upstreamProvider === 'openai' ||
@@ -94,12 +109,7 @@ function isActualCostDetails(value: unknown): value is ActualCostDetails {
         (record.matchedRequestId === undefined || typeof record.matchedRequestId === 'string') &&
         (record.reason === undefined || typeof record.reason === 'string');
     return (
-        validCurrency &&
-        validSource &&
-        validConfidence &&
-        validProvider &&
-        validOptionalNumbers &&
-        validOptionalStrings
+        validCurrency && validSource && validConfidence && validProvider && validOptionalNumbers && validOptionalStrings
     );
 }
 
@@ -214,26 +224,36 @@ export function buildStreamingBatchJobs(imageCount: number): StreamingBatchJob[]
 
 export async function scheduleStreamingBatch<T>(
     jobs: StreamingBatchJob[],
-    concurrency: number,
-    runJob: (job: StreamingBatchJob) => Promise<T>
+    options: StreamingBatchScheduleOptions<T>
 ): Promise<Array<StreamingBatchResult<T>>> {
-    const safeConcurrency = Math.max(1, Math.floor(concurrency));
+    const safeConcurrency = Math.max(1, Math.floor(options.concurrency));
     const results: Array<StreamingBatchResult<T>> = new Array(jobs.length);
+    const assigned: boolean[] = new Array(jobs.length).fill(false);
     let nextIndex = 0;
 
     async function worker(): Promise<void> {
         while (nextIndex < jobs.length) {
+            if (options.shouldPause?.()) {
+                return;
+            }
             const currentIndex = nextIndex;
             nextIndex += 1;
             try {
-                results[currentIndex] = await runJob(jobs[currentIndex]);
+                results[currentIndex] = await options.runJob(jobs[currentIndex]);
             } catch (error) {
                 results[currentIndex] = error instanceof Error ? error : new Error(String(error));
+            } finally {
+                assigned[currentIndex] = true;
             }
         }
     }
 
     const workerCount = Math.min(safeConcurrency, jobs.length);
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    for (let index = 0; index < results.length; index += 1) {
+        if (!assigned[index]) {
+            results[index] = new BatchPausedError();
+        }
+    }
     return results;
 }

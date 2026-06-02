@@ -50,7 +50,11 @@ import {
     HelpCircle,
     SquareDashed,
     WandSparkles,
-    Globe2
+    Globe2,
+    ListChecks,
+    Pause,
+    RotateCcw,
+    Bookmark
 } from 'lucide-react';
 import * as React from 'react';
 
@@ -98,6 +102,10 @@ type GenerationFormProps = {
     setPrompt: React.Dispatch<React.SetStateAction<string>>;
     batchPromptText: string;
     setBatchPromptText: React.Dispatch<React.SetStateAction<string>>;
+    failedBatchPrompts?: string[];
+    canPauseBatch?: boolean;
+    isBatchPauseRequested?: boolean;
+    onPauseBatch?: () => void;
     n: number[];
     setN: React.Dispatch<React.SetStateAction<number[]>>;
     size: GenerationFormData['size'];
@@ -154,6 +162,10 @@ const promptStyleTags = [
     'promptTag.summerWindow'
 ];
 
+const compactSettingRowClass =
+    'space-y-1.5 lg:grid lg:grid-cols-[3.4rem_minmax(0,1fr)] lg:items-center lg:gap-1.5 lg:space-y-0';
+const compactSettingLabelClass = 'text-muted-foreground text-xs lg:pt-0.5';
+
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -196,8 +208,8 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
-            <Icon className='h-3 w-3 text-current opacity-50' />
+            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-7 lg:flex-row lg:px-1 lg:text-[11px] 2xl:px-1.5 2xl:text-xs [&_[data-slot=radio-group-indicator]]:hidden [&_[data-slot=radio-group-item-content]]:gap-1 lg:[&_[data-slot=radio-group-item-content]]:gap-0.5 2xl:[&_[data-slot=radio-group-item-content]]:gap-1'>
+            <Icon className='h-3 w-3 shrink-0 text-current opacity-50 lg:hidden 2xl:block' />
             <span className='max-w-full min-w-0 truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
@@ -231,6 +243,35 @@ function getBackendLabel(backend: GenerationFormData['image_backend'], t: (key: 
     if (backend === 'images-api') return t('upstream.backendImages');
     if (backend === 'responses-image-generation') return t('upstream.backendResponses');
     return t('upstream.serverDefault');
+}
+
+function getWorkbenchBackendLabel(backend: GenerationFormData['image_backend'], t: (key: string) => string): string {
+    if (backend === 'images-api') return t('upstream.backendImages');
+    if (backend === 'responses-image-generation') return t('upstream.backendResponses');
+    return t('upstream.workbenchDefaultRoute');
+}
+
+function getRouteImpactDetails(input: {
+    backend: GenerationFormData['image_backend'];
+    streamingStrategy: GenerationFormData['streaming_strategy'];
+    t: (key: string) => string;
+}): string[] {
+    const backendKey =
+        input.backend === 'images-api'
+            ? 'upstream.backendImpactImages'
+            : input.backend === 'responses-image-generation'
+              ? 'upstream.backendImpactResponses'
+              : 'upstream.backendImpactServerDefault';
+    const strategyKey =
+        input.streamingStrategy === 'off'
+            ? 'upstream.strategyImpactOff'
+            : input.streamingStrategy === 'force-sse'
+              ? 'upstream.strategyImpactForceSse'
+              : input.streamingStrategy === 'server-default' || input.streamingStrategy === 'auto'
+                ? 'upstream.strategyImpactAuto'
+                : 'upstream.strategyImpactSse';
+
+    return [input.t(backendKey), input.t(strategyKey), input.t('upstream.routeImpactCost')];
 }
 
 function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => string): string {
@@ -269,6 +310,10 @@ export function GenerationForm({
     setPrompt,
     batchPromptText,
     setBatchPromptText,
+    failedBatchPrompts = [],
+    canPauseBatch = false,
+    isBatchPauseRequested = false,
+    onPauseBatch,
     n,
     setN,
     size,
@@ -343,6 +388,7 @@ export function GenerationForm({
     const isBatchMode = currentMode === 'batch';
     const isReuseMode = currentMode === 'reuse';
     const batchPrompts = React.useMemo(() => readBatchPromptLines(batchPromptText), [batchPromptText]);
+    const hasFailedBatchPrompts = isBatchMode && failedBatchPrompts.length > 0;
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (isBatchMode && batchPrompts.length === 0) return t('ux.disabledBatchPrompts');
@@ -357,6 +403,7 @@ export function GenerationForm({
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
     const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
+    const workbenchBackendLabel = getWorkbenchBackendLabel(imageBackend, t);
 
     const applyPromptTag = React.useCallback(
         (label: string) => {
@@ -422,13 +469,17 @@ export function GenerationForm({
         onSubmit(formData);
     };
 
+    const reuseFailedBatchPrompts = () => {
+        setBatchPromptText(failedBatchPrompts.join('\n'));
+    };
+
     return (
         <Card className='workbench-panel text-card-foreground border-border flex w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 lg:h-full'>
             <CardHeader className='border-border/70 border-b px-3 pt-2 !pb-2'>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
-                <CardContent className='space-y-3 p-4 pb-28 lg:flex-1 lg:overflow-y-auto lg:pb-4'>
+                <CardContent className='literary-scrollbar space-y-2.5 p-4 pb-28 lg:max-h-[calc(100%-9.75rem)] lg:flex-none lg:overflow-y-auto lg:px-4 lg:py-3 2xl:space-y-2.5'>
                     <div className='space-y-1'>
                         <div className='flex items-center'>
                             <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
@@ -450,58 +501,67 @@ export function GenerationForm({
                             )}
                         </div>
                     </div>
-                    <div className='space-y-1.5'>
-                        <div className='flex items-center'>
-                            <Label htmlFor='prompt' className='text-foreground text-sm font-medium'>
-                                {t('workbench.promptTitle')}
-                            </Label>
-                            {prompt.trim() && (
-                                <button
-                                    type='button'
-                                    onClick={() => setPrompt('')}
-                                    disabled={isLoading}
-                                    className='text-muted-foreground hover:text-foreground ml-auto text-xs disabled:opacity-50'>
-                                    {t('common.clear')}
-                                </button>
-                            )}
-                        </div>
-                        <div className='relative'>
-                            <Textarea
-                                id='prompt'
-                                name='prompt'
-                                placeholder={t('form.promptPlaceholder')}
-                                value={prompt}
-                                onChange={(e) => setPrompt(e.target.value)}
-                                required
-                                disabled={isLoading}
-                                className='min-h-[118px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-9 leading-7 shadow-inner'
-                            />
-                            <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
-                                {prompt.trim().length} / 1000
-                            </span>
-                        </div>
-                        <div className='flex flex-wrap gap-1.5 pt-1.5'>
-                            {promptStyleTags.map((key) => {
-                                const label = t(key);
-                                const selected = createPromptTagPattern(label).test(prompt);
-                                return (
-                                    <button
-                                        key={key}
-                                        type='button'
-                                        onClick={() => applyPromptTag(label)}
+                    <div className='space-y-1.5 lg:space-y-1'>
+                        {!isBatchMode && (
+                            <>
+                                <div className='flex items-center'>
+                                    <Label htmlFor='prompt' className='text-foreground text-sm font-medium'>
+                                        {t('workbench.promptTitle')}
+                                    </Label>
+                                    {prompt.trim() && (
+                                        <button
+                                            type='button'
+                                            onClick={() => setPrompt('')}
+                                            disabled={isLoading}
+                                            className='text-muted-foreground hover:text-foreground ml-auto text-xs disabled:opacity-50'>
+                                            {t('common.clear')}
+                                        </button>
+                                    )}
+                                </div>
+                                <div className='relative'>
+                                    <Textarea
+                                        id='prompt'
+                                        name='prompt'
+                                        placeholder={t('form.promptPlaceholder')}
+                                        value={prompt}
+                                        onChange={(e) => setPrompt(e.target.value)}
+                                        required
                                         disabled={isLoading}
-                                        aria-pressed={selected}
-                                        className={`rounded-full border px-2.5 py-0.5 text-xs shadow-sm transition-[background-color,border-color,color,transform,box-shadow] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
-                                            selected
-                                                ? 'border-primary/50 bg-primary/90 text-primary-foreground shadow-[0_4px_10px_oklch(0.5_0.12_30/0.14)]'
-                                                : 'border-border text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground bg-[oklch(0.982_0.012_84)]'
-                                        }`}>
-                                        {label}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        {recommendStreaming && (
+                                        className='min-h-[104px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-8 leading-6 shadow-inner lg:min-h-[92px]'
+                                    />
+                                    <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
+                                        {prompt.trim().length} / 1000
+                                    </span>
+                                </div>
+                                <div className='border-border/55 mt-2 flex items-center justify-between border-t pt-2'>
+                                    <span className='text-foreground text-sm font-medium'>
+                                        {t('workbench.stylePreference')}
+                                    </span>
+                                </div>
+                                <div className='scrollbar-none -mx-1 flex max-w-full gap-1.5 overflow-x-auto px-1 pt-1 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0'>
+                                    {promptStyleTags.map((key) => {
+                                        const label = t(key);
+                                        const selected = createPromptTagPattern(label).test(prompt);
+                                        return (
+                                            <button
+                                                key={key}
+                                                type='button'
+                                                onClick={() => applyPromptTag(label)}
+                                                disabled={isLoading}
+                                                aria-pressed={selected}
+                                                className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs shadow-sm transition-[background-color,border-color,color,transform,box-shadow] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
+                                                    selected
+                                                        ? 'border-primary/50 bg-primary/90 text-primary-foreground shadow-[0_4px_10px_oklch(0.5_0.12_30/0.14)]'
+                                                        : 'border-border text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground bg-[oklch(0.982_0.012_84)]'
+                                                }`}>
+                                                {label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        )}
+                        {recommendStreaming && !isBatchMode && (
                             <p className='text-xs text-amber-700 dark:text-amber-300'>
                                 {t('streaming.highResolutionRecommendation')}
                             </p>
@@ -560,16 +620,56 @@ export function GenerationForm({
                                     className='min-h-[132px] rounded-md bg-[oklch(0.978_0.016_82)] px-3 py-2 leading-6 shadow-inner'
                                     placeholder={t('batch.promptPlaceholder')}
                                 />
+                                {hasFailedBatchPrompts && (
+                                    <div className='border-destructive/25 bg-destructive/5 text-muted-foreground flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs leading-5'>
+                                        <span>
+                                            {t('batch.failedReuseHint', {
+                                                count: failedBatchPrompts.length
+                                            })}
+                                        </span>
+                                        <Button
+                                            type='button'
+                                            variant='outline'
+                                            size='sm'
+                                            onClick={reuseFailedBatchPrompts}
+                                            disabled={isLoading}
+                                            className='bg-background/80 h-7 px-2 text-xs'>
+                                            <RotateCcw className='mr-1.5 h-3.5 w-3.5' />
+                                            {t('batch.reuseFailed')}
+                                        </Button>
+                                    </div>
+                                )}
+                                <div
+                                    id='batch-task-summary'
+                                    className='border-border/60 grid gap-2 border-t pt-2 text-xs leading-5 sm:grid-cols-2'>
+                                    <div className='flex gap-2'>
+                                        <ListChecks className='text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0' />
+                                        <div className='min-w-0'>
+                                            <div className='text-foreground font-medium'>{t('batch.summaryTitle')}</div>
+                                            <p className='text-muted-foreground'>{t('batch.summaryPerLine')}</p>
+                                        </div>
+                                    </div>
+                                    <div className='flex gap-2'>
+                                        <RotateCcw className='text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0' />
+                                        <div className='min-w-0'>
+                                            <div className='text-foreground font-medium'>
+                                                {t('batch.summaryFailureTitle')}
+                                            </div>
+                                            <p className='text-muted-foreground'>{t('batch.summaryFailureDetail')}</p>
+                                        </div>
+                                    </div>
+                                    <p className='text-muted-foreground sm:col-span-2'>{t('batch.summaryProgress')}</p>
+                                </div>
                             </div>
                         )}
                     </div>
 
-                    <div className='border-border/70 space-y-3 border-t pt-3'>
+                    <div className='border-border/70 space-y-2 border-t pt-2'>
                         <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('workbench.basicSettings')}
                         </div>
-                        <div className='space-y-2'>
-                            <div className='text-muted-foreground text-xs'>{t('form.size')}</div>
+                        <div className={compactSettingRowClass}>
+                            <div className={compactSettingLabelClass}>{t('form.size')}</div>
                             <RadioGroup
                                 value={size}
                                 onValueChange={(value) => setSize(value as GenerationFormData['size'])}
@@ -670,8 +770,8 @@ export function GenerationForm({
                             </div>
                         )}
 
-                        <div className='space-y-2'>
-                            <div className='text-muted-foreground text-xs'>
+                        <div className={compactSettingRowClass}>
+                            <div className={compactSettingLabelClass}>
                                 {isBatchMode
                                     ? t('form.batchNumberOfImages', { count: batchPrompts.length })
                                     : t('form.numberOfImages', { count: n[0] })}
@@ -702,8 +802,8 @@ export function GenerationForm({
                             )}
                         </div>
 
-                        <div className='space-y-2'>
-                            <div className='text-muted-foreground text-xs'>{t('form.quality')}</div>
+                        <div className={compactSettingRowClass}>
+                            <div className={compactSettingLabelClass}>{t('form.quality')}</div>
                             <RadioGroup
                                 value={quality}
                                 onValueChange={(value) => setQuality(value as GenerationFormData['quality'])}
@@ -735,8 +835,8 @@ export function GenerationForm({
                             </RadioGroup>
                         </div>
 
-                        <div className='space-y-2'>
-                            <div className='text-muted-foreground text-xs'>{t('form.outputFormat')}</div>
+                        <div className={compactSettingRowClass}>
+                            <div className={compactSettingLabelClass}>{t('form.outputFormat')}</div>
                             <RadioGroup
                                 value={outputFormat}
                                 onValueChange={(value) => setOutputFormat(value as GenerationFormData['output_format'])}
@@ -779,9 +879,11 @@ export function GenerationForm({
                             <span className='flex min-w-0 items-center gap-2'>
                                 <SlidersHorizontal className='h-4 w-4 shrink-0' />
                                 <span className='min-w-0'>
-                                    <span className='text-foreground block'>{t('ux.professionalMode')}</span>
+                                    <span className='text-foreground block'>
+                                        {isAdvancedOpen ? t('ux.professionalMode') : t('ux.easyMode')}
+                                    </span>
                                     <span className='text-muted-foreground block truncate text-xs font-normal'>
-                                        {advancedSummary}
+                                        {isAdvancedOpen ? advancedSummary : t('ux.easyModeSummary')}
                                     </span>
                                 </span>
                             </span>
@@ -897,6 +999,17 @@ export function GenerationForm({
                                                     </SelectContent>
                                                 </Select>
                                             </div>
+                                        </div>
+                                        <div className='border-border bg-muted/20 text-muted-foreground space-y-1.5 rounded-md border p-3 text-xs leading-5'>
+                                            <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                <ShieldAlert className='text-muted-foreground h-4 w-4' />
+                                                {t('upstream.routeImpactTitle')}
+                                            </div>
+                                            {getRouteImpactDetails({ backend: imageBackend, streamingStrategy, t }).map(
+                                                (detail) => (
+                                                    <p key={detail}>{detail}</p>
+                                                )
+                                            )}
                                         </div>
 
                                         {imageBackend === 'responses-image-generation' && (
@@ -1276,11 +1389,14 @@ export function GenerationForm({
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='border-border bg-card/80 hidden border-t p-4 lg:flex'>
+                <CardFooter className='border-border bg-card/88 hidden border-t p-3 lg:flex lg:shrink-0'>
                     <div className='w-full space-y-2'>
                         <div className='flex flex-wrap items-center gap-1.5 text-xs'>
                             <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {model}
+                            </span>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
+                                {workbenchBackendLabel}
                             </span>
                             <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {streamStatusLabel}
@@ -1292,27 +1408,52 @@ export function GenerationForm({
                         {submitDisabledReason && (
                             <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>
                         )}
-                        <Button
-                            type='button'
-                            onClick={handleSubmit}
-                            disabled={isLoading || !!submitDisabledReason}
-                            className='flex w-full items-center justify-center gap-2 border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white'>
-                            {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
-                            {isLoading ? t('generate.loading') : t('generate.submit')}
-                        </Button>
-                        <div className='flex justify-center gap-3 text-xs'>
+                        <div className='grid gap-2 sm:grid-cols-[1fr_auto]'>
+                            <Button
+                                type='button'
+                                onClick={handleSubmit}
+                                disabled={isLoading || !!submitDisabledReason}
+                                className='flex w-full items-center justify-center gap-2 border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white'>
+                                {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
+                                {isLoading ? t('generate.loading') : t('generate.submit')}
+                            </Button>
+                            {canPauseBatch && (
+                                <Button
+                                    type='button'
+                                    variant='outline'
+                                    onClick={() => onPauseBatch?.()}
+                                    disabled={isBatchPauseRequested}
+                                    title={t('batch.pauseHint')}
+                                    className='bg-background/80 min-h-10 gap-2 px-3'>
+                                    {isBatchPauseRequested ? (
+                                        <Loader2 className='h-4 w-4 animate-spin' />
+                                    ) : (
+                                        <Pause className='h-4 w-4' />
+                                    )}
+                                    <span className='whitespace-nowrap'>
+                                        {isBatchPauseRequested ? t('batch.pauseRequested') : t('batch.pause')}
+                                    </span>
+                                </Button>
+                            )}
+                        </div>
+                        {canPauseBatch && (
+                            <p className='text-muted-foreground text-center text-xs'>{t('batch.pauseHint')}</p>
+                        )}
+                        <div className='grid grid-cols-2 gap-2'>
                             <button
                                 type='button'
-                                className='text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50'
+                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-9 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50'
                                 disabled={!prompt.trim() || isLoading}
                                 onClick={() => onSaveInspiration(prompt)}>
+                                <Bookmark className='h-3.5 w-3.5' />
                                 {t('workbench.saveInspiration')}
                             </button>
                             <button
                                 type='button'
-                                className='text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50'
+                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-9 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50'
                                 disabled={isLoading}
                                 onClick={() => setPrompt(t('workbench.randomPromptExample'))}>
+                                <WandSparkles className='h-3.5 w-3.5' />
                                 {t('workbench.randomInspiration')}
                             </button>
                         </div>

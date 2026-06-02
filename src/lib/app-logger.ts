@@ -1,20 +1,18 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 const MAX_LOG_ENTRIES = 300;
-const DEFAULT_LOG_FILE = path.join(
+const LOG_DIR = path.join(
     /* turbopackIgnore: true */ process.cwd(),
     'generated-images',
-    '.app-logs',
-    'app.log.jsonl'
+    '.app-logs'
 );
-const TEST_LOG_FILE = path.join(
-    /* turbopackIgnore: true */ process.cwd(),
-    'generated-images',
-    '.app-logs',
-    'app-test.log.jsonl'
-);
+const DEFAULT_LOG_FILE_NAME = 'app.log.jsonl';
+const TEST_LOG_DIR = path.join(os.tmpdir(), 'gpt-image-playground-app-logs');
+const TEST_LOG_FILE_NAME = 'app-test.log.jsonl';
+const testLogFileNameOverrideEnv = 'APP_LOG_TEST_FILE_NAME';
 
 type LogLevel = (typeof LOG_LEVELS)[number];
 type LogContext = string | number | boolean | null | Record<string, unknown> | unknown[];
@@ -43,7 +41,13 @@ let hydratedLogFile: string | undefined;
 let persistenceEnabledForTest = false;
 
 function resolveLogFile(): string {
-    return process.env.NODE_ENV === 'test' ? TEST_LOG_FILE : DEFAULT_LOG_FILE;
+    if (process.env.NODE_ENV === 'test') {
+        const overrideName = process.env[testLogFileNameOverrideEnv];
+        const fileName =
+            overrideName && path.basename(overrideName) === overrideName ? overrideName : TEST_LOG_FILE_NAME;
+        return path.join(TEST_LOG_DIR, fileName);
+    }
+    return path.join(LOG_DIR, DEFAULT_LOG_FILE_NAME);
 }
 
 function shouldPersistEntries(): boolean {

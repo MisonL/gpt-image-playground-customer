@@ -1,7 +1,7 @@
 'use client';
 
 import { ApiSettingsDialog, type ApiSettings } from '@/components/api-settings-dialog';
-import { EditingForm, type EditingFormData } from '@/components/editing-form';
+import { EditingForm, type EditingFormData, type EditingReuseContext } from '@/components/editing-form';
 import { GenerationForm, type GenerationFormData, type WorkbenchReuseContext } from '@/components/generation-form';
 import { HistoryPanel, type InspirationItem, type PromptApplySource } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
@@ -19,24 +19,42 @@ import {
     type ApiErrorNotice
 } from '@/lib/api-error-guidance';
 import { formatBatchPromptHistory, readBatchPromptLines } from '@/lib/batch-prompts';
-import { calculateApiCost, type CostDetails, type GptImageModel } from '@/lib/cost-utils';
 import { db, type ImageRecord } from '@/lib/db';
 import {
     advanceGenerationBatchProgress,
     buildGenerationActivityItems,
+    collectFailedBatchPrompts,
+    countCompletedBatchResults,
     type GenerationBatchProgress
 } from '@/lib/generation-activity';
 import { resolveHistoryCompareImage } from '@/lib/history-compare';
+import {
+    buildCompletedHistoryEntry,
+    buildFailedHistoryEntry,
+    buildHistoryGenerationFormData,
+    readHistoryImageCountSelection,
+    readHistorySizeSelection,
+    resolveHistoryImageClientRequestId,
+    uniqueStrings,
+    type HistoryMetadata,
+    type RequestMode
+} from '@/lib/history-metadata';
 import { useI18n } from '@/lib/i18n';
-import { IMAGE_UPSTREAM_FORM_SERVER_DEFAULT, appendImageUpstreamOverrideFields } from '@/lib/image-upstream-form';
+import {
+    IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
+    appendImageUpstreamOverrideFields,
+    type ImageUpstreamFormBackend
+} from '@/lib/image-upstream-form';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
 import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
+import { resolveMobilePrimaryDisabledReason } from '@/lib/mobile-primary-action-state';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
 import { sha256Hex } from '@/lib/sha256';
 import { createImageShareFromBlob } from '@/lib/share-client';
 import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
+    BatchPausedError,
     buildStreamingBatchJobs,
     isRuntimeStreamingBatchEnabled,
     resolveStreamingBatchCapacity,
@@ -50,31 +68,8 @@ import {
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowUp, Flower2, HelpCircle, Loader2, Lock, PenLine, Settings2, Activity, X } from 'lucide-react';
+import { ArrowUp, Flower2, HelpCircle, Loader2, Lock, Pause, PenLine, Settings2, Activity, X } from 'lucide-react';
 import * as React from 'react';
-
-type HistoryImage = {
-    filename: string;
-    clientRequestId?: string;
-};
-
-export type HistoryMetadata = {
-    timestamp: number;
-    images: HistoryImage[];
-    storageModeUsed?: 'fs' | 'indexeddb';
-    durationMs: number;
-    quality: GenerationFormData['quality'];
-    background: GenerationFormData['background'];
-    moderation: GenerationFormData['moderation'];
-    prompt: string;
-    mode: 'generate' | 'edit';
-    costDetails: CostDetails | null;
-    actualCostDetails?: ActualCostDetails;
-    output_format?: GenerationFormData['output_format'];
-    model?: GptImageModel;
-    size?: string;
-    clientRequestIds?: string[];
-};
 
 type DrawnPoint = {
     x: number;
@@ -92,9 +87,14 @@ const apiSettingsLocalStorageKey = 'openaiImageApiSettings';
 const inspirationsLocalStorageKey = 'openaiImageInspirations';
 const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
-type RequestMode = 'generate' | 'edit';
 type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, 1 | 2 | 3];
 type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
+
+function getImageBackendLabel(backend: ImageUpstreamFormBackend, t: (key: string) => string): string {
+    if (backend === 'images-api') return t('upstream.backendImages');
+    if (backend === 'responses-image-generation') return t('upstream.backendResponses');
+    return t('upstream.workbenchDefaultRoute');
+}
 
 const defaultInspirations: InspirationItem[] = [
     {
@@ -120,21 +120,6 @@ function createClientRequestId(): string {
         return `web-${crypto.randomUUID()}`;
     }
     return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function uniqueStrings(values: Array<string | undefined>): string[] {
-    return Array.from(
-        new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))
-    );
-}
-
-function resolveHistoryImageClientRequestId(item: HistoryMetadata, imageIndex: number): string | undefined {
-    const imageRequestId = item.images[imageIndex]?.clientRequestId;
-    if (imageRequestId) return imageRequestId;
-    if (!item.clientRequestIds || item.clientRequestIds.length === 0) return undefined;
-    if (item.clientRequestIds.length === item.images.length) return item.clientRequestIds[imageIndex];
-    if (item.images.length === 1) return item.clientRequestIds[0];
-    return undefined;
 }
 
 function readLocalStorageValue(key: string): string | null {
@@ -201,45 +186,6 @@ function readStoredDeletePreference(): boolean {
     return readLocalStorageValue('imageGenSkipDeleteConfirm') === 'true';
 }
 
-function readHistoryImageCountSelection(count: number): number | null {
-    return [1, 2, 4, 8].includes(count) ? count : null;
-}
-
-function readHistorySizeSelection(
-    item: HistoryMetadata,
-    model: GptImageModel
-): {
-    size: GenerationFormData['size'];
-    customWidth: number | null;
-    customHeight: number | null;
-    restored: boolean;
-} {
-    const rawSize = item.size;
-    if (!rawSize || rawSize === 'auto') {
-        return { size: 'auto', customWidth: null, customHeight: null, restored: Boolean(rawSize) };
-    }
-
-    const presets: Array<Exclude<GenerationFormData['size'], 'auto' | 'custom'>> = ['square', 'landscape', 'portrait'];
-    const matchedPreset = presets.find(
-        (preset) => rawSize === preset || rawSize === getPresetDimensions(preset, model)
-    );
-    if (matchedPreset) {
-        return { size: matchedPreset, customWidth: null, customHeight: null, restored: true };
-    }
-
-    const customMatch = /^(\d+)x(\d+)$/.exec(rawSize);
-    if (customMatch && model === 'gpt-image-2') {
-        return {
-            size: 'custom',
-            customWidth: Number(customMatch[1]),
-            customHeight: Number(customMatch[2]),
-            restored: true
-        };
-    }
-
-    return { size: 'auto', customWidth: null, customHeight: null, restored: false };
-}
-
 function getMimeTypeFromFormat(format: string): string {
     if (format === 'jpeg') return 'image/jpeg';
     if (format === 'webp') return 'image/webp';
@@ -268,6 +214,7 @@ type ApiImageResult = {
     path: string;
     filename: string;
     clientRequestId?: string;
+    storageMode?: HistoryMetadata['storageModeUsed'];
 };
 
 type ApiUsage = {
@@ -403,13 +350,17 @@ export default function HomePage() {
     const [mode, setMode] = React.useState<'generate' | 'edit'>('generate');
     const [workbenchMode, setWorkbenchMode] = React.useState<WorkbenchMode>('generate');
     const [reuseContext, setReuseContext] = React.useState<WorkbenchReuseContext | null>(null);
+    const [editReuseContext, setEditReuseContext] = React.useState<EditingReuseContext | null>(null);
     const [isPasswordRequiredByBackend, setIsPasswordRequiredByBackend] = React.useState<boolean | null>(null);
     const [clientPasswordHash, setClientPasswordHash] = React.useState<string | null>(null);
     const [isEntryAuthenticated, setIsEntryAuthenticated] = React.useState(false);
     const [isLoading, setIsLoading] = React.useState(false);
     const [isSendingToEdit, setIsSendingToEdit] = React.useState(false);
     const [error, setError] = React.useState<ApiErrorNotice | null>(null);
+    const [generationFailureMessage, setGenerationFailureMessage] = React.useState<string | null>(null);
+    const [failedBatchPrompts, setFailedBatchPrompts] = React.useState<string[]>([]);
     const [latestImageBatch, setLatestImageBatch] = React.useState<ApiImageResult[] | null>(null);
+    const [activeResultSource, setActiveResultSource] = React.useState<HistoryMetadata | null>(null);
     const [completedGenerationCount, setCompletedGenerationCount] = React.useState<number | null>(null);
     const [imageOutputView, setImageOutputView] = React.useState<'grid' | number>('grid');
     const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
@@ -509,6 +460,8 @@ export default function HomePage() {
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const [batchProgress, setBatchProgress] = React.useState<GenerationBatchProgress | null>(null);
+    const [isBatchPauseRequested, setIsBatchPauseRequested] = React.useState(false);
+    const batchPauseRequestedRef = React.useRef(false);
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
         featureEnabled: isRuntimeStreamingBatchEnabled({
             serverEnabled: runtimeCapabilities?.streamingBatch.enabled
@@ -518,6 +471,7 @@ export default function HomePage() {
         serverRecommendedConcurrency: runtimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
     });
     const streamingBatchEnabled = streamingBatchCapacity.enabled;
+    const isPromptBatchMode = mode === 'generate' && workbenchMode === 'batch';
     const currentPrompt =
         mode === 'generate' && workbenchMode === 'batch'
             ? genBatchPromptText
@@ -530,6 +484,11 @@ export default function HomePage() {
     const currentEditSizeValidation =
         editSize === 'custom' ? validateGptImage2Size(editCustomWidth, editCustomHeight) : { valid: true as const };
     const canOpenLogs = isPasswordRequiredByBackend === true && !!clientPasswordHash;
+    const usesEditControls = workbenchMode === 'edit';
+    const activeWorkbenchModel = usesEditControls ? editModel : genModel;
+    const activeWorkbenchBackend = usesEditControls ? editImageBackend : genImageBackend;
+    const activeWorkbenchBackendLabel = getImageBackendLabel(activeWorkbenchBackend, t);
+    const mobileCanSaveInspiration = !isLoading && !isSendingToEdit && currentPrompt.trim().length > 0;
     const activeLogClientRequestIds = React.useMemo(() => {
         if (!latestImageBatch || latestImageBatch.length === 0) return [];
         if (typeof imageOutputView === 'number') {
@@ -567,30 +526,56 @@ export default function HomePage() {
             t
         ]
     );
-    const mobilePrimaryDisabled =
-        isLoading ||
-        isSendingToEdit ||
-        !currentPrompt.trim() ||
-        (mode === 'edit' && !hasEditSourceImage) ||
-        (mode === 'generate' && !currentGenerateSizeValidation.valid) ||
-        (mode === 'edit' && !currentEditSizeValidation.valid) ||
-        (mode === 'edit' && editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved);
+    const mobilePrimaryDisabledReason = resolveMobilePrimaryDisabledReason({
+        isLoading,
+        isSendingToEdit,
+        mode,
+        isBatchMode: workbenchMode === 'batch',
+        prompt: currentPrompt,
+        batchPromptCount: workbenchMode === 'batch' ? readBatchPromptLines(genBatchPromptText).length : 0,
+        hasEditSourceImage,
+        hasUnsavedMask: editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved,
+        generateSizeValidation: currentGenerateSizeValidation,
+        editSizeValidation: currentEditSizeValidation,
+        t
+    });
+    const mobilePrimaryDisabled = isLoading || isSendingToEdit || Boolean(mobilePrimaryDisabledReason);
+    const currentResultPrompt = activeResultSource?.prompt.trim() || currentPrompt.trim();
+    const canCreateResultVariant = !isLoading && Boolean(latestImageBatch) && Boolean(currentResultPrompt);
+    const canReuseResultPrompt = Boolean(currentResultPrompt);
+    const canPausePromptBatch = isLoading && isPromptBatchMode && Boolean(batchProgress);
 
-    const handleWorkbenchModeChange = React.useCallback((nextMode: WorkbenchMode) => {
-        setWorkbenchMode(nextMode);
-        if (nextMode !== 'reuse') {
-            setReuseContext(null);
-        }
-        if (nextMode === 'edit') {
-            setMode('edit');
-            return;
-        }
-        if (nextMode === 'batch') {
-            setGenN([1]);
-            setGenBatchPromptText((current) => (current.trim() ? current : genPrompt));
-        }
-        setMode('generate');
-    }, [genPrompt]);
+    const handleBatchPromptTextChange = React.useCallback((nextText: React.SetStateAction<string>) => {
+        setGenBatchPromptText(nextText);
+        setFailedBatchPrompts([]);
+    }, []);
+
+    const handlePauseBatch = React.useCallback(() => {
+        batchPauseRequestedRef.current = true;
+        setIsBatchPauseRequested(true);
+    }, []);
+
+    const handleWorkbenchModeChange = React.useCallback(
+        (nextMode: WorkbenchMode) => {
+            setWorkbenchMode(nextMode);
+            if (nextMode !== 'reuse') {
+                setReuseContext(null);
+            }
+            if (nextMode !== 'edit') {
+                setEditReuseContext(null);
+            }
+            if (nextMode === 'edit') {
+                setMode('edit');
+                return;
+            }
+            if (nextMode === 'batch') {
+                setGenN([1]);
+                setGenBatchPromptText((current) => (current.trim() ? current : genPrompt));
+            }
+            setMode('generate');
+        },
+        [genPrompt]
+    );
 
     const scrollToOutput = React.useCallback(() => {
         const outputTop = outputPanelRef.current?.getBoundingClientRect().top;
@@ -961,74 +946,6 @@ export default function HomePage() {
         }
     };
 
-    const buildHistoryEntry = React.useCallback(
-        (
-            images: ApiImageResponseItem[],
-            usage: unknown,
-            actualCost: ActualCostDetails | undefined,
-            durationMsValue: number,
-            promptOverride?: string
-        ): HistoryMetadata => {
-            const isGenerateMode = mode === 'generate';
-            const currentModel = isGenerateMode ? genModel : editModel;
-            const clientRequestIds = uniqueStrings(images.map((img) => img.clientRequestId));
-            const requestSize = isGenerateMode
-                ? genSize === 'custom'
-                    ? `${genCustomWidth}x${genCustomHeight}`
-                    : (getPresetDimensions(genSize, genModel) ?? genSize)
-                : editSize === 'custom'
-                  ? `${editCustomWidth}x${editCustomHeight}`
-                  : (getPresetDimensions(editSize, editModel) ?? editSize);
-            const costDetails = calculateApiCost(usage as Parameters<typeof calculateApiCost>[0], currentModel);
-            return {
-                timestamp: Date.now(),
-                images: images.map((img) => ({
-                    filename: img.filename,
-                    ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {})
-                })),
-                storageModeUsed: effectiveStorageModeClient,
-                durationMs: durationMsValue,
-                quality: isGenerateMode ? genQuality : editQuality,
-                background: isGenerateMode ? genBackground : 'auto',
-                moderation: isGenerateMode ? genModeration : 'auto',
-                output_format: isGenerateMode ? genOutputFormat : editOutputFormat,
-                prompt: isGenerateMode ? (promptOverride ?? genPrompt) : editPrompt,
-                mode,
-                costDetails,
-                ...(actualCost
-                    ? {
-                          actualCostDetails: {
-                              ...actualCost,
-                              ...(costDetails ? { estimatedUsd: costDetails.estimated_cost_usd } : {})
-                          }
-                      }
-                    : {}),
-                model: currentModel,
-                size: requestSize,
-                ...(clientRequestIds.length > 0 ? { clientRequestIds } : {})
-            };
-        },
-        [
-            editCustomHeight,
-            editCustomWidth,
-            editModel,
-            editOutputFormat,
-            editPrompt,
-            editQuality,
-            editSize,
-            genBackground,
-            genCustomHeight,
-            genCustomWidth,
-            genModel,
-            genModeration,
-            genOutputFormat,
-            genPrompt,
-            genQuality,
-            genSize,
-            mode
-        ]
-    );
-
     const materializeImages = React.useCallback(
         async (images: ApiImageResponseItem[]): Promise<ApiImageResult[]> => {
             if (effectiveStorageModeClient === 'indexeddb') {
@@ -1084,6 +1001,8 @@ export default function HomePage() {
             usage: unknown,
             actualCost: ActualCostDetails | undefined,
             durationMsValue: number,
+            formData: GenerationFormData | EditingFormData,
+            requestMode: RequestMode,
             clearStreaming = false,
             promptOverride?: string
         ) => {
@@ -1092,18 +1011,30 @@ export default function HomePage() {
             }
 
             const processedImages = await materializeImages(images);
-            setLatestImageBatch(processedImages);
+            const processedImagesWithStorage = processedImages.map((image) => ({
+                ...image,
+                storageMode: effectiveStorageModeClient
+            }));
+            setLatestImageBatch(processedImagesWithStorage);
             setCompletedGenerationCount(processedImages.length);
             setImageOutputView(processedImages.length > 1 ? 'grid' : 0);
             if (clearStreaming) {
                 setStreamingPreviewImages(new Map());
             }
-            setHistory((prevHistory) => [
-                buildHistoryEntry(images, usage, actualCost, durationMsValue, promptOverride),
-                ...prevHistory
-            ]);
+            const historyEntry = buildCompletedHistoryEntry({
+                images,
+                usage,
+                actualCost,
+                durationMs: durationMsValue,
+                formData,
+                requestMode,
+                storageMode: effectiveStorageModeClient,
+                promptOverride
+            });
+            setActiveResultSource(historyEntry);
+            setHistory((prevHistory) => [historyEntry, ...prevHistory]);
         },
-        [buildHistoryEntry, materializeImages, t]
+        [materializeImages, t]
     );
 
     const buildApiFormData = React.useCallback(
@@ -1357,15 +1288,22 @@ export default function HomePage() {
     ) {
         const startTime = Date.now();
         let durationMs = 0;
+        let shouldKeepRetryArgs = true;
 
         setIsLoading(true);
         setActiveRequestStreaming(requestStreamMode !== 'non_stream');
         setError(null);
+        setGenerationFailureMessage(null);
+        setFailedBatchPrompts([]);
+        setLastApiCallArgs(null);
         setLatestImageBatch(null);
+        setActiveResultSource(null);
         setCompletedGenerationCount(null);
         setImageOutputView('grid');
         setStreamingPreviewImages(new Map());
         setBatchProgress(null);
+        batchPauseRequestedRef.current = false;
+        setIsBatchPauseRequested(false);
         if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
             setIsMobileCreationDrawerOpen(false);
             window.setTimeout(scrollToOutput, 80);
@@ -1382,15 +1320,33 @@ export default function HomePage() {
                     latestRuntimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
                 serverRecommendedConcurrency: latestRuntimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
             });
-            if (isPasswordRequiredByBackend && !requestPasswordHash) {
-                setError(createErrorNotice(t('error.passwordRequired')));
-                setPasswordDialogContext('initial');
-                setIsPasswordDialogOpen(true);
-                return;
+            if (isPasswordRequiredByBackend) {
+                const verificationPasswordHash = requestPasswordHash;
+                if (!verificationPasswordHash) {
+                    const message = t('error.passwordRequired');
+                    setError(createErrorNotice(message));
+                    setGenerationFailureMessage(message);
+                    setPasswordDialogContext('initial');
+                    setIsPasswordDialogOpen(true);
+                    return;
+                }
+
+                const verificationResult = await verifyEntryPasswordHash(verificationPasswordHash);
+                if (verificationResult === 'valid') {
+                    setIsEntryAuthenticated(true);
+                } else if (verificationResult === 'unavailable') {
+                    const message = t('error.authVerifyUnavailable');
+                    setError(createErrorNotice(message));
+                    setGenerationFailureMessage(message);
+                    return;
+                } else {
+                    const message = t('error.passwordExpired');
+                    promptForExpiredPassword();
+                    setGenerationFailureMessage(message);
+                    return;
+                }
             }
-            if (!(await refreshImageAccessCookie(requestPasswordHash))) {
-                return;
-            }
+            setLastApiCallArgs([formData, requestMode, requestStreamMode, requestPartialImages]);
 
             const promptBatch =
                 requestMode === 'generate'
@@ -1450,28 +1406,24 @@ export default function HomePage() {
                     failed: 0,
                     total: jobs.length
                 });
-                const batchResults = await scheduleStreamingBatch(
-                    jobs,
-                    useStreamingBatch ? currentStreamingBatchCapacity.concurrency : 1,
-                    async (job: StreamingBatchJob) => {
+                const batchResults = await scheduleStreamingBatch(jobs, {
+                    concurrency: useStreamingBatch ? currentStreamingBatchCapacity.concurrency : 1,
+                    runJob: async (job: StreamingBatchJob) => {
                         try {
                             const result = await executeImageRequestForCurrentOptions({
                                 forceSingleImage: true,
                                 previewIndexOffset: job.outputIndex,
                                 promptOverride: promptBatch[job.outputIndex]
                             });
-                            setBatchProgress((current) =>
-                                advanceGenerationBatchProgress(current, jobs.length, false)
-                            );
+                            setBatchProgress((current) => advanceGenerationBatchProgress(current, jobs.length, false));
                             return result;
                         } catch (error) {
-                            setBatchProgress((current) =>
-                                advanceGenerationBatchProgress(current, jobs.length, true)
-                            );
+                            setBatchProgress((current) => advanceGenerationBatchProgress(current, jobs.length, true));
                             throw error;
                         }
-                    }
-                );
+                    },
+                    shouldPause: () => batchPauseRequestedRef.current
+                });
                 const errors = batchResults.filter((result): result is Error => result instanceof Error);
                 const successes = batchResults.filter(
                     (
@@ -1482,21 +1434,36 @@ export default function HomePage() {
                 if (errors.some(hasPreservedDisplayedAuthError)) {
                     return;
                 }
+                const failedPromptBatch = collectFailedBatchPrompts(promptBatch, batchResults);
+                if (errors.some((batchError) => batchError instanceof BatchPausedError)) {
+                    setBatchProgress((current) => ({
+                        completed: countCompletedBatchResults(batchResults),
+                        failed: failedPromptBatch.length,
+                        total: current?.total ?? jobs.length
+                    }));
+                }
                 if (successes.length === 0) {
+                    setFailedBatchPrompts(failedPromptBatch);
                     throw errors[0] || new Error(t('error.noImages'));
                 }
                 const images = successes.flatMap((result) => result.images);
                 const usage = mergeUsageValues(successes.map((result) => result.usage));
                 const actualCost = mergeActualCostValues(successes.map((result) => result.actualCost));
                 durationMs = Date.now() - startTime;
+                if (errors.length > 0) {
+                    setFailedBatchPrompts(failedPromptBatch);
+                }
                 await commitCompletedImages(
                     images,
                     usage,
                     actualCost,
                     durationMs,
+                    formData,
+                    requestMode,
                     true,
                     historyPromptOverride
                 );
+                shouldKeepRetryArgs = false;
                 if (errors.length > 0) {
                     await refreshRuntimeCapabilities();
                     setError(
@@ -1509,22 +1476,23 @@ export default function HomePage() {
                             })
                         )
                     );
+                } else {
+                    setFailedBatchPrompts([]);
                 }
                 return;
             }
 
             if (useStreamingBatch) {
                 const jobs = buildStreamingBatchJobs(imageCount);
-                const batchResults = await scheduleStreamingBatch(
-                    jobs,
-                    currentStreamingBatchCapacity.concurrency,
-                    async (job: StreamingBatchJob) => {
+                const batchResults = await scheduleStreamingBatch(jobs, {
+                    concurrency: currentStreamingBatchCapacity.concurrency,
+                    runJob: async (job: StreamingBatchJob) => {
                         return executeImageRequestForCurrentOptions({
                             forceSingleImage: true,
                             previewIndexOffset: job.outputIndex
                         });
                     }
-                );
+                });
                 const errors = batchResults.filter((result): result is Error => result instanceof Error);
                 const successes = batchResults.filter(
                     (
@@ -1542,7 +1510,8 @@ export default function HomePage() {
                 const usage = mergeUsageValues(successes.map((result) => result.usage));
                 const actualCost = mergeActualCostValues(successes.map((result) => result.actualCost));
                 durationMs = Date.now() - startTime;
-                await commitCompletedImages(images, usage, actualCost, durationMs, true);
+                await commitCompletedImages(images, usage, actualCost, durationMs, formData, requestMode, true);
+                shouldKeepRetryArgs = false;
                 if (errors.length > 0) {
                     await refreshRuntimeCapabilities();
                     setError(
@@ -1566,24 +1535,43 @@ export default function HomePage() {
                 result.usage,
                 result.actualCost,
                 durationMs,
+                formData,
+                requestMode,
                 false,
                 historyPromptOverride
             );
+            shouldKeepRetryArgs = false;
         } catch (err: unknown) {
             durationMs = Date.now() - startTime;
             console.error(`API 调用在 ${durationMs}ms 后失败：`, err);
             if (hasPreservedDisplayedAuthError(err)) {
+                setGenerationFailureMessage(t('error.passwordExpired'));
                 setLatestImageBatch(null);
                 setStreamingPreviewImages(new Map());
                 return;
             }
             const errorSummary = summarizeApiError(err, t('error.unexpected'));
-            setError(createErrorNotice(buildUserFacingApiErrorMessage({ ...errorSummary, t })));
+            const message = buildUserFacingApiErrorMessage({ ...errorSummary, t });
+            setError(createErrorNotice(message));
+            setGenerationFailureMessage(message);
             setLatestImageBatch(null);
+            setHistory((prevHistory) => [
+                buildFailedHistoryEntry({
+                    message,
+                    durationMs,
+                    formData,
+                    requestMode,
+                    storageMode: effectiveStorageModeClient
+                }),
+                ...prevHistory
+            ]);
             setStreamingPreviewImages(new Map());
             await refreshRuntimeCapabilities();
         } finally {
             if (durationMs === 0) durationMs = Date.now() - startTime;
+            if (!shouldKeepRetryArgs) {
+                setLastApiCallArgs(null);
+            }
             setActiveRequestStreaming(false);
             setIsLoading(false);
         }
@@ -1592,7 +1580,7 @@ export default function HomePage() {
     function handleMobilePrimaryAction() {
         if (mode === 'generate') {
             const batchPrompts = workbenchMode === 'batch' ? readBatchPromptLines(genBatchPromptText) : undefined;
-            void handleApiCall({
+            const formData: GenerationFormData = {
                 prompt: batchPrompts && batchPrompts.length > 0 ? batchPrompts[0] : genPrompt,
                 n: genN[0],
                 size: genSize,
@@ -1613,10 +1601,11 @@ export default function HomePage() {
                 promptOptimization: genPromptOptimization,
                 forceWeb: genForceWeb,
                 ...(batchPrompts ? { batchPrompts } : {})
-            });
+            };
+            void handleApiCall(formData);
             return;
         }
-        void handleApiCall({
+        const formData: EditingFormData = {
             prompt: editPrompt,
             n: editN[0],
             size: editSize,
@@ -1637,14 +1626,134 @@ export default function HomePage() {
             thinking: editThinking,
             promptOptimization: editPromptOptimization,
             forceWeb: editForceWeb
-        });
+        };
+        void handleApiCall(formData);
     }
 
+    function handleMobileSaveInspiration() {
+        const trimmedPrompt = currentPrompt.trim();
+        if (!trimmedPrompt) return;
+        handleSaveInspiration(trimmedPrompt);
+    }
+
+    function handleMobileRandomInspiration() {
+        const nextPrompt = t('workbench.randomPromptExample');
+        if (mode === 'edit') {
+            setEditPrompt(nextPrompt);
+            return;
+        }
+        if (workbenchMode === 'batch') {
+            setGenBatchPromptText(nextPrompt);
+            return;
+        }
+        setGenPrompt(nextPrompt);
+    }
+
+    const buildCurrentGenerationFallbackFormData = React.useCallback((): GenerationFormData => {
+        return {
+            prompt: genPrompt,
+            n: genN[0],
+            size: genSize,
+            customWidth: genCustomWidth,
+            customHeight: genCustomHeight,
+            quality: genQuality,
+            output_format: genOutputFormat,
+            ...(genOutputFormat === 'jpeg' || genOutputFormat === 'webp'
+                ? { output_compression: genCompression[0] }
+                : {}),
+            background: genBackground,
+            moderation: genModeration,
+            model: genModel,
+            image_backend: genImageBackend,
+            streaming_strategy: genStreamingStrategy,
+            responsesModel: genResponsesModel,
+            thinking: genThinking,
+            promptOptimization: genPromptOptimization,
+            forceWeb: genForceWeb
+        };
+    }, [
+        genBackground,
+        genCompression,
+        genCustomHeight,
+        genCustomWidth,
+        genForceWeb,
+        genImageBackend,
+        genModel,
+        genModeration,
+        genN,
+        genOutputFormat,
+        genPrompt,
+        genPromptOptimization,
+        genQuality,
+        genResponsesModel,
+        genSize,
+        genStreamingStrategy,
+        genThinking
+    ]);
+
+    const applyHistoryGenerationFormData = React.useCallback((formData: GenerationFormData, item: HistoryMetadata) => {
+        const trimmedPrompt = formData.prompt.trim();
+        const restoredFields = [t('reuse.fieldPrompt')];
+
+        setGenPrompt(trimmedPrompt || formData.prompt);
+        setGenModel(formData.model);
+        setGenSize(formData.size);
+        setGenCustomWidth(formData.customWidth);
+        setGenCustomHeight(formData.customHeight);
+        setGenQuality(formData.quality);
+        setGenBackground(formData.background);
+        setGenModeration(formData.moderation);
+        setGenOutputFormat(formData.output_format);
+        if (formData.output_compression !== undefined) {
+            setGenCompression([formData.output_compression]);
+        }
+
+        restoredFields.push(
+            t('reuse.fieldModel'),
+            t('reuse.fieldSize'),
+            t('reuse.fieldQuality'),
+            t('reuse.fieldBackground'),
+            t('reuse.fieldModeration'),
+            t('reuse.fieldFormat')
+        );
+
+        if (formData.batchPrompts && formData.batchPrompts.length > 1) {
+            setGenBatchPromptText(formData.batchPrompts.join('\n'));
+            setGenN([1]);
+            setWorkbenchMode('batch');
+        } else {
+            setGenBatchPromptText('');
+            setGenN([formData.n]);
+            restoredFields.push(t('reuse.fieldCount'));
+            setWorkbenchMode('reuse');
+        }
+
+        setReuseContext({
+            sourceLabel: t('reuse.sourceHistory', {
+                time: new Date(item.timestamp).toLocaleString(locale)
+            }),
+            restoredFields: Array.from(new Set(restoredFields)),
+            promptPreview: trimmedPrompt || t('history.noPrompt')
+        });
+        setMode('generate');
+    }, [locale, t]);
+
     function handleCreateVariant() {
+        if (activeResultSource) {
+            const formData = buildHistoryGenerationFormData(activeResultSource, buildCurrentGenerationFallbackFormData());
+            applyHistoryGenerationFormData(formData, activeResultSource);
+            void handleApiCall(formData, 'generate');
+            return;
+        }
         handleMobilePrimaryAction();
     }
 
     function handleReuseCurrentPrompt() {
+        if (activeResultSource) {
+            const formData = buildHistoryGenerationFormData(activeResultSource, buildCurrentGenerationFallbackFormData());
+            applyHistoryGenerationFormData(formData, activeResultSource);
+            return;
+        }
         const promptToReuse = mode === 'edit' && editPrompt.trim() ? editPrompt : currentPrompt;
         const trimmedPrompt = promptToReuse.trim();
         if (trimmedPrompt) {
@@ -1680,6 +1789,7 @@ export default function HomePage() {
                     return {
                         path,
                         filename: imgInfo.filename,
+                        storageMode: originalStorageMode,
                         ...(clientRequestId ? { clientRequestId } : {})
                     };
                 } else {
@@ -1701,6 +1811,7 @@ export default function HomePage() {
                 }
 
                 setLatestImageBatch(validImages.length > 0 ? validImages : null);
+                setActiveResultSource(validImages.length > 0 ? item : null);
                 setImageOutputView(validImages.length > 1 ? 'grid' : 0);
             });
         },
@@ -1711,49 +1822,13 @@ export default function HomePage() {
         (prompt: string, source: PromptApplySource) => {
             const trimmedPrompt = prompt.trim();
             const restoredFields = [t('reuse.fieldPrompt')];
-            setGenPrompt(trimmedPrompt || prompt);
 
             if (source.type === 'history') {
-                const item = source.item;
-                const nextModel = item.model ?? genModel;
-                const sizeSelection = readHistorySizeSelection(item, nextModel);
-                setGenModel(nextModel);
-                setGenSize(sizeSelection.size);
-                if (typeof sizeSelection.customWidth === 'number') {
-                    setGenCustomWidth(sizeSelection.customWidth);
-                }
-                if (typeof sizeSelection.customHeight === 'number') {
-                    setGenCustomHeight(sizeSelection.customHeight);
-                }
-                setGenQuality(item.quality);
-                setGenBackground(item.background);
-                setGenModeration(item.moderation);
-                const imageCount = readHistoryImageCountSelection(item.images.length);
-                if (imageCount !== null) {
-                    setGenN([imageCount]);
-                    restoredFields.push(t('reuse.fieldCount'));
-                }
-                restoredFields.push(
-                    t('reuse.fieldModel'),
-                    t('reuse.fieldQuality'),
-                    t('reuse.fieldBackground'),
-                    t('reuse.fieldModeration')
-                );
-                if (sizeSelection.restored) {
-                    restoredFields.push(t('reuse.fieldSize'));
-                }
-                if (item.output_format) {
-                    setGenOutputFormat(item.output_format);
-                    restoredFields.push(t('reuse.fieldFormat'));
-                }
-                setReuseContext({
-                    sourceLabel: t('reuse.sourceHistory', {
-                        time: new Date(item.timestamp).toLocaleString(locale)
-                    }),
-                    restoredFields: Array.from(new Set(restoredFields)),
-                    promptPreview: trimmedPrompt || t('history.noPrompt')
-                });
+                const formData = buildHistoryGenerationFormData(source.item, buildCurrentGenerationFallbackFormData());
+                applyHistoryGenerationFormData(formData, source.item);
+                return;
             } else {
+                setGenPrompt(trimmedPrompt || prompt);
                 setReuseContext({
                     sourceLabel: t('reuse.sourceInspiration', { title: source.title }),
                     restoredFields,
@@ -1764,7 +1839,7 @@ export default function HomePage() {
             setWorkbenchMode('reuse');
             setMode('generate');
         },
-        [genModel, locale, t]
+        [applyHistoryGenerationFormData, buildCurrentGenerationFallbackFormData, t]
     );
 
     const handleSaveInspiration = React.useCallback((prompt: string) => {
@@ -1792,6 +1867,7 @@ export default function HomePage() {
         if (window.confirm(confirmationMessage)) {
             setHistory([]);
             setLatestImageBatch(null);
+            setActiveResultSource(null);
             setCompletedGenerationCount(null);
             setImageOutputView('grid');
             setError(null);
@@ -1958,6 +2034,7 @@ export default function HomePage() {
 
             setEditImageFiles([newFile]);
             setEditSourceImagePreviewUrls([newPreviewUrl]);
+            setEditReuseContext(null);
 
             if (mode === 'generate') {
                 setMode('edit');
@@ -1986,6 +2063,7 @@ export default function HomePage() {
 
         const nextModel = item.model ?? editModel;
         const sizeSelection = readHistorySizeSelection(item, nextModel);
+        const restoredFields = [t('reuse.fieldReferenceImage'), t('reuse.fieldPrompt')];
         setEditPrompt(item.prompt);
         setEditModel(nextModel);
         setEditSize(sizeSelection.size);
@@ -2000,10 +2078,23 @@ export default function HomePage() {
         const imageCount = readHistoryImageCountSelection(item.images.length);
         if (imageCount !== null) {
             setEditN([imageCount]);
+            restoredFields.push(t('reuse.fieldCount'));
+        }
+        restoredFields.push(t('reuse.fieldModel'), t('reuse.fieldQuality'), t('reuse.fieldModeration'));
+        if (sizeSelection.restored) {
+            restoredFields.push(t('reuse.fieldSize'));
         }
         if (item.output_format) {
             setEditOutputFormat(item.output_format);
+            restoredFields.push(t('reuse.fieldFormat'));
         }
+        setEditReuseContext({
+            sourceLabel: t('reuse.sourceHistory', {
+                time: new Date(item.timestamp).toLocaleString(locale)
+            }),
+            restoredFields: Array.from(new Set(restoredFields)),
+            promptPreview: item.prompt.trim() || t('history.noPrompt')
+        });
         setMode('edit');
         setWorkbenchMode('edit');
     };
@@ -2048,6 +2139,7 @@ export default function HomePage() {
                 setLatestImageBatch((prev) =>
                     prev && prev.some((img) => filenamesToDelete.includes(img.filename)) ? null : prev
                 );
+                setActiveResultSource((current) => (current?.timestamp === timestamp ? null : current));
             } catch (e: unknown) {
                 console.error('删除条目失败：', e);
                 setError(createErrorNotice(e instanceof Error ? e.message : t('error.deleteUnexpected')));
@@ -2082,9 +2174,18 @@ export default function HomePage() {
     }, []);
 
     const showEntryLock = isPasswordRequiredByBackend === true && !isEntryAuthenticated;
+    const outputFailureMessage =
+        !isLoading && !isSendingToEdit && !latestImageBatch && error?.message === generationFailureMessage
+            ? generationFailureMessage
+            : null;
+    const canRetryLastGeneration = Boolean(lastApiCallArgs) && !isLoading && !isSendingToEdit;
+    function handleRetryLastGeneration() {
+        if (!lastApiCallArgs) return;
+        void handleApiCall(...lastApiCallArgs, clientPasswordHash);
+    }
 
     return (
-        <main className='studio-paper text-foreground min-h-screen pb-[calc(7rem+env(safe-area-inset-bottom))] lg:h-dvh lg:overflow-hidden lg:pb-0'>
+        <main className='studio-paper text-foreground min-h-screen pb-[calc(10.5rem+env(safe-area-inset-bottom))] lg:h-dvh lg:overflow-hidden lg:pb-0'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -2154,15 +2255,27 @@ export default function HomePage() {
                     <div className='mx-auto flex min-h-screen w-full max-w-[1760px] flex-col px-4 py-3 lg:h-full lg:min-h-0 lg:px-7 lg:py-5'>
                         <header className='mb-5 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
                             <div className='flex min-w-0 items-center gap-3'>
-                                <h1 className='editorial-title truncate text-3xl font-semibold tracking-normal sm:text-4xl'>
-                                    {t('app.studioTitle')}
-                                </h1>
-                                <Flower2 className='hidden h-7 w-7 rotate-12 text-[oklch(0.68_0.12_64)] sm:block' />
-                                <p className='text-muted-foreground text-sm'>{t('app.studioSubtitle')}</p>
+                                <div className='flex min-w-0 items-center gap-3'>
+                                    <h1 className='editorial-title truncate text-3xl font-semibold tracking-normal sm:text-4xl'>
+                                        {t('app.studioTitle')}
+                                    </h1>
+                                    <Flower2 className='hidden h-7 w-7 rotate-12 text-[oklch(0.68_0.12_64)] sm:block' />
+                                    <p className='text-muted-foreground text-sm'>{t('app.studioSubtitle')}</p>
+                                </div>
+                                <Button
+                                    type='button'
+                                    variant='outline'
+                                    size='icon'
+                                    onClick={() => setIsApiSettingsDialogOpen(true)}
+                                    className='bg-card/80 ml-auto h-9 w-9 shrink-0 shadow-sm sm:hidden'
+                                    aria-label={t('app.apiSettings')}>
+                                    <Settings2 className='h-4 w-4' />
+                                </Button>
                             </div>
                             <div className='flex flex-wrap items-center gap-4 sm:justify-end'>
                                 <WorkbenchStatusStrip
-                                    model={mode === 'generate' ? genModel : editModel}
+                                    model={activeWorkbenchModel}
+                                    channelLabel={activeWorkbenchBackendLabel}
                                     streamStatus={getStreamingStatusLabel(streamMode, t)}
                                     costLabel={t('workbench.estimatedCost')}
                                 />
@@ -2178,26 +2291,15 @@ export default function HomePage() {
                                         M
                                     </span>
                                 </div>
-                                <div className='sm:hidden'>
-                                    <Button
-                                        type='button'
-                                        variant='outline'
-                                        size='icon'
-                                        onClick={() => setIsApiSettingsDialogOpen(true)}
-                                        className='bg-card/80 h-9 w-9 shadow-sm'
-                                        aria-label={t('app.apiSettings')}>
-                                        <Settings2 className='h-4 w-4' />
-                                    </Button>
-                                </div>
                             </div>
                         </header>
-                        <div className='grid flex-1 grid-cols-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(360px,410px)_minmax(0,1fr)_minmax(390px,460px)]'>
+                        <div className='grid flex-1 grid-cols-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:grid-cols-[minmax(330px,370px)_minmax(560px,1fr)_minmax(320px,360px)] 2xl:grid-cols-[minmax(360px,410px)_minmax(620px,1fr)_minmax(360px,430px)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
                                 className={`order-2 lg:static lg:order-1 lg:block lg:min-h-0 lg:overflow-hidden lg:p-0 lg:shadow-none ${
                                     isMobileCreationDrawerOpen
-                                        ? 'border-border bg-background/95 supports-[backdrop-filter]:bg-background/88 fixed inset-x-0 bottom-0 z-50 max-h-[82vh] min-h-0 overflow-y-auto rounded-t-lg border-t px-3 pt-3 pb-[calc(6.75rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(73,50,25,0.18)] backdrop-blur lg:max-h-none lg:rounded-none'
+                                        ? 'border-border bg-[oklch(0.986_0.015_84)] fixed inset-x-0 bottom-0 z-50 max-h-[82vh] min-h-0 scroll-pb-44 overflow-y-auto rounded-t-lg border-t px-3 pt-3 pb-[calc(12rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(73,50,25,0.18)] lg:max-h-none lg:rounded-none'
                                         : 'hidden min-h-[620px]'
                                 }`}>
                                 {isMobileCreationDrawerOpen && (
@@ -2240,7 +2342,11 @@ export default function HomePage() {
                                         prompt={genPrompt}
                                         setPrompt={setGenPrompt}
                                         batchPromptText={genBatchPromptText}
-                                        setBatchPromptText={setGenBatchPromptText}
+                                        setBatchPromptText={handleBatchPromptTextChange}
+                                        failedBatchPrompts={failedBatchPrompts}
+                                        canPauseBatch={canPausePromptBatch}
+                                        isBatchPauseRequested={isBatchPauseRequested}
+                                        onPauseBatch={handlePauseBatch}
                                         n={genN}
                                         setN={setGenN}
                                         size={genSize}
@@ -2284,6 +2390,8 @@ export default function HomePage() {
                                         isLoading={isLoading || isSendingToEdit}
                                         currentMode={workbenchMode}
                                         onModeChange={handleWorkbenchModeChange}
+                                        reuseContext={editReuseContext}
+                                        onClearReuseContext={() => setEditReuseContext(null)}
                                         isPasswordRequiredByBackend={isPasswordRequiredByBackend}
                                         clientPasswordHash={clientPasswordHash}
                                         onOpenPasswordDialog={handleOpenPasswordDialog}
@@ -2349,7 +2457,7 @@ export default function HomePage() {
                             <section
                                 ref={outputPanelRef}
                                 aria-label={t('app.canvasPreview')}
-                                className='order-1 flex min-h-[460px] scroll-mt-4 flex-col lg:order-2 lg:min-h-0'>
+                                className='order-1 flex min-h-[380px] scroll-mt-4 flex-col sm:min-h-[460px] lg:order-2 lg:min-h-0'>
                                 {error && (
                                     <Alert
                                         variant='destructive'
@@ -2358,35 +2466,37 @@ export default function HomePage() {
                                         <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                                     </Alert>
                                 )}
-                                <ImageOutput
-                                    imageBatch={latestImageBatch}
-                                    viewMode={imageOutputView}
-                                    onViewChange={setImageOutputView}
-                                    altText={t('output.alt')}
-                                    isLoading={isLoading || isSendingToEdit}
-                                    onSendToEdit={handleSendToEdit}
-                                    onDownloadImage={handleDownloadImage}
-                                    onShareImage={handleOpenShareImage}
-                                    onCreateVariant={handleCreateVariant}
-                                    onReusePrompt={handleReuseCurrentPrompt}
-                                    compareImage={historyCompareImage}
-                                    canCreateVariant={Boolean(currentPrompt.trim()) && !!latestImageBatch}
-                                    canReusePrompt={Boolean(currentPrompt.trim())}
-                                    currentMode={mode}
-                                    baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
-                                    streamingPreviewImages={streamingPreviewImages}
-                                    isStreamingRequest={activeRequestStreaming}
-                                    clientPasswordHash={clientPasswordHash}
-                                    canOpenLogs={canOpenLogs}
-                                    openLogsSignal={openLogsSignal}
-                                    logClientRequestIds={activeLogClientRequestIds}
-                                    logFilenames={activeLogFilenames}
-                                />
+                                <div className='min-h-0 flex-1'>
+                                    <ImageOutput
+                                        imageBatch={latestImageBatch}
+                                        viewMode={imageOutputView}
+                                        onViewChange={setImageOutputView}
+                                        altText={t('output.alt')}
+                                        isLoading={isLoading || isSendingToEdit}
+                                        onSendToEdit={handleSendToEdit}
+                                        onDownloadImage={handleDownloadImage}
+                                        onShareImage={handleOpenShareImage}
+                                        onCreateVariant={handleCreateVariant}
+                                        onReusePrompt={handleReuseCurrentPrompt}
+                                        failureMessage={outputFailureMessage}
+                                        onRetry={canRetryLastGeneration ? handleRetryLastGeneration : undefined}
+                                        compareImage={historyCompareImage}
+                                        canCreateVariant={canCreateResultVariant}
+                                        canReusePrompt={canReuseResultPrompt}
+                                        currentMode={mode}
+                                        baseImagePreviewUrl={editSourceImagePreviewUrls[0] || null}
+                                        streamingPreviewImages={streamingPreviewImages}
+                                        isStreamingRequest={activeRequestStreaming}
+                                        clientPasswordHash={clientPasswordHash}
+                                        canOpenLogs={canOpenLogs}
+                                        openLogsSignal={openLogsSignal}
+                                        logClientRequestIds={activeLogClientRequestIds}
+                                        logFilenames={activeLogFilenames}
+                                    />
+                                </div>
                                 <WorkbenchProDock
                                     outputFormat={mode === 'generate' ? genOutputFormat : editOutputFormat}
-                                    onOutputFormatChange={
-                                        mode === 'generate' ? setGenOutputFormat : setEditOutputFormat
-                                    }
+                                    onOutputFormatChange={mode === 'generate' ? setGenOutputFormat : setEditOutputFormat}
                                     quality={mode === 'generate' ? genQuality : editQuality}
                                     onQualityChange={mode === 'generate' ? setGenQuality : setEditQuality}
                                     model={mode === 'generate' ? genModel : editModel}
@@ -2395,12 +2505,8 @@ export default function HomePage() {
                                     streamMode={streamMode}
                                     onStreamModeChange={setStreamMode}
                                     imageBackend={mode === 'generate' ? genImageBackend : editImageBackend}
-                                    onImageBackendChange={
-                                        mode === 'generate' ? setGenImageBackend : setEditImageBackend
-                                    }
-                                    streamingStrategy={
-                                        mode === 'generate' ? genStreamingStrategy : editStreamingStrategy
-                                    }
+                                    onImageBackendChange={mode === 'generate' ? setGenImageBackend : setEditImageBackend}
+                                    streamingStrategy={mode === 'generate' ? genStreamingStrategy : editStreamingStrategy}
                                     onStreamingStrategyChange={
                                         mode === 'generate' ? setGenStreamingStrategy : setEditStreamingStrategy
                                     }
@@ -2409,7 +2515,7 @@ export default function HomePage() {
                             </section>
                             <aside
                                 aria-label={t('history.title')}
-                                className='order-3 min-h-[420px] lg:min-h-0 lg:overflow-hidden'>
+                                className='order-3 min-h-[420px] lg:col-span-2 lg:min-h-[420px] xl:col-span-1 xl:min-h-0 xl:overflow-hidden'>
                                 <HistoryPanel
                                     history={history}
                                     inspirations={inspirations}
@@ -2432,7 +2538,7 @@ export default function HomePage() {
                         </div>
                     </div>
                     <div
-                        className={`bg-background/92 border-border supports-[backdrop-filter]:bg-background/85 fixed right-0 bottom-0 left-0 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] backdrop-blur lg:hidden ${
+                        className={`bg-background border-border fixed right-0 bottom-0 left-0 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden ${
                             isMobileCreationDrawerOpen ? 'z-[60]' : 'z-40'
                         }`}>
                         <button
@@ -2449,7 +2555,45 @@ export default function HomePage() {
                             aria-expanded={isMobileCreationDrawerOpen}>
                             <span className='bg-border h-1 w-10 rounded-full' aria-hidden='true' />
                         </button>
-                        <div className='mx-auto grid max-w-screen-sm grid-cols-[auto_1fr_auto_auto] gap-2'>
+                        <div className='mx-auto max-w-screen-sm space-y-2'>
+                            <div className='flex flex-wrap items-center justify-center gap-1.5 text-[11px]'>
+                                <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
+                                    {activeWorkbenchModel}
+                                </span>
+                                <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
+                                    {activeWorkbenchBackendLabel}
+                                </span>
+                                <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
+                                    {getStreamingStatusLabel(streamMode, t)}
+                                </span>
+                                <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
+                                    {t('workbench.estimatedCost')}
+                                </span>
+                            </div>
+                            {isMobileCreationDrawerOpen && (
+                                <div className='grid grid-cols-2 gap-2'>
+                                    <Button
+                                        type='button'
+                                        variant='outline'
+                                        size='sm'
+                                        onClick={handleMobileSaveInspiration}
+                                        disabled={!mobileCanSaveInspiration}
+                                        className='bg-card/80 min-h-9'>
+                                        {t('workbench.saveInspiration')}
+                                    </Button>
+                                    <Button
+                                        type='button'
+                                        variant='outline'
+                                        size='sm'
+                                        onClick={handleMobileRandomInspiration}
+                                        disabled={isLoading || isSendingToEdit}
+                                        className='bg-card/80 min-h-9'>
+                                        {t('workbench.randomInspiration')}
+                                    </Button>
+                                </div>
+                            )}
+                        </div>
+                        <div className='mx-auto mt-2 grid max-w-screen-sm grid-cols-[auto_1fr_auto_auto] gap-2'>
                             <Button
                                 type='button'
                                 variant='outline'
@@ -2477,6 +2621,22 @@ export default function HomePage() {
                                       ? t('edit.loading')
                                       : t('edit.submit')}
                             </Button>
+                            {canPausePromptBatch && (
+                                <Button
+                                    type='button'
+                                    variant='outline'
+                                    size='icon'
+                                    onClick={handlePauseBatch}
+                                    disabled={isBatchPauseRequested}
+                                    className='text-muted-foreground hover:text-foreground h-11 w-11'
+                                    aria-label={isBatchPauseRequested ? t('batch.pauseRequested') : t('batch.pause')}>
+                                    {isBatchPauseRequested ? (
+                                        <Loader2 className='h-4 w-4 animate-spin' />
+                                    ) : (
+                                        <Pause className='h-4 w-4' />
+                                    )}
+                                </Button>
+                            )}
                             <Button
                                 type='button'
                                 variant='outline'
@@ -2498,6 +2658,11 @@ export default function HomePage() {
                                 </Button>
                             )}
                         </div>
+                        {mobilePrimaryDisabledReason && (
+                            <p className='text-muted-foreground mx-auto mt-2 max-w-screen-sm text-center text-xs leading-4'>
+                                {mobilePrimaryDisabledReason}
+                            </p>
+                        )}
                     </div>
                 </>
             ) : null}
