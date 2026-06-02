@@ -58,7 +58,7 @@ function ReadonlyField({ label, children }: { label: string; children: React.Rea
     return (
         <div className='space-y-1'>
             <p className='text-muted-foreground'>{label}</p>
-            <div className='border-border bg-background/68 flex h-9 items-center rounded-md border px-3 font-medium'>
+            <div className='border-border bg-background/68 flex h-8 items-center rounded-md border px-3 font-medium'>
                 {children}
             </div>
         </div>
@@ -70,7 +70,7 @@ export function WorkbenchEasySummary({ model, streamMode, outputFormat, size }: 
     const resolution = formatResolution(size, model, locale);
 
     return (
-        <div className='grid grid-cols-4 gap-3 px-4 py-3 text-xs'>
+        <div className='grid grid-cols-4 gap-3 text-xs'>
             <ReadonlyField label={t('form.model')}>{model}</ReadonlyField>
             <ReadonlyField label={t('ux.streaming')}>{getStreamModeLabel(streamMode, t)}</ReadonlyField>
             <ReadonlyField label={t('form.outputFormat')}>{getOutputFormatLabel(outputFormat)}</ReadonlyField>
@@ -92,14 +92,14 @@ function OutputPanel({
     t: Translation;
 }) {
     return (
-        <TabsContent value='output' className='mt-0 grid grid-cols-4 gap-3'>
+        <TabsContent value='output' className='mt-0 grid grid-cols-4 gap-3 text-xs'>
             <div className='space-y-1'>
                 <p className='text-muted-foreground'>{t('form.outputFormat')}</p>
                 <Select
                     value={outputFormat}
                     onValueChange={(value) => onOutputFormatChange(value as OutputFormat)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-output-format-select' className='h-9 w-full'>
+                    <SelectTrigger id='pro-output-format-select' className='h-8 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -117,7 +117,7 @@ function OutputPanel({
                     value={quality}
                     onValueChange={(value) => onQualityChange(value as Quality)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-quality-select' className='h-9 w-full'>
+                    <SelectTrigger id='pro-quality-select' className='h-8 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -143,14 +143,14 @@ function ModelPanel({
     t
 }: Pick<ProPanelProps, 'model' | 'onModelChange' | 'disabled'> & { resolution: string; t: Translation }) {
     return (
-        <TabsContent value='model' className='mt-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3'>
+        <TabsContent value='model' className='mt-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 text-xs'>
             <div className='space-y-1'>
                 <p className='text-muted-foreground'>{t('form.model')}</p>
                 <Select
                     value={model}
                     onValueChange={(value) => onModelChange(value as GptImageModel)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-model-select' className='h-9 w-full'>
+                    <SelectTrigger id='pro-model-select' className='h-8 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -178,14 +178,14 @@ function StreamPanel({
     t: Translation;
 }) {
     return (
-        <TabsContent value='stream' className='mt-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3'>
+        <TabsContent value='stream' className='mt-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 text-xs'>
             <div className='space-y-1'>
                 <p className='text-muted-foreground'>{t('streaming.mode')}</p>
                 <Select
                     value={streamMode}
                     onValueChange={(value) => onStreamModeChange(value as ImageStreamMode)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-stream-mode-select' className='h-9 w-full'>
+                    <SelectTrigger id='pro-stream-mode-select' className='h-8 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -212,17 +212,17 @@ export function WorkbenchProPanel({
 
     return (
         <Tabs defaultValue={defaultTab} className='gap-0'>
-            <TabsList className='border-border bg-muted/35 grid h-10 w-full grid-cols-4 rounded-none border-b p-0'>
-                <TabsTrigger value='output' className='rounded-none'>
+            <TabsList className='border-border bg-background/45 mb-3 grid h-9 w-full grid-cols-4 rounded-md border p-0'>
+                <TabsTrigger value='output' className='rounded-md'>
                     {t('ux.output')}
                 </TabsTrigger>
-                <TabsTrigger value='model' className='rounded-none'>
+                <TabsTrigger value='model' className='rounded-md'>
                     {t('ux.modelRoute')}
                 </TabsTrigger>
-                <TabsTrigger value='stream' className='rounded-none'>
+                <TabsTrigger value='stream' className='rounded-md'>
                     {t('ux.streaming')}
                 </TabsTrigger>
-                <TabsTrigger value='route' className='rounded-none'>
+                <TabsTrigger value='route' className='rounded-md'>
                     {t('ux.route')}
                 </TabsTrigger>
             </TabsList>

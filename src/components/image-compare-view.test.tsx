@@ -35,5 +35,7 @@ describe('ImageCompareView', () => {
         assert.match(html, /当前图/);
         assert.match(html, /first\.png/);
         assert.match(html, /second\.png/);
+        assert.match(html, /grid-cols-1/);
+        assert.match(html, /sm:grid-cols-2/);
     });
 });

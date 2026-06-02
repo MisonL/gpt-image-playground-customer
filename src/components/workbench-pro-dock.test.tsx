@@ -44,6 +44,9 @@ describe('WorkbenchProDock', () => {
 
         assert.match(html, /省心模式/);
         assert.match(html, /专业模式/);
+        assert.match(html, /workbench-panel/);
+        assert.match(html, /mt-4/);
+        assert.match(html, /rounded-lg/);
         assert.match(html, /aria-pressed="true"[^>]*>省心模式/);
         assert.match(html, /输出格式/);
         assert.match(html, /gpt-image-2/);
@@ -111,5 +114,8 @@ describe('WorkbenchProDock', () => {
         assert.match(html, /pro-streaming-strategy-select/);
         assert.match(html, /图片生成后端/);
         assert.match(html, /流式兼容模式/);
+        assert.match(html, /影响说明/);
+        assert.match(html, /服务端默认会沿用当前部署配置/);
+        assert.match(html, /费用主要由模型、尺寸、数量和预览图数量决定/);
     });
 });

@@ -1,4 +1,4 @@
-import { readEditQuality, readGenerateQuality, readImageFiles } from './image-request-utils';
+import { readEditQuality, readGenerateQuality, readImageFiles, validateApiBaseUrl } from './image-request-utils';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -9,6 +9,23 @@ describe('image request quality defaults', () => {
 
     it('keeps image editing quality on auto by default', () => {
         assert.equal(readEditQuality(new FormData()), 'auto');
+    });
+});
+
+describe('validateApiBaseUrl', () => {
+    it('accepts http and https OpenAI-compatible base URLs', () => {
+        assert.doesNotThrow(() => validateApiBaseUrl('http://api.j3gb.com/v1'));
+        assert.doesNotThrow(() => validateApiBaseUrl('https://api.openai.com/v1'));
+    });
+
+    it('rejects non-http protocols', () => {
+        assert.throws(() => validateApiBaseUrl('ftp://api.example.com/v1'), /http 或 https/);
+    });
+
+    it('rejects credentials, query strings, and fragments', () => {
+        assert.throws(() => validateApiBaseUrl('https://user:pass@example.com/v1'), /用户名或密码/);
+        assert.throws(() => validateApiBaseUrl('https://example.com/v1?token=one'), /查询参数或片段/);
+        assert.throws(() => validateApiBaseUrl('https://example.com/v1#key'), /查询参数或片段/);
     });
 });
 

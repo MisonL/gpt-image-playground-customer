@@ -491,7 +491,7 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.deepEqual(generateProperties.stream_mode.enum, ['auto', 'stream', 'non_stream']);
         assert.ok('partial_images' in generateProperties);
-        const editProperties = document.components.schemas.EditRequest.properties;
+        const editProperties: Record<string, unknown> = document.components.schemas.EditRequest.properties;
         assert.equal('image_backend' in editProperties, false);
         assert.equal('output_format' in editProperties, false);
         assert.equal('output_compression' in editProperties, false);

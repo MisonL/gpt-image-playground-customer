@@ -24,7 +24,7 @@ export function resolveCompareTargetIndex(imageCount: number, selectedImageIndex
 
 export function ImageCompareView({ leftImage, leftLabel, rightImage, rightLabel }: ImageCompareViewProps) {
     return (
-        <div className='grid w-full max-w-[760px] grid-cols-2 gap-2 sm:gap-3'>
+        <div className='grid w-full max-w-[760px] grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3'>
             {[
                 { image: leftImage, label: leftLabel },
                 { image: rightImage, label: rightLabel }

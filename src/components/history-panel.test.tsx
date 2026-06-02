@@ -1,5 +1,5 @@
 import { HistoryPanel, type GenerationActivityItem, type InspirationItem } from './history-panel';
-import type { HistoryMetadata } from '@/app/page';
+import type { HistoryMetadata } from '@/lib/history-metadata';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -21,6 +21,23 @@ const historyItem: HistoryMetadata = {
     output_format: 'png',
     model: 'gpt-image-2',
     size: '2048x2048'
+};
+const batchHistoryItem: HistoryMetadata = {
+    ...historyItem,
+    images: [
+        { filename: 'batch-card-1.png', clientRequestId: 'batch-request-1' },
+        { filename: 'batch-card-2.png', clientRequestId: 'batch-request-2' },
+        { filename: 'batch-card-3.png', clientRequestId: 'batch-request-3' }
+    ]
+};
+const failedHistoryItem: HistoryMetadata = {
+    ...historyItem,
+    timestamp: Date.UTC(2026, 4, 31, 12, 35),
+    images: [],
+    status: 'failed',
+    failureMessage: '上游或 API 中转站异常。请稍后重试。',
+    durationMs: 2200,
+    prompt: '雨后街角花店，柔和胶片感'
 };
 const inspirationItem: InspirationItem = {
     id: 1,
@@ -63,6 +80,7 @@ describe('HistoryPanel recent history actions', () => {
 
         assert.match(html, /最近生成/);
         assert.match(html, /窗边花束与复古杂志/);
+        assert.match(html, /Album/);
         assert.match(html, /收藏这条历史提示词/);
         assert.match(html, /复用这条历史记录到创作单/);
         assert.match(html, /用这条历史记录的首张图片继续编辑/);
@@ -75,11 +93,49 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /w-\[min\(76vw,280px\)\]/);
     });
 
+    it('keeps multi-image history batches collapsed by default with an expand control', () => {
+        const html = renderHistoryPanel([batchHistoryItem]);
+
+        assert.match(html, /展开批次/);
+        assert.match(html, /3 张图/);
+        assert.match(html, /aria-expanded="false"/);
+        assert.match(html, /aria-controls="history-batch-/);
+        assert.doesNotMatch(html, /batch-thumbnail-strip/);
+    });
+
+    it('shows failed recent history reasons without a fake thumbnail', () => {
+        const html = renderHistoryPanel([failedHistoryItem]);
+
+        assert.match(html, /生成失败/);
+        assert.match(html, /失败原因：/);
+        assert.match(html, /上游或 API 中转站异常。请稍后重试。/);
+        assert.match(html, /雨后街角花店，柔和胶片感/);
+        assert.doesNotMatch(html, /<img/);
+        assert.doesNotMatch(html, /新图已入册 0 张/);
+    });
+
     it('renders inspirations as a mobile horizontal snap album', () => {
         const html = renderHistoryPanel([], [inspirationItem]);
 
         assert.match(html, /snap-x snap-mandatory/);
         assert.match(html, /w-\[min\(84vw,360px\)\]/);
+    });
+
+    it('renders a non-fake pending activity timeline before the first generation', () => {
+        const html = renderHistoryPanel([], [inspirationItem]);
+
+        assert.match(html, /activity-feed/);
+        assert.match(html, /aria-label="待开始生成动态"/);
+        assert.match(html, /点击生成后，这里会记录创作过程。/);
+        assert.match(html, /准备/);
+        assert.match(html, /预览/);
+        assert.match(html, /保存/);
+        assert.match(html, /失败/);
+        assert.match(html, /等待请求开始/);
+        assert.match(html, /等待流式预览/);
+        assert.match(html, /等待保存结果/);
+        assert.match(html, /失败时显示原因/);
+        assert.doesNotMatch(html, /新图已入册/);
     });
 
     it('renders live generation activity before completed history', () => {
@@ -98,6 +154,17 @@ describe('HistoryPanel recent history actions', () => {
 
         assert.match(html, /正在生成/);
         assert.match(html, /正在把当前创作单送去生成/);
+        assert.match(html, /新图已入册/);
+    });
+
+    it('keeps generation activity visible outside the inspiration tab content', () => {
+        const html = renderHistoryPanel([historyItem], [inspirationItem]);
+        const tabContentIndex = html.indexOf('午后窗边花束，奶油色桌面，日杂胶片感');
+        const activityIndex = html.indexOf('请求、预览、保存和失败会在这里轻量更新。');
+
+        assert.ok(tabContentIndex >= 0);
+        assert.ok(activityIndex > tabContentIndex);
+        assert.match(html, /最近生成/);
         assert.match(html, /新图已入册/);
     });
 

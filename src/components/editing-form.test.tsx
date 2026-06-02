@@ -10,6 +10,7 @@ type RenderOptions = {
     outputFormat?: EditingFormData['output_format'];
     advancedOpen?: boolean;
     advancedTab?: 'output' | 'model' | 'stream' | 'route';
+    reuseContext?: React.ComponentProps<typeof EditingForm>['reuseContext'];
 };
 
 const noop = () => {};
@@ -18,7 +19,8 @@ function renderEditingForm({
     backend,
     outputFormat = 'png',
     advancedOpen = true,
-    advancedTab = 'route'
+    advancedTab = 'route',
+    reuseContext = null
 }: RenderOptions): string {
     return renderToStaticMarkup(
         <I18nProvider>
@@ -27,6 +29,8 @@ function renderEditingForm({
                 isLoading={false}
                 currentMode='edit'
                 onModeChange={noop}
+                reuseContext={reuseContext}
+                onClearReuseContext={noop}
                 isPasswordRequiredByBackend={false}
                 clientPasswordHash={null}
                 onOpenPasswordDialog={noop}
@@ -113,6 +117,13 @@ describe('EditingForm advanced upstream controls', () => {
         assert.doesNotMatch(html, /edit-stream-mode-select/);
     });
 
+    it('translates the default backend into a user-facing route label near submit', () => {
+        const html = renderEditingForm({ backend: 'server-default', advancedOpen: false });
+
+        assert.match(html, /默认线路/);
+        assert.match(html, /预计 0\.12 积分/);
+    });
+
     it('renders edit model controls only in the professional model tab', () => {
         const html = renderEditingForm({ backend: 'server-default', advancedTab: 'model' });
 
@@ -133,6 +144,9 @@ describe('EditingForm advanced upstream controls', () => {
         const html = renderEditingForm({ backend: 'responses-image-generation' });
 
         assert.match(html, /图片生成后端/);
+        assert.match(html, /影响说明/);
+        assert.match(html, /Responses image_generation 需要实验开关和顶层模型/);
+        assert.match(html, /自动或服务端默认会优先使用当前推荐的流式策略/);
         assert.match(html, /GPT 顶层模型/);
         assert.match(html, /思考强度/);
         assert.match(html, /提示词优化/);
@@ -147,5 +161,28 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(html, /压缩：85%/);
         assert.match(html, /内容审核级别/);
         assert.doesNotMatch(html, /GPT 顶层模型/);
+    });
+});
+
+describe('EditingForm reused history context', () => {
+    it('shows which history values were carried into edit mode', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            reuseContext: {
+                sourceLabel: '最近生成：2026/6/2 12:00:00',
+                restoredFields: ['参考图', '提示词', '模型', '尺寸', '数量'],
+                promptPreview: '午后咖啡馆窗边，一束粉白花'
+            }
+        });
+
+        assert.match(html, /已带入内容/);
+        assert.match(html, /最近生成：2026\/6\/2 12:00:00/);
+        assert.match(html, /参考图/);
+        assert.match(html, /提示词/);
+        assert.match(html, /模型/);
+        assert.match(html, /尺寸/);
+        assert.match(html, /数量/);
+        assert.match(html, /午后咖啡馆窗边，一束粉白花/);
+        assert.match(html, /这些内容已经写入编辑单，可以修改后再生成。/);
     });
 });

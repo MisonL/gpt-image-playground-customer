@@ -196,8 +196,14 @@ export function validateApiBaseUrl(baseUrl: string): void {
     } catch {
         throw new RequestValidationError('API URL 格式无效。');
     }
-    if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
-        throw new RequestValidationError('API URL 必须使用 https，localhost 调试地址除外。');
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        throw new RequestValidationError('API URL 必须使用 http 或 https。');
+    }
+    if (parsed.username || parsed.password) {
+        throw new RequestValidationError('API URL 不能包含用户名或密码。');
+    }
+    if (parsed.search || parsed.hash) {
+        throw new RequestValidationError('API URL 不能包含查询参数或片段。');
     }
 }
 

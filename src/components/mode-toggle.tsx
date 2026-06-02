@@ -14,12 +14,13 @@ type ModeToggleProps = {
 const modeItems: Array<{
     value: WorkbenchMode;
     labelKey: string;
+    descriptionKey: string;
     Icon: typeof Sparkles;
 }> = [
-    { value: 'generate', labelKey: 'mode.generate', Icon: Sparkles },
-    { value: 'edit', labelKey: 'mode.edit', Icon: Images },
-    { value: 'batch', labelKey: 'mode.batch', Icon: Layers3 },
-    { value: 'reuse', labelKey: 'mode.reuse', Icon: History }
+    { value: 'generate', labelKey: 'mode.generate', descriptionKey: 'mode.generateDescription', Icon: Sparkles },
+    { value: 'edit', labelKey: 'mode.edit', descriptionKey: 'mode.editDescription', Icon: Images },
+    { value: 'batch', labelKey: 'mode.batch', descriptionKey: 'mode.batchDescription', Icon: Layers3 },
+    { value: 'reuse', labelKey: 'mode.reuse', descriptionKey: 'mode.reuseDescription', Icon: History }
 ];
 
 export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
@@ -31,19 +32,22 @@ export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
             onValueChange={(value) => onModeChange(value as WorkbenchMode)}
             className='w-full'>
             <TabsList className='grid h-auto w-full grid-cols-4 gap-1 rounded-md border border-border bg-background/70 p-0.5'>
-                {modeItems.map(({ value, labelKey, Icon }) => (
+                {modeItems.map(({ value, labelKey, descriptionKey, Icon }) => (
                     <TabsTrigger
                         key={value}
                         value={value}
-                        className={`min-h-7 rounded-md border px-2 py-1 text-center transition-colors ${
+                        className={`min-h-10 rounded-md border px-1 py-1 text-center transition-colors 2xl:px-1.5 ${
                             currentMode === value
                                 ? 'border-primary/35 bg-primary text-primary-foreground shadow-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground'
                                 : 'border-transparent bg-muted/30 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground'
                         } `}>
-                        <span className='flex w-full items-center justify-center gap-1.5'>
+                        <span className='flex w-full items-center justify-center gap-0.5 2xl:gap-1'>
                             <Icon className='hidden h-3.5 w-3.5 shrink-0 opacity-75 2xl:block' />
                             <span className='min-w-0'>
-                                <span className='block text-sm leading-4 font-medium'>{t(labelKey)}</span>
+                                <span className='block truncate text-[13px] leading-4 font-medium 2xl:text-sm'>
+                                    {t(labelKey)}
+                                </span>
+                                <span className='sr-only'>{t(descriptionKey)}</span>
                             </span>
                         </span>
                     </TabsTrigger>
