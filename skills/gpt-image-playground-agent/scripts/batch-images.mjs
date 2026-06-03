@@ -45,6 +45,7 @@ const MAX_PARTIAL_IMAGES = 3;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const DEFAULT_BATCH_MAX_ATTEMPTS = 1;
 const DEFAULT_MAX_CONSECUTIVE_FAILURES = 0;
+const DEFAULT_BATCH_CONCURRENCY = 1;
 const GENERATE_ONLY_FIELDS = [
   'background'
 ];
@@ -110,6 +111,7 @@ let baseUrl;
 let tasks;
 let timeoutMs;
 let capabilities;
+let capabilitiesPromise;
 try {
   if (!options.input) throw new Error('--input 需要 JSONL 文件路径。');
   baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
@@ -123,6 +125,14 @@ try {
     options.maxConsecutiveFailures ?? DEFAULT_MAX_CONSECUTIVE_FAILURES,
     '--max-consecutive-failures'
   );
+  options.concurrency = readConfiguredPositiveInteger(
+    options.concurrency ?? DEFAULT_BATCH_CONCURRENCY,
+    '--concurrency',
+    DEFAULT_BATCH_CONCURRENCY
+  );
+  if (options.concurrency > 1 && options.maxConsecutiveFailures > 0) {
+    throw new Error('--concurrency 大于 1 时不能同时使用 --max-consecutive-failures；请使用 --concurrency 1 保持严格顺序熔断。');
+  }
   tasks = readJsonlTasks(options.input);
 } catch (error) {
   console.error(errorMessage(error));
@@ -150,6 +160,7 @@ if (!options.allowBillable || options.dryRun) {
         total: planned.length,
         max_attempts: options.maxAttempts,
         max_consecutive_failures: options.maxConsecutiveFailures,
+        concurrency: options.concurrency,
         tasks: planned.map((task) => {
           const routing = buildTaskRouting(task);
           return {
@@ -173,43 +184,7 @@ if (!options.allowBillable || options.dryRun) {
 
 try {
   const completed = options.resume ? readCompletedManifestKeys(manifestPath) : new Set();
-  const results = [];
-  const failedTasks = [];
-  let consecutiveFailures = 0;
-  for (const task of planned) {
-    if (completed.has(task.idempotencyKey) || completed.has(task.id)) {
-      const skipped = {
-        ok: true,
-        status: 'skipped',
-        id: task.id,
-        idempotency_key: task.idempotencyKey,
-        billable: false,
-        skipped_reason: 'resume'
-      };
-      appendManifest(manifestPath, {
-        ...baseManifestEntry(task),
-        status: 'skipped',
-        billable: false,
-        skipped_reason: 'resume'
-      });
-      results.push(skipped);
-      continue;
-    }
-    if (options.maxConsecutiveFailures > 0 && consecutiveFailures >= options.maxConsecutiveFailures) {
-      const skipped = buildCircuitBreakerSkippedTask(task, consecutiveFailures);
-      appendManifest(manifestPath, { ...baseManifestEntry(task), ...skipped });
-      results.push({ ok: true, id: task.id, idempotency_key: task.idempotencyKey, ...skipped });
-      continue;
-    }
-    const result = await runTaskWithAttempts(task);
-    results.push(result);
-    if (result.ok) {
-      consecutiveFailures = 0;
-    } else {
-      consecutiveFailures += 1;
-      failedTasks.push(buildFailedTaskSummary(result, task));
-    }
-  }
+  const { results, failedTasks } = await runPlannedTasks(planned, completed);
   const failed = results.filter((result) => !result.ok).length;
   console.log(
     JSON.stringify(
@@ -220,6 +195,7 @@ try {
         manifest: manifestPath,
         max_attempts: options.maxAttempts,
         max_consecutive_failures: options.maxConsecutiveFailures,
+        concurrency: options.concurrency,
         failure_summary: buildFailureSummary(failedTasks),
         resume_fix_list: buildResumeFixList(failedTasks),
         results
@@ -242,6 +218,7 @@ function parseArgs(argv) {
     timeoutMs: undefined,
     maxAttempts: undefined,
     maxConsecutiveFailures: undefined,
+    concurrency: undefined,
     allowBillable: false,
     dryRun: false,
     resume: false,
@@ -263,6 +240,7 @@ function parseArgs(argv) {
     else if (arg === '--max-consecutive-failures') {
       parsed.maxConsecutiveFailures = readOptionValue(argv, (index += 1), arg);
     }
+    else if (arg === '--concurrency') parsed.concurrency = readOptionValue(argv, (index += 1), arg);
     else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
     else if (!parsed.input) parsed.input = arg;
     else throw new Error(`未知位置参数：${arg}`);
@@ -568,7 +546,14 @@ async function readCapabilities() {
 }
 
 async function ensureCapabilities() {
-  capabilities ??= await readCapabilities();
+  if (capabilities) return capabilities;
+  capabilitiesPromise ??= readCapabilities();
+  try {
+    capabilities = await capabilitiesPromise;
+  } catch (error) {
+    capabilitiesPromise = undefined;
+    throw error;
+  }
   return capabilities;
 }
 
@@ -602,6 +587,69 @@ async function runTaskWithAttempts(task) {
     if (result.ok) return lastResult;
   }
   return lastResult;
+}
+
+async function runPlannedTasks(plannedTasks, completed) {
+  const results = new Array(plannedTasks.length);
+  const failedTasks = [];
+  let consecutiveFailures = 0;
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < plannedTasks.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const task = plannedTasks[index];
+
+      if (completed.has(task.idempotencyKey) || completed.has(task.id)) {
+        results[index] = handleResumeSkippedTask(task);
+        continue;
+      }
+
+      if (options.maxConsecutiveFailures > 0 && consecutiveFailures >= options.maxConsecutiveFailures) {
+        results[index] = handleCircuitBreakerSkippedTask(task, consecutiveFailures);
+        continue;
+      }
+
+      const result = await runTaskWithAttempts(task);
+      results[index] = result;
+      if (result.ok) {
+        consecutiveFailures = 0;
+      } else {
+        consecutiveFailures += 1;
+        failedTasks.push(buildFailedTaskSummary(result, task));
+      }
+    }
+  }
+
+  const workerCount = Math.min(options.concurrency, plannedTasks.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  failedTasks.sort((left, right) => left.index - right.index);
+  return { results, failedTasks };
+}
+
+function handleResumeSkippedTask(task) {
+  const skipped = {
+    ok: true,
+    status: 'skipped',
+    id: task.id,
+    idempotency_key: task.idempotencyKey,
+    billable: false,
+    skipped_reason: 'resume'
+  };
+  appendManifest(manifestPath, {
+    ...baseManifestEntry(task),
+    status: 'skipped',
+    billable: false,
+    skipped_reason: 'resume'
+  });
+  return skipped;
+}
+
+function handleCircuitBreakerSkippedTask(task, consecutiveFailures) {
+  const skipped = buildCircuitBreakerSkippedTask(task, consecutiveFailures);
+  appendManifest(manifestPath, { ...baseManifestEntry(task), ...skipped });
+  return { ok: true, id: task.id, idempotency_key: task.idempotencyKey, ...skipped };
 }
 
 function buildAttemptTask(task, attempt) {
@@ -1174,5 +1222,5 @@ function mimeTypeForPath(filePath) {
 function printUsage() {
   console.error('用法：batch-images.mjs --input tasks.jsonl [options]');
   console.error('默认只输出 dry-run；添加 --allow-billable 才会按 routing rules 逐行真实请求 Agent API 或页面 SSE。');
-  console.error('常用参数：--manifest --resume --ordered-prefix --dimension-check --max-attempts --max-consecutive-failures --timeout-ms --dry-run --allow-billable');
+  console.error('常用参数：--manifest --resume --ordered-prefix --dimension-check --max-attempts --max-consecutive-failures --concurrency --timeout-ms --dry-run --allow-billable');
 }

@@ -4,8 +4,9 @@ import {
     buildStreamingBatchJobs,
     computeStreamingConcurrency,
     computeStreamingBatchRecommendation,
-    isRuntimeStreamingBatchEnabled,
+    canUseStreamingBatchTransport,
     resolveStreamingBatchCapacity,
+    resolveStreamingBatchToggleState,
     scheduleStreamingBatch,
     shouldUseStreamingBatch
 } from './streaming-batch';
@@ -79,10 +80,11 @@ describe('computeStreamingBatchRecommendation', () => {
 });
 
 describe('shouldUseStreamingBatch', () => {
-    it('requires the feature flag so existing behavior remains the default', () => {
+    it('requires explicit user enablement so existing behavior remains sequential', () => {
         assert.equal(
             shouldUseStreamingBatch({
-                enabled: false,
+                enabled: true,
+                userEnabled: false,
                 streaming: true,
                 imageCount: 3
             }),
@@ -94,6 +96,7 @@ describe('shouldUseStreamingBatch', () => {
         assert.equal(
             shouldUseStreamingBatch({
                 enabled: true,
+                userEnabled: true,
                 streaming: true,
                 imageCount: 3
             }),
@@ -102,6 +105,7 @@ describe('shouldUseStreamingBatch', () => {
         assert.equal(
             shouldUseStreamingBatch({
                 enabled: true,
+                userEnabled: true,
                 streaming: false,
                 imageCount: 3
             }),
@@ -110,6 +114,7 @@ describe('shouldUseStreamingBatch', () => {
         assert.equal(
             shouldUseStreamingBatch({
                 enabled: true,
+                userEnabled: true,
                 streaming: true,
                 imageCount: 1
             }),
@@ -118,27 +123,105 @@ describe('shouldUseStreamingBatch', () => {
     });
 });
 
-describe('isRuntimeStreamingBatchEnabled', () => {
-    it('uses the server runtime capability instead of a build-time client flag', () => {
+describe('canUseStreamingBatchTransport', () => {
+    it('requires both a streaming request mode and a streaming strategy that is not off', () => {
         assert.equal(
-            isRuntimeStreamingBatchEnabled({
-                clientFeatureFlag: undefined,
-                serverEnabled: true
+            canUseStreamingBatchTransport({
+                streamMode: 'auto',
+                streamingStrategy: 'auto'
             }),
             true
         );
         assert.equal(
-            isRuntimeStreamingBatchEnabled({
-                clientFeatureFlag: 'true',
-                serverEnabled: false
+            canUseStreamingBatchTransport({
+                streamMode: 'non_stream',
+                streamingStrategy: 'auto'
+            }),
+            false
+        );
+        assert.equal(
+            canUseStreamingBatchTransport({
+                streamMode: 'auto',
+                streamingStrategy: 'off'
             }),
             false
         );
     });
 });
 
+describe('resolveStreamingBatchToggleState', () => {
+    it('enables the checkbox only when capacity, streaming transport, and multiple targets are present', () => {
+        assert.deepEqual(
+            resolveStreamingBatchToggleState({
+                allowStreamingBatch: true,
+                userEnabled: true,
+                targetCount: 2,
+                streamMode: 'auto',
+                streamingStrategy: 'auto'
+            }),
+            {
+                canEnable: true,
+                checked: true,
+                transportEnabled: true,
+                unavailableReasonKey: 'streaming.parallelBatchUnavailableSingle'
+            }
+        );
+    });
+
+    it('keeps the checkbox unchecked when the user has not explicitly enabled parallel batch', () => {
+        assert.deepEqual(
+            resolveStreamingBatchToggleState({
+                allowStreamingBatch: true,
+                userEnabled: false,
+                targetCount: 2,
+                streamMode: 'stream',
+                streamingStrategy: 'auto'
+            }),
+            {
+                canEnable: true,
+                checked: false,
+                transportEnabled: true,
+                unavailableReasonKey: 'streaming.parallelBatchUnavailableSingle'
+            }
+        );
+    });
+
+    it('reports the right unavailable reason for capacity, transport, and single-target limits', () => {
+        assert.equal(
+            resolveStreamingBatchToggleState({
+                allowStreamingBatch: false,
+                userEnabled: true,
+                targetCount: 2,
+                streamMode: 'auto',
+                streamingStrategy: 'auto'
+            }).unavailableReasonKey,
+            'streaming.parallelBatchUnavailableCapacity'
+        );
+        assert.equal(
+            resolveStreamingBatchToggleState({
+                allowStreamingBatch: true,
+                userEnabled: true,
+                targetCount: 2,
+                streamMode: 'non_stream',
+                streamingStrategy: 'auto'
+            }).unavailableReasonKey,
+            'streaming.parallelBatchUnavailable'
+        );
+        assert.equal(
+            resolveStreamingBatchToggleState({
+                allowStreamingBatch: true,
+                userEnabled: true,
+                targetCount: 1,
+                streamMode: 'auto',
+                streamingStrategy: 'auto'
+            }).unavailableReasonKey,
+            'streaming.parallelBatchUnavailableSingle'
+        );
+    });
+});
+
 describe('resolveStreamingBatchCapacity', () => {
-    it('keeps batch streaming disabled when the feature flag is off', () => {
+    it('keeps batch streaming disabled when runtime capacity is unavailable', () => {
         assert.deepEqual(
             resolveStreamingBatchCapacity({
                 featureEnabled: false,
