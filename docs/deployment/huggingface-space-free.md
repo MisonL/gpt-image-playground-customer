@@ -153,6 +153,8 @@ APP_PASSWORD=<page-access-code>
 AGENT_API_TOKEN=<long-random-agent-token>
 ```
 
+`OPENAI_API_BASE_URL` 和 `OPENAI_CHANNEL_N_BASE_URL` 必须是无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址，通常以 `/v1` 结尾。公网 Space 推荐使用 `https` 上游；只有内网、专用代理或已确认的兼容渠道需要 `http` 时才配置 `http`。
+
 公网部署建议至少设置访问码 `APP_PASSWORD` 和 `AGENT_API_TOKEN`。如果不设置 `APP_PASSWORD`，任何人都可以打开网页并消耗服务端 API Key。
 
 如果使用服务端渠道池，改用 `OPENAI_CHANNEL_N_*` Secrets：
