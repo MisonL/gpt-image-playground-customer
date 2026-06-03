@@ -51,8 +51,7 @@ OPENAI_CHANNEL_2_ID=backup
 OPENAI_CHANNEL_2_BASE_URL=https://your-compatible-api.example.com/v1
 OPENAI_CHANNEL_2_API_KEYS=sk-backup-a,sk-backup-b
 
-# 可选：开启并发流式批处理。默认关闭。
-ENABLE_STREAMING_BATCH=true
+# 可选：页面“并发批量”开关使用的服务端容量。
 OPENAI_MAX_STREAMS_PER_CREDENTIAL=1
 ```
 
@@ -139,7 +138,7 @@ http://localhost:4783
 ## 默认行为
 
 - 图片生成默认使用 `quality=high`。如需降低成本或让上游自行选择质量，可在页面或 Agent 请求中显式改为 `auto`、`medium` 或 `low`。
-- 页面默认使用 `stream_mode=auto`。auto 会优先尝试 SSE；如果上游流式没有最终图，会在同一响应里显式回退到非流式并暴露 `fallback_used`。`stream` 强制流式，`non_stream` 直接走非流式 JSON。并发流式批处理仍默认关闭，只有设置 `ENABLE_STREAMING_BATCH=true` 后才会把 `n>1` 拆成多个流式任务。
+- 页面默认使用 `stream_mode=auto`。auto 会优先尝试 SSE；如果上游流式没有最终图，会在同一响应里显式回退到非流式并暴露 `fallback_used`。`stream` 强制流式，`non_stream` 直接走非流式 JSON。多图流式请求默认顺序执行；用户在页面显式勾选“并发批量”后，才会把 `n>1` 拆成多个流式任务。
 - 服务端会把官方 OpenAI Images 流式事件、gaoren002/new-api 与 sub2api 图片 SSE、OtokAPI `image.generation.*`、Responses `image_generation_call` 事件统一映射为前端稳定的 `partial_image`、`completed`、`done`、`error` 事件。
 - `stream` 模式失败时会显示原始错误状态和排查建议，不会自动改用非流式请求。`auto` 模式只在可观测回退路径中降级，并通过响应字段和 runtime capabilities 暴露状态。
 
@@ -238,7 +237,7 @@ node skills/gpt-image-playground-agent/scripts/batch-images.mjs \
   --ordered-prefix product-set
 ```
 
-默认 dry-run 只解析 JSONL 和输出计划，不联网、不计费。真实执行必须加 `--allow-billable`，并可配合 `--manifest`、`--resume`、`--dimension-check`、`--max-attempts`、`--max-consecutive-failures` 和任务级 `sse_log_path` 做 append-only 续跑、PNG/JPEG/WebP 尺寸校验、失败重试、连续失败熔断和页面 SSE 原始事件留档。
+默认 dry-run 只解析 JSONL 和输出计划，不联网、不计费。真实执行必须加 `--allow-billable`，并可配合 `--manifest`、`--resume`、`--dimension-check`、`--max-attempts`、`--concurrency`、`--max-consecutive-failures` 和任务级 `sse_log_path` 做 append-only 续跑、PNG/JPEG/WebP 尺寸校验、失败重试、并发执行、连续失败熔断和页面 SSE 原始事件留档。`--max-consecutive-failures` 只能与顺序执行的 `--concurrency 1` 同用。
 
 批量 JSONL 中，`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径，其中 edit 任务传入这些高级字段时会显式选择 `/api/images` form-data SSE，因为 Agent JSON edit 不接收这些字段。`responsesModel` 必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`。PNG 搭配 `output_compression` 会在 dry-run 输出 `normalizations.output_compression_ignored_for_png=true`，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
@@ -322,7 +321,6 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | `OPENAI_CHANNEL_N_BASE_URL` | 否 | 无 | 第 N 个 OpenAI 兼容接口根地址，通常以 `/v1` 结尾。 |
 | `OPENAI_CHANNEL_N_API_KEYS` | 否 | 无 | 第 N 个渠道的一个或多个 API Key，多个 key 用英文逗号分隔。 |
 | `OPENAI_CHANNEL_N_FAILURE_COOLDOWN_MS` | 否 | 继承全局值 | 第 N 个渠道的失败冷却时间。 |
-| `ENABLE_STREAMING_BATCH` | 否 | `false` | 显式设为 `true` 后，流式模式下 `n>1` 会拆成多个 `n=1` 任务并发执行。 |
 | `IMAGE_GENERATION_BACKEND` | 否 | `images-api` | 服务端默认图片后端，可选 `images-api` 或 `responses-image-generation`。请求字段可覆盖。 |
 | `IMAGE_STREAMING_STRATEGY` | 否 | `auto` | 服务端默认流式兼容策略，可选 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。请求字段可覆盖。 |
 | `ENABLE_RESPONSES_IMAGE_BACKEND` | 否 | `false` | 实验开关。显式设为 `true` 后，`image_backend=responses-image-generation` 或兼容别名 `imageBackend=responses` 请求才可调用 Responses API image generation。 |
@@ -366,7 +364,7 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | `OPENAI_CHANNEL_N_API_KEYS` | 当前渠道下的一个或多个 API Key，多个 key 用英文逗号分隔。 |
 | `OPENAI_CHANNEL_N_FAILURE_COOLDOWN_MS` | 可选，覆盖单个渠道的失败冷却窗口。 |
 
-并发流式批处理默认关闭。开启 `ENABLE_STREAMING_BATCH=true` 后，页面允许在流式模式下选择多张图片；应用会把批次拆成多个独立 `n=1` 流式请求。推荐并发窗口由服务端运行时能力接口返回：默认 `sticky` 路由按单个 credential 容量计算，`round_robin` / `random` 路由按完整 credential 池计算。
+并发流式批处理默认不自动启用。页面允许在流式模式下选择多张图片；用户显式勾选“并发批量”后，应用会把批次拆成多个独立 `n=1` 流式请求。推荐并发窗口由服务端运行时能力接口返回：默认 `sticky` 路由按单个 credential 容量计算，`round_robin` / `random` 路由按完整 credential 池计算。
 
 `OPENAI_MAX_STREAMS_PER_CREDENTIAL` 默认是 `1`，建议只在真实上游探针验证单 key 可承受更高并发后再调大。
 
