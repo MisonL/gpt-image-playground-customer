@@ -124,11 +124,13 @@ http://localhost:4783
 - `gpt-image-2` 图片编辑：上传源图后用提示词修改图片，可选遮罩。
 - Agent API：为 Codex、Claude Code、Gemini 等 Agent 提供强契约接口、幂等重试、结构化错误和产物追踪。
 - 内置遮罩工具：直接在图片上绘制遮罩，也可以上传 PNG 遮罩。
+- `图像手记` 工作台：提供文生图、图生图、批量和复用历史四种入口，中央预览、右侧灵感相册和最近生成围绕连续创作流程组织。
 - 完整参数控制：模型、尺寸、质量、输出格式、压缩、背景、审核级别、生成数量。
 - 4K 与自定义尺寸：支持 2K/4K 预设和手动输入宽高，并在前端校验尺寸约束。
 - 流式输出：用户显式开启后支持生成和编辑过程中的局部图片预览。
+- 显式并发批量：用户手动启用后，多图或多提示词任务会按当前渠道容量拆成独立流式任务并发执行；未启用时，普通多图保持单次 `n>1` 请求，批量提示词保持逐条顺序执行。
 - 历史记录：保留提示词、参数、图片、耗时、token 使用量和估算费用。
-- 发送到编辑：从生成结果或历史记录直接进入编辑模式。
+- 连续工作流：从生成结果或历史记录继续编辑、做变体、复用提示词、对比、下载、分享或保存为灵感。
 - 下载与分享：单图结果可直接下载，分享链接支持访问码和有效期。
 - 页面访问保护：可通过 `APP_PASSWORD` 给网页和受保护图片访问加访问码。
 - Agent 状态后端：支持 `memory`、`sqlite`、`postgres`，覆盖临时演示、单实例和集中状态库场景。
@@ -138,7 +140,8 @@ http://localhost:4783
 ## 默认行为
 
 - 图片生成默认使用 `quality=high`。如需降低成本或让上游自行选择质量，可在页面或 Agent 请求中显式改为 `auto`、`medium` 或 `low`。
-- 页面默认使用 `stream_mode=auto`。auto 会优先尝试 SSE；如果上游流式没有最终图，会在同一响应里显式回退到非流式并暴露 `fallback_used`。`stream` 强制流式，`non_stream` 直接走非流式 JSON。多图流式请求默认顺序执行；用户在页面显式勾选“并发批量”后，才会把 `n>1` 拆成多个流式任务。
+- 页面默认使用 `stream_mode=auto`。auto 会优先尝试 SSE；如果上游流式没有最终图，会在同一响应里显式回退到非流式并暴露 `fallback_used`。`stream` 强制流式，`non_stream` 直接走非流式 JSON。普通多图请求默认保持单次 `n>1` 上游请求；批量提示词默认按 `concurrency=1` 逐条执行。用户在页面显式勾选“并发批量”后，才会把多图或多提示词批次拆成多个 `n=1` 流式任务。
+- 批量模式下，每行提示词会形成一条独立任务，统一使用当前尺寸、质量、格式、模型和路由设置；底部提示词动作、批次历史、失败项复用和暂停状态都以当前可见批量提示词为准。
 - 服务端会把官方 OpenAI Images 流式事件、gaoren002/new-api 与 sub2api 图片 SSE、OtokAPI `image.generation.*`、Responses `image_generation_call` 事件统一映射为前端稳定的 `partial_image`、`completed`、`done`、`error` 事件。
 - `stream` 模式失败时会显示原始错误状态和排查建议，不会自动改用非流式请求。`auto` 模式只在可观测回退路径中降级，并通过响应字段和 runtime capabilities 暴露状态。
 
@@ -181,16 +184,17 @@ http://localhost:4783
 | 配置 | 说明 |
 | --- | --- |
 | API Key | OpenAI 或兼容接口的密钥。 |
-| API URL | OpenAI 兼容接口根地址，通常以 `/v1` 结尾。 |
+| API URL | OpenAI 兼容接口根地址，通常以 `/v1` 结尾；支持无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址。 |
 
 常见填写方式：
 
 ```text
 https://api.openai.com/v1
 https://your-compatible-api.example.com/v1
+http://your-internal-compatible-api.example.com/v1
 ```
 
-不要填写管理后台首页或网页地址。如果接口返回 HTML，应用会提示 API URL 不是 OpenAI Images JSON 响应。
+自定义 API URL 必须同时填写自定义 API Key，避免服务器密钥被发送到未知接口。不要填写管理后台首页或网页地址。如果接口返回 HTML，应用会提示 API URL 不是 OpenAI Images JSON 响应。
 
 ## Agent API
 
@@ -238,6 +242,21 @@ node skills/gpt-image-playground-agent/scripts/batch-images.mjs \
 ```
 
 默认 dry-run 只解析 JSONL 和输出计划，不联网、不计费。真实执行必须加 `--allow-billable`，并可配合 `--manifest`、`--resume`、`--dimension-check`、`--max-attempts`、`--concurrency`、`--max-consecutive-failures` 和任务级 `sse_log_path` 做 append-only 续跑、PNG/JPEG/WebP 尺寸校验、失败重试、并发执行、连续失败熔断和页面 SSE 原始事件留档。`--max-consecutive-failures` 只能与顺序执行的 `--concurrency 1` 同用。
+
+并发脚本示例：
+
+```bash
+node skills/gpt-image-playground-agent/scripts/batch-images.mjs \
+  --allow-billable \
+  --input tasks.jsonl \
+  --manifest runs/product-set.manifest.jsonl \
+  --resume \
+  --dimension-check \
+  --max-attempts 2 \
+  --concurrency 3
+```
+
+`--concurrency` 默认是 `1`。大于 `1` 时会并发执行任务并按输入顺序输出结果；连续失败熔断需要严格顺序语义，因此只能与 `--concurrency 1` 同用。
 
 批量 JSONL 中，`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径，其中 edit 任务传入这些高级字段时会显式选择 `/api/images` form-data SSE，因为 Agent JSON edit 不接收这些字段。`responsesModel` 必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`。PNG 搭配 `output_compression` 会在 dry-run 输出 `normalizations.output_compression_ignored_for_png=true`，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
@@ -315,10 +334,10 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | 变量 | 是否必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | 条件必填 | 无 | 服务端默认 API Key。也可以在页面 `API 设置` 中填写。 |
-| `OPENAI_API_BASE_URL` | 否 | OpenAI 官方地址 | OpenAI 兼容接口根地址。 |
+| `OPENAI_API_BASE_URL` | 否 | OpenAI 官方地址 | OpenAI 兼容接口根地址；支持无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址。 |
 | `OPENAI_ROUTING_STRATEGY` | 否 | `sticky` | 服务端多渠道路由策略，可选 `sticky`、`round_robin`、`random`。 |
 | `OPENAI_CHANNEL_N_ID` | 否 | 无 | 第 N 个服务端渠道标识，只用于日志排查。 |
-| `OPENAI_CHANNEL_N_BASE_URL` | 否 | 无 | 第 N 个 OpenAI 兼容接口根地址，通常以 `/v1` 结尾。 |
+| `OPENAI_CHANNEL_N_BASE_URL` | 否 | 无 | 第 N 个 OpenAI 兼容接口根地址，通常以 `/v1` 结尾；支持无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址。 |
 | `OPENAI_CHANNEL_N_API_KEYS` | 否 | 无 | 第 N 个渠道的一个或多个 API Key，多个 key 用英文逗号分隔。 |
 | `OPENAI_CHANNEL_N_FAILURE_COOLDOWN_MS` | 否 | 继承全局值 | 第 N 个渠道的失败冷却时间。 |
 | `IMAGE_GENERATION_BACKEND` | 否 | `images-api` | 服务端默认图片后端，可选 `images-api` 或 `responses-image-generation`。请求字段可覆盖。 |
@@ -360,11 +379,11 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | --- | --- |
 | `OPENAI_ROUTING_STRATEGY` | 可选 `sticky`、`round_robin`、`random`。不填默认 `sticky`。 |
 | `OPENAI_CHANNEL_N_ID` | 渠道标识，只用于日志与排查，不会暴露 API Key。 |
-| `OPENAI_CHANNEL_N_BASE_URL` | 兼容接口根地址，通常以 `/v1` 结尾。 |
+| `OPENAI_CHANNEL_N_BASE_URL` | 兼容接口根地址，通常以 `/v1` 结尾；支持无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址。 |
 | `OPENAI_CHANNEL_N_API_KEYS` | 当前渠道下的一个或多个 API Key，多个 key 用英文逗号分隔。 |
 | `OPENAI_CHANNEL_N_FAILURE_COOLDOWN_MS` | 可选，覆盖单个渠道的失败冷却窗口。 |
 
-并发流式批处理默认不自动启用。页面允许在流式模式下选择多张图片；用户显式勾选“并发批量”后，应用会把批次拆成多个独立 `n=1` 流式请求。推荐并发窗口由服务端运行时能力接口返回：默认 `sticky` 路由按单个 credential 容量计算，`round_robin` / `random` 路由按完整 credential 池计算。
+并发流式批处理默认不自动启用。页面允许在流式模式下选择多张图片或进入批量提示词模式；用户显式勾选“并发批量”后，应用会把批次拆成多个独立 `n=1` 流式请求。省心模式会显示当前并发状态摘要，专业模式的流式分组提供开关和不可用原因。推荐并发窗口由服务端运行时能力接口返回：默认 `sticky` 路由按单个 credential 容量计算，`round_robin` / `random` 路由按完整 credential 池计算。
 
 `OPENAI_MAX_STREAMS_PER_CREDENTIAL` 默认是 `1`，建议只在真实上游探针验证单 key 可承受更高并发后再调大。
 
@@ -636,7 +655,7 @@ dry-run 输出中的 `independent_targets` 会汇总必跑、已选、未选、�
 
 ### API 返回 HTML 页面
 
-说明 API URL 填成了网页或管理后台地址。请填写 OpenAI 兼容接口根地址，通常以 `/v1` 结尾。
+说明 API URL 填成了网页或管理后台地址。请填写 OpenAI 兼容接口根地址，通常以 `/v1` 结尾；地址必须是无凭据、无查询参数和无片段的 `http` 或 `https` 绝对 URL。
 
 ### 生成接口提示需要 API Key
 

@@ -81,13 +81,21 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--ordered-prefix`：未显式提供 `idempotency_key` 时构造稳定有序 key 的前缀，默认 `batch`。
 - `--dimension-check`：读取响应 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`。
 - `--max-attempts`：失败任务最大尝试次数。第二次及后续尝试会追加新的 attempt 级 `Idempotency-Key`，避免复用终态失败 key。
-- `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会并发执行任务并按输入顺序输出结果。
+- `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会并发执行任务并按输入顺序输出结果；适合已确认渠道容量的批量生产。
 - `--max-consecutive-failures`：顺序执行下的连续失败熔断阈值，默认 `0` 表示不熔断。只能与 `--concurrency 1` 同用。
 - `--timeout-ms`
 - `--dry-run`
 - `--allow-billable`
 
 批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径；edit 任务使用这些高级字段会显式走 `/api/images`，因为 Agent JSON edit 不接收这些字段。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
+
+并发批量示例：
+
+```text
+node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check --max-attempts 2 --concurrency 3
+```
+
+连续失败熔断需要严格顺序语义，不能与并发窗口大于 `1` 的批量执行同时使用。
 
 上游探针脚本参数：
 
@@ -100,7 +108,7 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--timeout-ms`
 - `--allow-billable`
 
-上游探针读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL` 作为上游地址，读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY` 作为上游鉴权。输出不会包含 key，也不会输出完整 base64。
+上游探针读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL` 作为上游地址，读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY` 作为上游鉴权。base URL 必须是无凭据、无查询参数和无片段的 `http`/`https` 绝对 URL。输出不会包含 key，也不会输出完整 base64。
 
 ## 能力查询
 
