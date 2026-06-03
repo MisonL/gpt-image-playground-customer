@@ -397,12 +397,12 @@ function HistoryPanelImpl({
                     <TabsList className='border-border grid h-auto w-full grid-cols-2 rounded-none border-0 border-b bg-transparent p-0'>
                         <TabsTrigger
                             value='inspiration'
-                            className='data-[state=active]:border-primary data-[state=active]:text-primary min-h-8 rounded-none border-0 border-b-2 border-transparent bg-transparent px-1 shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none'>
+                            className='data-[state=active]:border-primary data-[state=active]:text-primary min-h-11 rounded-none border-0 border-b-2 border-transparent bg-transparent px-1 shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none lg:min-h-8'>
                             {t('history.inspirationAlbum')}
                         </TabsTrigger>
                         <TabsTrigger
                             value='history'
-                            className='data-[state=active]:border-primary data-[state=active]:text-primary min-h-8 rounded-none border-0 border-b-2 border-transparent bg-transparent px-1 shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none'>
+                            className='data-[state=active]:border-primary data-[state=active]:text-primary min-h-11 rounded-none border-0 border-b-2 border-transparent bg-transparent px-1 shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none lg:min-h-8'>
                             {t('history.recentGenerated')}
                         </TabsTrigger>
                     </TabsList>
@@ -471,19 +471,17 @@ function HistoryPanelImpl({
                                                         </div>
                                                     </div>
                                                     <div className='flex shrink-0 gap-0.5 opacity-65 transition-opacity group-hover:opacity-100'>
-                                                        <Button
-                                                            type='button'
-                                                            variant='ghost'
-                                                            size='icon'
-                                                            className='text-primary h-7 w-7'
-                                                            aria-label={t('history.favorite')}>
+                                                        <span
+                                                            className='text-primary flex h-11 w-11 items-center justify-center rounded-md lg:h-7 lg:w-7'
+                                                            aria-label={t('history.savedInspiration')}
+                                                            role='img'>
                                                             <Bookmark className='h-3.5 w-3.5 fill-current' />
-                                                        </Button>
+                                                        </span>
                                                         <Button
                                                             type='button'
                                                             variant='ghost'
                                                             size='icon'
-                                                            className='text-muted-foreground hover:text-destructive h-7 w-7'
+                                                            className='text-muted-foreground hover:text-destructive h-11 w-11 lg:h-7 lg:w-7'
                                                             onClick={() => onDeleteInspiration(item.id)}
                                                             aria-label={t('history.deleteInspiration')}>
                                                             <Trash2 className='h-3.5 w-3.5' />
@@ -505,7 +503,7 @@ function HistoryPanelImpl({
                                                         type='button'
                                                         size='sm'
                                                         variant='ghost'
-                                                        className='h-7 px-2 text-xs'
+                                                        className='min-h-11 px-3 text-xs lg:min-h-7 lg:px-2'
                                                         onClick={() =>
                                                             onApplyPrompt(item.prompt, { type: 'inspiration', title })
                                                         }>
@@ -521,7 +519,8 @@ function HistoryPanelImpl({
                         <div className='flex items-center justify-between rounded-md px-1 text-sm'>
                             <button
                                 type='button'
-                                className='text-muted-foreground hover:text-primary inline-flex items-center gap-1.5'
+                                className='text-muted-foreground hover:text-primary focus-visible:ring-ring -ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 transition-[color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:outline-none lg:ml-0 lg:min-h-8 lg:px-0'
+                                disabled={!inspirations[0]}
                                 onClick={() =>
                                     inspirations[0] &&
                                     onApplyPrompt(inspirations[0].prompt, {
@@ -530,11 +529,11 @@ function HistoryPanelImpl({
                                     })
                                 }>
                                 <Plus className='h-4 w-4' />
-                                {t('history.newInspirationTemplate')}
+                                {t('history.applyFirstTemplate')}
                             </button>
-                            <button type='button' className='text-muted-foreground hover:text-foreground'>
-                                {t('history.manage')}
-                            </button>
+                            <span className='text-muted-foreground -mr-2 min-h-11 rounded-md px-2 py-3 lg:mr-0 lg:min-h-8 lg:py-1.5'>
+                                {t('history.inspirationCount', { count: inspirations.length })}
+                            </span>
                         </div>
                     </div>
                 ) : history.length === 0 ? (
@@ -931,7 +930,7 @@ function HistoryPanelImpl({
                                                 type='button'
                                                 variant='outline'
                                                 size='sm'
-                                                className='h-7 min-w-0 px-1 text-[11px]'
+                                                className='min-h-11 min-w-0 px-2 text-[11px] lg:h-7 lg:min-h-0 lg:px-1'
                                                 disabled={!hasPrompt}
                                                 onClick={() => onSaveInspiration(item.prompt)}
                                                 aria-label={t('history.saveHistoryPrompt')}>
@@ -942,7 +941,7 @@ function HistoryPanelImpl({
                                                 type='button'
                                                 variant='outline'
                                                 size='sm'
-                                                className='h-7 min-w-0 px-1 text-[11px]'
+                                                className='min-h-11 min-w-0 px-2 text-[11px] lg:h-7 lg:min-h-0 lg:px-1'
                                                 disabled={!hasPrompt}
                                                 onClick={() => onApplyPrompt(item.prompt, { type: 'history', item })}
                                                 aria-label={t('history.reuseHistoryPrompt')}>
@@ -953,7 +952,7 @@ function HistoryPanelImpl({
                                                 type='button'
                                                 variant='outline'
                                                 size='sm'
-                                                className='h-7 min-w-0 px-1 text-[11px]'
+                                                className='min-h-11 min-w-0 px-2 text-[11px] lg:h-7 lg:min-h-0 lg:px-1'
                                                 disabled={!firstImage || isFailedItem}
                                                 onClick={() => onSendHistoryToEdit(item)}
                                                 aria-label={t('history.continueHistoryEdit')}>
@@ -967,7 +966,7 @@ function HistoryPanelImpl({
                                                     type='button'
                                                     variant='ghost'
                                                     size='sm'
-                                                    className='text-muted-foreground hover:text-foreground h-7 w-full justify-between px-2 text-[11px]'
+                                                    className='text-muted-foreground hover:text-foreground min-h-11 w-full justify-between px-2 text-[11px] lg:h-7 lg:min-h-0'
                                                     aria-expanded={isBatchExpanded}
                                                     aria-controls={`history-batch-${item.timestamp}`}
                                                     onClick={() =>

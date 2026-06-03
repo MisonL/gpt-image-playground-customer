@@ -8,6 +8,7 @@ type WorkbenchStatusStripProps = {
     model: string;
     channelLabel: string;
     streamStatus: string;
+    parallelBatchEnabled?: boolean;
     costLabel: string;
     className?: string;
 };
@@ -16,6 +17,7 @@ export function WorkbenchStatusStrip({
     model,
     channelLabel,
     streamStatus,
+    parallelBatchEnabled = false,
     costLabel,
     className
 }: WorkbenchStatusStripProps) {
@@ -36,6 +38,11 @@ export function WorkbenchStatusStrip({
             <span className='inline-flex min-h-6 items-center rounded-full border border-[oklch(0.78_0.055_205)] bg-[oklch(0.94_0.028_205)] px-2 py-0.5 text-[oklch(0.38_0.065_218)] sm:min-h-7 sm:px-2.5 sm:py-1'>
                 {streamStatus}
             </span>
+            {parallelBatchEnabled && (
+                <span className='inline-flex min-h-6 items-center rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-0.5 text-[oklch(0.38_0.075_148)] sm:min-h-7 sm:px-2.5 sm:py-1'>
+                    {t('streaming.parallelBatchEnabled')}
+                </span>
+            )}
             <span className='inline-flex min-h-6 items-center rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-primary sm:min-h-7 sm:px-2.5 sm:py-1'>
                 {costLabel}
             </span>

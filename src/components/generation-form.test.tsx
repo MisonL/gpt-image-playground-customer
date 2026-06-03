@@ -1,5 +1,6 @@
 import { GenerationForm } from './generation-form';
 import { I18nProvider } from '@/lib/i18n';
+import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
@@ -16,6 +17,10 @@ function renderGenerationForm(
         isBatchPauseRequested?: boolean;
         defaultAdvancedOpen?: boolean;
         omitPauseHandler?: boolean;
+        allowStreamingBatch?: boolean;
+        enableParallelBatch?: boolean;
+        streamingStrategy?: React.ComponentProps<typeof GenerationForm>['streamingStrategy'];
+        defaultStreamingStrategy?: ImageStreamingStrategy;
     } = {}
 ) {
     return renderToStaticMarkup(
@@ -61,12 +66,15 @@ function renderGenerationForm(
                 setModeration={noop}
                 streamMode='auto'
                 setStreamMode={noop}
-                allowStreamingBatch={false}
+                allowStreamingBatch={options.allowStreamingBatch ?? false}
+                enableParallelBatch={options.enableParallelBatch ?? false}
+                setEnableParallelBatch={noop}
                 partialImages={1}
                 setPartialImages={noop}
                 imageBackend='server-default'
                 setImageBackend={noop}
-                streamingStrategy='server-default'
+                streamingStrategy={options.streamingStrategy ?? 'server-default'}
+                defaultStreamingStrategy={options.defaultStreamingStrategy ?? 'auto'}
                 setStreamingStrategy={noop}
                 responsesModel=''
                 setResponsesModel={noop}
@@ -76,6 +84,7 @@ function renderGenerationForm(
                 setPromptOptimization={noop}
                 forceWeb={false}
                 setForceWeb={noop}
+                estimatedCostLabel='预计 0.12 积分'
                 defaultAdvancedOpen={options.defaultAdvancedOpen}
                 defaultAdvancedTab={options.defaultAdvancedTab}
             />
@@ -214,6 +223,67 @@ describe('GenerationForm batch mode', () => {
         });
 
         assert.match(html, /暂停中/);
+        assert.match(html, /disabled=""/);
+    });
+
+    it('renders an explicit parallel batch toggle in stream settings', () => {
+        const html = renderGenerationForm({
+            currentMode: 'batch',
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'stream',
+            allowStreamingBatch: true,
+            enableParallelBatch: true
+        });
+
+        assert.match(html, /并发批量/);
+        assert.match(html, /多张图或多条提示词会按当前渠道容量并发执行/);
+        assert.match(html, /id="parallel-batch-enabled"/);
+        assert.match(html, /aria-checked="true"/);
+    });
+
+    it('keeps the parallel batch toggle disabled for a single image request', () => {
+        const html = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'stream',
+            allowStreamingBatch: true,
+            enableParallelBatch: true
+        });
+
+        assert.match(html, /选择至少 2 张图片或 2 条提示词后可启用并发/);
+        assert.match(html, /id="parallel-batch-enabled"/);
+        assert.match(html, /aria-checked="false"/);
+        assert.match(html, /disabled=""/);
+    });
+
+    it('keeps the parallel batch toggle disabled when streaming strategy is off', () => {
+        const html = renderGenerationForm({
+            currentMode: 'batch',
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'stream',
+            allowStreamingBatch: true,
+            enableParallelBatch: true,
+            streamingStrategy: 'off'
+        });
+
+        assert.match(html, /并发批量需要流式模式；非流式会保持顺序执行。/);
+        assert.match(html, /id="parallel-batch-enabled"/);
+        assert.match(html, /aria-checked="false"/);
+        assert.match(html, /disabled=""/);
+    });
+
+    it('keeps the parallel batch toggle disabled when the server default streaming strategy is off', () => {
+        const html = renderGenerationForm({
+            currentMode: 'batch',
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'stream',
+            allowStreamingBatch: true,
+            enableParallelBatch: true,
+            defaultStreamingStrategy: 'off'
+        });
+
+        assert.match(html, /并发批量需要流式模式；非流式会保持顺序执行。/);
+        assert.match(html, /id="parallel-batch-enabled"/);
+        assert.match(html, /aria-checked="false"/);
         assert.match(html, /disabled=""/);
     });
 });

@@ -80,7 +80,10 @@ export function WorkbenchProRoutePanel({
                     value={imageBackend}
                     onValueChange={(value) => onImageBackendChange(value as ImageUpstreamFormBackend)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-image-backend-select' className='h-9 w-full'>
+                    <SelectTrigger
+                        id='pro-image-backend-select'
+                        aria-label={t('upstream.backend')}
+                        className='h-9 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -98,7 +101,10 @@ export function WorkbenchProRoutePanel({
                     value={streamingStrategy}
                     onValueChange={(value) => onStreamingStrategyChange(value as ImageUpstreamFormStreamingStrategy)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-streaming-strategy-select' className='h-9 w-full'>
+                    <SelectTrigger
+                        id='pro-streaming-strategy-select'
+                        aria-label={t('upstream.streamingStrategy')}
+                        className='h-9 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

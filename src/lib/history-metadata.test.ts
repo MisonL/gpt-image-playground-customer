@@ -24,9 +24,10 @@ const fallbackGenerationForm: GenerationFormData = {
     image_backend: 'server-default',
     streaming_strategy: 'server-default',
     responsesModel: '',
-    thinking: 'auto',
-    promptOptimization: 'auto',
-    forceWeb: false
+    thinking: 'server-default',
+    promptOptimization: 'server-default',
+    forceWeb: false,
+    enableParallelBatch: false
 };
 
 function historyWithSize(size: string): HistoryMetadata {
@@ -57,11 +58,18 @@ describe('buildCompletedHistoryEntry', () => {
             output_compression: 82,
             background: 'opaque',
             moderation: 'low',
-            model: 'gpt-image-1.5'
+            model: 'gpt-image-1.5',
+            image_backend: 'responses-image-generation',
+            streaming_strategy: 'responses-sse',
+            responsesModel: 'gpt-5.4',
+            thinking: 'high',
+            promptOptimization: 'on',
+            forceWeb: true,
+            enableParallelBatch: true
         };
 
         const entry = buildCompletedHistoryEntry({
-            images: [{ filename: 'variant.webp', clientRequestId: 'request-1' }],
+            images: [{ filename: 'variant.webp', output_format: 'webp', clientRequestId: 'request-1' }],
             usage: {
                 input_tokens_details: { text_tokens: 10, image_tokens: 0 },
                 output_tokens: 20
@@ -80,19 +88,27 @@ describe('buildCompletedHistoryEntry', () => {
         assert.equal(entry.output_format, 'webp');
         assert.equal(entry.background, 'opaque');
         assert.equal(entry.moderation, 'low');
+        assert.equal(entry.image_backend, 'responses-image-generation');
+        assert.equal(entry.streaming_strategy, 'responses-sse');
+        assert.equal(entry.responsesModel, 'gpt-5.4');
+        assert.equal(entry.thinking, 'high');
+        assert.equal(entry.promptOptimization, 'on');
+        assert.equal(entry.forceWeb, true);
+        assert.equal(entry.enableParallelBatch, true);
         assert.deepEqual(entry.clientRequestIds, ['request-1']);
     });
 
     it('uses an explicit prompt override for prompt batch history display', () => {
         const entry = buildCompletedHistoryEntry({
-            images: [{ filename: 'batch-1.png' }],
+            images: [{ filename: 'batch-1.png', output_format: 'png' }],
             usage: null,
             actualCost: undefined,
             durationMs: 900,
             formData: {
                 ...fallbackGenerationForm,
                 prompt: '第一行',
-                batchPrompts: ['第一行', '第二行']
+                batchPrompts: ['第一行', '第二行'],
+                enableParallelBatch: true
             },
             requestMode: 'generate',
             storageMode: 'fs',
@@ -112,7 +128,8 @@ describe('buildFailedHistoryEntry', () => {
             formData: {
                 ...fallbackGenerationForm,
                 prompt: '第一行',
-                batchPrompts: ['第一行', '第二行']
+                batchPrompts: ['第一行', '第二行'],
+                enableParallelBatch: true
             },
             requestMode: 'generate',
             storageMode: 'fs'
@@ -123,6 +140,7 @@ describe('buildFailedHistoryEntry', () => {
         assert.equal(entry.prompt, '第一行\n第二行');
         assert.equal(entry.model, 'gpt-image-2');
         assert.equal(entry.size, '2048x2048');
+        assert.equal(entry.enableParallelBatch, true);
     });
 });
 
@@ -171,7 +189,14 @@ describe('history metadata helpers', () => {
                 costDetails: null,
                 output_format: 'jpeg',
                 model: 'gpt-image-2',
-                size: '2048x3072'
+                size: '2048x3072',
+                image_backend: 'responses-image-generation',
+                streaming_strategy: 'responses-sse',
+                responsesModel: 'gpt-5.4',
+                thinking: 'medium',
+                promptOptimization: 'off',
+                forceWeb: true,
+                enableParallelBatch: true
             },
             fallbackGenerationForm
         );
@@ -184,7 +209,51 @@ describe('history metadata helpers', () => {
         assert.equal(form.background, 'transparent');
         assert.equal(form.moderation, 'low');
         assert.equal(form.model, 'gpt-image-2');
+        assert.equal(form.image_backend, 'responses-image-generation');
+        assert.equal(form.streaming_strategy, 'responses-sse');
+        assert.equal(form.responsesModel, 'gpt-5.4');
+        assert.equal(form.thinking, 'medium');
+        assert.equal(form.promptOptimization, 'off');
+        assert.equal(form.forceWeb, true);
+        assert.equal(form.enableParallelBatch, true);
         assert.equal(form.batchPrompts, undefined);
+    });
+
+    it('does not inherit the current parallel batch toggle for old history entries', () => {
+        const form = buildHistoryGenerationFormData(
+            {
+                timestamp: 1,
+                images: [{ filename: 'a.png' }, { filename: 'b.png' }],
+                durationMs: 100,
+                quality: 'high',
+                background: 'auto',
+                moderation: 'auto',
+                prompt: '旧历史提示词',
+                mode: 'generate',
+                costDetails: null,
+                output_format: 'png',
+                model: 'gpt-image-2',
+                size: '2048x2048'
+            },
+            {
+                ...fallbackGenerationForm,
+                image_backend: 'images-api',
+                streaming_strategy: 'force-sse',
+                responsesModel: 'stale-model',
+                thinking: 'high',
+                promptOptimization: 'on',
+                forceWeb: true,
+                enableParallelBatch: true
+            }
+        );
+
+        assert.equal(form.image_backend, 'server-default');
+        assert.equal(form.streaming_strategy, 'server-default');
+        assert.equal(form.responsesModel, '');
+        assert.equal(form.thinking, 'server-default');
+        assert.equal(form.promptOptimization, 'server-default');
+        assert.equal(form.forceWeb, false);
+        assert.equal(form.enableParallelBatch, false);
     });
 
     it('restores failed batch history as batch prompts for retry', () => {
@@ -203,7 +272,14 @@ describe('history metadata helpers', () => {
                 costDetails: null,
                 output_format: 'webp',
                 model: 'gpt-image-1.5',
-                size: '1024x1536'
+                size: '1024x1536',
+                image_backend: 'images-api',
+                streaming_strategy: 'force-sse',
+                responsesModel: 'unused',
+                thinking: 'low',
+                promptOptimization: 'on',
+                forceWeb: true,
+                enableParallelBatch: true
             },
             {
                 ...fallbackGenerationForm,
@@ -221,6 +297,13 @@ describe('history metadata helpers', () => {
         assert.equal(form.output_compression, 88);
         assert.equal(form.background, 'opaque');
         assert.equal(form.moderation, 'low');
+        assert.equal(form.image_backend, 'images-api');
+        assert.equal(form.streaming_strategy, 'force-sse');
+        assert.equal(form.responsesModel, 'unused');
+        assert.equal(form.thinking, 'low');
+        assert.equal(form.promptOptimization, 'on');
+        assert.equal(form.forceWeb, true);
+        assert.equal(form.enableParallelBatch, true);
     });
 
     it('resolves image-level request ids before entry-level request ids', () => {

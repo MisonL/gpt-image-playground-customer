@@ -11,6 +11,7 @@ const setModel: React.Dispatch<
     React.SetStateAction<'gpt-image-2' | 'gpt-image-1.5' | 'gpt-image-1' | 'gpt-image-1-mini'>
 > = () => {};
 const setStreamMode: React.Dispatch<React.SetStateAction<'auto' | 'stream' | 'non_stream'>> = () => {};
+const setEnableParallelBatch: React.Dispatch<React.SetStateAction<boolean>> = () => {};
 const setImageBackend: React.Dispatch<
     React.SetStateAction<'server-default' | 'images-api' | 'responses-image-generation'>
 > = () => {};
@@ -19,6 +20,13 @@ const setStreamingStrategy: React.Dispatch<
         'server-default' | 'auto' | 'off' | 'openai-sse' | 'newapi-keepalive-sse' | 'responses-sse' | 'force-sse'
     >
 > = () => {};
+
+function assertProParallelBatchCheckboxDisabled(html: string) {
+    assert.match(
+        html,
+        /<button[^>]*(?:disabled=""[^>]*id="pro-parallel-batch-enabled"|id="pro-parallel-batch-enabled"[^>]*disabled="")/
+    );
+}
 
 describe('WorkbenchProDock', () => {
     it('defaults to easy mode and keeps professional controls collapsed', () => {
@@ -34,9 +42,14 @@ describe('WorkbenchProDock', () => {
                     size='auto'
                     streamMode='auto'
                     onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={false}
+                    enableParallelBatch={false}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={1}
                     imageBackend='server-default'
                     onImageBackendChange={setImageBackend}
                     streamingStrategy='server-default'
+                    defaultStreamingStrategy='auto'
                     onStreamingStrategyChange={setStreamingStrategy}
                 />
             </I18nProvider>
@@ -68,9 +81,14 @@ describe('WorkbenchProDock', () => {
                     size='auto'
                     streamMode='auto'
                     onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={false}
+                    enableParallelBatch={false}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={1}
                     imageBackend='server-default'
                     onImageBackendChange={setImageBackend}
                     streamingStrategy='server-default'
+                    defaultStreamingStrategy='auto'
                     onStreamingStrategyChange={setStreamingStrategy}
                     defaultMode='pro'
                 />
@@ -100,9 +118,14 @@ describe('WorkbenchProDock', () => {
                     size='auto'
                     streamMode='auto'
                     onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={false}
+                    enableParallelBatch={false}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={1}
                     imageBackend='server-default'
                     onImageBackendChange={setImageBackend}
                     streamingStrategy='server-default'
+                    defaultStreamingStrategy='auto'
                     onStreamingStrategyChange={setStreamingStrategy}
                     defaultMode='pro'
                     defaultProTab='route'
@@ -117,5 +140,167 @@ describe('WorkbenchProDock', () => {
         assert.match(html, /影响说明/);
         assert.match(html, /服务端默认会沿用当前部署配置/);
         assert.match(html, /费用主要由模型、尺寸、数量和预览图数量决定/);
+    });
+
+    it('renders a desktop parallel batch switch in stream settings', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchProDock
+                    outputFormat='png'
+                    onOutputFormatChange={setOutputFormat}
+                    quality='high'
+                    onQualityChange={setQuality}
+                    model='gpt-image-2'
+                    onModelChange={setModel}
+                    size='auto'
+                    streamMode='auto'
+                    onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={true}
+                    enableParallelBatch={true}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={2}
+                    imageBackend='server-default'
+                    onImageBackendChange={setImageBackend}
+                    streamingStrategy='server-default'
+                    defaultStreamingStrategy='auto'
+                    onStreamingStrategyChange={setStreamingStrategy}
+                    defaultMode='pro'
+                    defaultProTab='stream'
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /pro-parallel-batch-enabled/);
+        assert.match(html, /并发批量/);
+        assert.match(html, /多张图或多条提示词会按当前渠道容量并发执行/);
+        assert.match(html, /aria-checked="true"/);
+    });
+
+    it('keeps enabled parallel batch visible in easy mode summary', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchProDock
+                    outputFormat='png'
+                    onOutputFormatChange={setOutputFormat}
+                    quality='high'
+                    onQualityChange={setQuality}
+                    model='gpt-image-2'
+                    onModelChange={setModel}
+                    size='auto'
+                    streamMode='auto'
+                    onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={true}
+                    enableParallelBatch={true}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={2}
+                    imageBackend='server-default'
+                    onImageBackendChange={setImageBackend}
+                    streamingStrategy='server-default'
+                    defaultStreamingStrategy='auto'
+                    onStreamingStrategyChange={setStreamingStrategy}
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /自动 \/ 并发已启用/);
+    });
+
+    it('keeps the desktop parallel batch switch disabled when streaming strategy is off', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchProDock
+                    outputFormat='png'
+                    onOutputFormatChange={setOutputFormat}
+                    quality='high'
+                    onQualityChange={setQuality}
+                    model='gpt-image-2'
+                    onModelChange={setModel}
+                    size='auto'
+                    streamMode='auto'
+                    onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={true}
+                    enableParallelBatch={true}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={2}
+                    imageBackend='server-default'
+                    onImageBackendChange={setImageBackend}
+                    streamingStrategy='off'
+                    defaultStreamingStrategy='auto'
+                    onStreamingStrategyChange={setStreamingStrategy}
+                    defaultMode='pro'
+                    defaultProTab='stream'
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /pro-parallel-batch-enabled/);
+        assert.match(html, /并发批量需要流式模式；非流式会保持顺序执行。/);
+        assert.match(html, /aria-checked="false"/);
+        assertProParallelBatchCheckboxDisabled(html);
+    });
+
+    it('keeps the desktop parallel batch switch disabled when the server default streaming strategy is off', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchProDock
+                    outputFormat='png'
+                    onOutputFormatChange={setOutputFormat}
+                    quality='high'
+                    onQualityChange={setQuality}
+                    model='gpt-image-2'
+                    onModelChange={setModel}
+                    size='auto'
+                    streamMode='auto'
+                    onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={true}
+                    enableParallelBatch={true}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={2}
+                    imageBackend='server-default'
+                    onImageBackendChange={setImageBackend}
+                    streamingStrategy='server-default'
+                    defaultStreamingStrategy='off'
+                    onStreamingStrategyChange={setStreamingStrategy}
+                    defaultMode='pro'
+                    defaultProTab='stream'
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /pro-parallel-batch-enabled/);
+        assert.match(html, /并发批量需要流式模式；非流式会保持顺序执行。/);
+        assert.match(html, /aria-checked="false"/);
+        assertProParallelBatchCheckboxDisabled(html);
+    });
+
+    it('disables the desktop stream mode selector when the server default streaming strategy is off', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchProDock
+                    outputFormat='png'
+                    onOutputFormatChange={setOutputFormat}
+                    quality='high'
+                    onQualityChange={setQuality}
+                    model='gpt-image-2'
+                    onModelChange={setModel}
+                    size='auto'
+                    streamMode='auto'
+                    onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={true}
+                    enableParallelBatch={false}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={2}
+                    imageBackend='server-default'
+                    onImageBackendChange={setImageBackend}
+                    streamingStrategy='server-default'
+                    defaultStreamingStrategy='off'
+                    onStreamingStrategyChange={setStreamingStrategy}
+                    defaultMode='pro'
+                    defaultProTab='stream'
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /<button[^>]*(?:disabled=""[^>]*id="pro-stream-mode-select"|id="pro-stream-mode-select"[^>]*disabled="")/);
     });
 });

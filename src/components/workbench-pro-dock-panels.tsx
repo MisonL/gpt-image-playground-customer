@@ -1,5 +1,6 @@
 'use client';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { WorkbenchProDockProps, OutputFormat, Quality, SizePreset } from '@/components/workbench-pro-dock';
@@ -9,6 +10,7 @@ import type { Locale } from '@/lib/i18n';
 import { useI18n } from '@/lib/i18n';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
 import { getPresetDimensions } from '@/lib/size-utils';
+import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
 import type * as React from 'react';
 
 type Translation = ReturnType<typeof useI18n>['t'];
@@ -65,14 +67,39 @@ function ReadonlyField({ label, children }: { label: string; children: React.Rea
     );
 }
 
-export function WorkbenchEasySummary({ model, streamMode, outputFormat, size }: ProPanelProps) {
+export function WorkbenchEasySummary({
+    model,
+    streamMode,
+    outputFormat,
+    size,
+    allowStreamingBatch,
+    enableParallelBatch,
+    parallelBatchTargetCount,
+    streamingStrategy,
+    defaultStreamingStrategy
+}: ProPanelProps) {
     const { locale, t } = useI18n();
     const resolution = formatResolution(size, model, locale);
+    const effectiveStreamingStrategy =
+        streamingStrategy === 'server-default' ? defaultStreamingStrategy : streamingStrategy;
+    const parallelBatchVisible = resolveStreamingBatchToggleState({
+        allowStreamingBatch,
+        userEnabled: enableParallelBatch,
+        targetCount: parallelBatchTargetCount,
+        streamMode,
+        streamingStrategy: effectiveStreamingStrategy
+    }).checked;
 
     return (
         <div className='grid grid-cols-4 gap-3 text-xs'>
             <ReadonlyField label={t('form.model')}>{model}</ReadonlyField>
-            <ReadonlyField label={t('ux.streaming')}>{getStreamModeLabel(streamMode, t)}</ReadonlyField>
+            <ReadonlyField label={t('ux.streaming')}>
+                <span className='min-w-0 truncate'>
+                    {parallelBatchVisible
+                        ? `${getStreamModeLabel(streamMode, t)} / ${t('streaming.parallelBatchEnabled')}`
+                        : getStreamModeLabel(streamMode, t)}
+                </span>
+            </ReadonlyField>
             <ReadonlyField label={t('form.outputFormat')}>{getOutputFormatLabel(outputFormat)}</ReadonlyField>
             <ReadonlyField label={t('ux.resolution')}>{resolution}</ReadonlyField>
         </div>
@@ -99,7 +126,10 @@ function OutputPanel({
                     value={outputFormat}
                     onValueChange={(value) => onOutputFormatChange(value as OutputFormat)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-output-format-select' className='h-8 w-full'>
+                    <SelectTrigger
+                        id='pro-output-format-select'
+                        aria-label={t('form.outputFormat')}
+                        className='h-8 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -117,7 +147,7 @@ function OutputPanel({
                     value={quality}
                     onValueChange={(value) => onQualityChange(value as Quality)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-quality-select' className='h-8 w-full'>
+                    <SelectTrigger id='pro-quality-select' aria-label={t('form.quality')} className='h-8 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -150,7 +180,7 @@ function ModelPanel({
                     value={model}
                     onValueChange={(value) => onModelChange(value as GptImageModel)}
                     disabled={disabled}>
-                    <SelectTrigger id='pro-model-select' className='h-8 w-full'>
+                    <SelectTrigger id='pro-model-select' aria-label={t('form.model')} className='h-8 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -170,13 +200,44 @@ function ModelPanel({
 function StreamPanel({
     streamMode,
     onStreamModeChange,
+    allowStreamingBatch,
+    enableParallelBatch,
+    onEnableParallelBatchChange,
+    parallelBatchTargetCount,
     disabled,
     strategyLabel,
+    streamingStrategy,
+    defaultStreamingStrategy,
     t
-}: Pick<ProPanelProps, 'streamMode' | 'onStreamModeChange' | 'disabled'> & {
+}: Pick<
+    ProPanelProps,
+    | 'streamMode'
+    | 'onStreamModeChange'
+    | 'allowStreamingBatch'
+    | 'enableParallelBatch'
+    | 'onEnableParallelBatchChange'
+    | 'parallelBatchTargetCount'
+    | 'disabled'
+    | 'streamingStrategy'
+    | 'defaultStreamingStrategy'
+> & {
     strategyLabel: string;
     t: Translation;
 }) {
+    const effectiveStreamingStrategy =
+        streamingStrategy === 'server-default' ? defaultStreamingStrategy : streamingStrategy;
+    const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
+    const parallelBatchToggle = resolveStreamingBatchToggleState({
+        allowStreamingBatch,
+        userEnabled: enableParallelBatch,
+        targetCount: parallelBatchTargetCount,
+        streamMode,
+        streamingStrategy: effectiveStreamingStrategy
+    });
+    const canEnableParallelBatch = parallelBatchToggle.canEnable;
+    const parallelBatchChecked = parallelBatchToggle.checked;
+    const parallelBatchUnavailableKey = parallelBatchToggle.unavailableReasonKey;
+
     return (
         <TabsContent value='stream' className='mt-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 text-xs'>
             <div className='space-y-1'>
@@ -184,8 +245,12 @@ function StreamPanel({
                 <Select
                     value={streamMode}
                     onValueChange={(value) => onStreamModeChange(value as ImageStreamMode)}
-                    disabled={disabled}>
-                    <SelectTrigger id='pro-stream-mode-select' className='h-8 w-full'>
+                    disabled={disabled || streamingDisabledByStrategy}>
+                    <SelectTrigger
+                        id='pro-stream-mode-select'
+                        aria-label={t('streaming.mode')}
+                        disabled={disabled || streamingDisabledByStrategy}
+                        className='h-8 w-full'>
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -198,6 +263,32 @@ function StreamPanel({
                 </Select>
             </div>
             <ReadonlyField label={t('upstream.streamingStrategy')}>{strategyLabel}</ReadonlyField>
+            <div className='border-border bg-muted/20 col-span-2 flex items-start gap-3 rounded-md border p-3'>
+                <label
+                    htmlFor='pro-parallel-batch-enabled'
+                    className='-m-1.5 flex min-h-8 min-w-8 cursor-pointer items-start justify-center p-1.5 has-disabled:cursor-not-allowed'>
+                    <Checkbox
+                        id='pro-parallel-batch-enabled'
+                        checked={parallelBatchChecked}
+                        onCheckedChange={(value) => onEnableParallelBatchChange(value === true)}
+                        disabled={disabled || !canEnableParallelBatch}
+                        aria-label={t('streaming.parallelBatch')}
+                        className='mt-0.5'
+                    />
+                </label>
+                <div className='grid gap-1'>
+                    <label
+                        htmlFor='pro-parallel-batch-enabled'
+                        className='text-foreground text-sm leading-none font-medium'>
+                        {t('streaming.parallelBatch')}
+                    </label>
+                    <p className='text-muted-foreground text-xs leading-5'>
+                        {canEnableParallelBatch
+                            ? t('streaming.parallelBatchDescription')
+                            : t(parallelBatchUnavailableKey)}
+                    </p>
+                </div>
+            </div>
         </TabsContent>
     );
 }

@@ -36,7 +36,7 @@ export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
                     <TabsTrigger
                         key={value}
                         value={value}
-                        className={`min-h-10 rounded-md border px-1 py-1 text-center transition-colors 2xl:px-1.5 ${
+                        className={`min-h-11 rounded-md border px-1 py-1 text-center transition-colors lg:min-h-10 2xl:px-1.5 ${
                             currentMode === value
                                 ? 'border-primary/35 bg-primary text-primary-foreground shadow-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground'
                                 : 'border-transparent bg-muted/30 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground'

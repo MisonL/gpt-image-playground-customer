@@ -71,6 +71,11 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
         }
     };
 
+    const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        handleSave();
+    };
+
     const handleClear = () => {
         const emptySettings = { apiKey: '', baseUrl: '' };
         try {
@@ -87,54 +92,72 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
     return (
         <Dialog open={isOpen} onOpenChange={handleOpenChange}>
             <DialogContent className='sm:max-w-[520px]'>
-                <DialogHeader>
-                    <DialogTitle>{t('api.title')}</DialogTitle>
-                    <DialogDescription>{t('api.description')}</DialogDescription>
-                </DialogHeader>
-                <div className='grid gap-4 py-2'>
-                    <div className='grid gap-2'>
-                        <Label htmlFor='api-key-input'>{t('api.key')}</Label>
-                        <Input
-                            id='api-key-input'
-                            name='apiKey'
-                            type='password'
-                            autoComplete='off'
-                            spellCheck={false}
-                            placeholder='sk-...'
-                            value={draft.apiKey}
-                            onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))}
-                        />
+                <form onSubmit={handleSubmit} className='grid gap-4'>
+                    <DialogHeader>
+                        <DialogTitle>{t('api.title')}</DialogTitle>
+                        <DialogDescription>{t('api.description')}</DialogDescription>
+                    </DialogHeader>
+                    <div className='grid gap-4 py-2'>
+                        <div className='grid gap-2'>
+                            <Label htmlFor='api-key-input'>{t('api.key')}</Label>
+                            <Input
+                                id='api-key-input'
+                                name='apiKey'
+                                type='password'
+                                autoComplete='off'
+                                spellCheck={false}
+                                placeholder='sk-...'
+                                value={draft.apiKey}
+                                className='min-h-11 sm:min-h-9'
+                                onChange={(event) =>
+                                    setDraft((current) => ({ ...current, apiKey: event.target.value }))
+                                }
+                            />
+                        </div>
+                        <div className='grid gap-2'>
+                            <Label htmlFor='api-base-url-input'>{t('api.url')}</Label>
+                            <Input
+                                id='api-base-url-input'
+                                name='baseUrl'
+                                type='url'
+                                inputMode='url'
+                                autoComplete='off'
+                                spellCheck={false}
+                                placeholder='https://api.openai.com/v1'
+                                value={draft.baseUrl}
+                                className='min-h-11 sm:min-h-9'
+                                onChange={(event) =>
+                                    setDraft((current) => ({ ...current, baseUrl: event.target.value }))
+                                }
+                            />
+                            <p className='text-muted-foreground text-xs leading-5'>{t('api.urlHint')}</p>
+                        </div>
                     </div>
-                    <div className='grid gap-2'>
-                        <Label htmlFor='api-base-url-input'>{t('api.url')}</Label>
-                        <Input
-                            id='api-base-url-input'
-                            name='baseUrl'
-                            type='url'
-                            inputMode='url'
-                            autoComplete='off'
-                            spellCheck={false}
-                            placeholder='https://api.openai.com/v1'
-                            value={draft.baseUrl}
-                            onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))}
-                        />
-                        <p className='text-muted-foreground text-xs leading-5'>{t('api.urlHint')}</p>
-                    </div>
-                </div>
-                <DialogFooter>
-                    {saveStatus === 'saved' && (
-                        <p className='mr-auto self-center text-sm text-emerald-600 dark:text-emerald-400' aria-live='polite'>{t('api.saved')}</p>
-                    )}
-                    {saveStatus === 'error' && (
-                        <p className='text-destructive mr-auto self-center text-sm' aria-live='polite'>{t('api.saveFailed')}</p>
-                    )}
-                    <Button type='button' variant='ghost' onClick={handleClear} className='text-muted-foreground hover:text-foreground'>
-                        {t('common.clear')}
-                    </Button>
-                    <Button type='button' onClick={handleSave} className='px-6'>
-                        {t('common.save')}
-                    </Button>
-                </DialogFooter>
+                    <DialogFooter>
+                        {saveStatus === 'saved' && (
+                            <p
+                                className='mr-auto self-center text-sm text-emerald-600 dark:text-emerald-400'
+                                aria-live='polite'>
+                                {t('api.saved')}
+                            </p>
+                        )}
+                        {saveStatus === 'error' && (
+                            <p className='text-destructive mr-auto self-center text-sm' aria-live='polite'>
+                                {t('api.saveFailed')}
+                            </p>
+                        )}
+                        <Button
+                            type='button'
+                            variant='ghost'
+                            onClick={handleClear}
+                            className='text-muted-foreground hover:text-foreground min-h-11 sm:min-h-9'>
+                            {t('common.clear')}
+                        </Button>
+                        <Button type='submit' className='min-h-11 px-6 sm:min-h-9'>
+                            {t('common.save')}
+                        </Button>
+                    </DialogFooter>
+                </form>
             </DialogContent>
         </Dialog>
     );
