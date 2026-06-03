@@ -16,6 +16,7 @@ export type StreamingBatchRecommendationOptions = StreamingConcurrencyOptions & 
 
 export type StreamingBatchDecision = {
     enabled: boolean;
+    userEnabled?: boolean;
     streaming: boolean;
     imageCount: number;
 };
@@ -34,11 +35,6 @@ export class BatchPausedError extends Error {
     }
 }
 
-export type RuntimeStreamingBatchOptions = {
-    clientFeatureFlag?: string;
-    serverEnabled?: boolean;
-};
-
 export type StreamingBatchCapacityOptions = {
     featureEnabled: boolean;
     hasRequestApiKey: boolean;
@@ -49,6 +45,29 @@ export type StreamingBatchCapacityOptions = {
 export type StreamingBatchCapacity = {
     enabled: boolean;
     concurrency: number;
+};
+
+export type StreamingBatchTransportDecision = {
+    streamMode: string;
+    streamingStrategy: string;
+};
+
+export type StreamingBatchUnavailableReasonKey =
+    | 'streaming.parallelBatchUnavailableCapacity'
+    | 'streaming.parallelBatchUnavailable'
+    | 'streaming.parallelBatchUnavailableSingle';
+
+export type StreamingBatchToggleOptions = StreamingBatchTransportDecision & {
+    allowStreamingBatch: boolean;
+    userEnabled: boolean;
+    targetCount: number;
+};
+
+export type StreamingBatchToggleState = {
+    canEnable: boolean;
+    checked: boolean;
+    transportEnabled: boolean;
+    unavailableReasonKey: StreamingBatchUnavailableReasonKey;
 };
 
 export type ApiImageResponseItem = {
@@ -143,10 +162,6 @@ export function computeStreamingBatchRecommendation(options: StreamingBatchRecom
     return computeStreamingConcurrency(options);
 }
 
-export function isRuntimeStreamingBatchEnabled(options: RuntimeStreamingBatchOptions): boolean {
-    return options.serverEnabled === true;
-}
-
 export function resolveStreamingBatchCapacity(options: StreamingBatchCapacityOptions): StreamingBatchCapacity {
     if (!options.featureEnabled) {
         return { enabled: false, concurrency: 1 };
@@ -164,7 +179,28 @@ export function resolveStreamingBatchCapacity(options: StreamingBatchCapacityOpt
 }
 
 export function shouldUseStreamingBatch(options: StreamingBatchDecision): boolean {
-    return options.enabled && options.streaming && options.imageCount > 1;
+    return options.enabled && options.userEnabled === true && options.streaming && options.imageCount > 1;
+}
+
+export function canUseStreamingBatchTransport(options: StreamingBatchTransportDecision): boolean {
+    return options.streamMode !== 'non_stream' && options.streamingStrategy !== 'off';
+}
+
+export function resolveStreamingBatchToggleState(options: StreamingBatchToggleOptions): StreamingBatchToggleState {
+    const transportEnabled = canUseStreamingBatchTransport(options);
+    const canEnable = options.allowStreamingBatch && transportEnabled && options.targetCount > 1;
+    const unavailableReasonKey = !options.allowStreamingBatch
+        ? 'streaming.parallelBatchUnavailableCapacity'
+        : !transportEnabled
+          ? 'streaming.parallelBatchUnavailable'
+          : 'streaming.parallelBatchUnavailableSingle';
+
+    return {
+        canEnable,
+        checked: options.userEnabled && canEnable,
+        transportEnabled,
+        unavailableReasonKey
+    };
 }
 
 export function applyStreamingClientEvent(

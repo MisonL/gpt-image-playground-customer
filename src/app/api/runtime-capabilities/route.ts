@@ -1,5 +1,5 @@
 import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
-import { readImageStreamMode } from '@/lib/image-upstream-strategy';
+import { readImageStreamMode, readImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { computeStreamingBatchRecommendation } from '@/lib/streaming-batch';
 import { readBooleanEnv, readPositiveIntegerEnv } from '@/lib/server-runtime';
@@ -11,7 +11,6 @@ export async function GET() {
         const summary = getChannelPoolSummary(serverChannelState.config);
         const healthSummary = serverChannelState.router?.getHealthSummary();
         const maxStreamsPerCredential = readPositiveIntegerEnv(process.env, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1);
-        const streamingBatchEnabled = readBooleanEnv(process.env, 'ENABLE_STREAMING_BATCH');
         const responsesImageBackendEnabled = readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND');
         const recommendedStreamingConcurrency = computeStreamingBatchRecommendation({
             credentialCount: healthSummary?.healthyCredentialCount ?? summary.credentialCount,
@@ -22,11 +21,12 @@ export async function GET() {
         return NextResponse.json({
             streaming: {
                 defaultMode: readImageStreamMode(new FormData(), process.env),
+                defaultStrategy: readImageStreamingStrategy(new FormData(), process.env),
                 unavailableMarkScope: 'channel+backend+strategy+operation',
                 availability: serverChannelState.streamingAvailability.summary()
             },
             streamingBatch: {
-                enabled: streamingBatchEnabled,
+                enabled: true,
                 recommendedConcurrency: recommendedStreamingConcurrency,
                 requestCredentialConcurrency: maxStreamsPerCredential,
                 healthyCredentialCount: healthSummary?.healthyCredentialCount ?? summary.credentialCount,

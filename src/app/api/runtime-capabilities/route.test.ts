@@ -18,6 +18,7 @@ function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
 beforeEach(() => {
     originalEnv = { ...process.env };
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
+    delete process.env.IMAGE_STREAMING_STRATEGY;
 });
 
 afterEach(() => {
@@ -25,6 +26,25 @@ afterEach(() => {
 });
 
 describe('GET /api/runtime-capabilities', () => {
+    it('exposes streaming batch capability by default without the removed env gate', async () => {
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as Record<string, { enabled: boolean; recommendedConcurrency?: number }>;
+
+        assert.equal(body.streamingBatch.enabled, true);
+        assert.equal(typeof body.streamingBatch.recommendedConcurrency, 'number');
+    });
+
+    it('exposes the runtime default streaming strategy for client-side fanout decisions', async () => {
+        process.env.IMAGE_STREAMING_STRATEGY = 'off';
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as Record<string, { defaultMode?: string; defaultStrategy?: string }>;
+
+        assert.equal(body.streaming.defaultMode, 'non_stream');
+        assert.equal(body.streaming.defaultStrategy, 'off');
+    });
+
     it('exposes the experimental Responses image backend flag without enabling it by default', async () => {
         const { GET } = await import('./route');
 

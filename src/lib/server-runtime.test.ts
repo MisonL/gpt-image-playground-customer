@@ -149,10 +149,10 @@ describe('createBatchId', () => {
 
 describe('readBooleanEnv', () => {
     it('only enables a feature for explicit true-like values', () => {
-        assert.equal(readBooleanEnv({}, 'ENABLE_STREAMING_BATCH'), false);
-        assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: 'false' }, 'ENABLE_STREAMING_BATCH'), false);
-        assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: '1' }, 'ENABLE_STREAMING_BATCH'), true);
-        assert.equal(readBooleanEnv({ ENABLE_STREAMING_BATCH: 'true' }, 'ENABLE_STREAMING_BATCH'), true);
+        assert.equal(readBooleanEnv({}, 'FEATURE_ENABLED'), false);
+        assert.equal(readBooleanEnv({ FEATURE_ENABLED: 'false' }, 'FEATURE_ENABLED'), false);
+        assert.equal(readBooleanEnv({ FEATURE_ENABLED: '1' }, 'FEATURE_ENABLED'), true);
+        assert.equal(readBooleanEnv({ FEATURE_ENABLED: 'true' }, 'FEATURE_ENABLED'), true);
     });
 });
 
