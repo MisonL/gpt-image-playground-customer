@@ -35,7 +35,7 @@
 ### 新增
 
 - 增加服务端运行时能力接口 `/api/runtime-capabilities`，用于返回流式批处理开关、推荐并发和渠道健康状态。
-- 增加 `ENABLE_STREAMING_BATCH` 与 `OPENAI_MAX_STREAMS_PER_CREDENTIAL`，支持在流式模式下把 `n>1` 拆成多个 `n=1` 任务并发执行。
+- 增加运行时并发流式批处理能力与 `OPENAI_MAX_STREAMS_PER_CREDENTIAL`，支持在流式模式下把 `n>1` 拆成多个 `n=1` 任务并发执行。
 - 增加前端流式批处理执行链路，支持并发调度、SSE 完成事件聚合、预览图索引映射、用量合并和部分失败提示。
 - 生成和编辑表单在服务端允许批处理时支持 `n>1` 开启流式预览，并补充中英文提示文案。
 - 增加服务端 credential/channel 失败冷却机制，支持按渠道覆盖冷却窗口。

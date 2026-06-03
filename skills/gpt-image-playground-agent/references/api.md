@@ -52,6 +52,7 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--allow-billable`：允许真实调用生图端点。
 
 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果显式传 `--streaming-strategy off`，即使是大图也保持 `/api/agent/images/generate` 非流式 JSON 路径，用于诊断对照。
+当服务端默认 `IMAGE_STREAMING_STRATEGY=off` 且请求未覆盖 `streaming_strategy` 时，运行时默认策略为 `off`；WebUI 会把 server-default 流式请求切到 `non_stream`，并发批量开关不可用。脚本显式传 `--streaming-strategy off` 时同样保持非流式诊断路径。
 
 编辑脚本参数：
 
@@ -79,11 +80,14 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--resume`：读取 manifest 中已 `succeeded` 的 `id` 或 `idempotency_key` 并跳过。
 - `--ordered-prefix`：未显式提供 `idempotency_key` 时构造稳定有序 key 的前缀，默认 `batch`。
 - `--dimension-check`：读取响应 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`。
+- `--max-attempts`：失败任务最大尝试次数。第二次及后续尝试会追加新的 attempt 级 `Idempotency-Key`，避免复用终态失败 key。
+- `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会并发执行任务并按输入顺序输出结果。
+- `--max-consecutive-failures`：顺序执行下的连续失败熔断阈值，默认 `0` 表示不熔断。只能与 `--concurrency 1` 同用。
 - `--timeout-ms`
 - `--dry-run`
 - `--allow-billable`
 
-批量 JSONL 每行字段按 `mode` 区分。`output_format`、`format`、`output_compression`、`background`、`moderation`、`image_backend`、`responsesModel` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
+批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径；edit 任务使用这些高级字段会显式走 `/api/images`，因为 Agent JSON edit 不接收这些字段。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
 上游探针脚本参数：
 
