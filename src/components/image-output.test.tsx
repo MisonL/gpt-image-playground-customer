@@ -1,4 +1,4 @@
-import { buildSendToEditTarget, ImageOutput } from './image-output';
+import { buildImageActionTarget, ImageOutput } from './image-output';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -158,9 +158,9 @@ describe('ImageOutput result actions', () => {
         }
     });
 
-    it('passes the selected image storage mode to continue editing', () => {
+    it('builds selected image action targets with storage mode', () => {
         assert.deepEqual(
-            buildSendToEditTarget({
+            buildImageActionTarget({
                 path: 'data:image/png;base64,selected',
                 filename: 'selected.png',
                 storageMode: 'indexeddb'
@@ -168,13 +168,13 @@ describe('ImageOutput result actions', () => {
             { filename: 'selected.png', storageMode: 'indexeddb' }
         );
         assert.deepEqual(
-            buildSendToEditTarget({
+            buildImageActionTarget({
                 path: '/api/image/fs.png',
                 filename: 'fs.png'
             }),
             { filename: 'fs.png' }
         );
-        assert.equal(buildSendToEditTarget(null), null);
+        assert.equal(buildImageActionTarget(null), null);
     });
 
     it('keeps compare disabled for single-image results', () => {

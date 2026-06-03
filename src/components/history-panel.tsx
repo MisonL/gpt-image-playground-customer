@@ -59,6 +59,19 @@ type HistoryPanelProps = {
     onDeletePreferenceDialogChange: (isChecked: boolean) => void;
 };
 
+type HistoryPanelTab = 'inspiration' | 'history';
+
+export function resolveHistoryPanelTabSync(input: {
+    activeTab: HistoryPanelTab;
+    historyCount: number;
+    inspirationCount: number;
+}): HistoryPanelTab {
+    if (input.activeTab === 'inspiration' && input.historyCount > 0 && input.inspirationCount === 0) {
+        return 'history';
+    }
+    return input.activeTab;
+}
+
 export type InspirationItem = {
     id: number;
     prompt: string;
@@ -218,7 +231,7 @@ function HistoryPanelImpl({
 }: HistoryPanelProps) {
     const { locale, t } = useI18n();
     const pendingActivityItems = React.useMemo(() => buildPendingActivityItems(t), [t]);
-    const [activeTab, setActiveTab] = React.useState<'inspiration' | 'history'>(() =>
+    const [activeTab, setActiveTab] = React.useState<HistoryPanelTab>(() =>
         history.length > 0 && inspirations.length === 0 ? 'history' : 'inspiration'
     );
     const [openPromptDialogTimestamp, setOpenPromptDialogTimestamp] = React.useState<number | null>(null);
@@ -228,6 +241,11 @@ function HistoryPanelImpl({
     const [imageResolutions, setImageResolutions] = React.useState<Record<string, string>>({});
     const [failedThumbnails, setFailedThumbnails] = React.useState<Record<string, boolean>>({});
     const [expandedBatchTimestamp, setExpandedBatchTimestamp] = React.useState<number | null>(null);
+    const effectiveActiveTab = resolveHistoryPanelTabSync({
+        activeTab,
+        historyCount: history.length,
+        inspirationCount: inspirations.length
+    });
 
     const { totalCost, totalImages } = React.useMemo(() => {
         let cost = 0;
@@ -391,7 +409,7 @@ function HistoryPanelImpl({
                     </div>
                 ) : null}
                 <Tabs
-                    value={activeTab}
+                    value={effectiveActiveTab}
                     onValueChange={(value) => setActiveTab(value as 'inspiration' | 'history')}
                     className='gap-0'>
                     <TabsList className='border-border grid h-auto w-full grid-cols-2 rounded-none border-0 border-b bg-transparent p-0'>
@@ -409,7 +427,7 @@ function HistoryPanelImpl({
                     <TabsContent value='inspiration' forceMount className='hidden' />
                     <TabsContent value='history' forceMount className='hidden' />
                 </Tabs>
-                {history.length > 0 && activeTab === 'history' && (
+                {history.length > 0 && effectiveActiveTab === 'history' && (
                     <Button
                         variant='ghost'
                         size='sm'
@@ -420,7 +438,7 @@ function HistoryPanelImpl({
                 )}
             </CardHeader>
             <CardContent className='literary-scrollbar min-h-0 p-3 lg:max-h-[calc(100%-17.5rem)] lg:overflow-y-auto lg:p-3 xl:flex-none'>
-                {activeTab === 'inspiration' ? (
+                {effectiveActiveTab === 'inspiration' ? (
                     <div className='space-y-3 lg:space-y-2'>
                         {inspirations.length === 0 ? (
                             <div className='text-muted-foreground border-border bg-muted/20 flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 text-center text-sm'>

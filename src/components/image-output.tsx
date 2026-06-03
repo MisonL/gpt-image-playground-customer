@@ -36,6 +36,11 @@ type ImageInfo = {
     storageMode?: 'fs' | 'indexeddb';
 };
 
+type ImageActionTarget = {
+    filename: string;
+    storageMode?: ImageInfo['storageMode'];
+};
+
 type ImageOutputProps = {
     imageBatch: ImageInfo[] | null;
     viewMode: 'grid' | number;
@@ -43,8 +48,8 @@ type ImageOutputProps = {
     altText?: string;
     isLoading: boolean;
     onSendToEdit: (filename: string, storageMode?: ImageInfo['storageMode']) => void;
-    onDownloadImage: (filename: string) => void;
-    onShareImage: (filename: string) => void;
+    onDownloadImage: (filename: string, storageMode?: ImageInfo['storageMode']) => void;
+    onShareImage: (filename: string, storageMode?: ImageInfo['storageMode']) => void;
     onCreateVariant: () => void;
     onReusePrompt: () => void;
     failureMessage?: string | null;
@@ -79,9 +84,7 @@ type ImageDimensions = {
     height: number;
 };
 
-export function buildSendToEditTarget(
-    image: ImageInfo | null
-): { filename: string; storageMode?: ImageInfo['storageMode'] } | null {
+export function buildImageActionTarget(image: ImageInfo | null): ImageActionTarget | null {
     if (!image) return null;
     return {
         filename: image.filename,
@@ -264,21 +267,21 @@ export function ImageOutput({
         : (compareImageLabel ?? t('output.compareReference'));
 
     const handleSendClick = () => {
-        const target = buildSendToEditTarget(selectedImage);
+        const target = buildImageActionTarget(selectedImage);
         if (!target) return;
         onSendToEdit(target.filename, target.storageMode);
     };
 
     const handleDownloadClick = () => {
-        if (selectedImage) {
-            onDownloadImage(selectedImage.filename);
-        }
+        const target = buildImageActionTarget(selectedImage);
+        if (!target) return;
+        onDownloadImage(target.filename, target.storageMode);
     };
 
     const handleShareClick = () => {
-        if (selectedImage) {
-            onShareImage(selectedImage.filename);
-        }
+        const target = buildImageActionTarget(selectedImage);
+        if (!target) return;
+        onShareImage(target.filename, target.storageMode);
     };
 
     const handleCompareClick = () => {

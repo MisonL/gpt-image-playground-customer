@@ -1,4 +1,9 @@
-import { HistoryPanel, type GenerationActivityItem, type InspirationItem } from './history-panel';
+import {
+    HistoryPanel,
+    resolveHistoryPanelTabSync,
+    type GenerationActivityItem,
+    type InspirationItem
+} from './history-panel';
 import type { HistoryMetadata } from '@/lib/history-metadata';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
@@ -75,6 +80,33 @@ function renderHistoryPanel(
 }
 
 describe('HistoryPanel recent history actions', () => {
+    it('switches to recent history when history appears and no inspirations exist', () => {
+        assert.equal(
+            resolveHistoryPanelTabSync({
+                activeTab: 'inspiration',
+                historyCount: 1,
+                inspirationCount: 0
+            }),
+            'history'
+        );
+        assert.equal(
+            resolveHistoryPanelTabSync({
+                activeTab: 'inspiration',
+                historyCount: 1,
+                inspirationCount: 1
+            }),
+            'inspiration'
+        );
+        assert.equal(
+            resolveHistoryPanelTabSync({
+                activeTab: 'history',
+                historyCount: 0,
+                inspirationCount: 1
+            }),
+            'history'
+        );
+    });
+
     it('renders visible save, reuse, and continue-edit actions on history cards', () => {
         const html = renderHistoryPanel([historyItem]);
 
