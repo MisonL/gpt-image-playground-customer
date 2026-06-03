@@ -1,4 +1,4 @@
-import { GenerationForm } from './generation-form';
+import { GenerationForm, resolveGenerationFooterPromptTarget } from './generation-form';
 import { I18nProvider } from '@/lib/i18n';
 import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import assert from 'node:assert/strict';
@@ -21,6 +21,8 @@ function renderGenerationForm(
         enableParallelBatch?: boolean;
         streamingStrategy?: React.ComponentProps<typeof GenerationForm>['streamingStrategy'];
         defaultStreamingStrategy?: ImageStreamingStrategy;
+        prompt?: string;
+        batchPromptText?: string;
     } = {}
 ) {
     return renderToStaticMarkup(
@@ -38,9 +40,9 @@ function renderGenerationForm(
                 onOpenPasswordDialog={noop}
                 model='gpt-image-2'
                 setModel={noop}
-                prompt='午后咖啡馆窗边，一束粉白花'
+                prompt={options.prompt ?? '午后咖啡馆窗边，一束粉白花'}
                 setPrompt={noop}
-                batchPromptText={'午后咖啡馆窗边\n奶油色卧室一角'}
+                batchPromptText={options.batchPromptText ?? '午后咖啡馆窗边\n奶油色卧室一角'}
                 setBatchPromptText={noop}
                 failedBatchPrompts={options.failedBatchPrompts}
                 canPauseBatch={options.canPauseBatch}
@@ -157,6 +159,31 @@ describe('GenerationForm advanced groups', () => {
 });
 
 describe('GenerationForm batch mode', () => {
+    it('uses the visible batch prompt text for footer prompt actions', () => {
+        assert.deepEqual(
+            resolveGenerationFooterPromptTarget({
+                currentMode: 'batch',
+                prompt: 'hidden single prompt',
+                batchPromptText: 'first batch prompt\nsecond batch prompt'
+            }),
+            {
+                value: 'first batch prompt\nsecond batch prompt',
+                isEmpty: false
+            }
+        );
+        assert.deepEqual(
+            resolveGenerationFooterPromptTarget({
+                currentMode: 'generate',
+                prompt: 'visible single prompt',
+                batchPromptText: 'hidden batch prompt'
+            }),
+            {
+                value: 'visible single prompt',
+                isEmpty: false
+            }
+        );
+    });
+
     it('renders a real batch prompt list only in batch mode', () => {
         const html = renderGenerationForm({ currentMode: 'batch' });
 

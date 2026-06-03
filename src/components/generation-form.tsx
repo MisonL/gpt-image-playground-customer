@@ -173,6 +173,18 @@ const compactSettingRowClass =
     'space-y-1.5 lg:grid lg:grid-cols-[3.4rem_minmax(0,1fr)] lg:items-center lg:gap-1.5 lg:space-y-0';
 const compactSettingLabelClass = 'text-muted-foreground text-xs lg:pt-0.5';
 
+export function resolveGenerationFooterPromptTarget(input: {
+    currentMode: WorkbenchMode;
+    prompt: string;
+    batchPromptText: string;
+}): { value: string; isEmpty: boolean } {
+    const value = input.currentMode === 'batch' ? input.batchPromptText : input.prompt;
+    return {
+        value,
+        isEmpty: value.trim().length === 0
+    };
+}
+
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -426,6 +438,11 @@ export function GenerationForm({
     const streamModeLabel = getStreamModeLabel(streamMode, t);
     const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
     const workbenchBackendLabel = getWorkbenchBackendLabel(imageBackend, t);
+    const footerPromptTarget = resolveGenerationFooterPromptTarget({
+        currentMode,
+        prompt,
+        batchPromptText
+    });
 
     const applyPromptTag = React.useCallback(
         (label: string) => {
@@ -1504,8 +1521,8 @@ export function GenerationForm({
                             <button
                                 type='button'
                                 className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
-                                disabled={!prompt.trim() || isLoading}
-                                onClick={() => onSaveInspiration(prompt)}>
+                                disabled={footerPromptTarget.isEmpty || isLoading}
+                                onClick={() => onSaveInspiration(footerPromptTarget.value)}>
                                 <Bookmark className='h-3.5 w-3.5' />
                                 {t('workbench.saveInspiration')}
                             </button>
@@ -1513,7 +1530,14 @@ export function GenerationForm({
                                 type='button'
                                 className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
                                 disabled={isLoading}
-                                onClick={() => setPrompt(t('workbench.randomPromptExample'))}>
+                                onClick={() => {
+                                    const example = t('workbench.randomPromptExample');
+                                    if (currentMode === 'batch') {
+                                        setBatchPromptText(example);
+                                        return;
+                                    }
+                                    setPrompt(example);
+                                }}>
                                 <WandSparkles className='h-3.5 w-3.5' />
                                 {t('workbench.randomInspiration')}
                             </button>
