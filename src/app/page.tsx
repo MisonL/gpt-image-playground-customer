@@ -219,6 +219,8 @@ type ApiImageResult = {
     storageMode?: HistoryMetadata['storageModeUsed'];
 };
 
+type ImageStorageMode = NonNullable<HistoryMetadata['storageModeUsed']>;
+
 type ApiUsage = {
     input_tokens_details?: {
         text_tokens?: number;
@@ -385,6 +387,7 @@ export default function HomePage() {
     const [openLogsSignal, setOpenLogsSignal] = React.useState(0);
     const [shareDialogOpen, setShareDialogOpen] = React.useState(false);
     const [shareTargetFilename, setShareTargetFilename] = React.useState<string | null>(null);
+    const [shareTargetStorageMode, setShareTargetStorageMode] = React.useState<HistoryMetadata['storageModeUsed']>();
     const [shareUrl, setShareUrl] = React.useState<string | null>(null);
     const [shareError, setShareError] = React.useState<string | null>(null);
     const [isCreatingShare, setIsCreatingShare] = React.useState(false);
@@ -2049,8 +2052,8 @@ export default function HomePage() {
     }, [createErrorNotice, t]);
 
     const resolveImageBlob = React.useCallback(
-        async (filename: string): Promise<Blob> => {
-            if (effectiveStorageModeClient === 'indexeddb') {
+        async (filename: string, storageMode: ImageStorageMode = effectiveStorageModeClient): Promise<Blob> => {
+            if (storageMode === 'indexeddb') {
                 const record = allDbImages?.find((img) => img.filename === filename);
                 if (!record?.blob) {
                     throw new Error(t('error.imageNotFoundDb', { filename }));
@@ -2071,9 +2074,9 @@ export default function HomePage() {
     );
 
     const handleDownloadImage = React.useCallback(
-        async (filename: string) => {
+        async (filename: string, storageMode?: HistoryMetadata['storageModeUsed']) => {
             try {
-                const blob = await resolveImageBlob(filename);
+                const blob = await resolveImageBlob(filename, storageMode);
                 const url = URL.createObjectURL(blob);
                 const link = document.createElement('a');
                 link.href = url;
@@ -2091,8 +2094,9 @@ export default function HomePage() {
         [createErrorNotice, resolveImageBlob, t]
     );
 
-    const handleOpenShareImage = React.useCallback((filename: string) => {
+    const handleOpenShareImage = React.useCallback((filename: string, storageMode?: HistoryMetadata['storageModeUsed']) => {
         setShareTargetFilename(filename);
+        setShareTargetStorageMode(storageMode);
         setShareUrl(null);
         setShareError(null);
         setShareDialogOpen(true);
@@ -2104,7 +2108,7 @@ export default function HomePage() {
             setIsCreatingShare(true);
             setShareError(null);
             try {
-                const blob = await resolveImageBlob(shareTargetFilename);
+                const blob = await resolveImageBlob(shareTargetFilename, shareTargetStorageMode);
                 const result = await createImageShareFromBlob({
                     filename: shareTargetFilename,
                     blob,
@@ -2120,7 +2124,7 @@ export default function HomePage() {
                 setIsCreatingShare(false);
             }
         },
-        [refreshImageAccessCookie, resolveImageBlob, shareTargetFilename, t]
+        [refreshImageAccessCookie, resolveImageBlob, shareTargetFilename, shareTargetStorageMode, t]
     );
 
     const handleSendToEdit = async (
