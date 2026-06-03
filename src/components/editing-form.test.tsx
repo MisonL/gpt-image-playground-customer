@@ -1,5 +1,6 @@
 import { EditingForm, type EditingFormData } from './editing-form';
 import { I18nProvider } from '@/lib/i18n';
+import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
@@ -11,6 +12,11 @@ type RenderOptions = {
     advancedOpen?: boolean;
     advancedTab?: 'output' | 'model' | 'stream' | 'route';
     reuseContext?: React.ComponentProps<typeof EditingForm>['reuseContext'];
+    allowStreamingBatch?: boolean;
+    enableParallelBatch?: boolean;
+    editN?: number[];
+    streamingStrategy?: EditingFormData['streaming_strategy'];
+    defaultStreamingStrategy?: ImageStreamingStrategy;
 };
 
 const noop = () => {};
@@ -20,7 +26,12 @@ function renderEditingForm({
     outputFormat = 'png',
     advancedOpen = true,
     advancedTab = 'route',
-    reuseContext = null
+    reuseContext = null,
+    allowStreamingBatch = false,
+    enableParallelBatch = false,
+    editN = [1],
+    streamingStrategy = 'server-default',
+    defaultStreamingStrategy = 'auto'
 }: RenderOptions): string {
     return renderToStaticMarkup(
         <I18nProvider>
@@ -43,7 +54,7 @@ function renderEditingForm({
                 maxImages={10}
                 editPrompt=''
                 setEditPrompt={noop}
-                editN={[1]}
+                editN={editN}
                 setEditN={noop}
                 editSize='auto'
                 setEditSize={noop}
@@ -75,12 +86,15 @@ function renderEditingForm({
                 setEditMaskPreviewUrl={noop}
                 streamMode='auto'
                 setStreamMode={noop}
-                allowStreamingBatch={false}
+                allowStreamingBatch={allowStreamingBatch}
+                enableParallelBatch={enableParallelBatch}
+                setEnableParallelBatch={noop}
                 partialImages={1}
                 setPartialImages={noop}
                 editImageBackend={backend}
                 setEditImageBackend={noop}
-                editStreamingStrategy='server-default'
+                editStreamingStrategy={streamingStrategy}
+                defaultStreamingStrategy={defaultStreamingStrategy}
                 setEditStreamingStrategy={noop}
                 editResponsesModel=''
                 setEditResponsesModel={noop}
@@ -90,6 +104,7 @@ function renderEditingForm({
                 setEditPromptOptimization={noop}
                 editForceWeb={false}
                 setEditForceWeb={noop}
+                estimatedCostLabel='预计 0.12 积分'
                 initialAdvancedOpen={advancedOpen}
                 initialAdvancedTab={advancedTab}
             />
@@ -138,6 +153,77 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(html, /edit-stream-mode-select/);
         assert.match(html, /edit-partial-1/);
         assert.doesNotMatch(html, /edit-model-select/);
+    });
+
+    it('renders an explicit parallel batch toggle in edit stream settings', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            advancedTab: 'stream',
+            allowStreamingBatch: true,
+            enableParallelBatch: true,
+            editN: [2]
+        });
+
+        assert.match(html, /并发批量/);
+        assert.match(html, /多张图或多条提示词会按当前渠道容量并发执行/);
+        assert.match(html, /id="edit-parallel-batch-enabled"/);
+        assert.match(html, /aria-checked="true"/);
+    });
+
+    it('keeps edit parallel batch disabled for a single output image', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            advancedTab: 'stream',
+            allowStreamingBatch: true,
+            enableParallelBatch: true
+        });
+
+        assert.match(html, /选择至少 2 张图片或 2 条提示词后可启用并发/);
+        assert.match(html, /id="edit-parallel-batch-enabled"/);
+        assert.match(html, /aria-checked="false"/);
+        assert.match(html, /disabled=""/);
+    });
+
+    it('keeps edit parallel batch disabled when streaming strategy is off', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            advancedTab: 'stream',
+            allowStreamingBatch: true,
+            enableParallelBatch: true,
+            editN: [2],
+            streamingStrategy: 'off'
+        });
+
+        assert.match(html, /并发批量需要流式模式；非流式会保持顺序执行。/);
+        assert.match(html, /id="edit-parallel-batch-enabled"/);
+        assert.match(html, /aria-checked="false"/);
+        assert.match(html, /disabled=""/);
+    });
+
+    it('keeps edit parallel batch disabled when the server default streaming strategy is off', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            advancedTab: 'stream',
+            allowStreamingBatch: true,
+            enableParallelBatch: true,
+            editN: [2],
+            defaultStreamingStrategy: 'off'
+        });
+
+        assert.match(html, /并发批量需要流式模式；非流式会保持顺序执行。/);
+        assert.match(html, /id="edit-parallel-batch-enabled"/);
+        assert.match(html, /aria-checked="false"/);
+        assert.match(html, /disabled=""/);
+    });
+
+    it('disables the edit stream mode selector when the server default streaming strategy is off', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            advancedTab: 'stream',
+            defaultStreamingStrategy: 'off'
+        });
+
+        assert.match(html, /<button[^>]*(?:disabled=""[^>]*id="edit-stream-mode-select"|id="edit-stream-mode-select"[^>]*disabled="")/);
     });
 
     it('renders Responses-specific edit controls when the Responses backend is selected', () => {

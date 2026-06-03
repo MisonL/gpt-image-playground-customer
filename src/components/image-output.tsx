@@ -146,7 +146,7 @@ function ResultActionButton({
             onClick={onClick}
             disabled={disabled}
             className={cn(
-                'text-muted-foreground hover:text-foreground h-8 shrink-0 rounded-md px-2 text-xs disabled:opacity-50',
+                'text-muted-foreground hover:text-foreground min-h-11 shrink-0 rounded-md px-3 text-xs disabled:opacity-50 lg:h-8 lg:min-h-0 lg:px-2',
                 active && 'bg-accent text-accent-foreground hover:text-accent-foreground',
                 emphasized && 'border-border/70 bg-card/80 border'
             )}
@@ -695,7 +695,7 @@ export function ImageOutput({
                                 variant='ghost'
                                 size='icon'
                                 className={cn(
-                                    'h-8 w-8 rounded p-1',
+                                    'h-11 w-11 rounded p-1 lg:h-8 lg:w-8',
                                     viewMode === 'grid' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
                                 )}
                                 onClick={() => onViewChange('grid')}
@@ -708,7 +708,7 @@ export function ImageOutput({
                                     variant='ghost'
                                     size='icon'
                                     className={cn(
-                                        'h-8 w-8 overflow-hidden rounded p-0.5',
+                                        'h-11 w-11 overflow-hidden rounded p-0.5 lg:h-8 lg:w-8',
                                         viewMode === index
                                             ? 'ring-ring ring-offset-background ring-2 ring-offset-1'
                                             : 'opacity-60 hover:opacity-100'

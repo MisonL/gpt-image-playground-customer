@@ -121,6 +121,16 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /w-\[min\(84vw,360px\)\]/);
     });
 
+    it('does not render fake inspiration actions without handlers', () => {
+        const html = renderHistoryPanel([], [inspirationItem]);
+
+        assert.match(html, /已保存的灵感/);
+        assert.match(html, /套用首个模板/);
+        assert.match(html, /1 条灵感/);
+        assert.doesNotMatch(html, /aria-label="收藏"/);
+        assert.doesNotMatch(html, />管理</);
+    });
+
     it('renders a non-fake pending activity timeline before the first generation', () => {
         const html = renderHistoryPanel([], [inspirationItem]);
 

@@ -4,6 +4,7 @@ import { ModeToggle } from '@/components/mode-toggle';
 import type { WorkbenchMode } from '@/components/mode-toggle';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -28,6 +29,7 @@ import {
 } from '@/lib/image-upstream-strategy';
 import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
+import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import {
     Square,
@@ -76,6 +78,7 @@ export type GenerationFormData = {
     thinking: ImageUpstreamFormThinking;
     promptOptimization: ImageUpstreamFormPromptOptimization;
     forceWeb: boolean;
+    enableParallelBatch: boolean;
     batchPrompts?: string[];
 };
 
@@ -127,11 +130,14 @@ type GenerationFormProps = {
     streamMode: ImageStreamMode;
     setStreamMode: React.Dispatch<React.SetStateAction<ImageStreamMode>>;
     allowStreamingBatch: boolean;
+    enableParallelBatch: boolean;
+    setEnableParallelBatch: React.Dispatch<React.SetStateAction<boolean>>;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
     imageBackend: GenerationFormData['image_backend'];
     setImageBackend: React.Dispatch<React.SetStateAction<GenerationFormData['image_backend']>>;
     streamingStrategy: GenerationFormData['streaming_strategy'];
+    defaultStreamingStrategy: ImageStreamingStrategy;
     setStreamingStrategy: React.Dispatch<React.SetStateAction<GenerationFormData['streaming_strategy']>>;
     responsesModel: string;
     setResponsesModel: React.Dispatch<React.SetStateAction<string>>;
@@ -141,6 +147,7 @@ type GenerationFormProps = {
     setPromptOptimization: React.Dispatch<React.SetStateAction<GenerationFormData['promptOptimization']>>;
     forceWeb: boolean;
     setForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
+    estimatedCostLabel: string;
     defaultAdvancedOpen?: boolean;
     defaultAdvancedTab?: AdvancedTab;
 };
@@ -208,7 +215,7 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-8 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-7 lg:flex-row lg:px-1 lg:text-[11px] 2xl:px-1.5 2xl:text-xs [&_[data-slot=radio-group-indicator]]:hidden [&_[data-slot=radio-group-item-content]]:gap-1 lg:[&_[data-slot=radio-group-item-content]]:gap-0.5 2xl:[&_[data-slot=radio-group-item-content]]:gap-1'>
+            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-7 lg:flex-row lg:px-1 lg:text-[11px] 2xl:px-1.5 2xl:text-xs [&_[data-slot=radio-group-indicator]]:hidden [&_[data-slot=radio-group-item-content]]:gap-1 lg:[&_[data-slot=radio-group-item-content]]:gap-0.5 2xl:[&_[data-slot=radio-group-item-content]]:gap-1'>
             <Icon className='h-3 w-3 shrink-0 text-current opacity-50 lg:hidden 2xl:block' />
             <span className='max-w-full min-w-0 truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
@@ -335,11 +342,14 @@ export function GenerationForm({
     streamMode,
     setStreamMode,
     allowStreamingBatch,
+    enableParallelBatch,
+    setEnableParallelBatch,
     partialImages,
     setPartialImages,
     imageBackend,
     setImageBackend,
     streamingStrategy,
+    defaultStreamingStrategy,
     setStreamingStrategy,
     responsesModel,
     setResponsesModel,
@@ -349,6 +359,7 @@ export function GenerationForm({
     setPromptOptimization,
     forceWeb,
     setForceWeb,
+    estimatedCostLabel,
     defaultAdvancedOpen = false,
     defaultAdvancedTab = 'output'
 }: GenerationFormProps) {
@@ -370,7 +381,7 @@ export function GenerationForm({
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
     const effectiveStreamingStrategy: ImageStreamingStrategy =
-        streamingStrategy === 'server-default' ? 'auto' : streamingStrategy;
+        streamingStrategy === 'server-default' ? defaultStreamingStrategy : streamingStrategy;
     const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
     const concreteSize = readConcreteSize({ size, model, customWidth, customHeight });
     const recommendStreaming = Boolean(
@@ -388,6 +399,17 @@ export function GenerationForm({
     const isBatchMode = currentMode === 'batch';
     const isReuseMode = currentMode === 'reuse';
     const batchPrompts = React.useMemo(() => readBatchPromptLines(batchPromptText), [batchPromptText]);
+    const parallelBatchTargetCount = isBatchMode ? batchPrompts.length : n[0];
+    const parallelBatchToggle = resolveStreamingBatchToggleState({
+        allowStreamingBatch,
+        userEnabled: enableParallelBatch,
+        targetCount: parallelBatchTargetCount,
+        streamMode,
+        streamingStrategy: effectiveStreamingStrategy
+    });
+    const canEnableParallelBatch = parallelBatchToggle.canEnable;
+    const parallelBatchChecked = parallelBatchToggle.checked;
+    const parallelBatchUnavailableKey = parallelBatchToggle.unavailableReasonKey;
     const hasFailedBatchPrompts = isBatchMode && failedBatchPrompts.length > 0;
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
@@ -458,7 +480,8 @@ export function GenerationForm({
             responsesModel,
             thinking,
             promptOptimization,
-            forceWeb
+            forceWeb,
+            enableParallelBatch: parallelBatchChecked
         };
         if (isBatchMode) {
             formData.batchPrompts = batchPrompts;
@@ -490,7 +513,7 @@ export function GenerationForm({
                                     variant='ghost'
                                     size='sm'
                                     onClick={onOpenPasswordDialog}
-                                    className='text-muted-foreground hover:text-foreground ml-auto h-7 px-2'
+                                    className='text-muted-foreground hover:text-foreground ml-auto min-h-11 min-w-11 px-2 lg:min-h-7 lg:min-w-0'
                                     aria-label={t('password.configure')}>
                                     {clientPasswordHash ? (
                                         <Lock className='h-4 w-4' />
@@ -513,7 +536,7 @@ export function GenerationForm({
                                             type='button'
                                             onClick={() => setPrompt('')}
                                             disabled={isLoading}
-                                            className='text-muted-foreground hover:text-foreground ml-auto text-xs disabled:opacity-50'>
+                                            className='text-muted-foreground hover:text-foreground focus-visible:ring-ring -mr-2 ml-auto min-h-11 min-w-11 rounded-md px-2 text-xs transition-[color,box-shadow] focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 lg:mr-0 lg:min-h-7 lg:min-w-0 lg:px-0'>
                                             {t('common.clear')}
                                         </button>
                                     )}
@@ -549,7 +572,7 @@ export function GenerationForm({
                                                 onClick={() => applyPromptTag(label)}
                                                 disabled={isLoading}
                                                 aria-pressed={selected}
-                                                className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs shadow-sm transition-[background-color,border-color,color,transform,box-shadow] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 ${
+                                                className={`min-h-11 shrink-0 rounded-full border px-3 py-1 text-xs shadow-sm transition-[background-color,border-color,color,transform,box-shadow] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-0 lg:px-2.5 lg:py-0.5 ${
                                                     selected
                                                         ? 'border-primary/50 bg-primary/90 text-primary-foreground shadow-[0_4px_10px_oklch(0.5_0.12_30/0.14)]'
                                                         : 'border-border text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground bg-[oklch(0.982_0.012_84)]'
@@ -581,7 +604,7 @@ export function GenerationForm({
                                                 type='button'
                                                 onClick={onClearReuseContext}
                                                 disabled={isLoading}
-                                                className='text-muted-foreground hover:text-foreground shrink-0 disabled:opacity-50'>
+                                                className='text-muted-foreground hover:text-foreground focus-visible:ring-ring -mr-2 min-h-11 shrink-0 rounded-md px-2 transition-[color,box-shadow] focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 lg:mr-0 lg:min-h-7 lg:px-0'>
                                                 {t('common.clear')}
                                             </button>
                                         </div>
@@ -633,7 +656,7 @@ export function GenerationForm({
                                             size='sm'
                                             onClick={reuseFailedBatchPrompts}
                                             disabled={isLoading}
-                                            className='bg-background/80 h-7 px-2 text-xs'>
+                                            className='bg-background/80 min-h-11 px-3 text-xs lg:h-7 lg:min-h-0 lg:px-2'>
                                             <RotateCcw className='mr-1.5 h-3.5 w-3.5' />
                                             {t('batch.reuseFailed')}
                                         </Button>
@@ -898,16 +921,16 @@ export function GenerationForm({
                                     onValueChange={(value) => setAdvancedTab(value as AdvancedTab)}
                                     className='gap-3'>
                                     <TabsList className='grid h-auto w-full grid-cols-4 rounded-md'>
-                                        <TabsTrigger value='output' className='min-h-9'>
+                                        <TabsTrigger value='output' className='min-h-11 lg:min-h-9'>
                                             {t('ux.output')}
                                         </TabsTrigger>
-                                        <TabsTrigger value='model' className='min-h-9'>
+                                        <TabsTrigger value='model' className='min-h-11 lg:min-h-9'>
                                             {t('ux.modelRoute')}
                                         </TabsTrigger>
-                                        <TabsTrigger value='stream' className='min-h-9'>
+                                        <TabsTrigger value='stream' className='min-h-11 lg:min-h-9'>
                                             {t('ux.streaming')}
                                         </TabsTrigger>
-                                        <TabsTrigger value='route' className='min-h-9'>
+                                        <TabsTrigger value='route' className='min-h-11 lg:min-h-9'>
                                             {t('ux.route')}
                                         </TabsTrigger>
                                     </TabsList>
@@ -921,7 +944,7 @@ export function GenerationForm({
                                                 }
                                                 disabled={isLoading}
                                                 name='model'>
-                                                <SelectTrigger id='model-select' className='w-full'>
+                                                <SelectTrigger id='model-select' className='min-h-11 w-full lg:min-h-9'>
                                                     <SelectValue placeholder={t('form.selectModel')} />
                                                 </SelectTrigger>
                                                 <SelectContent>
@@ -944,7 +967,7 @@ export function GenerationForm({
                                                     }
                                                     disabled={isLoading}
                                                     name='image_backend'>
-                                                    <SelectTrigger id='image-backend-select'>
+                                                    <SelectTrigger id='image-backend-select' className='min-h-11 lg:min-h-9'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
@@ -973,7 +996,9 @@ export function GenerationForm({
                                                     }
                                                     disabled={isLoading}
                                                     name='image_streaming_strategy'>
-                                                    <SelectTrigger id='streaming-strategy-select'>
+                                                    <SelectTrigger
+                                                        id='streaming-strategy-select'
+                                                        className='min-h-11 lg:min-h-9'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
@@ -1045,7 +1070,7 @@ export function GenerationForm({
                                                             }
                                                             disabled={isLoading}
                                                             name='thinking'>
-                                                            <SelectTrigger id='thinking-select'>
+                                                            <SelectTrigger id='thinking-select' className='min-h-11 lg:min-h-9'>
                                                                 <SelectValue />
                                                             </SelectTrigger>
                                                             <SelectContent>
@@ -1074,7 +1099,9 @@ export function GenerationForm({
                                                             }
                                                             disabled={isLoading}
                                                             name='promptOptimization'>
-                                                            <SelectTrigger id='prompt-optimization-select'>
+                                                            <SelectTrigger
+                                                                id='prompt-optimization-select'
+                                                                className='min-h-11 lg:min-h-9'>
                                                                 <SelectValue />
                                                             </SelectTrigger>
                                                             <SelectContent>
@@ -1139,7 +1166,10 @@ export function GenerationForm({
                                                             }
                                                             disabled={isLoading || streamingDisabledByStrategy}
                                                             name='stream_mode'>
-                                                            <SelectTrigger id='stream-mode-select' className='w-full'>
+                                                            <SelectTrigger
+                                                                id='stream-mode-select'
+                                                                disabled={isLoading || streamingDisabledByStrategy}
+                                                                className='min-h-11 w-full lg:min-h-9'>
                                                                 <SelectValue />
                                                             </SelectTrigger>
                                                             <SelectContent>
@@ -1165,6 +1195,32 @@ export function GenerationForm({
                                                 </TooltipContent>
                                             </Tooltip>
                                         </div>
+                                        <div className='border-border bg-muted/20 flex items-start gap-3 rounded-md border p-3'>
+                                            <label
+                                                htmlFor='parallel-batch-enabled'
+                                                className='-m-2 flex min-h-11 min-w-11 cursor-pointer items-start justify-center p-2 has-disabled:cursor-not-allowed'>
+                                                <Checkbox
+                                                    id='parallel-batch-enabled'
+                                                    checked={parallelBatchChecked}
+                                                    onCheckedChange={(value) => setEnableParallelBatch(value === true)}
+                                                    disabled={isLoading || !canEnableParallelBatch}
+                                                    aria-label={t('streaming.parallelBatch')}
+                                                    className='mt-0.5'
+                                                />
+                                            </label>
+                                            <div className='grid gap-1'>
+                                                <Label
+                                                    htmlFor='parallel-batch-enabled'
+                                                    className='text-foreground text-sm leading-none font-medium'>
+                                                    {t('streaming.parallelBatch')}
+                                                </Label>
+                                                <p className='text-muted-foreground text-xs leading-5'>
+                                                    {canEnableParallelBatch
+                                                        ? t('streaming.parallelBatchDescription')
+                                                        : t(parallelBatchUnavailableKey)}
+                                                </p>
+                                            </div>
+                                        </div>
                                         {streamMode !== 'non_stream' && (
                                             <div className='space-y-3'>
                                                 <div className='flex items-center gap-2'>
@@ -1175,7 +1231,7 @@ export function GenerationForm({
                                                         <TooltipTrigger asChild>
                                                             <button
                                                                 type='button'
-                                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
+                                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-11 w-11 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95 lg:h-9 lg:w-9'
                                                                 aria-label={t('streaming.costHint')}>
                                                                 <HelpCircle className='h-4 w-4' />
                                                             </button>
@@ -1401,8 +1457,13 @@ export function GenerationForm({
                             <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
                                 {streamStatusLabel}
                             </span>
+                            {parallelBatchChecked && (
+                                <span className='border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] text-[oklch(0.38_0.075_148)] rounded-full border px-2 py-1'>
+                                    {t('streaming.parallelBatchEnabled')}
+                                </span>
+                            )}
                             <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
-                                {t('workbench.estimatedCost')}
+                                {estimatedCostLabel}
                             </span>
                         </div>
                         {submitDisabledReason && (
@@ -1442,7 +1503,7 @@ export function GenerationForm({
                         <div className='grid grid-cols-2 gap-2'>
                             <button
                                 type='button'
-                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-9 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50'
+                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
                                 disabled={!prompt.trim() || isLoading}
                                 onClick={() => onSaveInspiration(prompt)}>
                                 <Bookmark className='h-3.5 w-3.5' />
@@ -1450,7 +1511,7 @@ export function GenerationForm({
                             </button>
                             <button
                                 type='button'
-                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-9 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50'
+                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
                                 disabled={isLoading}
                                 onClick={() => setPrompt(t('workbench.randomPromptExample'))}>
                                 <WandSparkles className='h-3.5 w-3.5' />

@@ -28,6 +28,13 @@ export type HistoryMetadata = {
     output_format?: GenerationFormData['output_format'];
     model?: GptImageModel;
     size?: string;
+    image_backend?: GenerationFormData['image_backend'];
+    streaming_strategy?: GenerationFormData['streaming_strategy'];
+    responsesModel?: string;
+    thinking?: GenerationFormData['thinking'];
+    promptOptimization?: GenerationFormData['promptOptimization'];
+    forceWeb?: boolean;
+    enableParallelBatch?: boolean;
     clientRequestIds?: string[];
 };
 
@@ -130,6 +137,13 @@ export function buildHistoryGenerationFormData(
             background: item.background,
             moderation: item.moderation,
             model: nextModel,
+            image_backend: item.image_backend ?? 'server-default',
+            streaming_strategy: item.streaming_strategy ?? 'server-default',
+            responsesModel: item.responsesModel ?? '',
+            thinking: item.thinking ?? 'server-default',
+            promptOptimization: item.promptOptimization ?? 'server-default',
+            forceWeb: item.forceWeb === true,
+            enableParallelBatch: item.enableParallelBatch === true,
             batchPrompts: failedBatchPrompts.length > 1 ? failedBatchPrompts : undefined
         };
     }
@@ -151,6 +165,13 @@ export function buildHistoryGenerationFormData(
         background: item.background,
         moderation: item.moderation,
         model: nextModel,
+        image_backend: item.image_backend ?? 'server-default',
+        streaming_strategy: item.streaming_strategy ?? 'server-default',
+        responsesModel: item.responsesModel ?? '',
+        thinking: item.thinking ?? 'server-default',
+        promptOptimization: item.promptOptimization ?? 'server-default',
+        forceWeb: item.forceWeb === true,
+        enableParallelBatch: item.enableParallelBatch === true,
         batchPrompts: undefined
     };
 }
@@ -215,6 +236,13 @@ export function buildCompletedHistoryEntry(input: {
             : {}),
         model: currentModel,
         size: getRequestSize(input.formData, input.requestMode),
+        image_backend: input.formData.image_backend,
+        streaming_strategy: input.formData.streaming_strategy,
+        responsesModel: input.formData.responsesModel,
+        thinking: input.formData.thinking,
+        promptOptimization: input.formData.promptOptimization,
+        forceWeb: input.formData.forceWeb === true,
+        enableParallelBatch: input.formData.enableParallelBatch === true,
         ...(clientRequestIds.length > 0 ? { clientRequestIds } : {})
     };
 }
@@ -241,6 +269,13 @@ export function buildFailedHistoryEntry(input: {
         mode: input.requestMode,
         costDetails: null,
         model: getRequestModel(input.formData, input.requestMode),
-        size: getRequestSize(input.formData, input.requestMode)
+        size: getRequestSize(input.formData, input.requestMode),
+        image_backend: input.formData.image_backend,
+        streaming_strategy: input.formData.streaming_strategy,
+        responsesModel: input.formData.responsesModel,
+        thinking: input.formData.thinking,
+        promptOptimization: input.formData.promptOptimization,
+        forceWeb: input.formData.forceWeb === true,
+        enableParallelBatch: input.formData.enableParallelBatch === true
     };
 }

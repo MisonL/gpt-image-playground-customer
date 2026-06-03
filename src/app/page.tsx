@@ -45,7 +45,7 @@ import {
     appendImageUpstreamOverrideFields,
     type ImageUpstreamFormBackend
 } from '@/lib/image-upstream-form';
-import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
+import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
 import { resolveMobilePrimaryDisabledReason } from '@/lib/mobile-primary-action-state';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
@@ -56,8 +56,9 @@ import {
     applyStreamingClientEvent,
     BatchPausedError,
     buildStreamingBatchJobs,
-    isRuntimeStreamingBatchEnabled,
+    canUseStreamingBatchTransport,
     resolveStreamingBatchCapacity,
+    resolveStreamingBatchToggleState,
     scheduleStreamingBatch,
     shouldUseStreamingBatch,
     type ApiImageResponseItem,
@@ -67,6 +68,7 @@ import {
 } from '@/lib/streaming-batch';
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
+import { formatEstimatedCredits } from '@/lib/workbench-cost-label';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ArrowUp, Flower2, HelpCircle, Loader2, Lock, Pause, PenLine, Settings2, Activity, X } from 'lucide-react';
 import * as React from 'react';
@@ -87,7 +89,7 @@ const apiSettingsLocalStorageKey = 'openaiImageApiSettings';
 const inspirationsLocalStorageKey = 'openaiImageInspirations';
 const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
-type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, 1 | 2 | 3];
+type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, 1 | 2 | 3, boolean];
 type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
 
 function getImageBackendLabel(backend: ImageUpstreamFormBackend, t: (key: string) => string): string {
@@ -226,6 +228,10 @@ type ApiUsage = {
 };
 
 type RuntimeCapabilities = {
+    streaming?: {
+        defaultMode?: ImageStreamMode;
+        defaultStrategy?: ImageStreamingStrategy;
+    };
     streamingBatch: {
         enabled: boolean;
         recommendedConcurrency: number;
@@ -384,13 +390,25 @@ export default function HomePage() {
     const [isCreatingShare, setIsCreatingShare] = React.useState(false);
     const [isMobileCreationDrawerOpen, setIsMobileCreationDrawerOpen] = React.useState(false);
     const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
+    const mobileCreationDrawerCloseButtonRef = React.useRef<HTMLButtonElement | null>(null);
     const mobileDrawerPointerStartRef = React.useRef<MobileDrawerPointerStart | null>(null);
     const mobileDrawerGestureHandledAtRef = React.useRef(0);
 
     const allDbImages = useLiveQuery<ImageRecord[] | undefined>(() => db.images.toArray(), []);
 
     const [editImageFiles, setEditImageFiles] = React.useState<File[]>([]);
-    const [editSourceImagePreviewUrls, setEditSourceImagePreviewUrls] = React.useState<string[]>([]);
+    const [editSourceImagePreviewUrls, setEditSourceImagePreviewUrlsState] = React.useState<string[]>([]);
+    const editSourceImagePreviewUrlsRef = React.useRef<string[]>([]);
+    const updateEditSourceImagePreviewUrls = React.useCallback((nextUrls: string[]) => {
+        const nextUrlSet = new Set(nextUrls);
+        editSourceImagePreviewUrlsRef.current.forEach((url) => {
+            if (!nextUrlSet.has(url)) {
+                URL.revokeObjectURL(url);
+            }
+        });
+        editSourceImagePreviewUrlsRef.current = nextUrls;
+        setEditSourceImagePreviewUrlsState(nextUrls);
+    }, []);
     const [editPrompt, setEditPrompt] = React.useState('');
     const [editN, setEditN] = React.useState([1]);
     const [editSize, setEditSize] = React.useState<EditingFormData['size']>('auto');
@@ -456,16 +474,16 @@ export default function HomePage() {
     // 流式状态，由生成和编辑模式共用。
     const [streamMode, setStreamMode] = React.useState<ImageStreamMode>('auto');
     const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(1);
+    const [enableParallelBatch, setEnableParallelBatch] = React.useState(false);
     const [activeRequestStreaming, setActiveRequestStreaming] = React.useState(false);
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
     const [streamingPreviewImages, setStreamingPreviewImages] = React.useState<Map<number, string>>(new Map());
     const [batchProgress, setBatchProgress] = React.useState<GenerationBatchProgress | null>(null);
     const [isBatchPauseRequested, setIsBatchPauseRequested] = React.useState(false);
     const batchPauseRequestedRef = React.useRef(false);
+    const defaultStreamingStrategy = runtimeCapabilities?.streaming?.defaultStrategy ?? 'auto';
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
-        featureEnabled: isRuntimeStreamingBatchEnabled({
-            serverEnabled: runtimeCapabilities?.streamingBatch.enabled
-        }),
+        featureEnabled: runtimeCapabilities?.streamingBatch.enabled === true,
         hasRequestApiKey: apiSettings.apiKey.trim().length > 0,
         requestCredentialConcurrency: runtimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
         serverRecommendedConcurrency: runtimeCapabilities?.streamingBatch.recommendedConcurrency ?? 0
@@ -487,7 +505,28 @@ export default function HomePage() {
     const usesEditControls = workbenchMode === 'edit';
     const activeWorkbenchModel = usesEditControls ? editModel : genModel;
     const activeWorkbenchBackend = usesEditControls ? editImageBackend : genImageBackend;
+    const activeWorkbenchStreamingStrategy = usesEditControls ? editStreamingStrategy : genStreamingStrategy;
+    const activeEffectiveStreamingStrategy =
+        activeWorkbenchStreamingStrategy === IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+            ? defaultStreamingStrategy
+            : activeWorkbenchStreamingStrategy;
     const activeWorkbenchBackendLabel = getImageBackendLabel(activeWorkbenchBackend, t);
+    const activeTaskCount =
+        mode === 'generate' && workbenchMode === 'batch'
+            ? readBatchPromptLines(genBatchPromptText).length
+            : mode === 'generate'
+              ? genN[0]
+              : editN[0];
+    const activeEstimatedCostLabel = t('workbench.estimatedCost', {
+        credits: formatEstimatedCredits(activeTaskCount)
+    });
+    const activeParallelBatchVisible = resolveStreamingBatchToggleState({
+        allowStreamingBatch: streamingBatchEnabled,
+        userEnabled: enableParallelBatch,
+        targetCount: activeTaskCount,
+        streamMode,
+        streamingStrategy: activeEffectiveStreamingStrategy
+    }).checked;
     const mobileCanSaveInspiration = !isLoading && !isSendingToEdit && currentPrompt.trim().length > 0;
     const activeLogClientRequestIds = React.useMemo(() => {
         if (!latestImageBatch || latestImageBatch.length === 0) return [];
@@ -586,9 +625,31 @@ export default function HomePage() {
         });
     }, []);
 
-    const toggleMobileCreationDrawer = React.useCallback(() => {
-        setIsMobileCreationDrawerOpen((isOpen) => !isOpen);
+    const blurActiveMobileTrigger = React.useCallback(() => {
+        if (typeof document === 'undefined') return;
+        if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+        }
     }, []);
+
+    const openMobileCreationDrawer = React.useCallback(() => {
+        blurActiveMobileTrigger();
+        setIsMobileCreationDrawerOpen(true);
+    }, [blurActiveMobileTrigger]);
+
+    const closeMobileCreationDrawer = React.useCallback(() => {
+        blurActiveMobileTrigger();
+        setIsMobileCreationDrawerOpen(false);
+    }, [blurActiveMobileTrigger]);
+
+    const toggleMobileCreationDrawer = React.useCallback(() => {
+        setIsMobileCreationDrawerOpen((isOpen) => {
+            if (!isOpen) {
+                blurActiveMobileTrigger();
+            }
+            return !isOpen;
+        });
+    }, [blurActiveMobileTrigger]);
 
     const beginMobileCreationDrawerGesture = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return;
@@ -599,25 +660,28 @@ export default function HomePage() {
         };
     }, []);
 
-    const finishMobileCreationDrawerGesture = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
-        const start = mobileDrawerPointerStartRef.current;
-        mobileDrawerPointerStartRef.current = null;
-        if (!start) return;
+    const finishMobileCreationDrawerGesture = React.useCallback(
+        (event: React.PointerEvent<HTMLElement>) => {
+            const start = mobileDrawerPointerStartRef.current;
+            mobileDrawerPointerStartRef.current = null;
+            if (!start) return;
 
-        const gesture = resolveMobileCreationSheetGesture({
-            startX: start.x,
-            startY: start.y,
-            currentX: event.clientX,
-            currentY: event.clientY
-        });
-        if (gesture === 'open') {
-            mobileDrawerGestureHandledAtRef.current = Date.now();
-            setIsMobileCreationDrawerOpen(true);
-        } else if (gesture === 'close') {
-            mobileDrawerGestureHandledAtRef.current = Date.now();
-            setIsMobileCreationDrawerOpen(false);
-        }
-    }, []);
+            const gesture = resolveMobileCreationSheetGesture({
+                startX: start.x,
+                startY: start.y,
+                currentX: event.clientX,
+                currentY: event.clientY
+            });
+            if (gesture === 'open') {
+                mobileDrawerGestureHandledAtRef.current = Date.now();
+                openMobileCreationDrawer();
+            } else if (gesture === 'close') {
+                mobileDrawerGestureHandledAtRef.current = Date.now();
+                closeMobileCreationDrawer();
+            }
+        },
+        [closeMobileCreationDrawer, openMobileCreationDrawer]
+    );
 
     const cancelMobileCreationDrawerGesture = React.useCallback(() => {
         mobileDrawerPointerStartRef.current = null;
@@ -630,6 +694,45 @@ export default function HomePage() {
         }
         toggleMobileCreationDrawer();
     }, [toggleMobileCreationDrawer]);
+
+    React.useEffect(() => {
+        if (!isMobileCreationDrawerOpen || typeof document === 'undefined') return;
+
+        const previousBodyOverflow = document.body.style.overflow;
+        const previousHtmlOverflow = document.documentElement.style.overflow;
+        document.body.style.overflow = 'hidden';
+        document.documentElement.style.overflow = 'hidden';
+
+        return () => {
+            document.body.style.overflow = previousBodyOverflow;
+            document.documentElement.style.overflow = previousHtmlOverflow;
+        };
+    }, [isMobileCreationDrawerOpen]);
+
+    React.useEffect(() => {
+        if (!isMobileCreationDrawerOpen) return;
+
+        requestAnimationFrame(() => {
+            mobileCreationDrawerCloseButtonRef.current?.focus();
+        });
+    }, [isMobileCreationDrawerOpen]);
+
+    React.useEffect(() => {
+        if (!isMobileCreationDrawerOpen || typeof window === 'undefined') return;
+
+        const desktopMediaQuery = window.matchMedia('(min-width: 1024px)');
+        const closeDrawerOnDesktop = () => {
+            if (desktopMediaQuery.matches) {
+                setIsMobileCreationDrawerOpen(false);
+            }
+        };
+
+        closeDrawerOnDesktop();
+        desktopMediaQuery.addEventListener('change', closeDrawerOnDesktop);
+        return () => {
+            desktopMediaQuery.removeEventListener('change', closeDrawerOnDesktop);
+        };
+    }, [isMobileCreationDrawerOpen]);
 
     const getImageSrc = React.useCallback(
         (filename: string): string | undefined => {
@@ -674,9 +777,7 @@ export default function HomePage() {
     }, []);
 
     React.useEffect(() => {
-        return () => {
-            editSourceImagePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
-        };
+        editSourceImagePreviewUrlsRef.current = editSourceImagePreviewUrls;
     }, [editSourceImagePreviewUrls]);
 
     const verifyEntryPasswordHash = React.useCallback(
@@ -843,9 +944,10 @@ export default function HomePage() {
 
     React.useEffect(() => {
         return () => {
-            editSourceImagePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+            editSourceImagePreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+            editSourceImagePreviewUrlsRef.current = [];
         };
-    }, [editSourceImagePreviewUrls]);
+    }, []);
 
     React.useEffect(() => {
         queueMicrotask(() => {
@@ -878,7 +980,7 @@ export default function HomePage() {
                         const previewUrl = URL.createObjectURL(file);
 
                         setEditImageFiles((prevFiles) => [...prevFiles, file]);
-                        setEditSourceImagePreviewUrls((prevUrls) => [...prevUrls, previewUrl]);
+                        updateEditSourceImagePreviewUrls([...editSourceImagePreviewUrlsRef.current, previewUrl]);
 
                         break;
                     }
@@ -891,7 +993,7 @@ export default function HomePage() {
         return () => {
             window.removeEventListener('paste', handlePaste);
         };
-    }, [mode, editImageFiles.length, t]);
+    }, [mode, editImageFiles.length, t, updateEditSourceImagePreviewUrls]);
 
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
@@ -1147,6 +1249,7 @@ export default function HomePage() {
                 retryMode?: RequestMode;
                 retryStreamMode?: ImageStreamMode;
                 retryPartialImages?: 1 | 2 | 3;
+                retryEnableParallelBatch?: boolean;
             } = {}
         ): Promise<{ images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails }> => {
             const formClientRequestId = String(apiFormData.get('clientRequestId') || '');
@@ -1247,13 +1350,15 @@ export default function HomePage() {
                         options.retryFormData &&
                         options.retryMode &&
                         options.retryStreamMode !== undefined &&
-                        options.retryPartialImages !== undefined
+                        options.retryPartialImages !== undefined &&
+                        options.retryEnableParallelBatch !== undefined
                     ) {
                         setLastApiCallArgs([
                             options.retryFormData,
                             options.retryMode,
                             options.retryStreamMode,
-                            options.retryPartialImages
+                            options.retryPartialImages,
+                            options.retryEnableParallelBatch
                         ]);
                     }
                     promptForExpiredPassword();
@@ -1284,11 +1389,13 @@ export default function HomePage() {
         requestMode: RequestMode = mode,
         requestStreamMode: ImageStreamMode = streamMode,
         requestPartialImages: 1 | 2 | 3 = partialImages,
+        requestEnableParallelBatch = formData.enableParallelBatch,
         requestPasswordHash: string | null = clientPasswordHash
     ) {
         const startTime = Date.now();
         let durationMs = 0;
         let shouldKeepRetryArgs = true;
+        let effectiveFormData: GenerationFormData | EditingFormData = formData;
 
         setIsLoading(true);
         setActiveRequestStreaming(requestStreamMode !== 'non_stream');
@@ -1312,9 +1419,7 @@ export default function HomePage() {
         try {
             const latestRuntimeCapabilities = await refreshRuntimeCapabilities();
             const currentStreamingBatchCapacity = resolveStreamingBatchCapacity({
-                featureEnabled: isRuntimeStreamingBatchEnabled({
-                    serverEnabled: latestRuntimeCapabilities?.streamingBatch.enabled
-                }),
+                featureEnabled: latestRuntimeCapabilities?.streamingBatch.enabled === true,
                 hasRequestApiKey: apiSettings.apiKey.trim().length > 0,
                 requestCredentialConcurrency:
                     latestRuntimeCapabilities?.streamingBatch.requestCredentialConcurrency ?? 1,
@@ -1346,8 +1451,6 @@ export default function HomePage() {
                     return;
                 }
             }
-            setLastApiCallArgs([formData, requestMode, requestStreamMode, requestPartialImages]);
-
             const promptBatch =
                 requestMode === 'generate'
                     ? ((formData as GenerationFormData).batchPrompts ?? [])
@@ -1364,11 +1467,37 @@ export default function HomePage() {
                 : requestMode === 'generate'
                   ? (formData as GenerationFormData).n
                   : (formData as EditingFormData).n;
-            const useStreamingBatch = shouldUseStreamingBatch({
+            const requestStreamingStrategy =
+                requestMode === 'generate'
+                    ? (formData as GenerationFormData).streaming_strategy
+                    : (formData as EditingFormData).streaming_strategy;
+            const runtimeDefaultStreamingStrategy =
+                latestRuntimeCapabilities?.streaming?.defaultStrategy ?? defaultStreamingStrategy;
+            const effectiveRequestStreamingStrategy =
+                requestStreamingStrategy === IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
+                    ? runtimeDefaultStreamingStrategy
+                    : requestStreamingStrategy;
+            const normalizedEnableParallelBatch = shouldUseStreamingBatch({
                 enabled: currentStreamingBatchCapacity.enabled,
-                streaming: requestStreamMode !== 'non_stream',
+                userEnabled: requestEnableParallelBatch,
+                streaming: canUseStreamingBatchTransport({
+                    streamMode: requestStreamMode,
+                    streamingStrategy: effectiveRequestStreamingStrategy
+                }),
                 imageCount
             });
+            effectiveFormData = {
+                ...formData,
+                enableParallelBatch: normalizedEnableParallelBatch
+            };
+            setLastApiCallArgs([
+                effectiveFormData,
+                requestMode,
+                requestStreamMode,
+                requestPartialImages,
+                normalizedEnableParallelBatch
+            ]);
+
             const executeImageRequestForCurrentOptions = async (
                 options: { forceSingleImage: boolean; previewIndexOffset?: number; promptOverride?: string } = {
                     forceSingleImage: false
@@ -1377,11 +1506,11 @@ export default function HomePage() {
                 const requestFormData =
                     requestMode === 'generate' && options.promptOverride
                         ? {
-                              ...(formData as GenerationFormData),
+                              ...(effectiveFormData as GenerationFormData),
                               prompt: options.promptOverride,
                               n: 1
                           }
-                        : formData;
+                        : effectiveFormData;
                 return executeImageRequest(
                     buildApiFormData(requestFormData, requestMode, {
                         forceSingleImage: options.forceSingleImage,
@@ -1391,10 +1520,11 @@ export default function HomePage() {
                     }),
                     {
                         previewIndexOffset: options.previewIndexOffset,
-                        retryFormData: formData,
+                        retryFormData: effectiveFormData,
                         retryMode: requestMode,
                         retryStreamMode: requestStreamMode,
-                        retryPartialImages: requestPartialImages
+                        retryPartialImages: requestPartialImages,
+                        retryEnableParallelBatch: normalizedEnableParallelBatch
                     }
                 );
             };
@@ -1407,7 +1537,7 @@ export default function HomePage() {
                     total: jobs.length
                 });
                 const batchResults = await scheduleStreamingBatch(jobs, {
-                    concurrency: useStreamingBatch ? currentStreamingBatchCapacity.concurrency : 1,
+                    concurrency: normalizedEnableParallelBatch ? currentStreamingBatchCapacity.concurrency : 1,
                     runJob: async (job: StreamingBatchJob) => {
                         try {
                             const result = await executeImageRequestForCurrentOptions({
@@ -1458,7 +1588,7 @@ export default function HomePage() {
                     usage,
                     actualCost,
                     durationMs,
-                    formData,
+                    effectiveFormData,
                     requestMode,
                     true,
                     historyPromptOverride
@@ -1482,7 +1612,7 @@ export default function HomePage() {
                 return;
             }
 
-            if (useStreamingBatch) {
+            if (normalizedEnableParallelBatch) {
                 const jobs = buildStreamingBatchJobs(imageCount);
                 const batchResults = await scheduleStreamingBatch(jobs, {
                     concurrency: currentStreamingBatchCapacity.concurrency,
@@ -1510,7 +1640,15 @@ export default function HomePage() {
                 const usage = mergeUsageValues(successes.map((result) => result.usage));
                 const actualCost = mergeActualCostValues(successes.map((result) => result.actualCost));
                 durationMs = Date.now() - startTime;
-                await commitCompletedImages(images, usage, actualCost, durationMs, formData, requestMode, true);
+                await commitCompletedImages(
+                    images,
+                    usage,
+                    actualCost,
+                    durationMs,
+                    effectiveFormData,
+                    requestMode,
+                    true
+                );
                 shouldKeepRetryArgs = false;
                 if (errors.length > 0) {
                     await refreshRuntimeCapabilities();
@@ -1535,7 +1673,7 @@ export default function HomePage() {
                 result.usage,
                 result.actualCost,
                 durationMs,
-                formData,
+                effectiveFormData,
                 requestMode,
                 false,
                 historyPromptOverride
@@ -1559,7 +1697,7 @@ export default function HomePage() {
                 buildFailedHistoryEntry({
                     message,
                     durationMs,
-                    formData,
+                    formData: effectiveFormData,
                     requestMode,
                     storageMode: effectiveStorageModeClient
                 }),
@@ -1600,6 +1738,7 @@ export default function HomePage() {
                 thinking: genThinking,
                 promptOptimization: genPromptOptimization,
                 forceWeb: genForceWeb,
+                enableParallelBatch,
                 ...(batchPrompts ? { batchPrompts } : {})
             };
             void handleApiCall(formData);
@@ -1625,7 +1764,8 @@ export default function HomePage() {
             responsesModel: editResponsesModel,
             thinking: editThinking,
             promptOptimization: editPromptOptimization,
-            forceWeb: editForceWeb
+            forceWeb: editForceWeb,
+            enableParallelBatch
         };
         void handleApiCall(formData);
     }
@@ -1669,9 +1809,11 @@ export default function HomePage() {
             responsesModel: genResponsesModel,
             thinking: genThinking,
             promptOptimization: genPromptOptimization,
-            forceWeb: genForceWeb
+            forceWeb: genForceWeb,
+            enableParallelBatch
         };
     }, [
+        enableParallelBatch,
         genBackground,
         genCompression,
         genCustomHeight,
@@ -1691,56 +1833,70 @@ export default function HomePage() {
         genThinking
     ]);
 
-    const applyHistoryGenerationFormData = React.useCallback((formData: GenerationFormData, item: HistoryMetadata) => {
-        const trimmedPrompt = formData.prompt.trim();
-        const restoredFields = [t('reuse.fieldPrompt')];
+    const applyHistoryGenerationFormData = React.useCallback(
+        (formData: GenerationFormData, item: HistoryMetadata) => {
+            const trimmedPrompt = formData.prompt.trim();
+            const restoredFields = [t('reuse.fieldPrompt')];
 
-        setGenPrompt(trimmedPrompt || formData.prompt);
-        setGenModel(formData.model);
-        setGenSize(formData.size);
-        setGenCustomWidth(formData.customWidth);
-        setGenCustomHeight(formData.customHeight);
-        setGenQuality(formData.quality);
-        setGenBackground(formData.background);
-        setGenModeration(formData.moderation);
-        setGenOutputFormat(formData.output_format);
-        if (formData.output_compression !== undefined) {
-            setGenCompression([formData.output_compression]);
-        }
+            setGenPrompt(trimmedPrompt || formData.prompt);
+            setGenModel(formData.model);
+            setGenSize(formData.size);
+            setGenCustomWidth(formData.customWidth);
+            setGenCustomHeight(formData.customHeight);
+            setGenQuality(formData.quality);
+            setGenBackground(formData.background);
+            setGenModeration(formData.moderation);
+            setGenOutputFormat(formData.output_format);
+            setGenImageBackend(formData.image_backend);
+            setGenStreamingStrategy(formData.streaming_strategy);
+            setGenResponsesModel(formData.responsesModel);
+            setGenThinking(formData.thinking);
+            setGenPromptOptimization(formData.promptOptimization);
+            setGenForceWeb(formData.forceWeb);
+            setEnableParallelBatch(formData.enableParallelBatch);
+            if (formData.output_compression !== undefined) {
+                setGenCompression([formData.output_compression]);
+            }
 
-        restoredFields.push(
-            t('reuse.fieldModel'),
-            t('reuse.fieldSize'),
-            t('reuse.fieldQuality'),
-            t('reuse.fieldBackground'),
-            t('reuse.fieldModeration'),
-            t('reuse.fieldFormat')
-        );
+            restoredFields.push(
+                t('reuse.fieldModel'),
+                t('reuse.fieldSize'),
+                t('reuse.fieldQuality'),
+                t('reuse.fieldBackground'),
+                t('reuse.fieldModeration'),
+                t('reuse.fieldFormat'),
+                t('reuse.fieldRoute')
+            );
 
-        if (formData.batchPrompts && formData.batchPrompts.length > 1) {
-            setGenBatchPromptText(formData.batchPrompts.join('\n'));
-            setGenN([1]);
-            setWorkbenchMode('batch');
-        } else {
-            setGenBatchPromptText('');
-            setGenN([formData.n]);
-            restoredFields.push(t('reuse.fieldCount'));
-            setWorkbenchMode('reuse');
-        }
+            if (formData.batchPrompts && formData.batchPrompts.length > 1) {
+                setGenBatchPromptText(formData.batchPrompts.join('\n'));
+                setGenN([1]);
+                setWorkbenchMode('batch');
+            } else {
+                setGenBatchPromptText('');
+                setGenN([formData.n]);
+                restoredFields.push(t('reuse.fieldCount'));
+                setWorkbenchMode('reuse');
+            }
 
-        setReuseContext({
-            sourceLabel: t('reuse.sourceHistory', {
-                time: new Date(item.timestamp).toLocaleString(locale)
-            }),
-            restoredFields: Array.from(new Set(restoredFields)),
-            promptPreview: trimmedPrompt || t('history.noPrompt')
-        });
-        setMode('generate');
-    }, [locale, t]);
+            setReuseContext({
+                sourceLabel: t('reuse.sourceHistory', {
+                    time: new Date(item.timestamp).toLocaleString(locale)
+                }),
+                restoredFields: Array.from(new Set(restoredFields)),
+                promptPreview: trimmedPrompt || t('history.noPrompt')
+            });
+            setMode('generate');
+        },
+        [locale, t]
+    );
 
     function handleCreateVariant() {
         if (activeResultSource) {
-            const formData = buildHistoryGenerationFormData(activeResultSource, buildCurrentGenerationFallbackFormData());
+            const formData = buildHistoryGenerationFormData(
+                activeResultSource,
+                buildCurrentGenerationFallbackFormData()
+            );
             applyHistoryGenerationFormData(formData, activeResultSource);
             void handleApiCall(formData, 'generate');
             return;
@@ -1750,7 +1906,10 @@ export default function HomePage() {
 
     function handleReuseCurrentPrompt() {
         if (activeResultSource) {
-            const formData = buildHistoryGenerationFormData(activeResultSource, buildCurrentGenerationFallbackFormData());
+            const formData = buildHistoryGenerationFormData(
+                activeResultSource,
+                buildCurrentGenerationFallbackFormData()
+            );
             applyHistoryGenerationFormData(formData, activeResultSource);
             return;
         }
@@ -2030,10 +2189,8 @@ export default function HomePage() {
             const newFile = new File([blob], filename, { type: mimeType });
             const newPreviewUrl = URL.createObjectURL(blob);
 
-            editSourceImagePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
-
             setEditImageFiles([newFile]);
-            setEditSourceImagePreviewUrls([newPreviewUrl]);
+            updateEditSourceImagePreviewUrls([newPreviewUrl]);
             setEditReuseContext(null);
 
             if (mode === 'generate') {
@@ -2075,6 +2232,7 @@ export default function HomePage() {
         }
         setEditQuality(item.quality);
         setEditModeration(item.moderation);
+        setEnableParallelBatch(item.enableParallelBatch === true);
         const imageCount = readHistoryImageCountSelection(item.images.length);
         if (imageCount !== null) {
             setEditN([imageCount]);
@@ -2185,7 +2343,7 @@ export default function HomePage() {
     }
 
     return (
-        <main className='studio-paper text-foreground min-h-screen pb-[calc(10.5rem+env(safe-area-inset-bottom))] lg:h-dvh lg:overflow-hidden lg:pb-0'>
+        <main className='studio-paper text-foreground min-h-screen pb-[calc(10.5rem+env(safe-area-inset-bottom))] xl:h-dvh xl:overflow-hidden xl:pb-0'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -2249,11 +2407,14 @@ export default function HomePage() {
                             type='button'
                             aria-label={t('ux.closeCreationSheet')}
                             className='bg-foreground/25 fixed inset-0 z-40 lg:hidden'
-                            onClick={() => setIsMobileCreationDrawerOpen(false)}
+                            onClick={closeMobileCreationDrawer}
                         />
                     )}
-                    <div className='mx-auto flex min-h-screen w-full max-w-[1760px] flex-col px-4 py-3 lg:h-full lg:min-h-0 lg:px-7 lg:py-5'>
-                        <header className='mb-5 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                    <div className='mx-auto flex min-h-screen w-full max-w-[1760px] flex-col px-4 py-3 lg:px-7 lg:py-5 xl:h-full xl:min-h-0'>
+                        <header
+                            aria-hidden={isMobileCreationDrawerOpen}
+                            inert={isMobileCreationDrawerOpen}
+                            className='mb-5 flex shrink-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between'>
                             <div className='flex min-w-0 items-center gap-3'>
                                 <div className='flex min-w-0 items-center gap-3'>
                                     <h1 className='editorial-title truncate text-3xl font-semibold tracking-normal sm:text-4xl'>
@@ -2267,7 +2428,7 @@ export default function HomePage() {
                                     variant='outline'
                                     size='icon'
                                     onClick={() => setIsApiSettingsDialogOpen(true)}
-                                    className='bg-card/80 ml-auto h-9 w-9 shrink-0 shadow-sm sm:hidden'
+                                    className='bg-card/80 ml-auto h-11 w-11 shrink-0 shadow-sm sm:hidden'
                                     aria-label={t('app.apiSettings')}>
                                     <Settings2 className='h-4 w-4' />
                                 </Button>
@@ -2277,14 +2438,16 @@ export default function HomePage() {
                                     model={activeWorkbenchModel}
                                     channelLabel={activeWorkbenchBackendLabel}
                                     streamStatus={getStreamingStatusLabel(streamMode, t)}
-                                    costLabel={t('workbench.estimatedCost')}
+                                    parallelBatchEnabled={activeParallelBatchVisible}
+                                    costLabel={activeEstimatedCostLabel}
                                 />
                                 <div className='text-muted-foreground hidden items-center gap-4 sm:flex'>
-                                    <HelpCircle className='h-4 w-4' />
+                                    <HelpCircle className='h-4 w-4' aria-hidden='true' />
                                     <button
                                         type='button'
                                         onClick={() => setIsApiSettingsDialogOpen(true)}
-                                        aria-label={t('app.apiSettings')}>
+                                        aria-label={t('app.apiSettings')}
+                                        className='hover:bg-accent hover:text-foreground focus-visible:ring-ring flex h-9 w-9 items-center justify-center rounded-md transition-[background-color,color,box-shadow] focus-visible:ring-2 focus-visible:outline-none active:scale-[0.98]'>
                                         <Settings2 className='h-4 w-4' />
                                     </button>
                                     <span className='flex h-8 w-8 items-center justify-center rounded-full bg-[oklch(0.34_0.06_55)] text-sm text-white'>
@@ -2293,13 +2456,13 @@ export default function HomePage() {
                                 </div>
                             </div>
                         </header>
-                        <div className='grid flex-1 grid-cols-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:grid-cols-[minmax(330px,370px)_minmax(560px,1fr)_minmax(320px,360px)] 2xl:grid-cols-[minmax(360px,410px)_minmax(620px,1fr)_minmax(360px,430px)]'>
+                        <div className='grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(330px,370px)_minmax(560px,1fr)_minmax(320px,360px)] 2xl:grid-cols-[minmax(360px,410px)_minmax(620px,1fr)_minmax(360px,430px)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
-                                className={`order-2 lg:static lg:order-1 lg:block lg:min-h-0 lg:overflow-hidden lg:p-0 lg:shadow-none ${
+                                className={`order-2 lg:static lg:order-1 lg:block lg:p-0 lg:shadow-none xl:min-h-0 xl:overflow-hidden ${
                                     isMobileCreationDrawerOpen
-                                        ? 'border-border bg-[oklch(0.986_0.015_84)] fixed inset-x-0 bottom-0 z-50 max-h-[82vh] min-h-0 scroll-pb-44 overflow-y-auto rounded-t-lg border-t px-3 pt-3 pb-[calc(12rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(73,50,25,0.18)] lg:max-h-none lg:rounded-none'
+                                        ? 'border-border fixed inset-x-0 top-4 bottom-0 z-50 min-h-0 scroll-pb-28 overflow-y-auto rounded-t-lg border-t bg-[oklch(0.986_0.015_84)] px-3 pt-3 pb-[calc(8rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(73,50,25,0.18)] lg:max-h-none lg:rounded-none'
                                         : 'hidden min-h-[620px]'
                                 }`}>
                                 {isMobileCreationDrawerOpen && (
@@ -2311,17 +2474,42 @@ export default function HomePage() {
                                             onPointerUp={finishMobileCreationDrawerGesture}
                                             onPointerCancel={cancelMobileCreationDrawerGesture}
                                             onClick={handleMobileCreationDrawerHandleClick}
-                                            aria-label={t('ux.closeCreationSheet')}>
+                                            aria-label={t('ux.closeCreationSheet')}
+                                            aria-controls='mobile-creation-sheet'
+                                            aria-expanded={true}>
                                             <span className='bg-border h-1 w-10 rounded-full' aria-hidden='true' />
                                         </button>
                                         <Button
+                                            ref={mobileCreationDrawerCloseButtonRef}
                                             type='button'
                                             variant='outline'
                                             size='icon'
-                                            onClick={() => setIsMobileCreationDrawerOpen(false)}
+                                            onClick={closeMobileCreationDrawer}
                                             className='bg-card/95 absolute top-0 right-0 h-11 w-11 shadow-sm'
                                             aria-label={t('ux.closeCreationSheet')}>
                                             <X className='h-4 w-4' />
+                                        </Button>
+                                    </div>
+                                )}
+                                {isMobileCreationDrawerOpen && (
+                                    <div className='mb-3 grid grid-cols-2 gap-2 lg:hidden'>
+                                        <Button
+                                            type='button'
+                                            variant='outline'
+                                            size='sm'
+                                            onClick={handleMobileSaveInspiration}
+                                            disabled={!mobileCanSaveInspiration}
+                                            className='bg-card/80 min-h-11'>
+                                            {t('workbench.saveInspiration')}
+                                        </Button>
+                                        <Button
+                                            type='button'
+                                            variant='outline'
+                                            size='sm'
+                                            onClick={handleMobileRandomInspiration}
+                                            disabled={isLoading || isSendingToEdit}
+                                            className='bg-card/80 min-h-11'>
+                                            {t('workbench.randomInspiration')}
                                         </Button>
                                     </div>
                                 )}
@@ -2368,11 +2556,14 @@ export default function HomePage() {
                                         streamMode={streamMode}
                                         setStreamMode={setStreamMode}
                                         allowStreamingBatch={streamingBatchEnabled}
+                                        enableParallelBatch={enableParallelBatch}
+                                        setEnableParallelBatch={setEnableParallelBatch}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}
                                         imageBackend={genImageBackend}
                                         setImageBackend={setGenImageBackend}
                                         streamingStrategy={genStreamingStrategy}
+                                        defaultStreamingStrategy={defaultStreamingStrategy}
                                         setStreamingStrategy={setGenStreamingStrategy}
                                         responsesModel={genResponsesModel}
                                         setResponsesModel={setGenResponsesModel}
@@ -2382,6 +2573,7 @@ export default function HomePage() {
                                         setPromptOptimization={setGenPromptOptimization}
                                         forceWeb={genForceWeb}
                                         setForceWeb={setGenForceWeb}
+                                        estimatedCostLabel={activeEstimatedCostLabel}
                                     />
                                 </div>
                                 <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
@@ -2400,7 +2592,13 @@ export default function HomePage() {
                                         imageFiles={editImageFiles}
                                         sourceImagePreviewUrls={editSourceImagePreviewUrls}
                                         setImageFiles={setEditImageFiles}
-                                        setSourceImagePreviewUrls={setEditSourceImagePreviewUrls}
+                                        setSourceImagePreviewUrls={(nextUrls) => {
+                                            const resolvedUrls =
+                                                typeof nextUrls === 'function'
+                                                    ? nextUrls(editSourceImagePreviewUrlsRef.current)
+                                                    : nextUrls;
+                                            updateEditSourceImagePreviewUrls(resolvedUrls);
+                                        }}
                                         maxImages={MAX_EDIT_IMAGES}
                                         editPrompt={editPrompt}
                                         setEditPrompt={setEditPrompt}
@@ -2437,11 +2635,14 @@ export default function HomePage() {
                                         streamMode={streamMode}
                                         setStreamMode={setStreamMode}
                                         allowStreamingBatch={streamingBatchEnabled}
+                                        enableParallelBatch={enableParallelBatch}
+                                        setEnableParallelBatch={setEnableParallelBatch}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}
                                         editImageBackend={editImageBackend}
                                         setEditImageBackend={setEditImageBackend}
                                         editStreamingStrategy={editStreamingStrategy}
+                                        defaultStreamingStrategy={defaultStreamingStrategy}
                                         setEditStreamingStrategy={setEditStreamingStrategy}
                                         editResponsesModel={editResponsesModel}
                                         setEditResponsesModel={setEditResponsesModel}
@@ -2451,13 +2652,16 @@ export default function HomePage() {
                                         setEditPromptOptimization={setEditPromptOptimization}
                                         editForceWeb={editForceWeb}
                                         setEditForceWeb={setEditForceWeb}
+                                        estimatedCostLabel={activeEstimatedCostLabel}
                                     />
                                 </div>
                             </section>
                             <section
                                 ref={outputPanelRef}
                                 aria-label={t('app.canvasPreview')}
-                                className='order-1 flex min-h-[380px] scroll-mt-4 flex-col sm:min-h-[460px] lg:order-2 lg:min-h-0'>
+                                aria-hidden={isMobileCreationDrawerOpen}
+                                inert={isMobileCreationDrawerOpen}
+                                className='order-1 flex min-h-[380px] scroll-mt-4 flex-col sm:min-h-[460px] lg:order-2 xl:min-h-0'>
                                 {error && (
                                     <Alert
                                         variant='destructive'
@@ -2496,7 +2700,9 @@ export default function HomePage() {
                                 </div>
                                 <WorkbenchProDock
                                     outputFormat={mode === 'generate' ? genOutputFormat : editOutputFormat}
-                                    onOutputFormatChange={mode === 'generate' ? setGenOutputFormat : setEditOutputFormat}
+                                    onOutputFormatChange={
+                                        mode === 'generate' ? setGenOutputFormat : setEditOutputFormat
+                                    }
                                     quality={mode === 'generate' ? genQuality : editQuality}
                                     onQualityChange={mode === 'generate' ? setGenQuality : setEditQuality}
                                     model={mode === 'generate' ? genModel : editModel}
@@ -2504,9 +2710,24 @@ export default function HomePage() {
                                     size={mode === 'generate' ? genSize : editSize}
                                     streamMode={streamMode}
                                     onStreamModeChange={setStreamMode}
+                                    allowStreamingBatch={streamingBatchEnabled}
+                                    enableParallelBatch={enableParallelBatch}
+                                    onEnableParallelBatchChange={setEnableParallelBatch}
+                                    parallelBatchTargetCount={
+                                        mode === 'generate' && workbenchMode === 'batch'
+                                            ? readBatchPromptLines(genBatchPromptText).length
+                                            : mode === 'generate'
+                                              ? genN[0]
+                                              : editN[0]
+                                    }
                                     imageBackend={mode === 'generate' ? genImageBackend : editImageBackend}
-                                    onImageBackendChange={mode === 'generate' ? setGenImageBackend : setEditImageBackend}
-                                    streamingStrategy={mode === 'generate' ? genStreamingStrategy : editStreamingStrategy}
+                                    onImageBackendChange={
+                                        mode === 'generate' ? setGenImageBackend : setEditImageBackend
+                                    }
+                                    streamingStrategy={
+                                        mode === 'generate' ? genStreamingStrategy : editStreamingStrategy
+                                    }
+                                    defaultStreamingStrategy={defaultStreamingStrategy}
                                     onStreamingStrategyChange={
                                         mode === 'generate' ? setGenStreamingStrategy : setEditStreamingStrategy
                                     }
@@ -2515,6 +2736,8 @@ export default function HomePage() {
                             </section>
                             <aside
                                 aria-label={t('history.title')}
+                                aria-hidden={isMobileCreationDrawerOpen}
+                                inert={isMobileCreationDrawerOpen}
                                 className='order-3 min-h-[420px] lg:col-span-2 lg:min-h-[420px] xl:col-span-1 xl:min-h-0 xl:overflow-hidden'>
                                 <HistoryPanel
                                     history={history}
@@ -2537,133 +2760,115 @@ export default function HomePage() {
                             </aside>
                         </div>
                     </div>
-                    <div
-                        className={`bg-background border-border fixed right-0 bottom-0 left-0 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden ${
-                            isMobileCreationDrawerOpen ? 'z-[60]' : 'z-40'
-                        }`}>
-                        <button
-                            type='button'
-                            className='mx-auto mb-2 flex h-4 w-24 touch-none items-center justify-center rounded-full select-none'
-                            onPointerDown={beginMobileCreationDrawerGesture}
-                            onPointerUp={finishMobileCreationDrawerGesture}
-                            onPointerCancel={cancelMobileCreationDrawerGesture}
-                            onClick={handleMobileCreationDrawerHandleClick}
-                            aria-label={
-                                isMobileCreationDrawerOpen ? t('ux.closeCreationSheet') : t('ux.openCreationSheet')
-                            }
-                            aria-controls='mobile-creation-sheet'
-                            aria-expanded={isMobileCreationDrawerOpen}>
-                            <span className='bg-border h-1 w-10 rounded-full' aria-hidden='true' />
-                        </button>
-                        <div className='mx-auto max-w-screen-sm space-y-2'>
-                            <div className='flex flex-wrap items-center justify-center gap-1.5 text-[11px]'>
-                                <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                    {activeWorkbenchModel}
-                                </span>
-                                <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                    {activeWorkbenchBackendLabel}
-                                </span>
-                                <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                    {getStreamingStatusLabel(streamMode, t)}
-                                </span>
-                                <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
-                                    {t('workbench.estimatedCost')}
-                                </span>
-                            </div>
-                            {isMobileCreationDrawerOpen && (
-                                <div className='grid grid-cols-2 gap-2'>
-                                    <Button
-                                        type='button'
-                                        variant='outline'
-                                        size='sm'
-                                        onClick={handleMobileSaveInspiration}
-                                        disabled={!mobileCanSaveInspiration}
-                                        className='bg-card/80 min-h-9'>
-                                        {t('workbench.saveInspiration')}
-                                    </Button>
-                                    <Button
-                                        type='button'
-                                        variant='outline'
-                                        size='sm'
-                                        onClick={handleMobileRandomInspiration}
-                                        disabled={isLoading || isSendingToEdit}
-                                        className='bg-card/80 min-h-9'>
-                                        {t('workbench.randomInspiration')}
-                                    </Button>
-                                </div>
-                            )}
-                        </div>
-                        <div className='mx-auto mt-2 grid max-w-screen-sm grid-cols-[auto_1fr_auto_auto] gap-2'>
-                            <Button
+                    {!isMobileCreationDrawerOpen && (
+                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden'>
+                            <button
                                 type='button'
-                                variant='outline'
-                                size='icon'
-                                onClick={toggleMobileCreationDrawer}
-                                className='text-muted-foreground hover:text-foreground h-11 w-11'
-                                aria-label={
-                                    isMobileCreationDrawerOpen ? t('ux.closeCreationSheet') : t('ux.openCreationSheet')
-                                }
+                                className='mx-auto mb-2 flex h-11 w-24 touch-none items-center justify-center rounded-full select-none'
+                                onPointerDown={beginMobileCreationDrawerGesture}
+                                onPointerUp={finishMobileCreationDrawerGesture}
+                                onPointerCancel={cancelMobileCreationDrawerGesture}
+                                onClick={handleMobileCreationDrawerHandleClick}
+                                aria-label={t('ux.openCreationSheet')}
                                 aria-controls='mobile-creation-sheet'
-                                aria-expanded={isMobileCreationDrawerOpen}>
-                                <PenLine className='h-4 w-4' />
-                            </Button>
-                            <Button
-                                type='button'
-                                onClick={handleMobilePrimaryAction}
-                                disabled={mobilePrimaryDisabled}
-                                className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground min-h-11'>
-                                {(isLoading || isSendingToEdit) && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-                                {mode === 'generate'
-                                    ? isLoading
-                                        ? t('generate.loading')
-                                        : t('generate.submit')
-                                    : isLoading || isSendingToEdit
-                                      ? t('edit.loading')
-                                      : t('edit.submit')}
-                            </Button>
-                            {canPausePromptBatch && (
-                                <Button
-                                    type='button'
-                                    variant='outline'
-                                    size='icon'
-                                    onClick={handlePauseBatch}
-                                    disabled={isBatchPauseRequested}
-                                    className='text-muted-foreground hover:text-foreground h-11 w-11'
-                                    aria-label={isBatchPauseRequested ? t('batch.pauseRequested') : t('batch.pause')}>
-                                    {isBatchPauseRequested ? (
-                                        <Loader2 className='h-4 w-4 animate-spin' />
-                                    ) : (
-                                        <Pause className='h-4 w-4' />
+                                aria-expanded={false}>
+                                <span className='bg-border h-1 w-10 rounded-full' aria-hidden='true' />
+                            </button>
+                            <div className='mx-auto max-w-screen-sm space-y-2'>
+                                <div className='flex flex-wrap items-center justify-center gap-1.5 text-[11px]'>
+                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
+                                        {activeWorkbenchModel}
+                                    </span>
+                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
+                                        {activeWorkbenchBackendLabel}
+                                    </span>
+                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
+                                        {getStreamingStatusLabel(streamMode, t)}
+                                    </span>
+                                    {activeParallelBatchVisible && (
+                                        <span className='border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] text-[oklch(0.38_0.075_148)] rounded-full border px-2 py-1'>
+                                            {t('streaming.parallelBatchEnabled')}
+                                        </span>
                                     )}
-                                </Button>
-                            )}
-                            <Button
-                                type='button'
-                                variant='outline'
-                                size='icon'
-                                onClick={scrollToOutput}
-                                className='text-muted-foreground hover:text-foreground h-11 w-11'
-                                aria-label={t('ux.jumpToResult')}>
-                                <ArrowUp className='h-4 w-4' />
-                            </Button>
-                            {canOpenLogs && (
+                                    <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
+                                        {activeEstimatedCostLabel}
+                                    </span>
+                                </div>
+                            </div>
+                            <div className='mx-auto mt-2 flex max-w-screen-sm items-stretch gap-2'>
                                 <Button
                                     type='button'
                                     variant='outline'
                                     size='icon'
-                                    onClick={() => setOpenLogsSignal((value) => value + 1)}
-                                    className='text-muted-foreground hover:text-foreground h-11 w-11'
-                                    aria-label={t('logs.open')}>
-                                    <Activity className='h-4 w-4' />
+                                    onClick={toggleMobileCreationDrawer}
+                                    className='text-muted-foreground hover:text-foreground h-11 w-11 shrink-0'
+                                    aria-label={t('ux.openCreationSheet')}
+                                    aria-controls='mobile-creation-sheet'
+                                    aria-expanded={false}>
+                                    <PenLine className='h-4 w-4' />
                                 </Button>
+                                <Button
+                                    type='button'
+                                    onClick={handleMobilePrimaryAction}
+                                    disabled={mobilePrimaryDisabled}
+                                    className='bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground min-h-11 min-w-0 flex-1'>
+                                    {(isLoading || isSendingToEdit) && (
+                                        <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                                    )}
+                                    {mode === 'generate'
+                                        ? isLoading
+                                            ? t('generate.loading')
+                                            : t('generate.submit')
+                                        : isLoading || isSendingToEdit
+                                          ? t('edit.loading')
+                                          : t('edit.submit')}
+                                </Button>
+                                {canPausePromptBatch && (
+                                    <Button
+                                        type='button'
+                                        variant='outline'
+                                        size='icon'
+                                        onClick={handlePauseBatch}
+                                        disabled={isBatchPauseRequested}
+                                        className='text-muted-foreground hover:text-foreground h-11 w-11 shrink-0'
+                                        aria-label={
+                                            isBatchPauseRequested ? t('batch.pauseRequested') : t('batch.pause')
+                                        }>
+                                        {isBatchPauseRequested ? (
+                                            <Loader2 className='h-4 w-4 animate-spin' />
+                                        ) : (
+                                            <Pause className='h-4 w-4' />
+                                        )}
+                                    </Button>
+                                )}
+                                <Button
+                                    type='button'
+                                    variant='outline'
+                                    size='icon'
+                                    onClick={scrollToOutput}
+                                    className='text-muted-foreground hover:text-foreground h-11 w-11 shrink-0'
+                                    aria-label={t('ux.jumpToResult')}>
+                                    <ArrowUp className='h-4 w-4' />
+                                </Button>
+                                {canOpenLogs && (
+                                    <Button
+                                        type='button'
+                                        variant='outline'
+                                        size='icon'
+                                        onClick={() => setOpenLogsSignal((value) => value + 1)}
+                                        className='text-muted-foreground hover:text-foreground h-11 w-11 shrink-0'
+                                        aria-label={t('logs.open')}>
+                                        <Activity className='h-4 w-4' />
+                                    </Button>
+                                )}
+                            </div>
+                            {mobilePrimaryDisabledReason && (
+                                <p className='text-muted-foreground mx-auto mt-2 max-w-screen-sm text-center text-xs leading-4'>
+                                    {mobilePrimaryDisabledReason}
+                                </p>
                             )}
                         </div>
-                        {mobilePrimaryDisabledReason && (
-                            <p className='text-muted-foreground mx-auto mt-2 max-w-screen-sm text-center text-xs leading-4'>
-                                {mobilePrimaryDisabledReason}
-                            </p>
-                        )}
-                    </div>
+                    )}
                 </>
             ) : null}
         </main>

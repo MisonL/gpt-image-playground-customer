@@ -4,7 +4,7 @@ import { WorkbenchEasySummary, WorkbenchProPanel } from '@/components/workbench-
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
 import type { ImageUpstreamFormBackend, ImageUpstreamFormStreamingStrategy } from '@/lib/image-upstream-form';
-import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
+import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import * as React from 'react';
 
 export type OutputFormat = 'png' | 'jpeg' | 'webp';
@@ -21,9 +21,14 @@ export type WorkbenchProDockProps = {
     size: SizePreset;
     streamMode: ImageStreamMode;
     onStreamModeChange: React.Dispatch<React.SetStateAction<ImageStreamMode>>;
+    allowStreamingBatch: boolean;
+    enableParallelBatch: boolean;
+    onEnableParallelBatchChange: React.Dispatch<React.SetStateAction<boolean>>;
+    parallelBatchTargetCount: number;
     imageBackend: ImageUpstreamFormBackend;
     onImageBackendChange: React.Dispatch<React.SetStateAction<ImageUpstreamFormBackend>>;
     streamingStrategy: ImageUpstreamFormStreamingStrategy;
+    defaultStreamingStrategy: ImageStreamingStrategy;
     onStreamingStrategyChange: React.Dispatch<React.SetStateAction<ImageUpstreamFormStreamingStrategy>>;
     disabled?: boolean;
     defaultMode?: 'easy' | 'pro';
