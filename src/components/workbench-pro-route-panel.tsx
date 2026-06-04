@@ -1,14 +1,28 @@
 'use client';
 
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { TabsContent } from '@/components/ui/tabs';
 import type { WorkbenchProDockProps } from '@/components/workbench-pro-dock';
 import { useI18n } from '@/lib/i18n';
 import type { ImageUpstreamFormBackend, ImageUpstreamFormStreamingStrategy } from '@/lib/image-upstream-form';
+import {
+    getImageUpstreamRouteImpactKeys,
+    isImageUpstreamStreamingStrategySelectable
+} from '@/lib/image-upstream-form';
 
 type WorkbenchProRoutePanelProps = Pick<
     WorkbenchProDockProps,
-    'imageBackend' | 'onImageBackendChange' | 'streamingStrategy' | 'onStreamingStrategyChange' | 'disabled'
+    | 'allowResponsesImageBackend'
+    | 'hasDefaultResponsesModel'
+    | 'imageBackend'
+    | 'onImageBackendChange'
+    | 'streamingStrategy'
+    | 'defaultStreamingStrategy'
+    | 'onStreamingStrategyChange'
+    | 'responsesModel'
+    | 'onResponsesModelChange'
+    | 'disabled'
 >;
 
 type Translation = ReturnType<typeof useI18n>['t'];
@@ -40,37 +54,21 @@ function getStreamingStrategyLabel(strategy: ImageUpstreamFormStreamingStrategy,
     return t('upstream.serverDefault');
 }
 
-function getRouteImpactDetails(input: {
-    backend: ImageUpstreamFormBackend;
-    streamingStrategy: ImageUpstreamFormStreamingStrategy;
-    t: Translation;
-}): string[] {
-    const backendKey =
-        input.backend === 'images-api'
-            ? 'upstream.backendImpactImages'
-            : input.backend === 'responses-image-generation'
-              ? 'upstream.backendImpactResponses'
-              : 'upstream.backendImpactServerDefault';
-    const strategyKey =
-        input.streamingStrategy === 'off'
-            ? 'upstream.strategyImpactOff'
-            : input.streamingStrategy === 'force-sse'
-              ? 'upstream.strategyImpactForceSse'
-              : input.streamingStrategy === 'server-default' || input.streamingStrategy === 'auto'
-                ? 'upstream.strategyImpactAuto'
-                : 'upstream.strategyImpactSse';
-
-    return [input.t(backendKey), input.t(strategyKey), input.t('upstream.routeImpactCost')];
-}
-
 export function WorkbenchProRoutePanel({
+    allowResponsesImageBackend,
+    hasDefaultResponsesModel,
     imageBackend,
     onImageBackendChange,
     streamingStrategy,
+    defaultStreamingStrategy,
     onStreamingStrategyChange,
+    responsesModel,
+    onResponsesModelChange,
     disabled
 }: WorkbenchProRoutePanelProps) {
     const { t } = useI18n();
+    const requiresResponsesModel =
+        imageBackend === 'responses-image-generation' && !hasDefaultResponsesModel && !responsesModel.trim();
 
     return (
         <TabsContent value='route' className='mt-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3'>
@@ -88,7 +86,10 @@ export function WorkbenchProRoutePanel({
                     </SelectTrigger>
                     <SelectContent>
                         {backendOptions.map((option) => (
-                            <SelectItem key={option} value={option}>
+                            <SelectItem
+                                key={option}
+                                value={option}
+                                disabled={option === 'responses-image-generation' && !allowResponsesImageBackend}>
                                 {getBackendLabel(option, t)}
                             </SelectItem>
                         ))}
@@ -109,7 +110,16 @@ export function WorkbenchProRoutePanel({
                     </SelectTrigger>
                     <SelectContent>
                         {streamingStrategyOptions.map((option) => (
-                            <SelectItem key={option} value={option}>
+                            <SelectItem
+                                key={option}
+                                value={option}
+                                disabled={
+                                    !isImageUpstreamStreamingStrategySelectable({
+                                        imageBackend,
+                                        streamingStrategy: option,
+                                        allowResponsesImageBackend
+                                    })
+                                }>
                                 {getStreamingStrategyLabel(option, t)}
                             </SelectItem>
                         ))}
@@ -118,10 +128,37 @@ export function WorkbenchProRoutePanel({
             </div>
             <div className='border-border bg-muted/20 text-muted-foreground col-span-2 grid gap-2 rounded-md border px-3 py-2 leading-5 md:grid-cols-[auto_1fr_1fr_1fr]'>
                 <p className='text-foreground font-medium'>{t('upstream.routeImpactTitle')}</p>
-                {getRouteImpactDetails({ backend: imageBackend, streamingStrategy, t }).map((detail) => (
-                    <p key={detail}>{detail}</p>
+                {getImageUpstreamRouteImpactKeys({
+                    backend: imageBackend,
+                    streamingStrategy,
+                    defaultStreamingStrategy,
+                    allowResponsesImageBackend
+                }).map((key) => (
+                    <p key={key}>{t(key)}</p>
                 ))}
             </div>
+            {imageBackend === 'responses-image-generation' && (
+                <div className='border-border bg-muted/20 col-span-2 grid gap-2 rounded-md border px-3 py-2'>
+                    <label
+                        htmlFor='pro-responses-model-input'
+                        className='text-foreground text-xs font-medium'>
+                        {t('upstream.gptModel')}
+                    </label>
+                    <Input
+                        id='pro-responses-model-input'
+                        value={responsesModel}
+                        onChange={(event) => onResponsesModelChange(event.target.value)}
+                        disabled={disabled}
+                        autoComplete='off'
+                        spellCheck={false}
+                        placeholder='OPENAI_RESPONSES_API_MODEL'
+                        className='h-8 text-xs'
+                    />
+                    {requiresResponsesModel && (
+                        <p className='text-destructive text-xs'>{t('upstream.responsesModelRequired')}</p>
+                    )}
+                </div>
+            )}
         </TabsContent>
     );
 }

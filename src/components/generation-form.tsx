@@ -23,6 +23,11 @@ import type {
     ImageUpstreamFormThinking
 } from '@/lib/image-upstream-form';
 import {
+    getImageUpstreamRouteImpactKeys,
+    isImageUpstreamStreamingStrategySelectable,
+    resolveImageUpstreamEffectiveStreamingStrategy
+} from '@/lib/image-upstream-form';
+import {
     shouldRecommendImageStreaming,
     type ImageStreamMode,
     type ImageStreamingStrategy
@@ -91,6 +96,8 @@ export type WorkbenchReuseContext = {
 type GenerationFormProps = {
     onSubmit: (data: GenerationFormData) => void;
     onSaveInspiration: (prompt: string) => void;
+    canApplyRandomInspiration: boolean;
+    onPickRandomInspiration: () => string;
     isLoading: boolean;
     currentMode: WorkbenchMode;
     onModeChange: (mode: WorkbenchMode) => void;
@@ -134,6 +141,8 @@ type GenerationFormProps = {
     setEnableParallelBatch: React.Dispatch<React.SetStateAction<boolean>>;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
+    allowResponsesImageBackend: boolean;
+    hasDefaultResponsesModel: boolean;
     imageBackend: GenerationFormData['image_backend'];
     setImageBackend: React.Dispatch<React.SetStateAction<GenerationFormData['image_backend']>>;
     streamingStrategy: GenerationFormData['streaming_strategy'];
@@ -153,21 +162,6 @@ type GenerationFormProps = {
 };
 
 type AdvancedTab = 'output' | 'model' | 'stream' | 'route';
-type PromptTagPattern = {
-    test: (value: string) => boolean;
-    remove: (value: string) => string;
-};
-
-const promptStyleTags = [
-    'promptTag.film',
-    'promptTag.cream',
-    'promptTag.japaneseMagazine',
-    'promptTag.bouquet',
-    'promptTag.clear',
-    'promptTag.relaxed',
-    'promptTag.coffee',
-    'promptTag.summerWindow'
-];
 
 const compactSettingRowClass =
     'space-y-1.5 lg:grid lg:grid-cols-[3.4rem_minmax(0,1fr)] lg:items-center lg:gap-1.5 lg:space-y-0';
@@ -182,27 +176,6 @@ export function resolveGenerationFooterPromptTarget(input: {
     return {
         value,
         isEmpty: value.trim().length === 0
-    };
-}
-
-function escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function createPromptTagPattern(label: string): PromptTagPattern {
-    const escapedLabel = escapeRegExp(label);
-    const tokenPattern = new RegExp(`(^|[，,、\\s])${escapedLabel}(?=$|[，,、\\s])`);
-    const removePattern = new RegExp(`(^|[，,、\\s]+)${escapedLabel}(?=$|[，,、\\s]+)`, 'g');
-
-    return {
-        test: (value) => tokenPattern.test(value),
-        remove: (value) =>
-            value
-                .replace(removePattern, '$1')
-                .replace(/[，,、\s]+$/g, '')
-                .replace(/^[，,、\s]+/g, '')
-                .replace(/\s*([，,、])\s*/g, '$1')
-                .replace(/([，,、]){2,}/g, '$1')
     };
 }
 
@@ -270,29 +243,6 @@ function getWorkbenchBackendLabel(backend: GenerationFormData['image_backend'], 
     return t('upstream.workbenchDefaultRoute');
 }
 
-function getRouteImpactDetails(input: {
-    backend: GenerationFormData['image_backend'];
-    streamingStrategy: GenerationFormData['streaming_strategy'];
-    t: (key: string) => string;
-}): string[] {
-    const backendKey =
-        input.backend === 'images-api'
-            ? 'upstream.backendImpactImages'
-            : input.backend === 'responses-image-generation'
-              ? 'upstream.backendImpactResponses'
-              : 'upstream.backendImpactServerDefault';
-    const strategyKey =
-        input.streamingStrategy === 'off'
-            ? 'upstream.strategyImpactOff'
-            : input.streamingStrategy === 'force-sse'
-              ? 'upstream.strategyImpactForceSse'
-              : input.streamingStrategy === 'server-default' || input.streamingStrategy === 'auto'
-                ? 'upstream.strategyImpactAuto'
-                : 'upstream.strategyImpactSse';
-
-    return [input.t(backendKey), input.t(strategyKey), input.t('upstream.routeImpactCost')];
-}
-
 function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => string): string {
     if (streamMode === 'stream') return t('streaming.modeStream');
     if (streamMode === 'non_stream') return t('streaming.modeNonStream');
@@ -315,6 +265,8 @@ function getOutputFormatLabel(format: GenerationFormData['output_format'], t: (k
 export function GenerationForm({
     onSubmit,
     onSaveInspiration,
+    canApplyRandomInspiration,
+    onPickRandomInspiration,
     isLoading,
     currentMode,
     onModeChange,
@@ -358,6 +310,8 @@ export function GenerationForm({
     setEnableParallelBatch,
     partialImages,
     setPartialImages,
+    allowResponsesImageBackend,
+    hasDefaultResponsesModel,
     imageBackend,
     setImageBackend,
     streamingStrategy,
@@ -392,8 +346,10 @@ export function GenerationForm({
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
-    const effectiveStreamingStrategy: ImageStreamingStrategy =
-        streamingStrategy === 'server-default' ? defaultStreamingStrategy : streamingStrategy;
+    const effectiveStreamingStrategy = resolveImageUpstreamEffectiveStreamingStrategy({
+        streamingStrategy,
+        defaultStreamingStrategy
+    });
     const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
     const concreteSize = readConcreteSize({ size, model, customWidth, customHeight });
     const recommendStreaming = Boolean(
@@ -423,13 +379,25 @@ export function GenerationForm({
     const parallelBatchChecked = parallelBatchToggle.checked;
     const parallelBatchUnavailableKey = parallelBatchToggle.unavailableReasonKey;
     const hasFailedBatchPrompts = isBatchMode && failedBatchPrompts.length > 0;
+    const requiresResponsesModel =
+        imageBackend === 'responses-image-generation' && !hasDefaultResponsesModel && !responsesModel.trim();
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (isBatchMode && batchPrompts.length === 0) return t('ux.disabledBatchPrompts');
         if (!isBatchMode && !prompt.trim()) return t('ux.disabledPrompt');
+        if (requiresResponsesModel) return t('upstream.responsesModelRequired');
         if (customSizeInvalid) return customSizeError || t('ux.disabledCustomSize');
         return '';
-    }, [batchPrompts.length, customSizeError, customSizeInvalid, isBatchMode, isLoading, prompt, t]);
+    }, [
+        batchPrompts.length,
+        customSizeError,
+        customSizeInvalid,
+        isBatchMode,
+        isLoading,
+        prompt,
+        requiresResponsesModel,
+        t
+    ]);
     const advancedSummary = [
         `${t('form.quality')}: ${getQualityLabel(quality, t)}`,
         `${t('form.outputFormat')}: ${getOutputFormatLabel(outputFormat, t)}`,
@@ -443,19 +411,6 @@ export function GenerationForm({
         prompt,
         batchPromptText
     });
-
-    const applyPromptTag = React.useCallback(
-        (label: string) => {
-            setPrompt((current) => {
-                const trimmed = current.trim();
-                const pattern = createPromptTagPattern(label);
-                if (!trimmed) return label;
-                if (pattern.test(trimmed)) return pattern.remove(trimmed);
-                return `${trimmed}，${label}`;
-            });
-        },
-        [setPrompt]
-    );
 
     React.useEffect(() => {
         if (streamingDisabledByStrategy && streamMode !== 'non_stream') {
@@ -520,26 +475,24 @@ export function GenerationForm({
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
                 <CardContent className='literary-scrollbar space-y-2.5 p-4 pb-28 lg:max-h-[calc(100%-9.75rem)] lg:flex-none lg:overflow-y-auto lg:px-4 lg:py-3 2xl:space-y-2.5'>
-                    <div className='space-y-1'>
-                        <div className='flex items-center'>
-                            <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
-                                {t('workbench.creationSheet')}
-                            </CardTitle>
-                            {isPasswordRequiredByBackend && (
-                                <Button
-                                    variant='ghost'
-                                    size='sm'
-                                    onClick={onOpenPasswordDialog}
-                                    className='text-muted-foreground hover:text-foreground ml-auto min-h-11 min-w-11 px-2 lg:min-h-7 lg:min-w-0'
-                                    aria-label={t('password.configure')}>
-                                    {clientPasswordHash ? (
-                                        <Lock className='h-4 w-4' />
-                                    ) : (
-                                        <LockOpen className='h-4 w-4' />
-                                    )}
-                                </Button>
-                            )}
-                        </div>
+                    <div className='flex items-center'>
+                        <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
+                            {t('workbench.creationSheet')}
+                        </CardTitle>
+                        {isPasswordRequiredByBackend && (
+                            <Button
+                                variant='ghost'
+                                size='sm'
+                                onClick={onOpenPasswordDialog}
+                                className='text-muted-foreground hover:text-foreground ml-auto min-h-11 min-w-11 px-2 lg:min-h-7 lg:min-w-0'
+                                aria-label={t('password.configure')}>
+                                {clientPasswordHash ? (
+                                    <Lock className='h-4 w-4' />
+                                ) : (
+                                    <LockOpen className='h-4 w-4' />
+                                )}
+                            </Button>
+                        )}
                     </div>
                     <div className='space-y-1.5 lg:space-y-1'>
                         {!isBatchMode && (
@@ -572,32 +525,6 @@ export function GenerationForm({
                                     <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
                                         {prompt.trim().length} / 1000
                                     </span>
-                                </div>
-                                <div className='border-border/55 mt-2 flex items-center justify-between border-t pt-2'>
-                                    <span className='text-foreground text-sm font-medium'>
-                                        {t('workbench.stylePreference')}
-                                    </span>
-                                </div>
-                                <div className='scrollbar-none -mx-1 flex max-w-full gap-1.5 overflow-x-auto px-1 pt-1 pb-1 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0'>
-                                    {promptStyleTags.map((key) => {
-                                        const label = t(key);
-                                        const selected = createPromptTagPattern(label).test(prompt);
-                                        return (
-                                            <button
-                                                key={key}
-                                                type='button'
-                                                onClick={() => applyPromptTag(label)}
-                                                disabled={isLoading}
-                                                aria-pressed={selected}
-                                                className={`min-h-11 shrink-0 rounded-full border px-3 py-1 text-xs shadow-sm transition-[background-color,border-color,color,transform,box-shadow] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-0 lg:px-2.5 lg:py-0.5 ${
-                                                    selected
-                                                        ? 'border-primary/50 bg-primary/90 text-primary-foreground shadow-[0_4px_10px_oklch(0.5_0.12_30/0.14)]'
-                                                        : 'border-border text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground bg-[oklch(0.982_0.012_84)]'
-                                                }`}>
-                                                {label}
-                                            </button>
-                                        );
-                                    })}
                                 </div>
                             </>
                         )}
@@ -909,7 +836,7 @@ export function GenerationForm({
                         </div>
                     </div>
 
-                    <div className='border-border bg-muted/20 rounded-md border lg:hidden'>
+                    <div className='border-border bg-muted/20 rounded-md border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
@@ -991,7 +918,9 @@ export function GenerationForm({
                                                         <SelectItem value='images-api'>
                                                             {t('upstream.backendImages')}
                                                         </SelectItem>
-                                                        <SelectItem value='responses-image-generation'>
+                                                        <SelectItem
+                                                            value='responses-image-generation'
+                                                            disabled={!allowResponsesImageBackend}>
                                                             {t('upstream.backendResponses')}
                                                         </SelectItem>
                                                         <SelectItem value='server-default'>
@@ -1023,13 +952,37 @@ export function GenerationForm({
                                                             {t('upstream.strategyAuto')}
                                                         </SelectItem>
                                                         <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
-                                                        <SelectItem value='openai-sse'>
+                                                        <SelectItem
+                                                            value='openai-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend,
+                                                                    streamingStrategy: 'openai-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyOpenAiSse')}
                                                         </SelectItem>
-                                                        <SelectItem value='newapi-keepalive-sse'>
+                                                        <SelectItem
+                                                            value='newapi-keepalive-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend,
+                                                                    streamingStrategy: 'newapi-keepalive-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyKeepaliveSse')}
                                                         </SelectItem>
-                                                        <SelectItem value='responses-sse'>
+                                                        <SelectItem
+                                                            value='responses-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend,
+                                                                    streamingStrategy: 'responses-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyResponsesSse')}
                                                         </SelectItem>
                                                         <SelectItem value='force-sse'>
@@ -1047,11 +1000,14 @@ export function GenerationForm({
                                                 <ShieldAlert className='text-muted-foreground h-4 w-4' />
                                                 {t('upstream.routeImpactTitle')}
                                             </div>
-                                            {getRouteImpactDetails({ backend: imageBackend, streamingStrategy, t }).map(
-                                                (detail) => (
-                                                    <p key={detail}>{detail}</p>
-                                                )
-                                            )}
+                                            {getImageUpstreamRouteImpactKeys({
+                                                backend: imageBackend,
+                                                streamingStrategy,
+                                                defaultStreamingStrategy,
+                                                allowResponsesImageBackend
+                                            }).map((key) => (
+                                                <p key={key}>{t(key)}</p>
+                                            ))}
                                         </div>
 
                                         {imageBackend === 'responses-image-generation' && (
@@ -1073,8 +1029,13 @@ export function GenerationForm({
                                                             disabled={isLoading}
                                                             autoComplete='off'
                                                             spellCheck={false}
-                                                            placeholder='gpt-5.4'
+                                                            placeholder='OPENAI_RESPONSES_API_MODEL'
                                                         />
+                                                        {requiresResponsesModel && (
+                                                            <p className='text-destructive text-xs'>
+                                                                {t('upstream.responsesModelRequired')}
+                                                            </p>
+                                                        )}
                                                     </div>
                                                     <div className='space-y-1.5'>
                                                         <Label htmlFor='thinking-select'>
@@ -1529,14 +1490,15 @@ export function GenerationForm({
                             <button
                                 type='button'
                                 className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
-                                disabled={isLoading}
+                                disabled={isLoading || !canApplyRandomInspiration}
                                 onClick={() => {
-                                    const example = t('workbench.randomPromptExample');
+                                    const nextPrompt = onPickRandomInspiration().trim();
+                                    if (!nextPrompt) return;
                                     if (currentMode === 'batch') {
-                                        setBatchPromptText(example);
+                                        setBatchPromptText(nextPrompt);
                                         return;
                                     }
-                                    setPrompt(example);
+                                    setPrompt(nextPrompt);
                                 }}>
                                 <WandSparkles className='h-3.5 w-3.5' />
                                 {t('workbench.randomInspiration')}

@@ -23,6 +23,11 @@ function renderGenerationForm(
         defaultStreamingStrategy?: ImageStreamingStrategy;
         prompt?: string;
         batchPromptText?: string;
+        canApplyRandomInspiration?: boolean;
+        allowResponsesImageBackend?: boolean;
+        hasDefaultResponsesModel?: boolean;
+        responsesModel?: string;
+        imageBackend?: React.ComponentProps<typeof GenerationForm>['imageBackend'];
     } = {}
 ) {
     return renderToStaticMarkup(
@@ -30,6 +35,8 @@ function renderGenerationForm(
             <GenerationForm
                 onSubmit={noop}
                 onSaveInspiration={noop}
+                canApplyRandomInspiration={options.canApplyRandomInspiration ?? true}
+                onPickRandomInspiration={() => '用户保存的真实提示词'}
                 isLoading={false}
                 currentMode={options.currentMode ?? 'generate'}
                 onModeChange={noop}
@@ -40,9 +47,9 @@ function renderGenerationForm(
                 onOpenPasswordDialog={noop}
                 model='gpt-image-2'
                 setModel={noop}
-                prompt={options.prompt ?? '午后咖啡馆窗边，一束粉白花'}
+                prompt={options.prompt ?? '用户真实提示词 A'}
                 setPrompt={noop}
-                batchPromptText={options.batchPromptText ?? '午后咖啡馆窗边\n奶油色卧室一角'}
+                batchPromptText={options.batchPromptText ?? '用户真实提示词 A\n用户真实提示词 B'}
                 setBatchPromptText={noop}
                 failedBatchPrompts={options.failedBatchPrompts}
                 canPauseBatch={options.canPauseBatch}
@@ -73,12 +80,14 @@ function renderGenerationForm(
                 setEnableParallelBatch={noop}
                 partialImages={1}
                 setPartialImages={noop}
-                imageBackend='server-default'
+                allowResponsesImageBackend={options.allowResponsesImageBackend ?? true}
+                hasDefaultResponsesModel={options.hasDefaultResponsesModel ?? true}
+                imageBackend={options.imageBackend ?? 'server-default'}
                 setImageBackend={noop}
                 streamingStrategy={options.streamingStrategy ?? 'server-default'}
                 defaultStreamingStrategy={options.defaultStreamingStrategy ?? 'auto'}
                 setStreamingStrategy={noop}
-                responsesModel=''
+                responsesModel={options.responsesModel ?? ''}
                 setResponsesModel={noop}
                 thinking='server-default'
                 setThinking={noop}
@@ -103,10 +112,17 @@ describe('GenerationForm advanced groups', () => {
         }
     });
 
-    it('keeps the left-side professional accordion mobile-only', () => {
+    it('keeps the full professional accordion available on desktop and mobile', () => {
         const html = renderGenerationForm({ defaultAdvancedTab: 'route' });
 
-        assert.match(html, /<div class="[^"]*lg:hidden[^"]*"><button[^>]*aria-controls="generation-advanced-panel"/);
+        assert.match(
+            html,
+            /<div class="border-border bg-muted\/20 rounded-md border"><button[^>]*aria-controls="generation-advanced-panel"/
+        );
+        assert.doesNotMatch(
+            html,
+            /<div class="[^"]*lg:hidden[^"]*"><button[^>]*aria-controls="generation-advanced-panel"/
+        );
     });
 
     it('labels the collapsed mobile advanced drawer as easy mode', () => {
@@ -150,11 +166,85 @@ describe('GenerationForm advanced groups', () => {
         assert.match(html, /费用主要由模型、尺寸、数量和预览图数量决定/);
     });
 
+    it('explains the resolved server default streaming strategy', () => {
+        const offHtml = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'route',
+            streamingStrategy: 'server-default',
+            defaultStreamingStrategy: 'off'
+        });
+        const forceHtml = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'route',
+            streamingStrategy: 'server-default',
+            defaultStreamingStrategy: 'force-sse'
+        });
+
+        assert.match(offHtml, /关闭流式会减少长连接不稳定因素/);
+        assert.doesNotMatch(offHtml, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.match(forceHtml, /强制 SSE 会跳过自动判断/);
+        assert.doesNotMatch(forceHtml, /自动或服务端默认会优先使用当前推荐的流式策略/);
+    });
+
+    it('disables the experimental Responses backend when runtime capabilities do not allow it', () => {
+        const html = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'route',
+            allowResponsesImageBackend: false
+        });
+
+        assert.match(html, /当前运行时未启用 Responses image_generation/);
+        assert.doesNotMatch(html, /GPT 顶层模型/);
+    });
+
+    it('blocks Responses generation until a top-level model is available', () => {
+        const html = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'route',
+            imageBackend: 'responses-image-generation',
+            hasDefaultResponsesModel: false,
+            responsesModel: ''
+        });
+
+        assert.match(html, /Responses image_generation 需要填写 GPT 顶层模型/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*生成图像[\s\S]*<\/button>/);
+    });
+
+    it('allows Responses generation when the runtime has a default top-level model', () => {
+        const html = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'route',
+            imageBackend: 'responses-image-generation',
+            hasDefaultResponsesModel: true,
+            responsesModel: ''
+        });
+
+        assert.match(html, /GPT 顶层模型/);
+        assert.doesNotMatch(html, /Responses image_generation 需要填写 GPT 顶层模型/);
+    });
+
     it('keeps the model selector out of the route group', () => {
         const html = renderGenerationForm({ defaultAdvancedOpen: true, defaultAdvancedTab: 'model' });
 
         assert.match(html, /model-select/);
         assert.doesNotMatch(html, /image-backend-select/);
+    });
+
+    it('disables random inspiration when no saved prompt is available', () => {
+        const html = renderGenerationForm({ canApplyRandomInspiration: false });
+
+        assert.match(html, /随便来点/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*随便来点[\s\S]*<\/button>/);
+        assert.doesNotMatch(html, /夏日窗边的奶油色房间/);
+    });
+
+    it('does not render built-in prompt style chips before the user enters real content', () => {
+        const html = renderGenerationForm();
+
+        assert.doesNotMatch(html, /风格偏好/);
+        assert.doesNotMatch(html, /胶片感/);
+        assert.doesNotMatch(html, /奶油色/);
+        assert.doesNotMatch(html, /夏日窗边/);
     });
 });
 
@@ -207,7 +297,7 @@ describe('GenerationForm batch mode', () => {
     it('shows a reusable failed-task entry for partial batch failures', () => {
         const html = renderGenerationForm({
             currentMode: 'batch',
-            failedBatchPrompts: ['奶油色卧室一角']
+            failedBatchPrompts: ['用户真实提示词 B']
         });
 
         assert.match(html, /上次批量有 1 条未完成/);
@@ -215,7 +305,7 @@ describe('GenerationForm batch mode', () => {
     });
 
     it('keeps the batch prompt list out of the default generate mode', () => {
-        const html = renderGenerationForm({ failedBatchPrompts: ['奶油色卧室一角'] });
+        const html = renderGenerationForm({ failedBatchPrompts: ['用户真实提示词 B'] });
 
         assert.doesNotMatch(html, /batch-prompt-list/);
         assert.doesNotMatch(html, /batch-task-summary/);

@@ -21,6 +21,11 @@ import type {
     ImageUpstreamFormStreamingStrategy,
     ImageUpstreamFormThinking
 } from '@/lib/image-upstream-form';
+import {
+    getImageUpstreamRouteImpactKeys,
+    isImageUpstreamStreamingStrategySelectable,
+    resolveImageUpstreamEffectiveStreamingStrategy
+} from '@/lib/image-upstream-form';
 import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
@@ -139,6 +144,8 @@ type EditingFormProps = {
     setEnableParallelBatch: React.Dispatch<React.SetStateAction<boolean>>;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
+    allowResponsesImageBackend: boolean;
+    hasDefaultResponsesModel: boolean;
     editImageBackend: EditingFormData['image_backend'];
     setEditImageBackend: React.Dispatch<React.SetStateAction<EditingFormData['image_backend']>>;
     editStreamingStrategy: EditingFormData['streaming_strategy'];
@@ -212,29 +219,6 @@ function getWorkbenchBackendLabel(backend: EditingFormData['image_backend'], t: 
     if (backend === 'images-api') return t('upstream.backendImages');
     if (backend === 'responses-image-generation') return t('upstream.backendResponses');
     return t('upstream.workbenchDefaultRoute');
-}
-
-function getRouteImpactDetails(input: {
-    backend: EditingFormData['image_backend'];
-    streamingStrategy: EditingFormData['streaming_strategy'];
-    t: (key: string) => string;
-}): string[] {
-    const backendKey =
-        input.backend === 'images-api'
-            ? 'upstream.backendImpactImages'
-            : input.backend === 'responses-image-generation'
-              ? 'upstream.backendImpactResponses'
-              : 'upstream.backendImpactServerDefault';
-    const strategyKey =
-        input.streamingStrategy === 'off'
-            ? 'upstream.strategyImpactOff'
-            : input.streamingStrategy === 'force-sse'
-              ? 'upstream.strategyImpactForceSse'
-              : input.streamingStrategy === 'server-default' || input.streamingStrategy === 'auto'
-                ? 'upstream.strategyImpactAuto'
-                : 'upstream.strategyImpactSse';
-
-    return [input.t(backendKey), input.t(strategyKey), input.t('upstream.routeImpactCost')];
 }
 
 function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => string): string {
@@ -312,6 +296,8 @@ export function EditingForm({
     setEnableParallelBatch,
     partialImages,
     setPartialImages,
+    allowResponsesImageBackend,
+    hasDefaultResponsesModel,
     editImageBackend,
     setEditImageBackend,
     editStreamingStrategy,
@@ -349,8 +335,10 @@ export function EditingForm({
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
     const showCompression = editOutputFormat === 'jpeg' || editOutputFormat === 'webp';
-    const effectiveStreamingStrategy =
-        editStreamingStrategy === 'server-default' ? defaultStreamingStrategy : editStreamingStrategy;
+    const effectiveStreamingStrategy = resolveImageUpstreamEffectiveStreamingStrategy({
+        streamingStrategy: editStreamingStrategy,
+        defaultStreamingStrategy
+    });
     const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
     const parallelBatchToggle = resolveStreamingBatchToggleState({
         allowStreamingBatch,
@@ -365,6 +353,8 @@ export function EditingForm({
 
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(initialAdvancedOpen);
     const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>(initialAdvancedTab);
+    const requiresResponsesModel =
+        editImageBackend === 'responses-image-generation' && !hasDefaultResponsesModel && !editResponsesModel.trim();
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (imageFiles.length === 0) return t('ux.disabledSourceImage');
@@ -372,6 +362,7 @@ export function EditingForm({
         if (editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved) {
             return t('ux.disabledUnsavedMask');
         }
+        if (requiresResponsesModel) return t('upstream.responsesModelRequired');
         if (customSizeInvalid) return editCustomSizeError || t('ux.disabledCustomSize');
         return '';
     }, [
@@ -383,6 +374,7 @@ export function EditingForm({
         editPrompt,
         imageFiles.length,
         isLoading,
+        requiresResponsesModel,
         t
     ]);
     const advancedSummary = [
@@ -1178,7 +1170,7 @@ export function EditingForm({
                         )}
                     </div>
 
-                    <div className='border-border bg-muted/20 rounded-md border lg:hidden'>
+                    <div className='border-border bg-muted/20 rounded-md border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
@@ -1279,7 +1271,9 @@ export function EditingForm({
                                                         <SelectItem value='images-api'>
                                                             {t('upstream.backendImages')}
                                                         </SelectItem>
-                                                        <SelectItem value='responses-image-generation'>
+                                                        <SelectItem
+                                                            value='responses-image-generation'
+                                                            disabled={!allowResponsesImageBackend}>
                                                             {t('upstream.backendResponses')}
                                                         </SelectItem>
                                                         <SelectItem value='server-default'>
@@ -1311,13 +1305,37 @@ export function EditingForm({
                                                             {t('upstream.strategyAuto')}
                                                         </SelectItem>
                                                         <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
-                                                        <SelectItem value='openai-sse'>
+                                                        <SelectItem
+                                                            value='openai-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend: editImageBackend,
+                                                                    streamingStrategy: 'openai-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyOpenAiSse')}
                                                         </SelectItem>
-                                                        <SelectItem value='newapi-keepalive-sse'>
+                                                        <SelectItem
+                                                            value='newapi-keepalive-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend: editImageBackend,
+                                                                    streamingStrategy: 'newapi-keepalive-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyKeepaliveSse')}
                                                         </SelectItem>
-                                                        <SelectItem value='responses-sse'>
+                                                        <SelectItem
+                                                            value='responses-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend: editImageBackend,
+                                                                    streamingStrategy: 'responses-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyResponsesSse')}
                                                         </SelectItem>
                                                         <SelectItem value='force-sse'>
@@ -1335,12 +1353,13 @@ export function EditingForm({
                                                 <ShieldAlert className='text-muted-foreground h-4 w-4' />
                                                 {t('upstream.routeImpactTitle')}
                                             </div>
-                                            {getRouteImpactDetails({
+                                            {getImageUpstreamRouteImpactKeys({
                                                 backend: editImageBackend,
                                                 streamingStrategy: editStreamingStrategy,
-                                                t
-                                            }).map((detail) => (
-                                                <p key={detail}>{detail}</p>
+                                                defaultStreamingStrategy,
+                                                allowResponsesImageBackend
+                                            }).map((key) => (
+                                                <p key={key}>{t(key)}</p>
                                             ))}
                                         </div>
 
@@ -1365,8 +1384,13 @@ export function EditingForm({
                                                             disabled={isLoading}
                                                             autoComplete='off'
                                                             spellCheck={false}
-                                                            placeholder='gpt-5.4'
+                                                            placeholder='OPENAI_RESPONSES_API_MODEL'
                                                         />
+                                                        {requiresResponsesModel && (
+                                                            <p className='text-destructive text-xs'>
+                                                                {t('upstream.responsesModelRequired')}
+                                                            </p>
+                                                        )}
                                                     </div>
                                                     <div className='space-y-1.5'>
                                                         <Label htmlFor='edit-thinking-select'>

@@ -190,10 +190,6 @@
             0 18px 38px oklch(0.35 0.036 54 / 0.16);
     }
 
-    .sample-art-image {
-        filter: saturate(1.08) contrast(1.04) brightness(1.01);
-    }
-
     .photo-paper::before {
         content: '';
         position: absolute;
@@ -208,10 +204,6 @@
             linear-gradient(90deg, oklch(0.9 0.025 75 / 0.82), oklch(0.78 0.024 75 / 0.64)),
             repeating-linear-gradient(90deg, oklch(1 0 0 / 0.18) 0 2px, transparent 2px 7px);
         box-shadow: 0 4px 10px oklch(0.35 0.036 54 / 0.08);
-    }
-
-    .hand-note {
-        font-family: 'Bradley Hand', 'Kaiti SC', 'STKaiti', cursive;
     }
 
     .preview-gallery-board {

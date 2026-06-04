@@ -17,6 +17,11 @@ type RenderOptions = {
     editN?: number[];
     streamingStrategy?: EditingFormData['streaming_strategy'];
     defaultStreamingStrategy?: ImageStreamingStrategy;
+    allowResponsesImageBackend?: boolean;
+    hasDefaultResponsesModel?: boolean;
+    editResponsesModel?: string;
+    editPrompt?: string;
+    imageFiles?: File[];
 };
 
 const noop = () => {};
@@ -31,7 +36,12 @@ function renderEditingForm({
     enableParallelBatch = false,
     editN = [1],
     streamingStrategy = 'server-default',
-    defaultStreamingStrategy = 'auto'
+    defaultStreamingStrategy = 'auto',
+    allowResponsesImageBackend = true,
+    hasDefaultResponsesModel = true,
+    editResponsesModel = '',
+    editPrompt = '',
+    imageFiles = []
 }: RenderOptions): string {
     return renderToStaticMarkup(
         <I18nProvider>
@@ -47,12 +57,12 @@ function renderEditingForm({
                 onOpenPasswordDialog={noop}
                 editModel='gpt-image-2'
                 setEditModel={noop}
-                imageFiles={[]}
+                imageFiles={imageFiles}
                 sourceImagePreviewUrls={[]}
                 setImageFiles={noop}
                 setSourceImagePreviewUrls={noop}
                 maxImages={10}
-                editPrompt=''
+                editPrompt={editPrompt}
                 setEditPrompt={noop}
                 editN={editN}
                 setEditN={noop}
@@ -91,12 +101,14 @@ function renderEditingForm({
                 setEnableParallelBatch={noop}
                 partialImages={1}
                 setPartialImages={noop}
+                allowResponsesImageBackend={allowResponsesImageBackend}
+                hasDefaultResponsesModel={hasDefaultResponsesModel}
                 editImageBackend={backend}
                 setEditImageBackend={noop}
                 editStreamingStrategy={streamingStrategy}
                 defaultStreamingStrategy={defaultStreamingStrategy}
                 setEditStreamingStrategy={noop}
-                editResponsesModel=''
+                editResponsesModel={editResponsesModel}
                 setEditResponsesModel={noop}
                 editThinking='server-default'
                 setEditThinking={noop}
@@ -113,10 +125,14 @@ function renderEditingForm({
 }
 
 describe('EditingForm advanced upstream controls', () => {
-    it('keeps the left-side professional accordion mobile-only', () => {
+    it('keeps the full professional accordion available on desktop and mobile', () => {
         const html = renderEditingForm({ backend: 'server-default', advancedTab: 'route' });
 
         assert.match(
+            html,
+            /<div class="border-border bg-muted\/20 rounded-md border"><button[^>]*aria-controls="editing-advanced-panel"/
+        );
+        assert.doesNotMatch(
             html,
             /<div class="[^"]*lg:hidden[^"]*"><button[^>]*aria-controls="editing-advanced-panel"/
         );
@@ -239,6 +255,49 @@ describe('EditingForm advanced upstream controls', () => {
         assert.doesNotMatch(html, /优先 Web 账号/);
     });
 
+    it('explains the resolved edit server default streaming strategy', () => {
+        const offHtml = renderEditingForm({
+            backend: 'server-default',
+            advancedTab: 'route',
+            streamingStrategy: 'server-default',
+            defaultStreamingStrategy: 'off'
+        });
+        const forceHtml = renderEditingForm({
+            backend: 'server-default',
+            advancedTab: 'route',
+            streamingStrategy: 'server-default',
+            defaultStreamingStrategy: 'force-sse'
+        });
+
+        assert.match(offHtml, /关闭流式会减少长连接不稳定因素/);
+        assert.doesNotMatch(offHtml, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.match(forceHtml, /强制 SSE 会跳过自动判断/);
+        assert.doesNotMatch(forceHtml, /自动或服务端默认会优先使用当前推荐的流式策略/);
+    });
+
+    it('disables the experimental Responses backend when runtime capabilities do not allow it', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            allowResponsesImageBackend: false
+        });
+
+        assert.match(html, /当前运行时未启用 Responses image_generation/);
+        assert.doesNotMatch(html, /GPT 顶层模型/);
+    });
+
+    it('blocks Responses edits until a top-level model is available', () => {
+        const html = renderEditingForm({
+            backend: 'responses-image-generation',
+            hasDefaultResponsesModel: false,
+            editResponsesModel: '',
+            editPrompt: '用户真实编辑要求',
+            imageFiles: [new File(['x'], 'source.png', { type: 'image/png' })]
+        });
+
+        assert.match(html, /Responses image_generation 需要填写 GPT 顶层模型/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*编辑图像[\s\S]*<\/button>/);
+    });
+
     it('renders Images API edit controls and compression when JPEG output is selected', () => {
         const html = renderEditingForm({ backend: 'images-api', outputFormat: 'jpeg', advancedTab: 'output' });
 
@@ -257,7 +316,7 @@ describe('EditingForm reused history context', () => {
             reuseContext: {
                 sourceLabel: '最近生成：2026/6/2 12:00:00',
                 restoredFields: ['参考图', '提示词', '模型', '尺寸', '数量'],
-                promptPreview: '午后咖啡馆窗边，一束粉白花'
+                promptPreview: '用户真实编辑提示词'
             }
         });
 
@@ -268,7 +327,7 @@ describe('EditingForm reused history context', () => {
         assert.match(html, /模型/);
         assert.match(html, /尺寸/);
         assert.match(html, /数量/);
-        assert.match(html, /午后咖啡馆窗边，一束粉白花/);
+        assert.match(html, /用户真实编辑提示词/);
         assert.match(html, /这些内容已经写入编辑单，可以修改后再生成。/);
     });
 });

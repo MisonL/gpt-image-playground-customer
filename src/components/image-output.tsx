@@ -24,7 +24,8 @@ import {
     Send,
     Share2,
     Activity,
-    Trash2
+    Trash2,
+    ImageIcon
 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
@@ -215,7 +216,9 @@ export function ImageOutput({
         imageBatch && imageBatch.length > 0
             ? typeof viewMode === 'number' && imageBatch[viewMode]
                 ? viewMode
-                : 0
+                : showCarousel
+                  ? null
+                  : 0
             : null;
     const selectedImage = selectedImageIndex === null ? null : imageBatch?.[selectedImageIndex] || null;
     const sameBatchCompareTargetIndex = imageBatch
@@ -240,10 +243,12 @@ export function ImageOutput({
                 : t('output.emptyTitle');
     const previewMetaItems = [
         !isLoading && imageBatch && imageBatch.length > 0
-            ? t('output.selectedImageMeta', {
-                  index: selectedImageIndex === null ? 1 : selectedImageIndex + 1,
-                  count: imageBatch.length
-              })
+            ? selectedImageIndex === null
+                ? t('output.selectImageForActions')
+                : t('output.selectedImageMeta', {
+                      index: selectedImageIndex + 1,
+                      count: imageBatch.length
+                  })
             : null,
         !isLoading && selectedImageDimensions
             ? t('output.imageDimensions', {
@@ -593,20 +598,20 @@ export function ImageOutput({
                                 )}
                             </div>
                         ) : (
-                            <div className='photo-paper relative aspect-[4/3] w-full max-w-[720px] p-3'>
-                                <Image
-                                    src='/assets/workbench-sample.jpg'
-                                    alt={t('output.sampleAlt')}
-                                    fill
-                                    sizes='(max-width: 768px) 92vw, (max-width: 1800px) 44vw, 720px'
-                                    className='sample-art-image object-cover p-2'
-                                    loading='eager'
-                                />
-                                <div className='text-muted-foreground hand-note absolute right-7 bottom-4 rotate-[-2deg] text-sm'>
-                                    {t('output.sampleNote')}
+                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] flex-col justify-between p-5 sm:p-6'>
+                                <div className='space-y-3'>
+                                    <div className='text-muted-foreground text-xs'>{t('output.previewEyebrow')}</div>
+                                    <div className='space-y-2'>
+                                        <h3 className='editorial-title text-2xl font-semibold'>
+                                            {t('output.emptyTitle')}
+                                        </h3>
+                                        <p className='text-muted-foreground max-w-[36rem] text-sm leading-6'>
+                                            {t('output.emptyDescription')}
+                                        </p>
+                                    </div>
                                 </div>
-                                <div className='border-border/70 bg-background/82 text-muted-foreground absolute bottom-5 left-6 rounded-full border px-3 py-1 text-xs shadow-sm'>
-                                    {t('output.sampleLabel')}
+                                <div className='border-border/70 bg-muted/30 text-muted-foreground flex h-20 w-20 items-center justify-center rounded-md border'>
+                                    <ImageIcon className='h-7 w-7' />
                                 </div>
                             </div>
                         )}
