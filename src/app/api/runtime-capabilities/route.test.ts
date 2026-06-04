@@ -18,6 +18,7 @@ function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
 beforeEach(() => {
     originalEnv = { ...process.env };
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
+    delete process.env.OPENAI_RESPONSES_API_MODEL;
     delete process.env.IMAGE_STREAMING_STRATEGY;
 });
 
@@ -45,16 +46,44 @@ describe('GET /api/runtime-capabilities', () => {
         assert.equal(body.streaming.defaultStrategy, 'off');
     });
 
-    it('exposes the experimental Responses image backend flag without enabling it by default', async () => {
+    it('exposes the experimental Responses image backend when the backend flag is enabled', async () => {
         const { GET } = await import('./route');
 
-        const disabled = (await (await GET()).json()) as Record<string, { enabled: boolean; mode?: string }>;
+        const disabled = (await (await GET()).json()) as Record<
+            string,
+            {
+                enabled: boolean;
+                mode?: string;
+                requiredEnv?: string[];
+                optionalEnv?: string[];
+                hasDefaultModel?: boolean;
+                missingEnv?: string[];
+            }
+        >;
         assert.equal(disabled.responsesImageBackend.enabled, false);
         assert.equal(disabled.responsesImageBackend.mode, 'experimental');
+        assert.deepEqual(disabled.responsesImageBackend.requiredEnv, ['ENABLE_RESPONSES_IMAGE_BACKEND']);
+        assert.deepEqual(disabled.responsesImageBackend.optionalEnv, ['OPENAI_RESPONSES_API_MODEL']);
+        assert.equal(disabled.responsesImageBackend.hasDefaultModel, false);
+        assert.deepEqual(disabled.responsesImageBackend.missingEnv, ['ENABLE_RESPONSES_IMAGE_BACKEND']);
 
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
-        const enabled = (await (await GET()).json()) as Record<string, { enabled: boolean; mode?: string }>;
+        const requestModelAllowed = (await (await GET()).json()) as Record<
+            string,
+            { enabled: boolean; mode?: string; hasDefaultModel?: boolean; missingEnv?: string[] }
+        >;
+        assert.equal(requestModelAllowed.responsesImageBackend.enabled, true);
+        assert.equal(requestModelAllowed.responsesImageBackend.hasDefaultModel, false);
+        assert.deepEqual(requestModelAllowed.responsesImageBackend.missingEnv, []);
+
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        const enabled = (await (await GET()).json()) as Record<
+            string,
+            { enabled: boolean; mode?: string; hasDefaultModel?: boolean; missingEnv?: string[] }
+        >;
         assert.equal(enabled.responsesImageBackend.enabled, true);
         assert.equal(enabled.responsesImageBackend.mode, 'experimental');
+        assert.equal(enabled.responsesImageBackend.hasDefaultModel, true);
+        assert.deepEqual(enabled.responsesImageBackend.missingEnv, []);
     });
 });

@@ -20,7 +20,7 @@ const historyItem: HistoryMetadata = {
     quality: 'high',
     background: 'auto',
     moderation: 'auto',
-    prompt: '窗边花束与复古杂志，柔和自然光，胶片感',
+    prompt: '用户真实历史提示词',
     mode: 'generate',
     costDetails: null,
     output_format: 'png',
@@ -42,12 +42,12 @@ const failedHistoryItem: HistoryMetadata = {
     status: 'failed',
     failureMessage: '上游或 API 中转站异常。请稍后重试。',
     durationMs: 2200,
-    prompt: '雨后街角花店，柔和胶片感'
+    prompt: '用户真实失败提示词'
 };
 const inspirationItem: InspirationItem = {
     id: 1,
     createdAt: Date.UTC(2026, 4, 31, 12, 20),
-    prompt: '午后窗边花束，奶油色桌面，日杂胶片感'
+    prompt: '用户保存的真实灵感提示词'
 };
 
 function renderHistoryPanel(
@@ -103,7 +103,7 @@ describe('HistoryPanel recent history actions', () => {
                 historyCount: 0,
                 inspirationCount: 1
             }),
-            'history'
+            'inspiration'
         );
     });
 
@@ -111,8 +111,10 @@ describe('HistoryPanel recent history actions', () => {
         const html = renderHistoryPanel([historyItem]);
 
         assert.match(html, /最近生成/);
-        assert.match(html, /窗边花束与复古杂志/);
-        assert.match(html, /Album/);
+        assert.match(html, /用户真实历史提示词/);
+        assert.match(html, /数据库/);
+        assert.doesNotMatch(html, /Album/);
+        assert.doesNotMatch(html, /Local/);
         assert.match(html, /收藏这条历史提示词/);
         assert.match(html, /复用这条历史记录到创作单/);
         assert.match(html, /用这条历史记录的首张图片继续编辑/);
@@ -141,7 +143,7 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /生成失败/);
         assert.match(html, /失败原因：/);
         assert.match(html, /上游或 API 中转站异常。请稍后重试。/);
-        assert.match(html, /雨后街角花店，柔和胶片感/);
+        assert.match(html, /用户真实失败提示词/);
         assert.doesNotMatch(html, /<img/);
         assert.doesNotMatch(html, /新图已入册 0 张/);
     });
@@ -151,6 +153,10 @@ describe('HistoryPanel recent history actions', () => {
 
         assert.match(html, /snap-x snap-mandatory/);
         assert.match(html, /w-\[min\(84vw,360px\)\]/);
+        assert.match(html, /用户保存的真实灵感提示词/);
+        assert.match(html, /aria-label="套用灵感：用户保存的真实灵感提示词"/);
+        assert.doesNotMatch(html, /窗边的花与书/);
+        assert.doesNotMatch(html, /inspiration-flowers/);
     });
 
     it('does not render fake inspiration actions without handlers', () => {
@@ -201,7 +207,7 @@ describe('HistoryPanel recent history actions', () => {
 
     it('keeps generation activity visible outside the inspiration tab content', () => {
         const html = renderHistoryPanel([historyItem], [inspirationItem]);
-        const tabContentIndex = html.indexOf('午后窗边花束，奶油色桌面，日杂胶片感');
+        const tabContentIndex = html.indexOf('用户保存的真实灵感提示词');
         const activityIndex = html.indexOf('请求、预览、保存和失败会在这里轻量更新。');
 
         assert.ok(tabContentIndex >= 0);

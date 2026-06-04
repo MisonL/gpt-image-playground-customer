@@ -25,11 +25,15 @@ export type WorkbenchProDockProps = {
     enableParallelBatch: boolean;
     onEnableParallelBatchChange: React.Dispatch<React.SetStateAction<boolean>>;
     parallelBatchTargetCount: number;
+    allowResponsesImageBackend: boolean;
+    hasDefaultResponsesModel: boolean;
     imageBackend: ImageUpstreamFormBackend;
     onImageBackendChange: React.Dispatch<React.SetStateAction<ImageUpstreamFormBackend>>;
     streamingStrategy: ImageUpstreamFormStreamingStrategy;
     defaultStreamingStrategy: ImageStreamingStrategy;
     onStreamingStrategyChange: React.Dispatch<React.SetStateAction<ImageUpstreamFormStreamingStrategy>>;
+    responsesModel: string;
+    onResponsesModelChange: React.Dispatch<React.SetStateAction<string>>;
     disabled?: boolean;
     defaultMode?: 'easy' | 'pro';
     defaultProTab?: 'output' | 'model' | 'stream' | 'route';

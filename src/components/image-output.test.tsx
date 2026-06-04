@@ -68,6 +68,10 @@ describe('ImageOutput result actions', () => {
         );
 
         assert.match(html, /还没有生成图像/);
+        assert.match(html, /写下灵感后点击生成/);
+        assert.doesNotMatch(html, /<img/);
+        assert.doesNotMatch(html, /workbench-sample/);
+        assert.doesNotMatch(html, /灵感样张/);
         assert.doesNotMatch(html, /1024 x 768/);
         for (const action of ['继续编辑', '做变体', '复用提示词', '对比', '下载']) {
             assert.match(
@@ -136,15 +140,30 @@ describe('ImageOutput result actions', () => {
         assert.doesNotMatch(html, /灵感样张/);
     });
 
-    it('keeps selected-image actions available in the multi-image grid view', () => {
+    it('requires an explicit selection before single-image actions in the multi-image grid view', () => {
         const html = renderImageOutput('grid');
 
         assert.match(html, /aria-label="选择第 1 张图片"/);
         assert.match(html, /aria-label="选择第 2 张图片"/);
+        assert.match(html, /请选择一张图片/);
+        assert.doesNotMatch(html, /第 1 张 \/ 共 2 张/);
 
-        assert.ok(html.indexOf('下载') < html.indexOf('继续编辑'));
+        for (const action of ['继续编辑', '对比', '下载', '分享']) {
+            assert.match(
+                html,
+                new RegExp(
+                    `<button[^>]*disabled=""[^>]*>${buttonContentPattern}${action}${buttonContentPattern}</button>`
+                )
+            );
+        }
+    });
 
-        for (const action of ['继续编辑', '做变体', '复用提示词', '对比', '下载']) {
+    it('keeps single-image actions available after selecting a multi-image result', () => {
+        const html = renderImageOutput(1);
+
+        assert.match(html, /第 2 张 \/ 共 2 张/);
+
+        for (const action of ['继续编辑', '对比', '下载', '分享']) {
             assert.match(
                 html,
                 new RegExp(`<button[^>]*>${buttonContentPattern}${action}${buttonContentPattern}</button>`)

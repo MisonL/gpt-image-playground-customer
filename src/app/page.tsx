@@ -43,6 +43,11 @@ import { useI18n } from '@/lib/i18n';
 import {
     IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
     appendImageUpstreamOverrideFields,
+    isResponsesImageBackendRuntimeEnabled,
+    normalizeImageUpstreamRuntimeFields,
+    shouldAllowResponsesHistoryRoute,
+    shouldBlockResponsesRequestWithoutModel,
+    shouldBlockExplicitResponsesRequest,
     type ImageUpstreamFormBackend
 } from '@/lib/image-upstream-form';
 import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
@@ -98,25 +103,6 @@ function getImageBackendLabel(backend: ImageUpstreamFormBackend, t: (key: string
     return t('upstream.workbenchDefaultRoute');
 }
 
-const defaultInspirations: InspirationItem[] = [
-    {
-        id: -1,
-        createdAt: 0,
-        prompt: '午后咖啡馆窗边，一束粉白花，胶片感，柔和自然光，松弛的生活杂志封面'
-    },
-    {
-        id: -2,
-        createdAt: 0,
-        prompt: '奶油色卧室一角，棉麻床品，阳光洒在书页上，日杂摄影，安静温柔'
-    },
-    {
-        id: -3,
-        createdAt: 0,
-        prompt: '周末花店门口，鼠尾草绿招牌，浅粉花束，复古咖啡色调，清透胶片'
-    }
-];
-const defaultGenerationPrompt = defaultInspirations[0]?.prompt ?? '';
-
 function createClientRequestId(): string {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
         return `web-${crypto.randomUUID()}`;
@@ -160,16 +146,23 @@ function readStoredApiSettings(): ApiSettings {
     }
 }
 
-function readStoredInspirations(): InspirationItem[] {
+type StoredInspirationsReadResult = {
+    items: InspirationItem[];
+    shouldPersist: boolean;
+    shouldRemove: boolean;
+};
+
+function readStoredInspirations(): StoredInspirationsReadResult {
     const storedInspirations = readLocalStorageValue(inspirationsLocalStorageKey);
-    if (!storedInspirations) return defaultInspirations;
+    if (!storedInspirations) {
+        return { items: [], shouldPersist: false, shouldRemove: false };
+    }
     try {
         const parsedInspirations: unknown = JSON.parse(storedInspirations);
         if (!Array.isArray(parsedInspirations)) {
-            window.localStorage.removeItem(inspirationsLocalStorageKey);
-            return [];
+            return { items: [], shouldPersist: false, shouldRemove: true };
         }
-        return parsedInspirations.filter(
+        const validInspirations = parsedInspirations.filter(
             (item): item is InspirationItem =>
                 item !== null &&
                 typeof item === 'object' &&
@@ -177,10 +170,15 @@ function readStoredInspirations(): InspirationItem[] {
                 typeof (item as InspirationItem).prompt === 'string' &&
                 typeof (item as InspirationItem).createdAt === 'number'
         );
+        const migratedInspirations = validInspirations.filter((item) => !(item.id < 0 && item.createdAt === 0));
+        return {
+            items: migratedInspirations,
+            shouldPersist: migratedInspirations.length !== parsedInspirations.length,
+            shouldRemove: false
+        };
     } catch (error) {
         console.error('加载或解析灵感相册失败：', error);
-        window.localStorage.removeItem(inspirationsLocalStorageKey);
-        return [];
+        return { items: [], shouldPersist: false, shouldRemove: true };
     }
 }
 
@@ -248,6 +246,14 @@ type RuntimeCapabilities = {
             code?: string;
             requestId?: string;
         };
+    };
+    responsesImageBackend?: {
+        enabled: boolean;
+        mode?: 'experimental';
+        requiredEnv?: string[];
+        optionalEnv?: string[];
+        hasDefaultModel?: boolean;
+        missingEnv?: string[];
     };
 };
 
@@ -446,8 +452,8 @@ export default function HomePage() {
     const [editForceWeb, setEditForceWeb] = React.useState(false);
 
     const [genModel, setGenModel] = React.useState<GenerationFormData['model']>('gpt-image-2');
-    const [genPrompt, setGenPrompt] = React.useState(defaultGenerationPrompt);
-    const [genBatchPromptText, setGenBatchPromptText] = React.useState(defaultGenerationPrompt);
+    const [genPrompt, setGenPrompt] = React.useState('');
+    const [genBatchPromptText, setGenBatchPromptText] = React.useState('');
     const [genN, setGenN] = React.useState([1]);
     const [genSize, setGenSize] = React.useState<GenerationFormData['size']>('auto');
     const [genCustomWidth, setGenCustomWidth] = React.useState<number>(1024);
@@ -485,6 +491,12 @@ export default function HomePage() {
     const [isBatchPauseRequested, setIsBatchPauseRequested] = React.useState(false);
     const batchPauseRequestedRef = React.useRef(false);
     const defaultStreamingStrategy = runtimeCapabilities?.streaming?.defaultStrategy ?? 'auto';
+    const allowResponsesImageBackend = isResponsesImageBackendRuntimeEnabled(runtimeCapabilities ?? {});
+    const allowResponsesHistoryRoute = shouldAllowResponsesHistoryRoute({
+        runtimeCapabilitiesAvailable: runtimeCapabilities !== null,
+        allowResponsesImageBackend
+    });
+    const hasDefaultResponsesModel = runtimeCapabilities?.responsesImageBackend?.hasDefaultModel === true;
     const streamingBatchCapacity = resolveStreamingBatchCapacity({
         featureEnabled: runtimeCapabilities?.streamingBatch.enabled === true,
         hasRequestApiKey: apiSettings.apiKey.trim().length > 0,
@@ -531,6 +543,41 @@ export default function HomePage() {
         streamingStrategy: activeEffectiveStreamingStrategy
     }).checked;
     const mobileCanSaveInspiration = !isLoading && !isSendingToEdit && currentPrompt.trim().length > 0;
+    const hasRandomInspirationPrompt = inspirations.some((item) => item.prompt.trim().length > 0);
+    const pickRandomInspirationPrompt = React.useCallback(() => {
+        const savedPrompts = inspirations.map((item) => item.prompt.trim()).filter((prompt) => prompt.length > 0);
+        if (savedPrompts.length === 0) return '';
+        return savedPrompts[Math.floor(Math.random() * savedPrompts.length)] ?? '';
+    }, [inspirations]);
+
+    React.useEffect(() => {
+        if (allowResponsesImageBackend || runtimeCapabilities === null) return;
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (cancelled) return;
+            setGenImageBackend((current) =>
+                current === 'responses-image-generation' ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : current
+            );
+            setEditImageBackend((current) =>
+                current === 'responses-image-generation' ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : current
+            );
+            setGenStreamingStrategy((current) =>
+                current === 'responses-sse' ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : current
+            );
+            setEditStreamingStrategy((current) =>
+                current === 'responses-sse' ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : current
+            );
+            setGenResponsesModel('');
+            setEditResponsesModel('');
+            setGenThinking(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+            setEditThinking(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+            setGenPromptOptimization(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+            setEditPromptOptimization(IMAGE_UPSTREAM_FORM_SERVER_DEFAULT);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [allowResponsesImageBackend, runtimeCapabilities]);
     const activeLogClientRequestIds = React.useMemo(() => {
         if (!latestImageBatch || latestImageBatch.length === 0) return [];
         if (typeof imageOutputView === 'number') {
@@ -577,6 +624,9 @@ export default function HomePage() {
         batchPromptCount: workbenchMode === 'batch' ? readBatchPromptLines(genBatchPromptText).length : 0,
         hasEditSourceImage,
         hasUnsavedMask: editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved,
+        imageBackend: mode === 'generate' ? genImageBackend : editImageBackend,
+        responsesModel: mode === 'generate' ? genResponsesModel : editResponsesModel,
+        hasDefaultResponsesModel,
         generateSizeValidation: currentGenerateSizeValidation,
         editSizeValidation: currentEditSizeValidation,
         t
@@ -774,7 +824,13 @@ export default function HomePage() {
     React.useEffect(() => {
         queueMicrotask(() => {
             setHistory(readStoredHistory());
-            setInspirations(readStoredInspirations());
+            const storedInspirations = readStoredInspirations();
+            setInspirations(storedInspirations.items);
+            if (storedInspirations.shouldRemove) {
+                window.localStorage.removeItem(inspirationsLocalStorageKey);
+            } else if (storedInspirations.shouldPersist) {
+                window.localStorage.setItem(inspirationsLocalStorageKey, JSON.stringify(storedInspirations.items));
+            }
             hasLoadedStoredHistoryRef.current = true;
         });
     }, []);
@@ -1454,9 +1510,36 @@ export default function HomePage() {
                     return;
                 }
             }
+            const allowRuntimeResponsesImageBackend =
+                isResponsesImageBackendRuntimeEnabled(latestRuntimeCapabilities ?? {});
+            if (
+                shouldBlockExplicitResponsesRequest({
+                    imageBackend: formData.image_backend,
+                    allowResponsesImageBackend: allowRuntimeResponsesImageBackend
+                })
+            ) {
+                throw new ApiRequestError(
+                    latestRuntimeCapabilities === null
+                        ? t('upstream.responsesRuntimeUnavailable')
+                        : t('upstream.backendResponsesUnavailable')
+                );
+            }
+            const runtimeFormData = normalizeImageUpstreamRuntimeFields(formData, {
+                allowResponsesImageBackend: allowRuntimeResponsesImageBackend
+            });
+            if (
+                shouldBlockResponsesRequestWithoutModel({
+                    imageBackend: runtimeFormData.image_backend,
+                    responsesModel: runtimeFormData.responsesModel,
+                    hasDefaultResponsesModel:
+                        latestRuntimeCapabilities?.responsesImageBackend?.hasDefaultModel === true
+                })
+            ) {
+                throw new ApiRequestError(t('upstream.responsesModelRequired'));
+            }
             const promptBatch =
                 requestMode === 'generate'
-                    ? ((formData as GenerationFormData).batchPrompts ?? [])
+                    ? ((runtimeFormData as GenerationFormData).batchPrompts ?? [])
                           .map((prompt) => prompt.trim())
                           .filter((prompt) => prompt.length > 0)
                     : [];
@@ -1468,12 +1551,12 @@ export default function HomePage() {
             const imageCount = isPromptBatch
                 ? promptBatch.length
                 : requestMode === 'generate'
-                  ? (formData as GenerationFormData).n
-                  : (formData as EditingFormData).n;
+                  ? (runtimeFormData as GenerationFormData).n
+                  : (runtimeFormData as EditingFormData).n;
             const requestStreamingStrategy =
                 requestMode === 'generate'
-                    ? (formData as GenerationFormData).streaming_strategy
-                    : (formData as EditingFormData).streaming_strategy;
+                    ? (runtimeFormData as GenerationFormData).streaming_strategy
+                    : (runtimeFormData as EditingFormData).streaming_strategy;
             const runtimeDefaultStreamingStrategy =
                 latestRuntimeCapabilities?.streaming?.defaultStrategy ?? defaultStreamingStrategy;
             const effectiveRequestStreamingStrategy =
@@ -1490,7 +1573,7 @@ export default function HomePage() {
                 imageCount
             });
             effectiveFormData = {
-                ...formData,
+                ...runtimeFormData,
                 enableParallelBatch: normalizedEnableParallelBatch
             };
             setLastApiCallArgs([
@@ -1780,7 +1863,8 @@ export default function HomePage() {
     }
 
     function handleMobileRandomInspiration() {
-        const nextPrompt = t('workbench.randomPromptExample');
+        const nextPrompt = pickRandomInspirationPrompt();
+        if (!nextPrompt) return;
         if (mode === 'edit') {
             setEditPrompt(nextPrompt);
             return;
@@ -1838,27 +1922,30 @@ export default function HomePage() {
 
     const applyHistoryGenerationFormData = React.useCallback(
         (formData: GenerationFormData, item: HistoryMetadata) => {
-            const trimmedPrompt = formData.prompt.trim();
+            const normalizedFormData = normalizeImageUpstreamRuntimeFields(formData, {
+                allowResponsesImageBackend: allowResponsesHistoryRoute
+            });
+            const trimmedPrompt = normalizedFormData.prompt.trim();
             const restoredFields = [t('reuse.fieldPrompt')];
 
-            setGenPrompt(trimmedPrompt || formData.prompt);
-            setGenModel(formData.model);
-            setGenSize(formData.size);
-            setGenCustomWidth(formData.customWidth);
-            setGenCustomHeight(formData.customHeight);
-            setGenQuality(formData.quality);
-            setGenBackground(formData.background);
-            setGenModeration(formData.moderation);
-            setGenOutputFormat(formData.output_format);
-            setGenImageBackend(formData.image_backend);
-            setGenStreamingStrategy(formData.streaming_strategy);
-            setGenResponsesModel(formData.responsesModel);
-            setGenThinking(formData.thinking);
-            setGenPromptOptimization(formData.promptOptimization);
-            setGenForceWeb(formData.forceWeb);
-            setEnableParallelBatch(formData.enableParallelBatch);
-            if (formData.output_compression !== undefined) {
-                setGenCompression([formData.output_compression]);
+            setGenPrompt(trimmedPrompt || normalizedFormData.prompt);
+            setGenModel(normalizedFormData.model);
+            setGenSize(normalizedFormData.size);
+            setGenCustomWidth(normalizedFormData.customWidth);
+            setGenCustomHeight(normalizedFormData.customHeight);
+            setGenQuality(normalizedFormData.quality);
+            setGenBackground(normalizedFormData.background);
+            setGenModeration(normalizedFormData.moderation);
+            setGenOutputFormat(normalizedFormData.output_format);
+            setGenImageBackend(normalizedFormData.image_backend);
+            setGenStreamingStrategy(normalizedFormData.streaming_strategy);
+            setGenResponsesModel(normalizedFormData.responsesModel);
+            setGenThinking(normalizedFormData.thinking);
+            setGenPromptOptimization(normalizedFormData.promptOptimization);
+            setGenForceWeb(normalizedFormData.forceWeb);
+            setEnableParallelBatch(normalizedFormData.enableParallelBatch);
+            if (normalizedFormData.output_compression !== undefined) {
+                setGenCompression([normalizedFormData.output_compression]);
             }
 
             restoredFields.push(
@@ -1871,13 +1958,13 @@ export default function HomePage() {
                 t('reuse.fieldRoute')
             );
 
-            if (formData.batchPrompts && formData.batchPrompts.length > 1) {
-                setGenBatchPromptText(formData.batchPrompts.join('\n'));
+            if (normalizedFormData.batchPrompts && normalizedFormData.batchPrompts.length > 1) {
+                setGenBatchPromptText(normalizedFormData.batchPrompts.join('\n'));
                 setGenN([1]);
                 setWorkbenchMode('batch');
             } else {
                 setGenBatchPromptText('');
-                setGenN([formData.n]);
+                setGenN([normalizedFormData.n]);
                 restoredFields.push(t('reuse.fieldCount'));
                 setWorkbenchMode('reuse');
             }
@@ -1890,8 +1977,9 @@ export default function HomePage() {
                 promptPreview: trimmedPrompt || t('history.noPrompt')
             });
             setMode('generate');
+            return normalizedFormData;
         },
-        [locale, t]
+        [allowResponsesHistoryRoute, locale, t]
     );
 
     function handleCreateVariant() {
@@ -1900,8 +1988,8 @@ export default function HomePage() {
                 activeResultSource,
                 buildCurrentGenerationFallbackFormData()
             );
-            applyHistoryGenerationFormData(formData, activeResultSource);
-            void handleApiCall(formData, 'generate');
+            const normalizedFormData = applyHistoryGenerationFormData(formData, activeResultSource);
+            void handleApiCall(normalizedFormData, 'generate');
             return;
         }
         handleMobilePrimaryAction();
@@ -2223,6 +2311,16 @@ export default function HomePage() {
         if (!sent) return;
 
         const nextModel = item.model ?? editModel;
+        const normalizedRouteFields = normalizeImageUpstreamRuntimeFields(
+            {
+                image_backend: item.image_backend ?? editImageBackend,
+                streaming_strategy: item.streaming_strategy ?? editStreamingStrategy,
+                responsesModel: item.responsesModel ?? editResponsesModel,
+                thinking: item.thinking ?? editThinking,
+                promptOptimization: item.promptOptimization ?? editPromptOptimization
+            },
+            { allowResponsesImageBackend: allowResponsesHistoryRoute }
+        );
         const sizeSelection = readHistorySizeSelection(item, nextModel);
         const restoredFields = [t('reuse.fieldReferenceImage'), t('reuse.fieldPrompt')];
         setEditPrompt(item.prompt);
@@ -2237,12 +2335,18 @@ export default function HomePage() {
         setEditQuality(item.quality);
         setEditModeration(item.moderation);
         setEnableParallelBatch(item.enableParallelBatch === true);
+        setEditImageBackend(normalizedRouteFields.image_backend);
+        setEditStreamingStrategy(normalizedRouteFields.streaming_strategy);
+        setEditResponsesModel(normalizedRouteFields.responsesModel);
+        setEditThinking(normalizedRouteFields.thinking);
+        setEditPromptOptimization(normalizedRouteFields.promptOptimization);
+        setEditForceWeb(item.forceWeb === true);
         const imageCount = readHistoryImageCountSelection(item.images.length);
         if (imageCount !== null) {
             setEditN([imageCount]);
             restoredFields.push(t('reuse.fieldCount'));
         }
-        restoredFields.push(t('reuse.fieldModel'), t('reuse.fieldQuality'), t('reuse.fieldModeration'));
+        restoredFields.push(t('reuse.fieldModel'), t('reuse.fieldQuality'), t('reuse.fieldModeration'), t('reuse.fieldRoute'));
         if (sizeSelection.restored) {
             restoredFields.push(t('reuse.fieldSize'));
         }
@@ -2454,9 +2558,6 @@ export default function HomePage() {
                                         className='hover:bg-accent hover:text-foreground focus-visible:ring-ring flex h-9 w-9 items-center justify-center rounded-md transition-[background-color,color,box-shadow] focus-visible:ring-2 focus-visible:outline-none active:scale-[0.98]'>
                                         <Settings2 className='h-4 w-4' />
                                     </button>
-                                    <span className='flex h-8 w-8 items-center justify-center rounded-full bg-[oklch(0.34_0.06_55)] text-sm text-white'>
-                                        M
-                                    </span>
                                 </div>
                             </div>
                         </header>
@@ -2511,7 +2612,7 @@ export default function HomePage() {
                                             variant='outline'
                                             size='sm'
                                             onClick={handleMobileRandomInspiration}
-                                            disabled={isLoading || isSendingToEdit}
+                                            disabled={isLoading || isSendingToEdit || !hasRandomInspirationPrompt}
                                             className='bg-card/80 min-h-11'>
                                             {t('workbench.randomInspiration')}
                                         </Button>
@@ -2521,6 +2622,8 @@ export default function HomePage() {
                                     <GenerationForm
                                         onSubmit={handleApiCall}
                                         onSaveInspiration={handleSaveInspiration}
+                                        canApplyRandomInspiration={hasRandomInspirationPrompt}
+                                        onPickRandomInspiration={pickRandomInspirationPrompt}
                                         isLoading={isLoading}
                                         currentMode={workbenchMode}
                                         onModeChange={handleWorkbenchModeChange}
@@ -2564,6 +2667,8 @@ export default function HomePage() {
                                         setEnableParallelBatch={setEnableParallelBatch}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}
+                                        allowResponsesImageBackend={allowResponsesImageBackend}
+                                        hasDefaultResponsesModel={hasDefaultResponsesModel}
                                         imageBackend={genImageBackend}
                                         setImageBackend={setGenImageBackend}
                                         streamingStrategy={genStreamingStrategy}
@@ -2643,6 +2748,8 @@ export default function HomePage() {
                                         setEnableParallelBatch={setEnableParallelBatch}
                                         partialImages={partialImages}
                                         setPartialImages={setPartialImages}
+                                        allowResponsesImageBackend={allowResponsesImageBackend}
+                                        hasDefaultResponsesModel={hasDefaultResponsesModel}
                                         editImageBackend={editImageBackend}
                                         setEditImageBackend={setEditImageBackend}
                                         editStreamingStrategy={editStreamingStrategy}
@@ -2724,6 +2831,8 @@ export default function HomePage() {
                                               ? genN[0]
                                               : editN[0]
                                     }
+                                    allowResponsesImageBackend={allowResponsesImageBackend}
+                                    hasDefaultResponsesModel={hasDefaultResponsesModel}
                                     imageBackend={mode === 'generate' ? genImageBackend : editImageBackend}
                                     onImageBackendChange={
                                         mode === 'generate' ? setGenImageBackend : setEditImageBackend
@@ -2734,6 +2843,10 @@ export default function HomePage() {
                                     defaultStreamingStrategy={defaultStreamingStrategy}
                                     onStreamingStrategyChange={
                                         mode === 'generate' ? setGenStreamingStrategy : setEditStreamingStrategy
+                                    }
+                                    responsesModel={mode === 'generate' ? genResponsesModel : editResponsesModel}
+                                    onResponsesModelChange={
+                                        mode === 'generate' ? setGenResponsesModel : setEditResponsesModel
                                     }
                                     disabled={isLoading || isSendingToEdit}
                                 />

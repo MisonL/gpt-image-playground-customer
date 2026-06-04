@@ -69,6 +69,9 @@ export function resolveHistoryPanelTabSync(input: {
     if (input.activeTab === 'inspiration' && input.historyCount > 0 && input.inspirationCount === 0) {
         return 'history';
     }
+    if (input.activeTab === 'history' && input.historyCount === 0 && input.inspirationCount > 0) {
+        return 'inspiration';
+    }
     return input.activeTab;
 }
 
@@ -117,17 +120,10 @@ const calculateCost = (value: number, rate: number): string => {
 
 const formatMoney = (value: number): string => value.toFixed(4);
 const formatEstimatedTokenCost = (value: number, rate: number): string => `$${calculateCost(value, rate)}`;
-const inspirationThumbnails = [
-    '/assets/inspiration-flowers.jpg',
-    '/assets/inspiration-desk.jpg',
-    '/assets/inspiration-window.jpg'
-];
-const inspirationTitles = ['窗边的花与书', '复古桌面时光', '海边的夏日下午'];
-const inspirationTags = ['奶油色', '花束', '日杂', '胶片感', '复古', '咖啡', '清透', '夏日'];
-const storageDisplayLabels = {
-    fs: 'Local',
-    indexeddb: 'Album'
-} as const;
+
+function getStorageLabel(storageMode: HistoryMetadata['storageModeUsed'], t: ReturnType<typeof useI18n>['t']): string {
+    return storageMode === 'fs' ? t('history.storageFile') : t('history.storageDb');
+}
 
 function getCostBadge(
     item: HistoryMetadata,
@@ -447,46 +443,29 @@ function HistoryPanelImpl({
                             </div>
                         ) : (
                             <div className='-mx-3 flex snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-1 lg:mx-0 lg:block lg:space-y-2 lg:overflow-visible lg:px-0 lg:pb-0'>
-                                {inspirations.map((item, index) => {
-                                    const thumbnail = inspirationThumbnails[index % inspirationThumbnails.length];
-                                    const title =
-                                        inspirationTitles[index % inspirationTitles.length] ||
-                                        t('history.inspirationAlbum');
-                                    const tags = inspirationTags.slice(index * 2, index * 2 + 2);
+                                {inspirations.map((item) => {
+                                    const title = item.prompt.trim() || t('history.inspirationAlbum');
                                     return (
                                         <div
                                             key={item.id}
-                                            className='group border-border/70 bg-card/58 hover:border-primary/30 flex w-[min(84vw,360px)] shrink-0 snap-start items-stretch gap-3 overflow-hidden rounded-md border p-2 shadow-sm transition-[border-color,box-shadow] hover:shadow-md lg:w-auto lg:gap-2 lg:p-1.5 2xl:p-1'>
+                                            className='group border-border/70 bg-card/58 hover:border-primary/30 flex w-[min(84vw,360px)] shrink-0 snap-start items-stretch gap-3 rounded-md border p-2 shadow-sm transition-[border-color,box-shadow] hover:shadow-md lg:w-auto lg:gap-2 lg:p-1.5 2xl:p-1'>
                                             <button
                                                 type='button'
                                                 onClick={() =>
                                                     onApplyPrompt(item.prompt, { type: 'inspiration', title })
                                                 }
-                                                className='border-border bg-muted relative min-h-24 w-36 shrink-0 overflow-hidden rounded border shadow-sm sm:w-40 lg:min-h-20 lg:w-32 2xl:min-h-18 2xl:w-28'>
-                                                <Image
-                                                    src={thumbnail}
-                                                    alt={title}
-                                                    fill
-                                                    sizes='160px'
-                                                    className='object-cover'
-                                                    loading={index === 0 ? 'eager' : 'lazy'}
-                                                />
+                                                aria-label={t('history.applyInspirationPrompt', { title })}
+                                                className='border-border bg-muted/30 text-muted-foreground flex min-h-24 w-24 shrink-0 items-center justify-center rounded border shadow-sm lg:min-h-20 lg:w-20 2xl:min-h-18 2xl:w-18'>
+                                                <Bookmark className='h-5 w-5' />
                                             </button>
                                             <div className='flex min-w-0 flex-1 flex-col gap-1.5 pr-1 2xl:gap-1'>
                                                 <div className='flex items-start justify-between gap-1.5'>
                                                     <div className='min-w-0'>
-                                                        <p className='truncate text-[15px] leading-5 font-medium 2xl:text-sm'>
+                                                        <p
+                                                            className='line-clamp-2 text-[15px] leading-5 font-medium 2xl:text-sm'
+                                                            title={title}>
                                                             {title}
                                                         </p>
-                                                        <div className='mt-1 flex gap-1 overflow-hidden 2xl:mt-0.5'>
-                                                            {tags.map((tag) => (
-                                                                <span
-                                                                    key={tag}
-                                                                    className='bg-muted/80 text-muted-foreground shrink-0 rounded-sm px-1.5 py-0.5 text-[11px]'>
-                                                                    {tag}
-                                                                </span>
-                                                            ))}
-                                                        </div>
                                                     </div>
                                                     <div className='flex shrink-0 gap-0.5 opacity-65 transition-opacity group-hover:opacity-100'>
                                                         <span
@@ -506,11 +485,6 @@ function HistoryPanelImpl({
                                                         </Button>
                                                     </div>
                                                 </div>
-                                                <p
-                                                    className='text-muted-foreground max-h-8 min-h-8 overflow-hidden text-xs leading-4 2xl:max-h-4 2xl:min-h-4'
-                                                    title={item.prompt}>
-                                                    {item.prompt}
-                                                </p>
                                                 <div className='flex items-center justify-between gap-2'>
                                                     <span className='text-muted-foreground text-[11px]'>
                                                         {item.createdAt > 0
@@ -682,7 +656,7 @@ function HistoryPanelImpl({
                                                     ) : (
                                                         <Database size={12} className='text-primary' />
                                                     )}
-                                                    <span>{storageDisplayLabels[originalStorageMode]}</span>
+                                                    <span>{getStorageLabel(originalStorageMode, t)}</span>
                                                 </div>
                                                 {item.output_format && (
                                                     <div className='bg-background/85 text-muted-foreground border-border flex items-center gap-1 rounded-sm border px-1 py-0.5 text-[11px]'>
