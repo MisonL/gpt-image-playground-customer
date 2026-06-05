@@ -32,6 +32,7 @@ import {
     readImageFiles,
     readMaskFile,
     readModel,
+    readPlainHttpApiBaseUrlAllowlist,
     readRequiredText,
     readSize,
     validateApiBaseUrl,
@@ -657,7 +658,9 @@ function createOpenAiClient(headers: Headers): CredentialContext {
         legacyBaseUrl: process.env.OPENAI_API_BASE_URL,
         selectedCredential
     });
-    validateApiBaseUrl(baseUrl || '');
+    validateApiBaseUrl(baseUrl || '', {
+        allowedPlainHttpBaseUrls: readPlainHttpApiBaseUrlAllowlist(process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS)
+    });
     if (!apiKey) {
         throw new AgentApiError({
             code: 'configuration_error',

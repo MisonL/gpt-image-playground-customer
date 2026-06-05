@@ -1870,7 +1870,7 @@ export default function HomePage() {
             return;
         }
         if (workbenchMode === 'batch') {
-            setGenBatchPromptText(nextPrompt);
+            handleBatchPromptTextChange(nextPrompt);
             return;
         }
         setGenPrompt(nextPrompt);

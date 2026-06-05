@@ -13,9 +13,24 @@ describe('image request quality defaults', () => {
 });
 
 describe('validateApiBaseUrl', () => {
-    it('accepts http and https OpenAI-compatible base URLs', () => {
-        assert.doesNotThrow(() => validateApiBaseUrl('http://api.j3gb.com/v1'));
+    it('accepts https and local http OpenAI-compatible base URLs', () => {
         assert.doesNotThrow(() => validateApiBaseUrl('https://api.openai.com/v1'));
+        assert.doesNotThrow(() => validateApiBaseUrl('http://localhost:4783/v1'));
+        assert.doesNotThrow(() => validateApiBaseUrl('http://127.0.0.1:4783/v1'));
+        assert.doesNotThrow(() => validateApiBaseUrl('http://[::1]:4783/v1'));
+    });
+
+    it('rejects remote plain-http API base URLs by default', () => {
+        assert.throws(() => validateApiBaseUrl('http://api.j3gb.com/v1'), /HTTPS/);
+        assert.throws(() => validateApiBaseUrl('http://192.168.1.2/v1'), /HTTPS/);
+    });
+
+    it('accepts explicitly allowlisted remote plain-http API base URLs', () => {
+        assert.doesNotThrow(() =>
+            validateApiBaseUrl('http://api.j3gb.com/v1', {
+                allowedPlainHttpBaseUrls: ['http://api.j3gb.com/v1']
+            })
+        );
     });
 
     it('rejects non-http protocols', () => {

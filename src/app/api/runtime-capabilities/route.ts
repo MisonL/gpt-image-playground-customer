@@ -41,6 +41,12 @@ export async function GET() {
                 unhealthyChannelCount: healthSummary?.unhealthyChannelCount ?? 0,
                 lastFailure: toPublicChannelFailure(healthSummary?.lastFailure)
             },
+            channelRecovery: {
+                requireProbeForRecovery: serverChannelState.channelRecovery.requireProbeForRecovery,
+                pendingProbeCredentialCount: healthSummary?.pendingRecoveryProbeCredentialCount ?? 0,
+                pendingProbeChannelCount: healthSummary?.pendingRecoveryProbeChannelCount ?? 0,
+                probe: serverChannelState.channelRecoveryProber?.summary()
+            },
             responsesImageBackend: {
                 enabled: responsesImageBackendEnabled,
                 mode: 'experimental',
