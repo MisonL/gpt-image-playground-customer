@@ -334,12 +334,18 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 | 变量 | 是否必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | 条件必填 | 无 | 服务端默认 API Key。也可以在页面 `API 设置` 中填写。 |
-| `OPENAI_API_BASE_URL` | 否 | OpenAI 官方地址 | OpenAI 兼容接口根地址；支持无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址。 |
+| `OPENAI_API_BASE_URL` | 否 | OpenAI 官方地址 | OpenAI 兼容接口根地址；默认要求 `https`。仅本机 loopback HTTP 可直接使用，远程 HTTP 必须显式加入 `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS`。 |
+| `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS` | 否 | 无 | 远程明文 HTTP 兼容接口 allowlist，多个完整 base URL 用英文逗号分隔。只用于必须明文接入且已确认网络边界安全的上游。 |
 | `OPENAI_ROUTING_STRATEGY` | 否 | `sticky` | 服务端多渠道路由策略，可选 `sticky`、`round_robin`、`random`。 |
 | `OPENAI_CHANNEL_N_ID` | 否 | 无 | 第 N 个服务端渠道标识，只用于日志排查。 |
-| `OPENAI_CHANNEL_N_BASE_URL` | 否 | 无 | 第 N 个 OpenAI 兼容接口根地址，通常以 `/v1` 结尾；支持无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址。 |
+| `OPENAI_CHANNEL_N_BASE_URL` | 否 | 无 | 第 N 个 OpenAI 兼容接口根地址，通常以 `/v1` 结尾；默认要求 `https`。仅本机 loopback HTTP 可直接使用，远程 HTTP 必须显式加入 `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS`。 |
 | `OPENAI_CHANNEL_N_API_KEYS` | 否 | 无 | 第 N 个渠道的一个或多个 API Key，多个 key 用英文逗号分隔。 |
 | `OPENAI_CHANNEL_N_FAILURE_COOLDOWN_MS` | 否 | 继承全局值 | 第 N 个渠道的失败冷却时间。 |
+| `OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED` | 否 | `true` | 服务端渠道恢复探测开关。存在服务端凭证时默认开启，只请求对应上游 `GET /models`。 |
+| `OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY` | 否 | 跟随恢复探测开关 | 是否要求冷却到期的 credential/channel 先通过恢复探测，成功后才回到用户流量。设为 `true` 时，`OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED` 也必须启用。 |
+| `OPENAI_CHANNEL_RECOVERY_PROBE_INTERVAL_MS` | 否 | `60000` | 后台恢复探测 tick 间隔。 |
+| `OPENAI_CHANNEL_RECOVERY_PROBE_TIMEOUT_MS` | 否 | `5000` | 单次 `/models` 探测超时。 |
+| `OPENAI_CHANNEL_RECOVERY_PROBE_MAX_PER_TICK` | 否 | `1` | 每个 tick 最多探测的恢复候选数量，用于限制低成本探测流量。 |
 | `IMAGE_GENERATION_BACKEND` | 否 | `images-api` | 服务端默认图片后端，可选 `images-api` 或 `responses-image-generation`。请求字段可覆盖。 |
 | `IMAGE_STREAMING_STRATEGY` | 否 | `auto` | 服务端默认流式兼容策略，可选 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。请求字段可覆盖。 |
 | `ENABLE_RESPONSES_IMAGE_BACKEND` | 否 | `false` | 实验开关。显式设为 `true` 后，`image_backend=responses-image-generation` 或兼容别名 `imageBackend=responses` 请求才可调用 Responses API image generation。 |
@@ -389,7 +395,13 @@ Web 流式 `/api/images` 事件会同时提供 camelCase 字段和旧 snake_case
 
 如果服务端 credential 返回鉴权失败、额度不足或限流错误，应用会把该 credential 标记为短暂不可用。若渠道返回 5xx、Cloudflare 520/522/523/524、连接失败或超时，应用会冷却整个 channel，并在冷却窗口内跳过该 channel 下所有 key。若兼容网关把 `invalid_api_key`、`insufficient_quota` 等 credential 错误包在 5xx 中返回，credential 错误优先，不会误冷却整个 channel。所有 credential 都在冷却中时，请求会显式失败，不会伪造成功或静默降级。
 
-运行时能力接口会返回健康 credential/channel 数量与最近一次失败摘要（status、code、requestId），用于诊断和前端并发窗口刷新；不会返回 API Key 或上游错误消息。
+默认情况下，冷却到期不会直接把 credential/channel 放回用户生图流量。服务端会启动低频后台恢复探测，只对待恢复候选请求对应上游的 `GET /models`；HTTP 200 且响应包含 `data` 数组后才恢复。探测不会调用 `/images/generations`，不触发生图费用。探测失败会继续隔离该 credential/channel 并重新进入冷却窗口。可用 `OPENAI_CHANNEL_RECOVERY_PROBE_MAX_PER_TICK` 限制每个 tick 的探测数量，默认每分钟最多探测 1 个候选。
+
+恢复探测调度器运行在当前 Node.js 进程内，适合 Docker 或 standalone 单实例部署。Serverless 环境可能在请求结束后冻结进程；多副本部署也会各自维护内存健康状态。此类部署如需严格恢复控制，应使用常驻实例、共享健康状态或外部定时探测；大规模 credential 池可按可接受恢复速度调大 `OPENAI_CHANNEL_RECOVERY_PROBE_MAX_PER_TICK`，但不要超过上游 `/models` 的限流承受能力。
+
+恢复探测带有状态版本锚点：如果某次 `/models` 探测请求发出后，同一个 credential/channel 又被新的用户请求失败重新冷却，旧探测成功不会覆盖这次更新后的失败状态。
+
+运行时能力接口会返回健康 credential/channel 数量、待恢复探测数量、已到期候选数量、按当前 `MAX_PER_TICK` 估算的最少 drain tick/时间、探测配置和最近一次失败摘要（status、code、requestId），用于诊断和前端并发窗口刷新；不会返回 API Key 或上游错误消息。
 
 三种策略：
 

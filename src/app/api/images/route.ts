@@ -6,6 +6,7 @@ import {
     readCount,
     readMode,
     readModel,
+    readPlainHttpApiBaseUrlAllowlist,
     readRequiredText,
     readStorageMode,
     validateApiBaseUrl
@@ -183,8 +184,11 @@ export async function POST(request: NextRequest) {
         requestLogContext = clientRequestId ? { clientRequestId } : undefined;
         const requestApiKey = String(formData.get('apiKey') || '').trim();
         const requestApiBaseUrl = String(formData.get('apiBaseUrl') || '').trim();
+        const allowedPlainHttpBaseUrls = readPlainHttpApiBaseUrlAllowlist(
+            process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS
+        );
         assertSafeApiOverride(requestApiKey, requestApiBaseUrl);
-        validateApiBaseUrl(requestApiBaseUrl);
+        validateApiBaseUrl(requestApiBaseUrl, { allowedPlainHttpBaseUrls });
         selectedServerCredential = requestApiKey
             ? undefined
             : serverChannelRouter?.select({ affinityKey: readAffinityKey(request.headers) });
@@ -198,7 +202,7 @@ export async function POST(request: NextRequest) {
             legacyBaseUrl: process.env.OPENAI_API_BASE_URL,
             selectedCredential: selectedServerCredential
         });
-        validateApiBaseUrl(effectiveApiBaseUrl || '');
+        validateApiBaseUrl(effectiveApiBaseUrl || '', { allowedPlainHttpBaseUrls });
 
         if (!effectiveApiKey) {
             appLogger.error('未设置 OPENAI_API_KEY，且请求未提供 API Key。', requestLogContext);

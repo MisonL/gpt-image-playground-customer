@@ -2339,7 +2339,10 @@ describe('Agent skill script argument validation', () => {
 
             let activeGenerateRequests = 0;
             let maxActiveGenerateRequests = 0;
+            let enteredGenerateRequests = 0;
             const requestKeys = [];
+            const twoGenerateRequestsEntered = createDeferred();
+            const releaseGenerateResponses = createDeferred();
             await withServer(
                 async (request, response) => {
                     if (request.url === '/api/agent/capabilities') {
@@ -2349,9 +2352,13 @@ describe('Agent skill script argument validation', () => {
                     }
                     if (request.url === '/api/agent/images/generate') {
                         activeGenerateRequests += 1;
+                        enteredGenerateRequests += 1;
                         maxActiveGenerateRequests = Math.max(maxActiveGenerateRequests, activeGenerateRequests);
                         requestKeys.push(request.headers['idempotency-key']);
-                        await delay(25);
+                        if (enteredGenerateRequests === 2) {
+                            twoGenerateRequestsEntered.resolve();
+                        }
+                        await releaseGenerateResponses.promise;
                         activeGenerateRequests -= 1;
                         response.writeHead(200, { 'content-type': 'application/json' });
                         response.end(
@@ -2371,11 +2378,26 @@ describe('Agent skill script argument validation', () => {
                     response.end(JSON.stringify({ error: 'missing' }));
                 },
                 async (baseUrl) => {
-                    const result = await runSkillScriptAsync(
+                    const resultPromise = runSkillScriptAsync(
                         'batch-images.mjs',
                         ['--allow-billable', '--input', inputPath, '--concurrency', '2'],
-                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl },
+                        { timeoutMs: 10_000 }
                     );
+                    let result;
+                    try {
+                        await waitWithTimeout(
+                            twoGenerateRequestsEntered.promise,
+                            2_000,
+                            'expected two generate requests to enter before any response was released'
+                        );
+                        assert.equal(maxActiveGenerateRequests, 2);
+                        releaseGenerateResponses.resolve();
+                        result = await resultPromise;
+                    } finally {
+                        releaseGenerateResponses.resolve();
+                        await resultPromise;
+                    }
 
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
@@ -3883,8 +3905,28 @@ function runSkillScriptAsync(filename, args, env = {}, options = {}) {
     });
 }
 
-function delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+function createDeferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((promiseResolve, promiseReject) => {
+        resolve = promiseResolve;
+        reject = promiseReject;
+    });
+    return { promise, resolve, reject };
+}
+
+async function waitWithTimeout(promise, timeoutMs, message) {
+    let timeout;
+    const timeoutPromise = new Promise((resolve, reject) => {
+        timeout = setTimeout(() => {
+            reject(new Error(message));
+        }, timeoutMs);
+    });
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 async function withServer(handler, run) {
