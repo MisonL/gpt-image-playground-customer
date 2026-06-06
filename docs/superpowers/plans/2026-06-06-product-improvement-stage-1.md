@@ -104,6 +104,14 @@
 - HF Space diagnostic gate executed on the completed branch: `npm run doctor:hf-space` returned `ok: true` and confirmed `remote-secrets` contains `APP_PASSWORD` and `AGENT_API_TOKEN`.
 - `npm run deploy:space` was not executed because the plan marks deployment as optional unless explicitly requested; this remains a residual external deployment gate in `docs/reviews/CR-PRODUCT-STAGE-1-GATE-2026-06-06.md`.
 
+## Follow-up Addendum
+
+- Current branch follow-up narrows the first battle to Chinese content operators generating first publish visuals for Xiaohongshu or e-commerce workflows.
+- Local result feedback markers were added to recent history items so the latest generation can be marked `可用` or `需修改` inside the workbench history.
+- Fresh local browser verification on `http://localhost:4784` confirmed the result feedback block renders on a recent history card with `结果反馈`, `可用` and `需修改` actions.
+- Public deployment docs now require `npm run deploy:space` plus a real browser check for customer-visible use, or an explicit residual note if that external gate is not executed.
+- Agent skill docs now keep Agent API in the automation lane and out of the first-battle proof path.
+
 ## File Structure
 
 - Create `docs/product/product-contract.md`
