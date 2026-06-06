@@ -1,6 +1,6 @@
 # Product Improvement Stage 1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use Markdown task-list syntax for tracking.
 
 **Goal:** 收窄并完善 GPT Image Playground 的第一阶段产品闭环，让产品从“能力集合”收敛为可验证、可部署、可解释的本地和内网 AI 图片创作工作台，同时保留 Agent API 作为明确的自动化接口。
 
@@ -82,12 +82,27 @@
 ## State Estimate
 
 - `main` is clean and matches `origin/main` at `34b982e Release v2.0.0` before this planning branch was created.
-- Current branch for this work: `codex/product-improvement-plan`.
+- Current branch for this work: `codex/product-improvement-planning-only`.
 - Existing UI PRD defines `图像手记` as a Chinese creative workbench and names a visual audience, but does not define measurable first-user outcomes.
 - Existing README also positions the repo as a local `gpt-image-2` service, compatible API probe, Agent API, and HF Space deployment artifact.
 - Existing share route already validates creator auth when `APP_PASSWORD` exists, image type, access code length, expiry range and content MIME type.
 - Existing share UI defaults to no access code and no expiry.
 - Existing HF Space docs already warn that free tier memory state and temporary image files are not persistent.
+
+## Execution Record
+
+- Stage 1 implementation completed on branch `codex/product-improvement-planning-only`.
+- Implementation commits:
+  - `896d4a4 docs: define product contract and validation`
+  - `9e36e11 fix: make image sharing defaults safer`
+  - `c6cc4cc docs: tighten public deployment and agent boundary`
+  - `9efcda8 docs: record product stage one gate`
+- Final local gate executed on the completed branch: `npm run verify` returned `"ok": true`.
+- Targeted share gates executed on the completed branch:
+  - `node --test --import tsx src/components/share-dialog.test.tsx` returned 2 pass.
+  - `node --test --import tsx src/app/api/shares/route.test.ts` returned 21 pass.
+- HF Space diagnostic gate executed on the completed branch: `npm run doctor:hf-space` returned `ok: true` and confirmed `remote-secrets` contains `APP_PASSWORD` and `AGENT_API_TOKEN`.
+- `npm run deploy:space` was not executed because the plan marks deployment as optional unless explicitly requested; this remains a residual external deployment gate in `docs/reviews/CR-PRODUCT-STAGE-1-GATE-2026-06-06.md`.
 
 ## File Structure
 
@@ -158,7 +173,7 @@
 - Modify: `README.md`
 - Modify: `docs/ui/literary-young-women-workbench-design.md`
 
-- [ ] **Step 1: Create product directory**
+- [x] **Step 1: Create product directory**
 
 Run:
 
@@ -168,7 +183,7 @@ mkdir -p docs/product
 
 Expected: `docs/product` exists.
 
-- [ ] **Step 2: Write the product contract**
+- [x] **Step 2: Write the product contract**
 
 Create `docs/product/product-contract.md` with these sections:
 
@@ -215,7 +230,7 @@ Create `docs/product/product-contract.md` with these sections:
 产品判断优先使用真实行为、任务完成、迁移、复用、授权和付费承诺。口头认可、审美偏好和内部演示不能单独证明产品成立。
 ```
 
-- [ ] **Step 3: Link contract from README**
+- [x] **Step 3: Link contract from README**
 
 Add a short sentence near the README product introduction:
 
@@ -223,7 +238,7 @@ Add a short sentence near the README product introduction:
 第一阶段产品边界以 `docs/product/product-contract.md` 为准：主线是本地和内网 AI 图片创作工作台，Agent API 是自动化接口，不是自治 Agent 平台。
 ```
 
-- [ ] **Step 4: Link contract from UI design baseline**
+- [x] **Step 4: Link contract from UI design baseline**
 
 Add this after `docs/ui/literary-young-women-workbench-design.md` line describing the core positioning:
 
@@ -231,7 +246,7 @@ Add this after `docs/ui/literary-young-women-workbench-design.md` line describin
 产品边界以 `docs/product/product-contract.md` 为准；本文档只定义工作台信息架构和视觉交互基线，不把审美画像当作真实用户证据。
 ```
 
-- [ ] **Step 5: Verify doc references**
+- [x] **Step 5: Verify doc references**
 
 Run:
 
@@ -242,7 +257,7 @@ git diff --check
 
 Expected: references are present and `git diff --check` exits 0.
 
-- [ ] **Step 6: Commit task**
+- [x] **Step 6: Commit task**
 
 Run:
 
@@ -259,7 +274,7 @@ Expected: commit succeeds with only these files staged.
 - Create: `docs/product/user-validation-script.md`
 - Modify: `docs/product/product-contract.md`
 
-- [ ] **Step 1: Write validation script**
+- [x] **Step 1: Write validation script**
 
 Create `docs/product/user-validation-script.md` with:
 
@@ -309,7 +324,7 @@ Create `docs/product/user-validation-script.md` with:
 - 分享链接被误认为默认私密。
 ```
 
-- [ ] **Step 2: Reference validation in product contract**
+- [x] **Step 2: Reference validation in product contract**
 
 Add to `docs/product/product-contract.md`:
 
@@ -319,7 +334,7 @@ Add to `docs/product/product-contract.md`:
 上线前按 `docs/product/user-validation-script.md` 执行 5 到 10 名用户验证。未执行前，不能声称产品已经通过真实用户验证。
 ```
 
-- [ ] **Step 3: Verify no opinion-only questions**
+- [x] **Step 3: Verify no opinion-only questions**
 
 Run:
 
@@ -329,7 +344,7 @@ rg -n "你觉得|会不会用|有没有价值|不错|喜欢吗" docs/product/use
 
 Expected: no matches.
 
-- [ ] **Step 4: Commit task**
+- [x] **Step 4: Commit task**
 
 Run:
 
@@ -348,7 +363,7 @@ Expected: commit succeeds.
 - Modify: `src/app/api/shares/route.test.ts`
 - Modify: `src/app/api/share-route.test.ts`
 
-- [ ] **Step 1: Add failing UI default test**
+- [x] **Step 1: Add failing UI default test**
 
 If no existing share dialog test exists, create `src/components/share-dialog.test.tsx`:
 
@@ -390,7 +405,7 @@ npm test -- src/components/share-dialog.test.tsx
 
 Expected: FAIL before copy/default changes.
 
-- [ ] **Step 2: Change share dialog initial expiry**
+- [x] **Step 2: Change share dialog initial expiry**
 
 In `src/components/share-dialog.tsx`, change:
 
@@ -404,7 +419,7 @@ to:
 const [expiry, setExpiry] = React.useState('1440');
 ```
 
-- [ ] **Step 3: Add public share risk copy**
+- [x] **Step 3: Add public share risk copy**
 
 Add localized messages in `src/lib/i18n.tsx`:
 
@@ -424,7 +439,7 @@ Render it below the access code input in `ShareDialog`:
 <p className='text-muted-foreground text-xs'>{t('share.publicRiskHint')}</p>
 ```
 
-- [ ] **Step 4: Lock server behavior**
+- [x] **Step 4: Lock server behavior**
 
 Ensure route tests cover:
 
@@ -446,7 +461,7 @@ it('does not return expired share content', async () => {
 });
 ```
 
-- [ ] **Step 5: Run targeted verification**
+- [x] **Step 5: Run targeted verification**
 
 Run:
 
@@ -458,7 +473,7 @@ git diff --check
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit task**
+- [x] **Step 6: Commit task**
 
 Run:
 
@@ -477,7 +492,7 @@ Expected: commit succeeds.
 - Optional modify: `scripts/hf-space-doctor-utils.mjs`
 - Optional modify: `scripts/hf-space-doctor-utils.test.mjs`
 
-- [ ] **Step 1: Update HF Space docs**
+- [x] **Step 1: Update HF Space docs**
 
 In `docs/deployment/huggingface-space-free.md`, keep the existing warning and add:
 
@@ -490,7 +505,7 @@ In `docs/deployment/huggingface-space-free.md`, keep the existing warning and ad
 - 免费层只适合演示和轻量试用，不承诺图片、分享链接或 Agent replay 长期保存。
 ```
 
-- [ ] **Step 2: Update customer instructions**
+- [x] **Step 2: Update customer instructions**
 
 Add to `客户使用说明.md`:
 
@@ -502,7 +517,7 @@ Add to `客户使用说明.md`:
 分享图片时建议保留有效期；如果不设置访问码，获得链接的人可以直接查看图片。
 ```
 
-- [ ] **Step 3: Inspect current doctor behavior**
+- [x] **Step 3: Inspect current doctor behavior**
 
 Run:
 
@@ -513,7 +528,7 @@ npm run doctor:hf-space -- --help
 
 Expected: commands print help or structured diagnostics without secrets.
 
-- [ ] **Step 4: Add diagnostic warning only if missing**
+- [x] **Step 4: Add diagnostic warning only if missing**
 
 If doctor output does not already flag missing public auth, add or adjust tests in `scripts/hf-space-doctor-utils.test.mjs` so the missing `APP_PASSWORD` case returns a warning named `hf-space-public-auth`.
 
@@ -523,7 +538,7 @@ Expected assertion shape:
 assert.equal(result.checks.find((check) => check.name === 'hf-space-public-auth')?.status, 'warn');
 ```
 
-- [ ] **Step 5: Run targeted verification**
+- [x] **Step 5: Run targeted verification**
 
 Run:
 
@@ -535,7 +550,7 @@ git diff --check
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit task**
+- [x] **Step 6: Commit task**
 
 Run:
 
@@ -554,7 +569,7 @@ If script files were not changed, omit them from `git add`.
 - Modify: `skills/gpt-image-playground-agent/references/api.md`
 - Modify: `docs/product/product-contract.md`
 
-- [ ] **Step 1: Search overclaim wording**
+- [x] **Step 1: Search overclaim wording**
 
 Run:
 
@@ -564,7 +579,7 @@ rg -n "自治|自主|自动完成|Agent 平台|生产级队列|持久队列|长�
 
 Expected: identify wording that could exceed current code capabilities.
 
-- [ ] **Step 2: Replace positioning with automation API boundary**
+- [x] **Step 2: Replace positioning with automation API boundary**
 
 Use this wording where applicable:
 
@@ -572,7 +587,7 @@ Use this wording where applicable:
 Agent API 是给 Codex、Claude Code、Gemini 等自动化客户端使用的机器接口。它提供结构化错误、幂等重试、产物追踪和脚本化调用能力，但不是自治 Agent 平台，也不承诺跨实例持久队列或生产级调度。
 ```
 
-- [ ] **Step 3: Keep existing contract details**
+- [x] **Step 3: Keep existing contract details**
 
 Do not remove these existing README claims:
 
@@ -582,7 +597,7 @@ Agent 请求必须带 `Idempotency-Key`
 Job polling 当前是同一 Next.js 服务实例内的后台任务
 ```
 
-- [ ] **Step 4: Verify capabilities wording**
+- [x] **Step 4: Verify capabilities wording**
 
 Run:
 
@@ -594,7 +609,7 @@ git diff --check
 
 Expected: wording exists and script lint passes.
 
-- [ ] **Step 5: Commit task**
+- [x] **Step 5: Commit task**
 
 Run:
 
@@ -610,7 +625,7 @@ Expected: commit succeeds.
 **Files:**
 - Create: `docs/reviews/CR-PRODUCT-STAGE-1-GATE-2026-06-06.md`
 
-- [ ] **Step 1: Create gate review**
+- [x] **Step 1: Create gate review**
 
 Create `docs/reviews/CR-PRODUCT-STAGE-1-GATE-2026-06-06.md`:
 
@@ -663,7 +678,7 @@ This review verifies the first-stage product improvement boundary: product contr
 - Real upstream image generation is not covered unless a billable smoke is explicitly run.
 ```
 
-- [ ] **Step 2: Fill evidence after commands**
+- [x] **Step 2: Fill evidence after commands**
 
 Run:
 
@@ -677,7 +692,7 @@ git diff --check
 
 Fill the evidence table with exit codes and summaries.
 
-- [ ] **Step 3: Verify review has no blank exit cells**
+- [x] **Step 3: Verify review has no blank exit cells**
 
 Run:
 
@@ -687,7 +702,7 @@ rg -n "\\| .* \\|  \\|" docs/reviews/CR-PRODUCT-STAGE-1-GATE-2026-06-06.md
 
 Expected: no matches.
 
-- [ ] **Step 4: Commit task**
+- [x] **Step 4: Commit task**
 
 Run:
 
@@ -703,7 +718,7 @@ Expected: commit succeeds.
 **Files:**
 - No new files expected.
 
-- [ ] **Step 1: Confirm branch and diff**
+- [x] **Step 1: Confirm branch and diff**
 
 Run:
 
@@ -713,9 +728,9 @@ git log --oneline --decorate -8
 git diff --stat main...HEAD
 ```
 
-Expected: branch is `codex/product-improvement-plan`; working tree is clean after commits; diff contains only planned files.
+Expected: branch is `codex/product-improvement-planning-only`; working tree is clean after commits; diff contains only planned files.
 
-- [ ] **Step 2: Run final verification**
+- [x] **Step 2: Run final verification**
 
 Run:
 
@@ -725,7 +740,7 @@ npm run verify
 
 Expected: JSON output has `"ok": true`.
 
-- [ ] **Step 3: Optional public deployment gate**
+- [x] **Step 3: Record optional public deployment gate decision**
 
 Only if user explicitly asks to verify HF Space or deploy:
 
@@ -735,7 +750,9 @@ npm run deploy:space
 
 Expected: Space reaches `RUNNING` and documented public checks pass.
 
-- [ ] **Step 4: Prepare closeout**
+Status: not executed in this stage because no explicit deploy request was made. The remote configuration diagnostic was executed with `npm run doctor:hf-space`; fresh deployment and browser verification remain external residual gates.
+
+- [x] **Step 4: Prepare closeout**
 
 Final report must include:
 
