@@ -35,29 +35,38 @@ describe('Command center scripts', () => {
     it('keeps the full verification gate aligned with repository policy', () => {
         assert.deepEqual(
             buildVerifyPlan().map((step) => step.name),
-            ['test', 'lint', 'lint:scripts', 'build', 'diff-check', 'diff-cached-check']
+            ['version:check', 'test', 'lint', 'lint:scripts', 'build', 'diff-check', 'diff-cached-check']
         );
     });
 
     it('supports a quick verification loop without hiding the full gate', () => {
         assert.deepEqual(
             buildVerifyPlan({ quick: true }).map((step) => step.name),
-            ['test:scripts', 'lint:scripts', 'diff-check', 'diff-cached-check']
+            ['version:check', 'test:scripts', 'lint:scripts', 'diff-check', 'diff-cached-check']
         );
         assert.deepEqual(
             buildVerifyPlan({ skipBuild: true }).map((step) => step.name),
-            ['test', 'lint', 'lint:scripts', 'diff-check', 'diff-cached-check']
+            ['version:check', 'test', 'lint', 'lint:scripts', 'diff-check', 'diff-cached-check']
         );
     });
 
     it('can include the live PostgreSQL gate before the final diff check', () => {
         assert.deepEqual(
             buildVerifyPlan({ postgres: true }).map((step) => step.name),
-            ['test', 'lint', 'lint:scripts', 'build', 'test:postgres', 'diff-check', 'diff-cached-check']
+            [
+                'version:check',
+                'test',
+                'lint',
+                'lint:scripts',
+                'build',
+                'test:postgres',
+                'diff-check',
+                'diff-cached-check'
+            ]
         );
         assert.deepEqual(
             buildVerifyPlan({ quick: true, postgres: true }).map((step) => step.name),
-            ['test:scripts', 'lint:scripts', 'test:postgres', 'diff-check', 'diff-cached-check']
+            ['version:check', 'test:scripts', 'lint:scripts', 'test:postgres', 'diff-check', 'diff-cached-check']
         );
     });
 

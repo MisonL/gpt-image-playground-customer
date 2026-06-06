@@ -1,6 +1,6 @@
 {
   "name": "gpt-image-playground",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -11,6 +11,7 @@
     "test": "node --test --import tsx \"src/**/*.test.ts\" \"src/**/*.test.tsx\" \"scripts/**/*.test.mjs\"",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "test:postgres": "node scripts/test-postgres-live.mjs",
+    "version:check": "node scripts/check-version-metadata.mjs",
     "doctor": "node scripts/doctor.mjs",
     "status": "node scripts/status.mjs",
     "verify": "node scripts/verify.mjs",
