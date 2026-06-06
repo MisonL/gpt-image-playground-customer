@@ -157,6 +157,8 @@ AGENT_API_TOKEN=<long-random-agent-token>
 
 公网部署建议至少设置访问码 `APP_PASSWORD` 和 `AGENT_API_TOKEN`。如果不设置 `APP_PASSWORD`，任何人都可以打开网页并消耗服务端 API Key。
 
+如果要把这个 Space 当成客户可见的公网服务，`npm run doctor:hf-space` 的 `remote-secrets` 必须通过，且应同时看到 `APP_PASSWORD` 和 `AGENT_API_TOKEN` 已配置。没有这两个值时，只适合本地或受控内网试用，不适合直接给客户公开。
+
 如果使用服务端渠道池，改用 `OPENAI_CHANNEL_N_*` Secrets：
 
 ```dotenv
@@ -224,6 +226,16 @@ npm run smoke:hf-space
 - Docker Space 重启后容器磁盘写入会丢失。`memory` 状态后端的 Agent 幂等记录、replay 状态和分享元数据也会丢失。
 - Agent API 仍会把产物图片写入容器临时文件系统，以便提供 `content_url` 下载。重启后这些链接不保证继续有效。
 - 需要长期保存图片、分享链接或 Agent replay 状态时，不应使用免费层纯内存模式。应切换到 PostgreSQL 加持久卷或外部对象存储。
+
+## 公网客户门槛
+
+如果把 Space 对外提供给客户使用，至少要满足以下门槛：
+
+- `APP_PASSWORD` 已设置，网页不会裸露给匿名访问者。
+- `AGENT_API_TOKEN` 已设置，自动化调用不会回退到页面访问码哈希。
+- `npm run doctor:hf-space` 的 `remote-secrets` 检查通过。
+- 共享链接明确保留访问码和有效期的默认控制，不把无访问码永久链接当成默认发布形态。
+- 免费层重启丢失分享元数据和 Agent replay 的前提已被客户知晓。
 
 ## 免费层 Keepalive
 

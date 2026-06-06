@@ -1,5 +1,7 @@
 # GPT Image Playground Agent API 参考
 
+Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平台。
+
 ## 目录
 
 - [辅助脚本](#辅助脚本)

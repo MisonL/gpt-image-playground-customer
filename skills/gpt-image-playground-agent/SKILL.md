@@ -7,6 +7,8 @@ description: 当用户需要通过已部署的 GPT Image Playground 生成、编
 
 通过用户已部署的 GPT Image Playground 生成、编辑、批量处理或诊断图片接口。不要假设服务一定在本机；不要模拟网页表单；优先运行本 Skill 内置脚本，让脚本处理 Agent API 契约、capabilities、幂等键、路由选择和产物 URL。
 
+Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平台。
+
 ## 脚本优先规则
 
 - 生成单张或少量图片：优先运行 `scripts/generate-image.mjs`。

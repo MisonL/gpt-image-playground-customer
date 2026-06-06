@@ -200,7 +200,7 @@ http://your-internal-compatible-api.example.com/v1
 
 ## Agent API
 
-Agent API 面向自动化调用，不要求 Agent 模拟网页表单。接口统一使用结构化错误、`Idempotency-Key` 和产物 ID。
+Agent API 面向自动化调用，不要求 Agent 模拟网页表单。它是给自动化客户端使用的机器接口，不是自治 Agent 平台。接口统一使用结构化错误、`Idempotency-Key` 和产物 ID。
 自动化客户端应先读取 `GET /api/agent/capabilities`，按其中的 `routing_rules`、`agent_streaming`、`agent_jobs`、`supported.enabled_image_backends` 和 `supported.image_backend_requirements` 选择路径，不要硬编码当前部署默认值。
 
 | 接口 | 用途 |
