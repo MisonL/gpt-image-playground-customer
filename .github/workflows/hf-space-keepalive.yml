@@ -16,6 +16,8 @@ jobs:
       HF_SPACE_KEEPALIVE_URL: ${{ vars.HF_SPACE_KEEPALIVE_URL || 'https://misonl-gpt-image-playground-customer.hf.space' }}
       HF_SPACE_KEEPALIVE_PATH: /api/auth-status
       HF_SPACE_KEEPALIVE_TIMEOUT_MS: '30000'
+      HF_SPACE_KEEPALIVE_MAX_ATTEMPTS: '3'
+      HF_SPACE_KEEPALIVE_RETRY_DELAY_MS: '5000'
       HF_SPACE_KEEPALIVE_EXPECT_PASSWORD_REQUIRED: 'true'
     steps:
       - name: Checkout repository
