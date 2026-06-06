@@ -5,7 +5,7 @@ app_port: 4783
 
 # GPT Image Playground
 
-![Version](https://img.shields.io/badge/version-1.4.0-blue)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-339933)
 
@@ -689,6 +689,22 @@ dry-run 输出中的 `independent_targets` 会汇总必跑、已选、未选、�
 ## 变更记录
 
 版本变更和未发布改动记录在 [CHANGELOG.md](./CHANGELOG.md)。
+
+## 发布版本管理
+
+正式版本使用语义化版本号，并同步维护 `package.json`、`package-lock.json`、README 版本徽章、`CHANGELOG.md` 和 git tag。发布前至少运行：
+
+```bash
+npm run version:check
+npm run verify -- --quick
+```
+
+发布步骤：
+
+1. 使用 `npm version <version> --no-git-tag-version` 更新 npm 元数据。
+2. 将 `CHANGELOG.md` 的 `[未发布]` 内容归档到对应版本日期，并更新底部 compare 链接。
+3. 同步 README 版本徽章。
+4. 通过验证后提交，并创建同名 git tag，例如 `v2.0.0`。
 
 ## 许可证
 

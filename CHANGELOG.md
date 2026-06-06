@@ -6,16 +6,22 @@
 
 ## [未发布]
 
+暂无。
+
+## [2.0.0] - 2026-06-06
+
 ### 新增
 
 - WebUI 增加 `图像手记` 工作台的显式批量模式：多条提示词逐行形成独立任务，批量进度、暂停、失败项复用和批次历史保持可追溯。
 - WebUI 在省心模式和专业模式中展示“并发批量”状态；只有用户手动启用且当前流式策略、任务数量和渠道容量满足条件时，才会把多图或多提示词拆成并发流式任务。
 - Agent skill 批量脚本支持 `--concurrency N` 并发执行、append-only manifest、续跑、尺寸校验、失败重试和页面 SSE 原始事件留档。
+- 增加 `npm run version:check`，校验 `package.json`、`package-lock.json`、README 版本徽章和 `CHANGELOG.md` 版本链接一致。
 
 ### 变更
 
 - API URL 校验允许无凭据、无查询参数和无片段的 `http` 或 `https` OpenAI 兼容根地址；自定义 API URL 仍必须与自定义 API Key 成对提供，避免服务端密钥转发到未知地址。
 - WebUI 结果区和最近生成记录补齐连续工作流动作：继续编辑、做变体、复用提示词、对比、收藏和批次折叠，批量模式的底部提示词动作以当前可见批量提示词为准。
+- `npm run verify` 和 `npm run verify -- --quick` 默认执行版本元数据一致性检查，防止发布版本、锁文件、README 和变更记录漂移。
 
 ## [1.4.0] - 2026-05-27
 
@@ -111,7 +117,8 @@
 - 支持基于 OpenAI 兼容 Images API 的本地图片生成和编辑流程。
 - 增加 Docker 部署支持和多平台启动脚本。
 
-[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.4.0...HEAD
+[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.4.0...v2.0.0
 [1.4.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.1.0...v1.2.0
