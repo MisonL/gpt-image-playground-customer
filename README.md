@@ -13,6 +13,8 @@ GPT Image Playground 是一个用于本地部署的 `gpt-image-2` 图片服务�
 
 它和普通图片生成页面的区别是：围绕 `gpt-image-2` 的高分辨率生成能力设计，支持 2K/4K 预设和自定义尺寸，流式输出过程可见，结果默认保存在本地，参数和费用记录可追溯。
 
+第一阶段产品边界以 `docs/product/product-contract.md` 为准：主线是本地和内网 AI 图片创作工作台，Agent API 是自动化接口，不是自治 Agent 平台。
+
 适合这些场景：
 
 - 在本机或内网服务器部署一个可控的 `gpt-image-2` 图片生成服务。
