@@ -11,6 +11,13 @@ export type HistoryImage = {
     clientRequestId?: string;
 };
 
+export type ResultFeedbackValue = 'usable' | 'needs_revision';
+
+export type ResultFeedback = {
+    value: ResultFeedbackValue;
+    updatedAt: number;
+};
+
 export type HistoryMetadata = {
     timestamp: number;
     images: HistoryImage[];
@@ -36,6 +43,7 @@ export type HistoryMetadata = {
     forceWeb?: boolean;
     enableParallelBatch?: boolean;
     clientRequestIds?: string[];
+    resultFeedback?: ResultFeedback;
 };
 
 export type RequestMode = HistoryMetadata['mode'];
@@ -53,6 +61,21 @@ export function resolveHistoryImageClientRequestId(item: HistoryMetadata, imageI
     if (item.clientRequestIds.length === item.images.length) return item.clientRequestIds[imageIndex];
     if (item.images.length === 1) return item.clientRequestIds[0];
     return undefined;
+}
+
+export function updateHistoryResultFeedback(input: {
+    history: HistoryMetadata[];
+    timestamp: number;
+    value: ResultFeedbackValue;
+    updatedAt?: number;
+}): HistoryMetadata[] {
+    const feedback = {
+        value: input.value,
+        updatedAt: input.updatedAt ?? Date.now()
+    };
+    return input.history.map((item) =>
+        item.timestamp === input.timestamp ? { ...item, resultFeedback: feedback } : item
+    );
 }
 
 export function isFailedHistoryItem(item: HistoryMetadata): boolean {

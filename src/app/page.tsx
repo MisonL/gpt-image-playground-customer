@@ -37,7 +37,9 @@ import {
     resolveHistoryImageClientRequestId,
     uniqueStrings,
     type HistoryMetadata,
-    type RequestMode
+    type RequestMode,
+    type ResultFeedbackValue,
+    updateHistoryResultFeedback
 } from '@/lib/history-metadata';
 import { useI18n } from '@/lib/i18n';
 import {
@@ -2104,6 +2106,21 @@ export default function HomePage() {
         });
     }, []);
 
+    const handleMarkResultFeedback = React.useCallback((item: HistoryMetadata, value: ResultFeedbackValue) => {
+        const updatedAt = Date.now();
+        setHistory((current) =>
+            updateHistoryResultFeedback({
+                history: current,
+                timestamp: item.timestamp,
+                value,
+                updatedAt
+            })
+        );
+        setActiveResultSource((current) =>
+            current?.timestamp === item.timestamp ? { ...current, resultFeedback: { value, updatedAt } } : current
+        );
+    }, []);
+
     const handleDeleteInspiration = React.useCallback((id: number) => {
         setInspirations((current) => current.filter((item) => item.id !== id));
     }, []);
@@ -2864,6 +2881,7 @@ export default function HomePage() {
                                     onApplyPrompt={handleApplyPrompt}
                                     onSaveInspiration={handleSaveInspiration}
                                     onSendHistoryToEdit={handleSendHistoryToEdit}
+                                    onMarkResultFeedback={handleMarkResultFeedback}
                                     onDeleteInspiration={handleDeleteInspiration}
                                     onClearHistory={handleClearHistory}
                                     getImageSrc={getImageSrc}

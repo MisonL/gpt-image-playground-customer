@@ -4,6 +4,7 @@ import {
     buildHistoryGenerationFormData,
     readHistorySizeSelection,
     resolveHistoryImageClientRequestId,
+    updateHistoryResultFeedback,
     type HistoryMetadata
 } from './history-metadata';
 import type { GenerationFormData } from '@/components/generation-form';
@@ -145,6 +146,23 @@ describe('buildFailedHistoryEntry', () => {
 });
 
 describe('history metadata helpers', () => {
+    it('marks result feedback on only the selected history entry', () => {
+        const first = historyWithSize('2048x2048');
+        const second = { ...historyWithSize('3072x2048'), timestamp: 2 };
+        const updated = updateHistoryResultFeedback({
+            history: [first, second],
+            timestamp: second.timestamp,
+            value: 'usable',
+            updatedAt: 1770000000000
+        });
+
+        assert.equal(updated[0], first);
+        assert.deepEqual(updated[1].resultFeedback, {
+            value: 'usable',
+            updatedAt: 1770000000000
+        });
+    });
+
     it('restores compatible history size presets and custom gpt-image-2 dimensions', () => {
         assert.deepEqual(readHistorySizeSelection(historyWithSize('3072x2048'), 'gpt-image-2'), {
             size: 'landscape',
