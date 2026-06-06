@@ -60,7 +60,7 @@ async function waitBeforeRetry(ms) {
     await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pingKeepaliveEndpointOnce(config, attempt) {
+async function pingKeepaliveEndpointOnce(config, attemptLabel) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
     const startedAt = Date.now();
@@ -93,7 +93,7 @@ async function pingKeepaliveEndpointOnce(config, attempt) {
                     status: response.status,
                     elapsedMs,
                     passwordRequired: body?.passwordRequired,
-                    attempt
+                    attempt: attemptLabel
                 },
                 null,
                 2
@@ -110,16 +110,16 @@ async function pingKeepaliveEndpoint() {
 
     for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
         try {
-            await pingKeepaliveEndpointOnce(config, attempt);
+            const attemptLabel = `${attempt}/${config.maxAttempts}`;
+            await pingKeepaliveEndpointOnce(config, attemptLabel);
             return;
         } catch (error) {
             lastError = error;
-            const elapsedAttempts = `${attempt}/${config.maxAttempts}`;
             console.error(
                 JSON.stringify(
                     {
                         ok: false,
-                        attempt: elapsedAttempts,
+                        attempt: `${attempt}/${config.maxAttempts}`,
                         error: formatKeepaliveError(error, config.timeoutMs)
                     },
                     null,
@@ -132,19 +132,13 @@ async function pingKeepaliveEndpoint() {
         }
     }
 
-    throw new Error(formatKeepaliveError(lastError, config.timeoutMs));
+    throw new Error(`Keepalive attempt already reported: ${formatKeepaliveError(lastError, config.timeoutMs)}`);
 }
 
 pingKeepaliveEndpoint().catch((error) => {
-    console.error(
-        JSON.stringify(
-            {
-                ok: false,
-                error: error instanceof Error ? error.message : String(error)
-            },
-            null,
-            2
-        )
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith('Keepalive attempt already reported: ')) {
+        console.error(JSON.stringify({ ok: false, error: message }, null, 2));
+    }
     process.exit(1);
 });
