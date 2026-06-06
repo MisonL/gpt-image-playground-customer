@@ -1,5 +1,6 @@
 'use client';
 
+import { ImageCompareView, resolveCompareTargetIndex } from '@/components/image-compare-view';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -12,7 +13,20 @@ import {
 import { useI18n } from '@/lib/i18n';
 import { filterLogsByScope, resolveLogClientRequestIds } from '@/lib/log-filter';
 import { cn } from '@/lib/utils';
-import { Download, Grid, Loader2, Send, Share2, Terminal, Trash2 } from 'lucide-react';
+import {
+    Copy,
+    Download,
+    GitCompare,
+    Grid,
+    Loader2,
+    MoreHorizontal,
+    RefreshCcw,
+    Send,
+    Share2,
+    Activity,
+    Trash2,
+    ImageIcon
+} from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
 
@@ -20,6 +34,12 @@ type ImageInfo = {
     path: string;
     filename: string;
     clientRequestId?: string;
+    storageMode?: 'fs' | 'indexeddb';
+};
+
+type ImageActionTarget = {
+    filename: string;
+    storageMode?: ImageInfo['storageMode'];
 };
 
 type ImageOutputProps = {
@@ -28,9 +48,17 @@ type ImageOutputProps = {
     onViewChange: (view: 'grid' | number) => void;
     altText?: string;
     isLoading: boolean;
-    onSendToEdit: (filename: string) => void;
-    onDownloadImage: (filename: string) => void;
-    onShareImage: (filename: string) => void;
+    onSendToEdit: (filename: string, storageMode?: ImageInfo['storageMode']) => void;
+    onDownloadImage: (filename: string, storageMode?: ImageInfo['storageMode']) => void;
+    onShareImage: (filename: string, storageMode?: ImageInfo['storageMode']) => void;
+    onCreateVariant: () => void;
+    onReusePrompt: () => void;
+    failureMessage?: string | null;
+    onRetry?: () => void;
+    compareImage?: ImageInfo | null;
+    compareImageLabel?: string;
+    canCreateVariant: boolean;
+    canReusePrompt: boolean;
     currentMode: 'generate' | 'edit';
     baseImagePreviewUrl: string | null;
     streamingPreviewImages?: Map<number, string>;
@@ -52,10 +80,41 @@ type LogEntry = {
     filenames?: string[];
 };
 
+type ImageDimensions = {
+    width: number;
+    height: number;
+};
+
+export function buildImageActionTarget(image: ImageInfo | null): ImageActionTarget | null {
+    if (!image) return null;
+    return {
+        filename: image.filename,
+        ...(image.storageMode ? { storageMode: image.storageMode } : {})
+    };
+}
+
 function formatLogTime(value: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
     return date.toLocaleTimeString();
+}
+
+function readImageDimensionsFromSource(source: string): Promise<ImageDimensions | null> {
+    return new Promise((resolve) => {
+        const image = new window.Image();
+        image.onload = () => {
+            if (!image.naturalWidth || !image.naturalHeight) {
+                resolve(null);
+                return;
+            }
+            resolve({
+                width: image.naturalWidth,
+                height: image.naturalHeight
+            });
+        };
+        image.onerror = () => resolve(null);
+        image.src = source;
+    });
 }
 
 const getGridColsClass = (count: number): string => {
@@ -64,6 +123,43 @@ const getGridColsClass = (count: number): string => {
     if (count <= 9) return 'grid-cols-3';
     return 'grid-cols-3';
 };
+
+type ResultActionButtonProps = {
+    icon: React.ReactNode;
+    label: string;
+    onClick?: () => void;
+    disabled?: boolean;
+    active?: boolean;
+    emphasized?: boolean;
+    iconOnly?: boolean;
+};
+
+function ResultActionButton({
+    icon,
+    label,
+    onClick,
+    disabled = false,
+    active = false,
+    emphasized = false,
+    iconOnly = false
+}: ResultActionButtonProps) {
+    return (
+        <Button
+            variant='ghost'
+            size='sm'
+            onClick={onClick}
+            disabled={disabled}
+            className={cn(
+                'text-muted-foreground hover:text-foreground min-h-11 shrink-0 rounded-md px-3 text-xs disabled:opacity-50 lg:h-8 lg:min-h-0 lg:px-2',
+                active && 'bg-accent text-accent-foreground hover:text-accent-foreground',
+                emphasized && 'border-border/70 bg-card/80 border'
+            )}
+            aria-label={iconOnly ? label : undefined}>
+            {icon}
+            {!iconOnly && <span>{label}</span>}
+        </Button>
+    );
+}
 
 export function ImageOutput({
     imageBatch,
@@ -74,6 +170,14 @@ export function ImageOutput({
     onSendToEdit,
     onDownloadImage,
     onShareImage,
+    onCreateVariant,
+    onReusePrompt,
+    failureMessage = null,
+    onRetry,
+    compareImage = null,
+    compareImageLabel,
+    canCreateVariant,
+    canReusePrompt,
     currentMode,
     baseImagePreviewUrl,
     streamingPreviewImages,
@@ -88,6 +192,12 @@ export function ImageOutput({
     const [isLogDialogOpen, setIsLogDialogOpen] = React.useState(false);
     const [logs, setLogs] = React.useState<LogEntry[]>([]);
     const [logConnectionState, setLogConnectionState] = React.useState<'idle' | 'connected' | 'error'>('idle');
+    const [compareSelection, setCompareSelection] = React.useState<{
+        imageBatch: ImageInfo[];
+        selectedImageIndex: number;
+        compareTargetFilename: string;
+    } | null>(null);
+    const [imageDimensions, setImageDimensions] = React.useState<Record<string, ImageDimensions>>({});
     const logEndRef = React.useRef<HTMLDivElement | null>(null);
     const resolvedLogClientRequestIds = React.useMemo(
         () => resolveLogClientRequestIds({ logs, clientRequestIds: logClientRequestIds, filenames: logFilenames }),
@@ -100,29 +210,109 @@ export function ImageOutput({
     const hasSelectedImageBatch = !!imageBatch && imageBatch.length > 0;
     const hasLogScope = resolvedLogClientRequestIds.length > 0;
     const hasScopeCandidate = logClientRequestIds.length > 0 || logFilenames.length > 0;
-    const visibleLogs = React.useMemo(
-        () => (hasLogScope ? filteredLogs : []),
-        [filteredLogs, hasLogScope]
-    );
+    const visibleLogs = React.useMemo(() => (hasLogScope ? filteredLogs : []), [filteredLogs, hasLogScope]);
+    const showCarousel = Boolean(imageBatch && imageBatch.length > 1);
+    const selectedImageIndex =
+        imageBatch && imageBatch.length > 0
+            ? typeof viewMode === 'number' && imageBatch[viewMode]
+                ? viewMode
+                : showCarousel
+                  ? null
+                  : 0
+            : null;
+    const selectedImage = selectedImageIndex === null ? null : imageBatch?.[selectedImageIndex] || null;
+    const sameBatchCompareTargetIndex = imageBatch
+        ? resolveCompareTargetIndex(imageBatch.length, selectedImageIndex)
+        : null;
+    const sameBatchCompareTargetImage =
+        sameBatchCompareTargetIndex === null ? null : imageBatch?.[sameBatchCompareTargetIndex] || null;
+    const compareTargetImage = sameBatchCompareTargetImage || compareImage || null;
+    const selectedImageDimensions = selectedImage ? imageDimensions[selectedImage.filename] : null;
+    const hasFailure = !isLoading && !hasSelectedImageBatch && Boolean(failureMessage);
+    const hasEditReferencePreview = currentMode === 'edit' && Boolean(baseImagePreviewUrl);
+    const previewStateLabel = isLoading
+        ? t('output.progressDeveloping')
+        : hasFailure
+          ? t('output.failedTitle')
+          : hasEditReferencePreview
+            ? t('output.editReferenceReady')
+            : currentMode === 'edit'
+              ? t('output.editReferenceNeeded')
+              : imageBatch && imageBatch.length > 0
+                ? t('output.previewReady')
+                : t('output.emptyTitle');
+    const previewMetaItems = [
+        !isLoading && imageBatch && imageBatch.length > 0
+            ? selectedImageIndex === null
+                ? t('output.selectImageForActions')
+                : t('output.selectedImageMeta', {
+                      index: selectedImageIndex + 1,
+                      count: imageBatch.length
+                  })
+            : null,
+        !isLoading && selectedImageDimensions
+            ? t('output.imageDimensions', {
+                  width: selectedImageDimensions.width,
+                  height: selectedImageDimensions.height
+              })
+            : null,
+        isLoading ? (isStreamingRequest ? t('output.streaming') : t('output.progressGenerating')) : null
+    ].filter((item): item is string => Boolean(item));
+    const canUseSelectedImageActions = !isLoading && !!selectedImage;
+    const canCompareImages = !isLoading && !!selectedImage && !!compareTargetImage;
+    const isCompareView =
+        !!compareSelection &&
+        compareSelection.imageBatch === imageBatch &&
+        compareSelection.selectedImageIndex === selectedImageIndex &&
+        compareSelection.compareTargetFilename === compareTargetImage?.filename;
+    const compareReferenceLabel = sameBatchCompareTargetImage
+        ? selectedImageIndex === 0
+            ? t('output.compareOther')
+            : t('output.compareReference')
+        : (compareImageLabel ?? t('output.compareReference'));
 
     const handleSendClick = () => {
-        // 只有选中单张图片时才允许发送到编辑。
-        if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
-            onSendToEdit(imageBatch[viewMode].filename);
-        }
+        const target = buildImageActionTarget(selectedImage);
+        if (!target) return;
+        onSendToEdit(target.filename, target.storageMode);
     };
 
     const handleDownloadClick = () => {
-        if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
-            onDownloadImage(imageBatch[viewMode].filename);
-        }
+        const target = buildImageActionTarget(selectedImage);
+        if (!target) return;
+        onDownloadImage(target.filename, target.storageMode);
     };
 
     const handleShareClick = () => {
-        if (typeof viewMode === 'number' && imageBatch && imageBatch[viewMode]) {
-            onShareImage(imageBatch[viewMode].filename);
+        const target = buildImageActionTarget(selectedImage);
+        if (!target) return;
+        onShareImage(target.filename, target.storageMode);
+    };
+
+    const handleCompareClick = () => {
+        if (canCompareImages && imageBatch && selectedImageIndex !== null && compareTargetImage) {
+            setCompareSelection({ imageBatch, selectedImageIndex, compareTargetFilename: compareTargetImage.filename });
         }
     };
+
+    const handleImageLoad = React.useCallback((filename: string, event: React.SyntheticEvent<HTMLImageElement>) => {
+        const source = event.currentTarget.currentSrc || event.currentTarget.src;
+        if (!source) return;
+
+        void readImageDimensionsFromSource(source).then((nextDimensions) => {
+            if (!nextDimensions) return;
+            setImageDimensions((current) => {
+                const currentDimensions = current[filename];
+                if (
+                    currentDimensions?.width === nextDimensions.width &&
+                    currentDimensions.height === nextDimensions.height
+                ) {
+                    return current;
+                }
+                return { ...current, [filename]: nextDimensions };
+            });
+        });
+    }, []);
 
     const handleLogDialogOpenChange = (open: boolean) => {
         setIsLogDialogOpen(open);
@@ -213,18 +403,36 @@ export function ImageOutput({
         queueMicrotask(() => setIsLogDialogOpen(true));
     }, [canOpenLogs, openLogsSignal]);
 
-    const showCarousel = imageBatch && imageBatch.length > 1;
-    const isSingleImageView = typeof viewMode === 'number';
-    const canSendToEdit = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
-    const canUseImageActions = !isLoading && isSingleImageView && imageBatch && imageBatch[viewMode];
-
     return (
-        <div className='bg-card text-card-foreground flex h-full min-h-[300px] w-full flex-col items-center justify-between gap-4 overflow-hidden rounded-lg border border-border p-4'>
-            <div className='relative flex h-full w-full flex-grow items-center justify-center overflow-hidden'>
+        <div className='workbench-panel text-card-foreground border-border flex h-full min-h-[300px] w-full flex-col overflow-hidden rounded-lg border'>
+            <div className='border-border/70 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3'>
+                <h2 className='editorial-title text-xl font-semibold'>{t('output.previewTitle')}</h2>
+                <div className='text-muted-foreground flex flex-wrap items-center gap-3 text-xs'>
+                    <span className='inline-flex items-center gap-1.5'>
+                        {isLoading ? (
+                            <Loader2 className='text-primary h-3.5 w-3.5 animate-spin' />
+                        ) : (
+                            <span
+                                className={cn(
+                                    'h-2 w-2 rounded-full',
+                                    imageBatch && imageBatch.length > 0
+                                        ? 'bg-[oklch(0.5_0.12_150)]'
+                                        : 'bg-muted-foreground/45'
+                                )}
+                            />
+                        )}
+                        {previewStateLabel}
+                    </span>
+                    {previewMetaItems.map((item) => (
+                        <span key={item}>{item}</span>
+                    ))}
+                </div>
+            </div>
+            <div className='preview-gallery-board relative flex min-h-[300px] flex-1 items-center justify-center overflow-hidden px-3 py-5 sm:min-h-[420px] sm:px-6 lg:min-h-[520px]'>
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
                         // 展示流式预览图，单图时和最终视图一样居中。
-                        <div className='relative flex h-full w-full items-center justify-center'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] items-center justify-center p-3'>
                             {/* 展示最新的预览图，也就是最大索引图片。 */}
                             {(() => {
                                 const entries = Array.from(streamingPreviewImages.entries());
@@ -237,19 +445,19 @@ export function ImageOutput({
                                         alt={t('output.streaming')}
                                         width={512}
                                         height={512}
-                                        className='max-h-full max-w-full object-contain'
+                                        className='h-full w-full object-contain'
                                         unoptimized
                                     />
                                 );
                             })()}
                             {/* 在底部居中叠加加载状态。 */}
-                            <div className='absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-white/80'>
+                            <div className='bg-foreground/80 text-background absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full px-3 py-1.5'>
                                 <Loader2 className='h-4 w-4 animate-spin' />
                                 <p className='text-sm'>{t('output.streaming')}</p>
                             </div>
                         </div>
                     ) : currentMode === 'edit' && baseImagePreviewUrl ? (
-                        <div className='relative flex h-full w-full items-center justify-center'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] items-center justify-center p-3'>
                             <Image
                                 src={baseImagePreviewUrl}
                                 alt={t('output.editing')}
@@ -269,44 +477,145 @@ export function ImageOutput({
                             <p>{isStreamingRequest ? t('output.keepalive') : t('output.generating')}</p>
                         </div>
                     )
+                ) : hasFailure ? (
+                    <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] flex-col justify-between p-5 sm:p-6'>
+                        <div className='space-y-3'>
+                            <div className='text-muted-foreground text-xs'>{t('output.failedKicker')}</div>
+                            <div className='space-y-2'>
+                                <h3 className='editorial-title text-2xl font-semibold'>{t('output.failedTitle')}</h3>
+                                <p className='text-muted-foreground max-w-[46rem] text-sm leading-6'>
+                                    {failureMessage}
+                                </p>
+                            </div>
+                        </div>
+                        <div className='flex flex-wrap items-center gap-2'>
+                            {onRetry ? (
+                                <Button type='button' onClick={onRetry} className='min-h-11'>
+                                    <RefreshCcw className='mr-2 h-4 w-4' />
+                                    {t('output.retry')}
+                                </Button>
+                            ) : null}
+                            {canOpenLogs ? (
+                                <Button
+                                    type='button'
+                                    variant='outline'
+                                    onClick={() => setIsLogDialogOpen(true)}
+                                    className='bg-background/76 min-h-11'>
+                                    <Activity className='mr-2 h-4 w-4' />
+                                    {t('logs.open')}
+                                </Button>
+                            ) : null}
+                        </div>
+                    </div>
+                ) : isCompareView && selectedImage && compareTargetImage ? (
+                    <ImageCompareView
+                        leftImage={compareTargetImage}
+                        leftLabel={compareReferenceLabel}
+                        rightImage={selectedImage}
+                        rightLabel={t('output.compareCurrent')}
+                    />
                 ) : imageBatch && imageBatch.length > 0 ? (
                     viewMode === 'grid' ? (
-                        <div
-                            className={`grid ${getGridColsClass(imageBatch.length)} max-h-full w-full max-w-full gap-1 p-1`}>
+                        <div className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[720px] gap-2`}>
                             {imageBatch.map((img, index) => (
-                                <div
+                                <button
+                                    type='button'
                                     key={img.filename}
-                                    className='relative aspect-square overflow-hidden rounded border border-border'>
+                                    onClick={() => onViewChange(index)}
+                                    className={cn(
+                                        'photo-paper relative aspect-square overflow-hidden p-2 text-left transition-[box-shadow,transform] enabled:motion-safe:hover:-translate-y-0.5',
+                                        selectedImageIndex === index
+                                            ? 'ring-ring ring-offset-background ring-2 ring-offset-2'
+                                            : 'focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:ring-2 focus-visible:ring-offset-2'
+                                    )}
+                                    aria-label={t('output.selectImage', { index: index + 1 })}>
                                     <Image
                                         src={img.path}
                                         alt={t('output.generatedImage', { index: index + 1 })}
                                         fill
                                         style={{ objectFit: 'contain' }}
                                         sizes='(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw'
+                                        onLoad={(event) => handleImageLoad(img.filename, event)}
                                         unoptimized
                                     />
-                                </div>
+                                </button>
                             ))}
                         </div>
                     ) : imageBatch[viewMode] ? (
-                        <Image
-                            src={imageBatch[viewMode].path}
-                            alt={altText}
-                            width={512}
-                            height={512}
-                            className='max-h-full max-w-full object-contain'
-                            unoptimized
-                        />
+                        <div className='photo-paper relative aspect-[4/3] w-full max-w-[720px] p-3'>
+                            <Image
+                                src={imageBatch[viewMode].path}
+                                alt={altText}
+                                fill
+                                sizes='(max-width: 768px) 92vw, (max-width: 1800px) 44vw, 720px'
+                                className='object-contain'
+                                onLoad={(event) => handleImageLoad(imageBatch[viewMode].filename, event)}
+                                unoptimized
+                            />
+                        </div>
                     ) : (
                         <div className='text-muted-foreground text-center'>
                             <p>{t('output.error')}</p>
                         </div>
                     )
                 ) : (
-                    <div className='mx-auto max-w-sm text-center'>
-                        <p className='text-foreground text-base font-medium'>{t('output.emptyTitle')}</p>
-                        <p className='text-muted-foreground mt-2 text-sm leading-6'>{t('output.emptyDescription')}</p>
-                    </div>
+                    <>
+                        {currentMode === 'edit' ? (
+                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] flex-col justify-between p-5 sm:p-6'>
+                                {baseImagePreviewUrl ? (
+                                    <>
+                                        <Image
+                                            src={baseImagePreviewUrl}
+                                            alt={t('output.editReferenceAlt')}
+                                            fill
+                                            sizes='(max-width: 768px) 92vw, (max-width: 1800px) 44vw, 720px'
+                                            className='object-contain p-3'
+                                            unoptimized
+                                        />
+                                        <div className='border-border/70 bg-background/86 text-muted-foreground absolute bottom-5 left-6 rounded-full border px-3 py-1 text-xs shadow-sm'>
+                                            {t('output.editReferenceReadyLabel')}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className='space-y-3'>
+                                            <div className='text-muted-foreground text-xs'>
+                                                {t('output.editReferenceKicker')}
+                                            </div>
+                                            <div className='space-y-2'>
+                                                <h3 className='editorial-title text-2xl font-semibold'>
+                                                    {t('output.editReferenceNeeded')}
+                                                </h3>
+                                                <p className='text-muted-foreground max-w-[36rem] text-sm leading-6'>
+                                                    {t('output.editReferenceDescription')}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className='border-border/70 bg-background/78 text-muted-foreground w-fit rounded-full border px-3 py-1 text-xs shadow-sm'>
+                                            {t('output.editReferenceWaitingLabel')}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        ) : (
+                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] flex-col justify-between p-5 sm:p-6'>
+                                <div className='space-y-3'>
+                                    <div className='text-muted-foreground text-xs'>{t('output.previewEyebrow')}</div>
+                                    <div className='space-y-2'>
+                                        <h3 className='editorial-title text-2xl font-semibold'>
+                                            {t('output.emptyTitle')}
+                                        </h3>
+                                        <p className='text-muted-foreground max-w-[36rem] text-sm leading-6'>
+                                            {t('output.emptyDescription')}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className='border-border/70 bg-muted/30 text-muted-foreground flex h-20 w-20 items-center justify-center rounded-md border'>
+                                    <ImageIcon className='h-7 w-7' />
+                                </div>
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
 
@@ -316,24 +625,24 @@ export function ImageOutput({
                         <DialogTitle>{t('logs.title')}</DialogTitle>
                         <DialogDescription>{t('logs.description')}</DialogDescription>
                     </DialogHeader>
-                    <div className='text-muted-foreground bg-muted/40 flex items-center justify-between rounded-md border border-border px-3 py-2 text-xs'>
+                    <div className='text-muted-foreground bg-muted/40 border-border flex items-center justify-between rounded-md border px-3 py-2 text-xs'>
                         <span>{t(`logs.status.${logConnectionState}`)}</span>
                         <span>{t('logs.count', { count: visibleLogs.length })}</span>
                     </div>
                     {hasLogScope ? (
-                        <div className='text-muted-foreground rounded-md border border-border bg-muted/20 px-3 py-2 text-xs'>
+                        <div className='text-muted-foreground border-border bg-muted/20 rounded-md border px-3 py-2 text-xs'>
                             {t('logs.scopeSelected')}
                         </div>
                     ) : hasSelectedImageBatch ? (
-                        <div className='text-muted-foreground rounded-md border border-dashed border-border px-3 py-2 text-xs'>
+                        <div className='text-muted-foreground border-border rounded-md border border-dashed px-3 py-2 text-xs'>
                             {t('logs.scopeMissing')}
                         </div>
                     ) : (
-                        <div className='text-muted-foreground rounded-md border border-dashed border-border px-3 py-2 text-xs'>
+                        <div className='text-muted-foreground border-border rounded-md border border-dashed px-3 py-2 text-xs'>
                             {t('logs.scopeNone')}
                         </div>
                     )}
-                    <div className='bg-muted/30 h-[420px] overflow-y-auto rounded-md border border-border p-3 font-mono text-xs leading-5 text-foreground/80'>
+                    <div className='literary-scrollbar bg-muted/30 border-border text-foreground/80 h-[420px] overflow-y-auto rounded-md border p-3 font-mono text-xs leading-5'>
                         {visibleLogs.length === 0 ? (
                             <p className='text-muted-foreground'>
                                 {hasLogScope
@@ -363,7 +672,9 @@ export function ImageOutput({
                                         <span className='text-foreground break-all'>{entry.message}</span>
                                     </div>
                                     {entry.context ? (
-                                        <pre className='text-muted-foreground mt-1 whitespace-pre-wrap break-words'>{entry.context}</pre>
+                                        <pre className='text-muted-foreground mt-1 break-words whitespace-pre-wrap'>
+                                            {entry.context}
+                                        </pre>
                                     ) : null}
                                 </div>
                             ))
@@ -371,11 +682,7 @@ export function ImageOutput({
                         <div ref={logEndRef} />
                     </div>
                     <DialogFooter>
-                        <Button
-                            type='button'
-                            variant='outline'
-                            size='sm'
-                            onClick={() => setLogs([])}>
+                        <Button type='button' variant='outline' size='sm' onClick={() => setLogs([])}>
                             <Trash2 className='mr-2 h-4 w-4' />
                             {t('logs.clear')}
                         </Button>
@@ -383,94 +690,136 @@ export function ImageOutput({
                 </DialogContent>
             </Dialog>
 
-            <div className='flex h-10 w-full shrink-0 items-center justify-center gap-3'>
-                {showCarousel && (
-                    <div className='bg-muted/50 flex items-center gap-1.5 rounded-md border border-border p-1'>
-                        <Button
-                            variant='ghost'
-                            size='icon'
-                            className={cn(
-                                'h-8 w-8 rounded p-1',
-                                viewMode === 'grid' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
-                            )}
-                            onClick={() => onViewChange('grid')}
-                            aria-label={t('output.showGrid')}>
-                            <Grid className='h-4 w-4' />
-                        </Button>
-                        {imageBatch.map((img, index) => (
+            <div
+                className={cn(
+                    'border-border/40 flex w-full shrink-0 flex-wrap items-center justify-center gap-1 border-t bg-transparent px-3 py-2',
+                    !hasSelectedImageBatch && 'bg-background/36'
+                )}>
+                {hasSelectedImageBatch ? (
+                    <>
+                    {showCarousel && (
+                        <div className='bg-card/80 border-border flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border p-1'>
                             <Button
-                                key={img.filename}
                                 variant='ghost'
                                 size='icon'
                                 className={cn(
-                                    'h-8 w-8 overflow-hidden rounded p-0.5',
-                                    viewMode === index
-                                        ? 'ring-2 ring-ring ring-offset-1 ring-offset-background'
-                                        : 'opacity-60 hover:opacity-100'
+                                    'h-11 w-11 rounded p-1 lg:h-8 lg:w-8',
+                                    viewMode === 'grid' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
                                 )}
-                                onClick={() => onViewChange(index)}
-                                aria-label={t('output.selectImage', { index: index + 1 })}>
-                                <Image
-                                    src={img.path}
-                                    alt={t('output.thumbnail', { index: index + 1 })}
-                                    width={28}
-                                    height={28}
-                                    className='h-full w-full object-cover'
-                                    unoptimized
-                                />
+                                onClick={() => onViewChange('grid')}
+                                aria-label={t('output.showGrid')}>
+                                <Grid className='h-4 w-4' />
                             </Button>
-                        ))}
-                    </div>
-                )}
+                            {imageBatch.map((img, index) => (
+                                <Button
+                                    key={img.filename}
+                                    variant='ghost'
+                                    size='icon'
+                                    className={cn(
+                                        'h-11 w-11 overflow-hidden rounded p-0.5 lg:h-8 lg:w-8',
+                                        viewMode === index
+                                            ? 'ring-ring ring-offset-background ring-2 ring-offset-1'
+                                            : 'opacity-60 hover:opacity-100'
+                                    )}
+                                    onClick={() => onViewChange(index)}
+                                    aria-label={t('output.selectImage', { index: index + 1 })}>
+                                    <Image
+                                        src={img.path}
+                                        alt={t('output.thumbnail', { index: index + 1 })}
+                                        width={28}
+                                        height={28}
+                                        className='h-full w-full object-cover'
+                                        unoptimized
+                                    />
+                                </Button>
+                            ))}
+                        </div>
+                    )}
 
-                {canOpenLogs && (
-                    <Button
-                        variant='outline'
-                        size='sm'
-                        onClick={() => setIsLogDialogOpen(true)}
-                        className='shrink-0'>
-                        <Terminal className='mr-2 h-4 w-4' />
-                        {t('logs.open')}
-                    </Button>
-                )}
+                    {canOpenLogs && (
+                        <ResultActionButton
+                            icon={<Activity className='mr-2 h-4 w-4' />}
+                            label={t('logs.open')}
+                            onClick={() => setIsLogDialogOpen(true)}
+                        />
+                    )}
 
-                <Button
-                    variant='outline'
-                    size='sm'
-                    onClick={handleSendClick}
-                    disabled={!canSendToEdit}
-                    className={cn(
-                        'shrink-0 disabled:opacity-50',
-                        // 多图网格视图下完全隐藏按钮。
-                        showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
-                    )}>
-                    <Send className='mr-2 h-4 w-4' />
-                    {t('output.sendToEdit')}
-                </Button>
-                <Button
-                    variant='outline'
-                    size='sm'
-                    onClick={handleDownloadClick}
-                    disabled={!canUseImageActions}
-                    className={cn(
-                        'shrink-0 disabled:opacity-50',
-                        showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
-                    )}>
-                    <Download className='mr-2 h-4 w-4' />
-                    {t('output.download')}
-                </Button>
-                <Button
-                    variant='outline'
-                    size='sm'
-                    onClick={handleShareClick}
-                    disabled={!canUseImageActions}
-                    className={cn(
-                        'shrink-0 disabled:opacity-50',
-                        showCarousel && viewMode === 'grid' ? 'invisible' : 'visible'
-                    )}>
-                    <Share2 className='mr-2 h-4 w-4' />
-                    {t('output.share')}
-                </Button>
+                    <ResultActionButton
+                        icon={<Download className='mr-2 h-4 w-4' />}
+                        label={t('output.download')}
+                        onClick={handleDownloadClick}
+                        disabled={!canUseSelectedImageActions}
+                        emphasized={showCarousel && viewMode === 'grid'}
+                    />
+                    <ResultActionButton
+                        icon={<Send className='mr-2 h-4 w-4' />}
+                        label={t('output.continueEdit')}
+                        onClick={handleSendClick}
+                        disabled={!canUseSelectedImageActions}
+                        emphasized={showCarousel && viewMode === 'grid'}
+                    />
+                    <ResultActionButton
+                        icon={<RefreshCcw className='mr-2 h-4 w-4' />}
+                        label={t('output.createVariant')}
+                        onClick={onCreateVariant}
+                        disabled={isLoading || !canCreateVariant}
+                    />
+                    <ResultActionButton
+                        icon={<Copy className='mr-2 h-4 w-4' />}
+                        label={t('output.reusePrompt')}
+                        onClick={onReusePrompt}
+                        disabled={isLoading || !canReusePrompt}
+                    />
+                    <ResultActionButton
+                        icon={<GitCompare className='mr-2 h-4 w-4' />}
+                        label={t('output.compare')}
+                        onClick={handleCompareClick}
+                        disabled={!canCompareImages}
+                        active={isCompareView}
+                    />
+                    <ResultActionButton
+                        icon={<Share2 className='mr-2 h-4 w-4' />}
+                        label={t('output.share')}
+                        onClick={handleShareClick}
+                        disabled={!canUseSelectedImageActions}
+                        emphasized={showCarousel && viewMode === 'grid'}
+                    />
+                    <ResultActionButton
+                        icon={<MoreHorizontal className='h-4 w-4' />}
+                        label={t('output.more')}
+                        disabled
+                        iconOnly
+                    />
+                    </>
+                ) : (
+                    <>
+                        <ResultActionButton
+                            icon={<Download className='mr-2 h-4 w-4' />}
+                            label={t('output.download')}
+                            disabled
+                        />
+                        <ResultActionButton
+                            icon={<Send className='mr-2 h-4 w-4' />}
+                            label={t('output.continueEdit')}
+                            disabled
+                        />
+                        <ResultActionButton
+                            icon={<RefreshCcw className='mr-2 h-4 w-4' />}
+                            label={t('output.createVariant')}
+                            disabled
+                        />
+                        <ResultActionButton
+                            icon={<Copy className='mr-2 h-4 w-4' />}
+                            label={t('output.reusePrompt')}
+                            disabled
+                        />
+                        <ResultActionButton
+                            icon={<GitCompare className='mr-2 h-4 w-4' />}
+                            label={t('output.compare')}
+                            disabled
+                        />
+                    </>
+                )}
             </div>
         </div>
     );

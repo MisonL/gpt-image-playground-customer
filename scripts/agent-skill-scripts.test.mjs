@@ -2114,6 +2114,7 @@ describe('Agent skill script argument validation', () => {
             assert.equal(body.dry_run, true);
             assert.equal(body.billable, false);
             assert.equal(body.total, 2);
+            assert.equal(body.concurrency, 1);
             assert.equal(body.tasks[0].endpoint, '/api/agent/images/generate');
             assert.equal(body.tasks[0].idempotency_key, 'demo-0001-first-item');
             assert.equal(body.tasks[0].request.model, 'gpt-image-2');
@@ -2126,6 +2127,45 @@ describe('Agent skill script argument validation', () => {
             assert.equal('image_path' in body.tasks[1].request, false);
             assert.equal('image_paths' in body.tasks[1].request, false);
             assert.equal('mask_path' in body.tasks[1].request, false);
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects invalid batch concurrency before dry-run output', () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-concurrency-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(inputPath, JSON.stringify({ id: 'first', prompt: 'prompt' }));
+
+            const result = runSkillScript('batch-images.mjs', ['--input', inputPath, '--concurrency', '0']);
+
+            assert.equal(result.status, 2);
+            assert.match(result.stderr, /--concurrency 必须是正整数/);
+            assert.equal(result.stdout.trim(), '');
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects batch concurrency with strict consecutive failure stopping', () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-concurrency-stop-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(inputPath, JSON.stringify({ id: 'first', prompt: 'prompt' }));
+
+            const result = runSkillScript('batch-images.mjs', [
+                '--input',
+                inputPath,
+                '--concurrency',
+                '2',
+                '--max-consecutive-failures',
+                '1'
+            ]);
+
+            assert.equal(result.status, 2);
+            assert.match(result.stderr, /不能同时使用 --max-consecutive-failures/);
+            assert.equal(result.stdout.trim(), '');
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
@@ -2277,6 +2317,102 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(manifestLines.length, 3);
                     assert.equal(manifestLines[1].status, 'skipped');
                     assert.equal(manifestLines[2].status, 'succeeded');
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('runs batch tasks with the requested concurrency while preserving result order', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-concurrent-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(
+                inputPath,
+                [
+                    JSON.stringify({ id: 'first', prompt: 'first prompt', idempotency_key: 'first-key' }),
+                    JSON.stringify({ id: 'second', prompt: 'second prompt', idempotency_key: 'second-key' }),
+                    JSON.stringify({ id: 'third', prompt: 'third prompt', idempotency_key: 'third-key' })
+                ].join('\n')
+            );
+
+            let activeGenerateRequests = 0;
+            let maxActiveGenerateRequests = 0;
+            let enteredGenerateRequests = 0;
+            const requestKeys = [];
+            const twoGenerateRequestsEntered = createDeferred();
+            const releaseGenerateResponses = createDeferred();
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ ok: true }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        activeGenerateRequests += 1;
+                        enteredGenerateRequests += 1;
+                        maxActiveGenerateRequests = Math.max(maxActiveGenerateRequests, activeGenerateRequests);
+                        requestKeys.push(request.headers['idempotency-key']);
+                        if (enteredGenerateRequests === 2) {
+                            twoGenerateRequestsEntered.resolve();
+                        }
+                        await releaseGenerateResponses.promise;
+                        activeGenerateRequests -= 1;
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                images: [
+                                    {
+                                        id: request.headers['idempotency-key'],
+                                        filename: `${request.headers['idempotency-key']}.png`,
+                                        b64_json: fakePngBase64(2, 1)
+                                    }
+                                ]
+                            })
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const resultPromise = runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath, '--concurrency', '2'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl },
+                        { timeoutMs: 10_000 }
+                    );
+                    let result;
+                    try {
+                        await waitWithTimeout(
+                            twoGenerateRequestsEntered.promise,
+                            2_000,
+                            'expected two generate requests to enter before any response was released'
+                        );
+                        assert.equal(maxActiveGenerateRequests, 2);
+                        releaseGenerateResponses.resolve();
+                        result = await resultPromise;
+                    } finally {
+                        releaseGenerateResponses.resolve();
+                        await resultPromise;
+                    }
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.concurrency, 2);
+                    assert.equal(maxActiveGenerateRequests, 2);
+                    assert.deepEqual([...requestKeys].sort(), ['first-key', 'second-key', 'third-key']);
+                    assert.deepEqual(
+                        body.results.map((item) => item.id),
+                        ['first', 'second', 'third']
+                    );
+                    assert.deepEqual(
+                        body.results.map((item) => item.response.images[0].filename),
+                        ['first-key.png', 'second-key.png', 'third-key.png']
+                    );
                 }
             );
         } finally {
@@ -2828,6 +2964,94 @@ describe('Agent skill script argument validation', () => {
                         requests.map((item) => `${item.method} ${item.url}`),
                         ['GET /api/agent/capabilities', 'POST /api/images']
                     );
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('re-fetches batch page SSE capabilities after a transient capabilities failure', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-page-sse-capability-retry-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const manifestPath = join(tempRoot, 'manifest.jsonl');
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    mode: 'edit',
+                    id: 'edit-large-capability-retry',
+                    prompt: 'edit prompt',
+                    image_path: imagePath,
+                    size: '3072x2048',
+                    idempotency_key: 'capability-retry-key'
+                })
+            );
+
+            let capabilitiesRequests = 0;
+            const requests = [];
+            await withServer(
+                (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
+                    if (request.url === '/api/agent/capabilities') {
+                        capabilitiesRequests += 1;
+                        if (capabilitiesRequests === 1) {
+                            response.writeHead(503, { 'content-type': 'text/plain' });
+                            response.end('capabilities maintenance');
+                            return;
+                        }
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: {
+                                    page_sse: { supported: true, endpoint: '/api/images' }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"retry-edit.png","path":"/generated/retry-edit.png","output_format":"png"}',
+                                '',
+                                'data: {"type":"done"}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath, '--manifest', manifestPath, '--max-attempts', '2'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        ['GET /api/agent/capabilities', 'GET /api/agent/capabilities', 'POST /api/images']
+                    );
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.results[0].attempt, 2);
+                    assert.equal(body.results[0].root_idempotency_key, 'capability-retry-key');
+                    assert.equal(body.results[0].response.images[0].filename, 'retry-edit.png');
+
+                    const manifestLines = readFileSync(manifestPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+                    assert.equal(manifestLines.length, 2);
+                    assert.equal(manifestLines[0].status, 'failed');
+                    assert.equal(manifestLines[0].idempotency_key, 'capability-retry-key');
+                    assert.equal(manifestLines[1].status, 'succeeded');
+                    assert.equal(manifestLines[1].idempotency_key, 'capability-retry-key-attempt-2');
                 }
             );
         } finally {
@@ -3679,6 +3903,30 @@ function runSkillScriptAsync(filename, args, env = {}, options = {}) {
             resolve({ status, signal, stdout, stderr, timedOut });
         });
     });
+}
+
+function createDeferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((promiseResolve, promiseReject) => {
+        resolve = promiseResolve;
+        reject = promiseReject;
+    });
+    return { promise, resolve, reject };
+}
+
+async function waitWithTimeout(promise, timeoutMs, message) {
+    let timeout;
+    const timeoutPromise = new Promise((resolve, reject) => {
+        timeout = setTimeout(() => {
+            reject(new Error(message));
+        }, timeoutMs);
+    });
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 async function withServer(handler, run) {

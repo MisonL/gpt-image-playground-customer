@@ -88,6 +88,29 @@ describe('parseChannelPoolConfig', () => {
         ]);
     });
 
+    it('rejects remote HTTP-compatible upstream base URLs unless they are allowlisted', () => {
+        assert.throws(
+            () =>
+                parseChannelPoolConfig({
+                    OPENAI_CHANNEL_1_ID: 'j3gb',
+                    OPENAI_CHANNEL_1_BASE_URL: 'http://api.j3gb.com/v1',
+                    OPENAI_CHANNEL_1_API_KEYS: 'sk-one'
+                }),
+            /HTTPS/
+        );
+    });
+
+    it('accepts allowlisted HTTP-compatible upstream base URLs in server channels', () => {
+        const config = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'j3gb',
+            OPENAI_CHANNEL_1_BASE_URL: 'http://api.j3gb.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sk-one',
+            OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS: 'http://api.j3gb.com/v1'
+        });
+
+        assert.equal(config.credentials[0]?.baseUrl, 'http://api.j3gb.com/v1');
+    });
+
     it('rejects a channel with missing API keys instead of silently falling back', () => {
         assert.throws(
             () =>
@@ -230,7 +253,9 @@ describe('createChannelRouter', () => {
             unhealthyCredentialCount: 0,
             channelCount: 2,
             healthyChannelCount: 2,
-            unhealthyChannelCount: 0
+            unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0
         });
 
         router.reportFailure(failed);
@@ -241,6 +266,8 @@ describe('createChannelRouter', () => {
             channelCount: 2,
             healthyChannelCount: 2,
             unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
             lastFailure: {
                 at: 1000,
                 scope: 'credential'
@@ -255,6 +282,8 @@ describe('createChannelRouter', () => {
             channelCount: 2,
             healthyChannelCount: 2,
             unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
             lastFailure: {
                 at: 1000,
                 scope: 'credential'
@@ -278,6 +307,8 @@ describe('createChannelRouter', () => {
             channelCount: 2,
             healthyChannelCount: 2,
             unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
             lastFailure: {
                 at: 1000,
                 scope: 'credential'
@@ -292,6 +323,8 @@ describe('createChannelRouter', () => {
             channelCount: 2,
             healthyChannelCount: 1,
             unhealthyChannelCount: 1,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
             lastFailure: {
                 at: 1000,
                 scope: 'channel'
@@ -306,6 +339,8 @@ describe('createChannelRouter', () => {
             channelCount: 2,
             healthyChannelCount: 2,
             unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
             lastFailure: {
                 at: 1000,
                 scope: 'channel'
@@ -368,7 +403,9 @@ describe('createChannelRouter', () => {
             unhealthyCredentialCount: 0,
             channelCount: 2,
             healthyChannelCount: 2,
-            unhealthyChannelCount: 0
+            unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0
         });
     });
 
@@ -392,6 +429,8 @@ describe('createChannelRouter', () => {
             channelCount: 2,
             healthyChannelCount: 1,
             unhealthyChannelCount: 1,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
             lastFailure: {
                 at: 1000,
                 scope: 'channel'
@@ -408,11 +447,244 @@ describe('createChannelRouter', () => {
             channelCount: 2,
             healthyChannelCount: 2,
             unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
             lastFailure: {
                 at: 1000,
                 scope: 'channel'
             }
         });
+    });
+
+    it('requires a successful recovery probe before a cooled credential returns to user traffic', () => {
+        let now = 1000;
+        const router = createChannelRouter({
+            ...config,
+            strategy: 'round_robin',
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+
+        const failed = router.select();
+        assert.equal(failed.id, 'a#0');
+        router.reportFailure(failed);
+
+        now = 1100;
+        assert.deepEqual(
+            [router.select().id, router.select().id, router.select().id],
+            ['a#1', 'b#0', 'a#1']
+        );
+
+        const candidates = router.getRecoveryProbeCandidates();
+        assert.deepEqual(
+            candidates.map((candidate) => ({
+                scope: candidate.scope,
+                credentialId: candidate.credential.id
+            })),
+            [{ scope: 'credential', credentialId: 'a#0' }]
+        );
+
+        assert.deepEqual(router.getHealthSummary(), {
+            credentialCount: 3,
+            healthyCredentialCount: 2,
+            unhealthyCredentialCount: 1,
+            channelCount: 2,
+            healthyChannelCount: 2,
+            unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 1,
+            pendingRecoveryProbeChannelCount: 0,
+            lastFailure: {
+                at: 1000,
+                scope: 'credential'
+            }
+        });
+
+        router.reportRecoveryProbeSuccess(candidates[0]);
+        assert.equal(router.select().id, 'b#0');
+        assert.equal(router.select().id, 'a#0');
+    });
+
+    it('requires channel recovery probes and re-cools the channel after a failed probe', () => {
+        let now = 1000;
+        const router = createChannelRouter({
+            ...config,
+            strategy: 'round_robin',
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+
+        router.reportFailure(config.credentials[0], { scope: 'channel' });
+
+        now = 1100;
+        assert.equal(router.select().id, 'b#0');
+        assert.equal(router.select().id, 'b#0');
+        assert.deepEqual(
+            router.getRecoveryProbeCandidates().map((candidate) => ({
+                scope: candidate.scope,
+                credentialId: candidate.credential.id
+            })),
+            [{ scope: 'channel', credentialId: 'a#0' }]
+        );
+
+        router.reportRecoveryProbeFailure(router.getRecoveryProbeCandidates()[0], {
+            at: now,
+            scope: 'channel',
+            status: 503,
+            code: 'probe_failed'
+        });
+        assert.deepEqual(router.getRecoveryProbeCandidates(), []);
+        assert.deepEqual(router.getHealthSummary(), {
+            credentialCount: 3,
+            healthyCredentialCount: 1,
+            unhealthyCredentialCount: 2,
+            channelCount: 2,
+            healthyChannelCount: 1,
+            unhealthyChannelCount: 1,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 1,
+            lastFailure: {
+                at: 1100,
+                scope: 'channel',
+                status: 503,
+                code: 'probe_failed'
+            }
+        });
+
+        now = 1200;
+        const retryCandidate = router.getRecoveryProbeCandidates()[0];
+        assert.equal(retryCandidate.scope, 'channel');
+        assert.equal(retryCandidate.credential.id, 'a#0');
+
+        router.reportRecoveryProbeSuccess(retryCandidate);
+        assert.deepEqual(router.getHealthSummary(), {
+            credentialCount: 3,
+            healthyCredentialCount: 3,
+            unhealthyCredentialCount: 0,
+            channelCount: 2,
+            healthyChannelCount: 2,
+            unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
+            lastFailure: {
+                at: 1100,
+                scope: 'channel',
+                status: 503,
+                code: 'probe_failed'
+            }
+        });
+    });
+
+    it('ignores stale recovery probe success after the credential fails again', () => {
+        let now = 1000;
+        const router = createChannelRouter({
+            ...config,
+            strategy: 'round_robin',
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+
+        const failed = config.credentials[0];
+        router.reportFailure(failed);
+        now = 1100;
+        const staleCandidate = router.getRecoveryProbeCandidates()[0];
+
+        now = 1110;
+        router.reportFailure(failed);
+        router.reportRecoveryProbeSuccess(staleCandidate);
+
+        assert.equal(router.getHealthSummary().pendingRecoveryProbeCredentialCount, 1);
+        assert.throws(() => selectOnlyCredential(router, failed.id), /没有可用的健康渠道凭证/);
+
+        now = 1210;
+        const freshCandidate = router.getRecoveryProbeCandidates()[0];
+        assert.equal(freshCandidate.credential.id, failed.id);
+        router.reportRecoveryProbeSuccess(freshCandidate);
+        assert.equal(selectOnlyCredential(router, failed.id).id, failed.id);
+    });
+
+    it('ignores stale recovery probe success after the channel fails again', () => {
+        let now = 1000;
+        const router = createChannelRouter({
+            ...config,
+            strategy: 'round_robin',
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+
+        const failed = config.credentials[0];
+        router.reportFailure(failed, { scope: 'channel' });
+        now = 1100;
+        const staleCandidate = router.getRecoveryProbeCandidates()[0];
+
+        now = 1110;
+        router.reportFailure(failed, { scope: 'channel' });
+        router.reportRecoveryProbeSuccess(staleCandidate);
+
+        assert.equal(router.getHealthSummary().pendingRecoveryProbeChannelCount, 1);
+        assert.deepEqual(config.credentials.filter((credential) => credential.channelId === 'a').filter(canSelect(router)), []);
+
+        now = 1210;
+        const freshCandidate = router.getRecoveryProbeCandidates()[0];
+        assert.equal(freshCandidate.scope, 'channel');
+        router.reportRecoveryProbeSuccess(freshCandidate);
+        assert.deepEqual(
+            config.credentials.filter((credential) => credential.channelId === 'a').filter(canSelect(router)).map((credential) => credential.id),
+            ['a#0', 'a#1']
+        );
+    });
+
+    it('clears the selected credential probe when its channel probe proves the same credential recovered', () => {
+        let now = 1000;
+        const router = createChannelRouter({
+            ...config,
+            strategy: 'round_robin',
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+
+        const failed = config.credentials[0];
+        router.reportFailure(failed);
+        now = 1010;
+        router.reportFailure(failed, { scope: 'channel' });
+        now = 1110;
+
+        const candidate = router.getRecoveryProbeCandidates()[0];
+        assert.equal(candidate.scope, 'channel');
+        assert.equal(candidate.credential.id, failed.id);
+        assert.equal(router.reportRecoveryProbeSuccess(candidate), true);
+
+        assert.equal(router.getHealthSummary().pendingRecoveryProbeChannelCount, 0);
+        assert.equal(router.getHealthSummary().pendingRecoveryProbeCredentialCount, 0);
+        assert.equal(selectOnlyCredential(router, failed.id).id, failed.id);
+    });
+
+    it('keeps a selected credential pending when its failure is newer than the channel probe', () => {
+        let now = 1000;
+        const router = createChannelRouter({
+            ...config,
+            strategy: 'round_robin',
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+
+        const failed = config.credentials[0];
+        router.reportFailure(failed, { scope: 'channel' });
+        now = 1100;
+        const candidate = router.getRecoveryProbeCandidates()[0];
+
+        now = 1110;
+        router.reportFailure(failed);
+        assert.equal(router.reportRecoveryProbeSuccess(candidate), true);
+
+        assert.equal(router.getHealthSummary().pendingRecoveryProbeChannelCount, 0);
+        assert.equal(router.getHealthSummary().pendingRecoveryProbeCredentialCount, 1);
+        assert.throws(() => selectOnlyCredential(router, failed.id), /没有可用的健康渠道凭证/);
     });
 
     it('stores sanitized failure diagnostics without exposing API keys', () => {
@@ -480,6 +752,25 @@ describe('createChannelRouter', () => {
         assert.equal(reason.requestId, 'req_lowercase');
     });
 });
+
+function canSelect(router: ReturnType<typeof createChannelRouter>) {
+    return (credential: { id: string }) => {
+        try {
+            selectOnlyCredential(router, credential.id);
+            return true;
+        } catch {
+            return false;
+        }
+    };
+}
+
+function selectOnlyCredential(router: ReturnType<typeof createChannelRouter>, credentialId: string) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        const credential = router.select();
+        if (credential.id === credentialId) return credential;
+    }
+    throw new RequestValidationError('当前没有可用的健康渠道凭证。', 503);
+}
 
 describe('resolveEffectiveCredential', () => {
     it('uses request API key while preserving legacy server base URL when request URL is blank', () => {

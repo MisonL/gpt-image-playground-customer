@@ -153,6 +153,8 @@ APP_PASSWORD=<page-access-code>
 AGENT_API_TOKEN=<long-random-agent-token>
 ```
 
+`OPENAI_API_BASE_URL` 和 `OPENAI_CHANNEL_N_BASE_URL` 必须是无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址，通常以 `/v1` 结尾。公网 Space 推荐使用 `https` 上游；只有内网、专用代理或已确认的兼容渠道需要 `http` 时才配置 `http`。
+
 公网部署建议至少设置访问码 `APP_PASSWORD` 和 `AGENT_API_TOKEN`。如果不设置 `APP_PASSWORD`，任何人都可以打开网页并消耗服务端 API Key。
 
 如果使用服务端渠道池，改用 `OPENAI_CHANNEL_N_*` Secrets：
@@ -230,6 +232,7 @@ npm run smoke:hf-space
 - 工作流文件：`.github/workflows/hf-space-keepalive.yml`
 - 默认频率：每 6 小时一次，可手动触发 `workflow_dispatch`
 - 默认目标：`https://misonl-gpt-image-playground-customer.hf.space/api/auth-status`
+- GitHub Actions 中默认最多请求 3 次，每次超时 30 秒，重试间隔 5 秒。失败日志会记录每次尝试，不把超时伪装成成功。
 - 行为边界：只访问只读鉴权状态端点，不携带 `APP_PASSWORD`、`AGENT_API_TOKEN` 或 OpenAI Key，不触发生图、不访问 Agent 生成接口。
 
 如果 Space 地址变化，在 GitHub 仓库 Variables 中设置：
@@ -243,6 +246,7 @@ HF_SPACE_KEEPALIVE_URL=https://<user>-<space>.hf.space
 ```bash
 HF_SPACE_KEEPALIVE_URL=https://<user>-<space>.hf.space \
 HF_SPACE_KEEPALIVE_EXPECT_PASSWORD_REQUIRED=true \
+HF_SPACE_KEEPALIVE_MAX_ATTEMPTS=3 \
 npm run keepalive:hf-space
 ```
 

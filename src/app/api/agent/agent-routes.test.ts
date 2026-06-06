@@ -38,8 +38,17 @@ beforeEach(async () => {
     process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE = 'fs';
     delete process.env.APP_PASSWORD;
     delete process.env.AGENT_API_TOKEN;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_BASE_URL;
+    delete process.env.OPENAI_CHANNEL_1_ID;
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
+    delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED;
+    delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_INTERVAL_MS;
+    delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_TIMEOUT_MS;
+    delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_MAX_PER_TICK;
+    delete process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY;
+    delete process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS;
 });
 
 afterEach(async () => {

@@ -188,7 +188,10 @@ export function assertSafeApiOverride(requestApiKey: string, requestApiBaseUrl: 
     }
 }
 
-export function validateApiBaseUrl(baseUrl: string): void {
+export function validateApiBaseUrl(
+    baseUrl: string,
+    options: { allowedPlainHttpBaseUrls?: string[] } = {}
+): void {
     if (!baseUrl) return;
     let parsed: URL;
     try {
@@ -196,9 +199,54 @@ export function validateApiBaseUrl(baseUrl: string): void {
     } catch {
         throw new RequestValidationError('API URL 格式无效。');
     }
-    if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
-        throw new RequestValidationError('API URL 必须使用 https，localhost 调试地址除外。');
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        throw new RequestValidationError('API URL 必须使用 http 或 https。');
     }
+    if (parsed.protocol === 'http:' && !isAllowedPlainHttpApiBaseUrl(parsed, options.allowedPlainHttpBaseUrls)) {
+        throw new RequestValidationError(
+            '远程 HTTP API URL 默认不安全，请改用 HTTPS，或将完整 base URL 加入 OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS。'
+        );
+    }
+    if (parsed.username || parsed.password) {
+        throw new RequestValidationError('API URL 不能包含用户名或密码。');
+    }
+    if (parsed.search || parsed.hash) {
+        throw new RequestValidationError('API URL 不能包含查询参数或片段。');
+    }
+}
+
+function isAllowedPlainHttpApiBaseUrl(parsed: URL, allowedBaseUrls: string[] | undefined): boolean {
+    if (isLoopbackHost(parsed.hostname)) return true;
+    const normalized = normalizeApiBaseUrl(parsed);
+    const configuredAllowlist = allowedBaseUrls ?? [];
+    return configuredAllowlist.some((value) => normalizeApiBaseUrlSafely(value) === normalized);
+}
+
+function isLoopbackHost(hostname: string): boolean {
+    const normalized = hostname.toLowerCase();
+    return normalized === 'localhost' || normalized === '::1' || normalized === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
+export function readPlainHttpApiBaseUrlAllowlist(rawValue: string | undefined): string[] {
+    if (!rawValue) return [];
+    return rawValue
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+}
+
+function normalizeApiBaseUrlSafely(value: string): string | undefined {
+    try {
+        const parsed = new URL(value);
+        return parsed.protocol === 'http:' ? normalizeApiBaseUrl(parsed) : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function normalizeApiBaseUrl(parsed: URL): string {
+    const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
 }
 
 export function isValidImageFilename(filename: string): boolean {

@@ -16,16 +16,24 @@ export type StreamingBatchRecommendationOptions = StreamingConcurrencyOptions & 
 
 export type StreamingBatchDecision = {
     enabled: boolean;
+    userEnabled?: boolean;
     streaming: boolean;
     imageCount: number;
 };
 
 export type StreamingBatchResult<T> = T | Error;
-
-export type RuntimeStreamingBatchOptions = {
-    clientFeatureFlag?: string;
-    serverEnabled?: boolean;
+export type StreamingBatchScheduleOptions<T> = {
+    concurrency: number;
+    runJob: (job: StreamingBatchJob) => Promise<T>;
+    shouldPause?: () => boolean;
 };
+
+export class BatchPausedError extends Error {
+    constructor() {
+        super('批量生成已暂停，任务尚未开始。');
+        this.name = 'BatchPausedError';
+    }
+}
 
 export type StreamingBatchCapacityOptions = {
     featureEnabled: boolean;
@@ -37,6 +45,29 @@ export type StreamingBatchCapacityOptions = {
 export type StreamingBatchCapacity = {
     enabled: boolean;
     concurrency: number;
+};
+
+export type StreamingBatchTransportDecision = {
+    streamMode: string;
+    streamingStrategy: string;
+};
+
+export type StreamingBatchUnavailableReasonKey =
+    | 'streaming.parallelBatchUnavailableCapacity'
+    | 'streaming.parallelBatchUnavailable'
+    | 'streaming.parallelBatchUnavailableSingle';
+
+export type StreamingBatchToggleOptions = StreamingBatchTransportDecision & {
+    allowStreamingBatch: boolean;
+    userEnabled: boolean;
+    targetCount: number;
+};
+
+export type StreamingBatchToggleState = {
+    canEnable: boolean;
+    checked: boolean;
+    transportEnabled: boolean;
+    unavailableReasonKey: StreamingBatchUnavailableReasonKey;
 };
 
 export type ApiImageResponseItem = {
@@ -79,7 +110,10 @@ function isActualCostDetails(value: unknown): value is ActualCostDetails {
         record.source === 'pending' ||
         record.source === 'unavailable';
     const validConfidence =
-        record.confidence === 'exact' || record.confidence === 'high' || record.confidence === 'low' || record.confidence === 'none';
+        record.confidence === 'exact' ||
+        record.confidence === 'high' ||
+        record.confidence === 'low' ||
+        record.confidence === 'none';
     const validProvider =
         record.upstreamProvider === 'new-api' ||
         record.upstreamProvider === 'openai' ||
@@ -94,12 +128,7 @@ function isActualCostDetails(value: unknown): value is ActualCostDetails {
         (record.matchedRequestId === undefined || typeof record.matchedRequestId === 'string') &&
         (record.reason === undefined || typeof record.reason === 'string');
     return (
-        validCurrency &&
-        validSource &&
-        validConfidence &&
-        validProvider &&
-        validOptionalNumbers &&
-        validOptionalStrings
+        validCurrency && validSource && validConfidence && validProvider && validOptionalNumbers && validOptionalStrings
     );
 }
 
@@ -133,10 +162,6 @@ export function computeStreamingBatchRecommendation(options: StreamingBatchRecom
     return computeStreamingConcurrency(options);
 }
 
-export function isRuntimeStreamingBatchEnabled(options: RuntimeStreamingBatchOptions): boolean {
-    return options.serverEnabled === true;
-}
-
 export function resolveStreamingBatchCapacity(options: StreamingBatchCapacityOptions): StreamingBatchCapacity {
     if (!options.featureEnabled) {
         return { enabled: false, concurrency: 1 };
@@ -154,7 +179,28 @@ export function resolveStreamingBatchCapacity(options: StreamingBatchCapacityOpt
 }
 
 export function shouldUseStreamingBatch(options: StreamingBatchDecision): boolean {
-    return options.enabled && options.streaming && options.imageCount > 1;
+    return options.enabled && options.userEnabled === true && options.streaming && options.imageCount > 1;
+}
+
+export function canUseStreamingBatchTransport(options: StreamingBatchTransportDecision): boolean {
+    return options.streamMode !== 'non_stream' && options.streamingStrategy !== 'off';
+}
+
+export function resolveStreamingBatchToggleState(options: StreamingBatchToggleOptions): StreamingBatchToggleState {
+    const transportEnabled = canUseStreamingBatchTransport(options);
+    const canEnable = options.allowStreamingBatch && transportEnabled && options.targetCount > 1;
+    const unavailableReasonKey = !options.allowStreamingBatch
+        ? 'streaming.parallelBatchUnavailableCapacity'
+        : !transportEnabled
+          ? 'streaming.parallelBatchUnavailable'
+          : 'streaming.parallelBatchUnavailableSingle';
+
+    return {
+        canEnable,
+        checked: options.userEnabled && canEnable,
+        transportEnabled,
+        unavailableReasonKey
+    };
 }
 
 export function applyStreamingClientEvent(
@@ -214,26 +260,36 @@ export function buildStreamingBatchJobs(imageCount: number): StreamingBatchJob[]
 
 export async function scheduleStreamingBatch<T>(
     jobs: StreamingBatchJob[],
-    concurrency: number,
-    runJob: (job: StreamingBatchJob) => Promise<T>
+    options: StreamingBatchScheduleOptions<T>
 ): Promise<Array<StreamingBatchResult<T>>> {
-    const safeConcurrency = Math.max(1, Math.floor(concurrency));
+    const safeConcurrency = Math.max(1, Math.floor(options.concurrency));
     const results: Array<StreamingBatchResult<T>> = new Array(jobs.length);
+    const assigned: boolean[] = new Array(jobs.length).fill(false);
     let nextIndex = 0;
 
     async function worker(): Promise<void> {
         while (nextIndex < jobs.length) {
+            if (options.shouldPause?.()) {
+                return;
+            }
             const currentIndex = nextIndex;
             nextIndex += 1;
             try {
-                results[currentIndex] = await runJob(jobs[currentIndex]);
+                results[currentIndex] = await options.runJob(jobs[currentIndex]);
             } catch (error) {
                 results[currentIndex] = error instanceof Error ? error : new Error(String(error));
+            } finally {
+                assigned[currentIndex] = true;
             }
         }
     }
 
     const workerCount = Math.min(safeConcurrency, jobs.length);
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    for (let index = 0; index < results.length; index += 1) {
+        if (!assigned[index]) {
+            results[index] = new BatchPausedError();
+        }
+    }
     return results;
 }
