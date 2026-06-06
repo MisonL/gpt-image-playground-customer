@@ -43,15 +43,19 @@ const expiryOptions = [
     { value: '10080', minutes: 10080 }
 ] as const;
 
+export const DEFAULT_SHARE_EXPIRY_VALUE = '1440';
 const MIN_ACCESS_CODE_LENGTH = 8;
+
+export function getShareExpiryMinutes(value: string): number | null {
+    return expiryOptions.find((option) => option.value === value)?.minutes ?? expiryOptions[0].minutes;
+}
 
 export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, onCreate }: ShareDialogProps) {
     const { t } = useI18n();
     const [accessCode, setAccessCode] = React.useState('');
-    const [expiry, setExpiry] = React.useState('none');
+    const [expiry, setExpiry] = React.useState(DEFAULT_SHARE_EXPIRY_VALUE);
     const [copyStatus, setCopyStatus] = React.useState<{ url: string; result: 'copied' | 'error' } | null>(null);
 
-    const selectedExpiry = expiryOptions.find((option) => option.value === expiry) ?? expiryOptions[0];
     const trimmedAccessCode = accessCode.trim();
     const accessCodeError =
         trimmedAccessCode && trimmedAccessCode.length < MIN_ACCESS_CODE_LENGTH ? t('share.accessCodeTooShort') : null;
@@ -79,6 +83,7 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                             onChange={(event) => setAccessCode(event.target.value)}
                             placeholder={t('share.accessCodeOptional')}
                         />
+                        <p className='text-muted-foreground text-xs'>{t('share.publicRiskHint')}</p>
                     </div>
                     <div className='grid gap-2'>
                         <Label>{t('share.expiry')}</Label>
@@ -133,7 +138,7 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                 <DialogFooter>
                     <Button
                         type='button'
-                        onClick={() => onCreate({ accessCode: trimmedAccessCode, expiresInMinutes: selectedExpiry.minutes })}
+                        onClick={() => onCreate({ accessCode: trimmedAccessCode, expiresInMinutes: getShareExpiryMinutes(expiry) })}
                         disabled={isCreating || Boolean(accessCodeError)}>
                         {isCreating ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
                         {t('share.create')}
