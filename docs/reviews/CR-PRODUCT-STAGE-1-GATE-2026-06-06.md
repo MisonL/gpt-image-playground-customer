@@ -2,13 +2,15 @@
 
 ## Scope
 
-This review verifies the first-stage product improvement boundary: product contract, user validation script, safer sharing defaults, public deployment safety and Agent API positioning.
+This review verifies the first-stage product improvement boundary and the follow-up narrowing: product contract, user validation script, safer sharing defaults, local result feedback, public deployment safety and Agent API positioning.
 
 ## Evidence
 
 | Check | Command | Exit | Result |
 | --- | --- | --- | --- |
 | Full local gate | `npm run verify` | 0 | `version:check`, `test`, `lint`, `lint:scripts`, `build`, `diff-check` and `diff-cached-check` passed. |
+| Local browser check | `http://localhost:4784` | 0 | Recent history card rendered `结果反馈`, `可用`, `需修改` and the matching mark buttons on a real browser page. |
+| Targeted result feedback tests | `node --test --import tsx src/components/history-panel.test.tsx src/lib/history-metadata.test.ts` | 0 | 22 tests passed, covering local result feedback markers and history metadata helpers. |
 | Share dialog defaults | `node --test --import tsx src/components/share-dialog.test.tsx` | 0 | 2 tests passed, covering default 1-day expiry and no-access-code risk copy. |
 | Share API contract | `node --test --import tsx src/app/api/shares/route.test.ts` | 0 | 21 tests passed, covering share creation, access-code behavior, expiry and content serving. |
 | Script tests | `npm run test:scripts` | 0 | 187 tests passed. |
@@ -18,10 +20,10 @@ This review verifies the first-stage product improvement boundary: product contr
 
 ## Product Contract
 
-- First user: `docs/product/product-contract.md` defines the first real user as a Chinese creator or small team operator who repeatedly generates, edits, reuses and exports images in a local, intranet or controlled public environment.
+- First user: `docs/product/product-contract.md` now defines the first real user as a Chinese content operator who repeatedly produces first publish visuals for Xiaohongshu notes, product detail pages or campaign posters.
 - Non-goals: public SaaS, enterprise asset approval systems, autonomous Agent scheduling and generic OpenAI-compatible benchmarking are explicitly outside Stage 1.
-- Core workflow: prompt, choose image parameters, generate or edit, inspect central preview, continue editing or reuse, then return from recent work or inspiration albums.
-- Metrics: the contract records third-minute generation, thirtieth-minute reuse, third-day return and explicit failure-recovery expectations.
+- Core workflow: choose a real publish topic, write prompt, generate or edit, inspect the central preview, mark recent output as `可用` or `需修改`, then continue editing, reuse or download.
+- Metrics: the contract records third-minute generation, thirtieth-minute reuse, third-day return, result quality marking and explicit failure-recovery expectations.
 - Evidence standard: `docs/product/user-validation-script.md` uses past-behavior and task evidence rather than opinion prompts.
 
 ## Share Safety
@@ -35,7 +37,7 @@ This review verifies the first-stage product improvement boundary: product contr
 - `APP_PASSWORD` gate: README, customer instructions and HF Space docs all state that public customer-visible deployments must configure page access protection.
 - `AGENT_API_TOKEN` gate: Agent-facing automation must configure an Agent token when exposed publicly; the full remote doctor confirmed the target Space currently has this secret.
 - Free-tier persistence boundary: HF Space docs keep `memory` mode and temporary file-system behavior visible; this is not represented as production-grade persistence.
-- Remote Space evidence: `npm run doctor:hf-space` returned `remote-secrets` pass for `APP_PASSWORD` and `AGENT_API_TOKEN`.
+- Remote Space evidence: `npm run doctor:hf-space` returned `remote-secrets` pass for `APP_PASSWORD` and `AGENT_API_TOKEN`, but `npm run deploy:space` plus a real browser check are still required for customer-visible readiness.
 
 ## Agent API Boundary
 
@@ -47,5 +49,6 @@ This review verifies the first-stage product improvement boundary: product contr
 
 - Real 5 to 10 user validation has not been executed. The script exists, but the evidence table is not populated with actual sessions.
 - Real billable upstream image generation has not been executed in this gate. The work did not claim live OpenAI or third-party image generation success.
-- `npm run deploy:space` was not executed. The remote doctor confirms configuration and accessibility, but it does not prove a fresh deployment from this branch or a browser session on the deployed Space.
+- `npm run deploy:space` and a real browser check were not executed for the follow-up narrowing. The remote doctor confirms configuration and accessibility, but it does not prove a fresh deployment from this branch or a customer-visible Space session.
+- The new local result feedback loop is client-side metadata only; it does not change server contracts or persist beyond the current history storage path.
 - Multi-instance persistence, production object storage and customer SaaS readiness remain outside Stage 1 by product contract.
