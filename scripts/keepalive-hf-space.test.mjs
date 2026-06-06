@@ -4,10 +4,17 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = join(repoRoot, 'scripts/keepalive-hf-space.mjs');
+const tempDirectories = [];
+
+after(() => {
+    for (const directory of tempDirectories) {
+        rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
+    }
+});
 
 describe('HF Space keepalive script validation', () => {
     it('rejects non-integer timeout env values before network access', () => {
@@ -69,7 +76,7 @@ describe('HF Space keepalive script validation', () => {
         assert.equal(result.status, 0);
         assert.match(result.stderr, /"attempt": "1\/2"/);
         assert.match(result.stdout, /"ok": true/);
-        assert.match(result.stdout, /"attempt": 2/);
+        assert.match(result.stdout, /"attempt": "2\/2"/);
     });
 
     it('prints a timeout-specific final error when every attempt aborts', () => {
@@ -92,6 +99,7 @@ describe('HF Space keepalive script validation', () => {
         assert.equal(result.status, 1);
         assert.match(result.stderr, /Keepalive request timed out after 1000ms/);
         assert.doesNotMatch(result.stderr, /This operation was aborted/);
+        assert.equal((result.stderr.match(/"ok": false/g) || []).length, 1);
     });
 });
 
@@ -105,8 +113,8 @@ function runKeepalive(env, nodeArgs = []) {
 
 function writeFetchStub(source) {
     const directory = mkdtempSync(join(tmpdir(), 'hf-keepalive-fetch-'));
+    tempDirectories.push(directory);
     const filePath = join(directory, 'fetch-stub.mjs');
     writeFileSync(filePath, source);
-    process.on('exit', () => rmSync(directory, { recursive: true, force: true }));
     return filePath;
 }
