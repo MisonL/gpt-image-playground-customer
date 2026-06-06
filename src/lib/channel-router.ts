@@ -1,4 +1,4 @@
-import { RequestValidationError, validateApiBaseUrl } from './image-request-utils';
+import { RequestValidationError, readPlainHttpApiBaseUrlAllowlist, validateApiBaseUrl } from './image-request-utils';
 
 export type RoutingStrategy = 'sticky' | 'round_robin' | 'random';
 
@@ -29,6 +29,9 @@ export type ChannelPoolSummary = {
 export type ChannelRouter = {
     select(options?: { affinityKey?: string }): ChannelCredential;
     reportFailure(credential: ChannelCredential, options?: ChannelFailureReportOptions): void;
+    getRecoveryProbeCandidates(): ChannelRecoveryProbeCandidate[];
+    reportRecoveryProbeSuccess(candidate: ChannelRecoveryProbeCandidate): boolean;
+    reportRecoveryProbeFailure(candidate: ChannelRecoveryProbeCandidate, reason?: ChannelFailureReason): void;
     getHealthSummary(): ChannelPoolHealthSummary;
 };
 
@@ -55,7 +58,15 @@ export type ChannelPoolHealthSummary = {
     channelCount: number;
     healthyChannelCount: number;
     unhealthyChannelCount: number;
+    pendingRecoveryProbeCredentialCount: number;
+    pendingRecoveryProbeChannelCount: number;
     lastFailure?: ChannelFailureReason;
+};
+
+export type ChannelRecoveryProbeCandidate = {
+    scope: 'credential' | 'channel';
+    credential: ChannelCredential;
+    unhealthyUntil: number;
 };
 
 export type EffectiveCredential = {
@@ -68,6 +79,7 @@ type ChannelRouterOptions = ChannelPoolConfig & {
     random?: () => number;
     failureCooldownMs?: number;
     now?: () => number;
+    requireProbeForRecovery?: boolean;
 };
 
 const DEFAULT_STRATEGY: RoutingStrategy = 'sticky';
@@ -109,18 +121,40 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
     const failureCooldownMs = Math.max(1, Math.floor(options.failureCooldownMs ?? DEFAULT_FAILURE_COOLDOWN_MS));
     const unhealthyUntilByCredentialId = new Map<string, number>();
     const unhealthyUntilByChannelId = new Map<string, number>();
+    const probeRequiredCredentialIds = new Set<string>();
+    const probeRequiredChannelIds = new Set<string>();
     const channelIds = Array.from(new Set(options.credentials.map((credential) => credential.channelId)));
     let lastFailure: ChannelFailureReason | undefined;
 
-    const isHealthy = (credential: ChannelCredential) => {
+    const isCoolingDown = (credential: ChannelCredential) => {
         const currentTime = now();
         return (
-            (unhealthyUntilByCredentialId.get(credential.id) ?? 0) <= currentTime &&
-            (unhealthyUntilByChannelId.get(credential.channelId) ?? 0) <= currentTime
+            (unhealthyUntilByCredentialId.get(credential.id) ?? 0) > currentTime ||
+            (unhealthyUntilByChannelId.get(credential.channelId) ?? 0) > currentTime
         );
     };
 
+    const isWaitingForProbe = (credential: ChannelCredential) => {
+        if (!options.requireProbeForRecovery) return false;
+        return probeRequiredCredentialIds.has(credential.id) || probeRequiredChannelIds.has(credential.channelId);
+    };
+
+    const isHealthy = (credential: ChannelCredential) => {
+        return !isCoolingDown(credential) && !isWaitingForProbe(credential);
+    };
+
     const healthyCredentials = () => options.credentials.filter(isHealthy);
+    const setCooldown = (credential: ChannelCredential, scope: 'credential' | 'channel') => {
+        const cooldownMs = credential.failureCooldownMs ?? failureCooldownMs;
+        const unhealthyUntil = now() + cooldownMs;
+        if (scope === 'channel') {
+            unhealthyUntilByChannelId.set(credential.channelId, unhealthyUntil);
+            if (options.requireProbeForRecovery) probeRequiredChannelIds.add(credential.channelId);
+            return;
+        }
+        unhealthyUntilByCredentialId.set(credential.id, unhealthyUntil);
+        if (options.requireProbeForRecovery) probeRequiredCredentialIds.add(credential.id);
+    };
 
     return {
         select(selectOptions = {}) {
@@ -152,16 +186,85 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             throw new RequestValidationError('当前没有可用的健康渠道凭证。', 503);
         },
         reportFailure(credential: ChannelCredential, reportOptions = {}) {
-            const cooldownMs = credential.failureCooldownMs ?? failureCooldownMs;
             const currentTime = now();
-            const unhealthyUntil = currentTime + cooldownMs;
             const scope = reportOptions.scope === 'channel' ? 'channel' : 'credential';
             lastFailure = reportOptions.reason ?? { at: currentTime, scope };
-            if (reportOptions.scope === 'channel') {
-                unhealthyUntilByChannelId.set(credential.channelId, unhealthyUntil);
-                return;
+            setCooldown(credential, scope);
+        },
+        getRecoveryProbeCandidates() {
+            if (!options.requireProbeForRecovery) return [];
+            const currentTime = now();
+            const candidates: ChannelRecoveryProbeCandidate[] = [];
+            const queuedChannelIds = new Set<string>();
+            const dueChannelIds = new Set<string>();
+            for (const credential of options.credentials) {
+                const channelUnhealthyUntil = unhealthyUntilByChannelId.get(credential.channelId) ?? 0;
+                const credentialUnhealthyUntil = unhealthyUntilByCredentialId.get(credential.id) ?? 0;
+                const credentialProbeIsNewer =
+                    probeRequiredCredentialIds.has(credential.id) && credentialUnhealthyUntil > channelUnhealthyUntil;
+                const channelReady =
+                    probeRequiredChannelIds.has(credential.channelId) &&
+                    channelUnhealthyUntil <= currentTime;
+                if (channelReady) {
+                    dueChannelIds.add(credential.channelId);
+                }
+                if (
+                    channelReady &&
+                    !credentialProbeIsNewer &&
+                    !queuedChannelIds.has(credential.channelId)
+                ) {
+                    candidates.push({
+                        scope: 'channel',
+                        credential,
+                        unhealthyUntil: channelUnhealthyUntil
+                    });
+                    queuedChannelIds.add(credential.channelId);
+                }
             }
-            unhealthyUntilByCredentialId.set(credential.id, unhealthyUntil);
+
+            for (const credential of options.credentials) {
+                const credentialUnhealthyUntil = unhealthyUntilByCredentialId.get(credential.id) ?? 0;
+                const credentialReady =
+                    probeRequiredCredentialIds.has(credential.id) &&
+                    credentialUnhealthyUntil <= currentTime &&
+                    (!probeRequiredChannelIds.has(credential.channelId) ||
+                        (dueChannelIds.has(credential.channelId) && !queuedChannelIds.has(credential.channelId)));
+                if (credentialReady) {
+                    candidates.push({
+                        scope: 'credential',
+                        credential,
+                        unhealthyUntil: credentialUnhealthyUntil
+                    });
+                }
+            }
+            return candidates;
+        },
+        reportRecoveryProbeSuccess(candidate: ChannelRecoveryProbeCandidate) {
+            if (candidate.scope === 'channel') {
+                if ((unhealthyUntilByChannelId.get(candidate.credential.channelId) ?? 0) !== candidate.unhealthyUntil) {
+                    return false;
+                }
+                unhealthyUntilByChannelId.delete(candidate.credential.channelId);
+                probeRequiredChannelIds.delete(candidate.credential.channelId);
+                if ((unhealthyUntilByCredentialId.get(candidate.credential.id) ?? 0) <= candidate.unhealthyUntil) {
+                    unhealthyUntilByCredentialId.delete(candidate.credential.id);
+                    probeRequiredCredentialIds.delete(candidate.credential.id);
+                }
+                return true;
+            }
+            if ((unhealthyUntilByCredentialId.get(candidate.credential.id) ?? 0) !== candidate.unhealthyUntil) {
+                return false;
+            }
+            unhealthyUntilByCredentialId.delete(candidate.credential.id);
+            probeRequiredCredentialIds.delete(candidate.credential.id);
+            return true;
+        },
+        reportRecoveryProbeFailure(candidate: ChannelRecoveryProbeCandidate, reason) {
+            lastFailure = reason ?? {
+                at: now(),
+                scope: candidate.scope
+            };
+            setCooldown(candidate.credential, candidate.scope);
         },
         getHealthSummary() {
             const healthyCredentialCount = healthyCredentials().length;
@@ -175,6 +278,8 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 channelCount: channelIds.length,
                 healthyChannelCount,
                 unhealthyChannelCount: channelIds.length - healthyChannelCount,
+                pendingRecoveryProbeCredentialCount: probeRequiredCredentialIds.size,
+                pendingRecoveryProbeChannelCount: probeRequiredChannelIds.size,
                 ...(lastFailure ? { lastFailure } : {})
             };
         }
@@ -303,7 +408,9 @@ function parseLegacyConfig(env: Record<string, string | undefined>): ChannelPool
     }
 
     if (baseUrl) {
-        validateApiBaseUrl(baseUrl);
+        validateApiBaseUrl(baseUrl, {
+            allowedPlainHttpBaseUrls: readPlainHttpApiBaseUrlAllowlist(env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS)
+        });
     }
 
     return {
@@ -325,7 +432,9 @@ function parseNumberedChannel(env: Record<string, string | undefined>, channelIn
     const baseUrl = normalizeOptionalString(env[`OPENAI_CHANNEL_${channelIndex}_BASE_URL`]);
     const failureCooldownMs = readOptionalPositiveIntegerEnv(env, `OPENAI_CHANNEL_${channelIndex}_FAILURE_COOLDOWN_MS`);
     if (baseUrl) {
-        validateApiBaseUrl(baseUrl);
+        validateApiBaseUrl(baseUrl, {
+            allowedPlainHttpBaseUrls: readPlainHttpApiBaseUrlAllowlist(env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS)
+        });
     }
 
     const apiKeys = rawApiKeys

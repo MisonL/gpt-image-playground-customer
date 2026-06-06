@@ -6,6 +6,9 @@ import { validateSpaceUrl } from './hf-space-doctor-utils.mjs';
 const DEFAULT_SPACE_URL = 'https://misonl-gpt-image-playground-customer.hf.space';
 const DEFAULT_KEEPALIVE_PATH = '/api/auth-status';
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_ATTEMPTS = 1;
+const DEFAULT_RETRY_DELAY_MS = 5_000;
+
 function normalizeUrl(rawUrl, path) {
     const urlError = validateSpaceUrl(rawUrl);
     if (urlError) {
@@ -34,18 +37,36 @@ async function readJsonResponse(response) {
     }
 }
 
-async function pingKeepaliveEndpoint() {
+function readKeepaliveConfig() {
     const spaceUrl = process.env.HF_SPACE_KEEPALIVE_URL?.trim() || DEFAULT_SPACE_URL;
     const path = process.env.HF_SPACE_KEEPALIVE_PATH?.trim() || DEFAULT_KEEPALIVE_PATH;
     const timeoutMs = readPositiveIntegerEnv('HF_SPACE_KEEPALIVE_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 1_000);
+    const maxAttempts = readPositiveIntegerEnv('HF_SPACE_KEEPALIVE_MAX_ATTEMPTS', DEFAULT_MAX_ATTEMPTS);
+    const retryDelayMs = readPositiveIntegerEnv('HF_SPACE_KEEPALIVE_RETRY_DELAY_MS', DEFAULT_RETRY_DELAY_MS);
     const expectedPasswordRequired = readExpectedPasswordRequired();
     const url = normalizeUrl(spaceUrl, path);
+
+    return { url, timeoutMs, maxAttempts, retryDelayMs, expectedPasswordRequired };
+}
+
+function formatKeepaliveError(error, timeoutMs) {
+    if (error?.name === 'AbortError') {
+        return `Keepalive request timed out after ${timeoutMs}ms`;
+    }
+    return error instanceof Error ? error.message : String(error);
+}
+
+async function waitBeforeRetry(ms) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pingKeepaliveEndpointOnce(config, attemptLabel) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
     const startedAt = Date.now();
 
     try {
-        const response = await fetch(url, {
+        const response = await fetch(config.url, {
             headers: {
                 'User-Agent': 'gpt-image-playground-keepalive/1.0'
             },
@@ -57,18 +78,22 @@ async function pingKeepaliveEndpoint() {
         if (!response.ok) {
             throw new Error(`Keepalive endpoint failed with HTTP ${response.status}`);
         }
-        if (expectedPasswordRequired !== undefined && body?.passwordRequired !== expectedPasswordRequired) {
-            throw new Error(`passwordRequired expected ${expectedPasswordRequired}, got ${body?.passwordRequired}`);
+        if (
+            config.expectedPasswordRequired !== undefined &&
+            body?.passwordRequired !== config.expectedPasswordRequired
+        ) {
+            throw new Error(`passwordRequired expected ${config.expectedPasswordRequired}, got ${body?.passwordRequired}`);
         }
 
         console.log(
             JSON.stringify(
                 {
                     ok: true,
-                    url,
+                    url: config.url,
                     status: response.status,
                     elapsedMs,
-                    passwordRequired: body?.passwordRequired
+                    passwordRequired: body?.passwordRequired,
+                    attempt: attemptLabel
                 },
                 null,
                 2
@@ -79,16 +104,41 @@ async function pingKeepaliveEndpoint() {
     }
 }
 
+async function pingKeepaliveEndpoint() {
+    const config = readKeepaliveConfig();
+    let lastError;
+
+    for (let attempt = 1; attempt <= config.maxAttempts; attempt += 1) {
+        try {
+            const attemptLabel = `${attempt}/${config.maxAttempts}`;
+            await pingKeepaliveEndpointOnce(config, attemptLabel);
+            return;
+        } catch (error) {
+            lastError = error;
+            console.error(
+                JSON.stringify(
+                    {
+                        ok: false,
+                        attempt: `${attempt}/${config.maxAttempts}`,
+                        error: formatKeepaliveError(error, config.timeoutMs)
+                    },
+                    null,
+                    2
+                )
+            );
+            if (attempt < config.maxAttempts) {
+                await waitBeforeRetry(config.retryDelayMs);
+            }
+        }
+    }
+
+    throw new Error(`Keepalive attempt already reported: ${formatKeepaliveError(lastError, config.timeoutMs)}`);
+}
+
 pingKeepaliveEndpoint().catch((error) => {
-    console.error(
-        JSON.stringify(
-            {
-                ok: false,
-                error: error instanceof Error ? error.message : String(error)
-            },
-            null,
-            2
-        )
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith('Keepalive attempt already reported: ')) {
+        console.error(JSON.stringify({ ok: false, error: message }, null, 2));
+    }
     process.exit(1);
 });

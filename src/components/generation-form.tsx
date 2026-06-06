@@ -1,8 +1,10 @@
 'use client';
 
 import { ModeToggle } from '@/components/mode-toggle';
+import type { WorkbenchMode } from '@/components/mode-toggle';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -11,6 +13,7 @@ import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
 import type {
@@ -20,12 +23,19 @@ import type {
     ImageUpstreamFormThinking
 } from '@/lib/image-upstream-form';
 import {
+    getImageUpstreamRouteImpactKeys,
+    isImageUpstreamStreamingStrategySelectable,
+    resolveImageUpstreamEffectiveStreamingStrategy
+} from '@/lib/image-upstream-form';
+import {
     shouldRecommendImageStreaming,
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
 import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
+import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
+import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import {
     Square,
     RectangleHorizontal,
@@ -47,7 +57,11 @@ import {
     HelpCircle,
     SquareDashed,
     WandSparkles,
-    Globe2
+    Globe2,
+    ListChecks,
+    Pause,
+    RotateCcw,
+    Bookmark
 } from 'lucide-react';
 import * as React from 'react';
 
@@ -69,13 +83,26 @@ export type GenerationFormData = {
     thinking: ImageUpstreamFormThinking;
     promptOptimization: ImageUpstreamFormPromptOptimization;
     forceWeb: boolean;
+    enableParallelBatch: boolean;
+    batchPrompts?: string[];
+};
+
+export type WorkbenchReuseContext = {
+    sourceLabel: string;
+    restoredFields: string[];
+    promptPreview: string;
 };
 
 type GenerationFormProps = {
     onSubmit: (data: GenerationFormData) => void;
+    onSaveInspiration: (prompt: string) => void;
+    canApplyRandomInspiration: boolean;
+    onPickRandomInspiration: () => string;
     isLoading: boolean;
-    currentMode: 'generate' | 'edit';
-    onModeChange: (mode: 'generate' | 'edit') => void;
+    currentMode: WorkbenchMode;
+    onModeChange: (mode: WorkbenchMode) => void;
+    reuseContext: WorkbenchReuseContext | null;
+    onClearReuseContext: () => void;
     isPasswordRequiredByBackend: boolean | null;
     clientPasswordHash: string | null;
     onOpenPasswordDialog: () => void;
@@ -83,6 +110,12 @@ type GenerationFormProps = {
     setModel: React.Dispatch<React.SetStateAction<GenerationFormData['model']>>;
     prompt: string;
     setPrompt: React.Dispatch<React.SetStateAction<string>>;
+    batchPromptText: string;
+    setBatchPromptText: React.Dispatch<React.SetStateAction<string>>;
+    failedBatchPrompts?: string[];
+    canPauseBatch?: boolean;
+    isBatchPauseRequested?: boolean;
+    onPauseBatch?: () => void;
     n: number[];
     setN: React.Dispatch<React.SetStateAction<number[]>>;
     size: GenerationFormData['size'];
@@ -104,11 +137,16 @@ type GenerationFormProps = {
     streamMode: ImageStreamMode;
     setStreamMode: React.Dispatch<React.SetStateAction<ImageStreamMode>>;
     allowStreamingBatch: boolean;
+    enableParallelBatch: boolean;
+    setEnableParallelBatch: React.Dispatch<React.SetStateAction<boolean>>;
     partialImages: 1 | 2 | 3;
     setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
+    allowResponsesImageBackend: boolean;
+    hasDefaultResponsesModel: boolean;
     imageBackend: GenerationFormData['image_backend'];
     setImageBackend: React.Dispatch<React.SetStateAction<GenerationFormData['image_backend']>>;
     streamingStrategy: GenerationFormData['streaming_strategy'];
+    defaultStreamingStrategy: ImageStreamingStrategy;
     setStreamingStrategy: React.Dispatch<React.SetStateAction<GenerationFormData['streaming_strategy']>>;
     responsesModel: string;
     setResponsesModel: React.Dispatch<React.SetStateAction<string>>;
@@ -118,9 +156,28 @@ type GenerationFormProps = {
     setPromptOptimization: React.Dispatch<React.SetStateAction<GenerationFormData['promptOptimization']>>;
     forceWeb: boolean;
     setForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
+    estimatedCostLabel: string;
+    defaultAdvancedOpen?: boolean;
+    defaultAdvancedTab?: AdvancedTab;
 };
 
-type AdvancedTab = 'route' | 'output' | 'stream';
+type AdvancedTab = 'output' | 'model' | 'stream' | 'route';
+
+const compactSettingRowClass =
+    'space-y-1.5 lg:grid lg:grid-cols-[3.4rem_minmax(0,1fr)] lg:items-center lg:gap-1.5 lg:space-y-0';
+const compactSettingLabelClass = 'text-muted-foreground text-xs lg:pt-0.5';
+
+export function resolveGenerationFooterPromptTarget(input: {
+    currentMode: WorkbenchMode;
+    prompt: string;
+    batchPromptText: string;
+}): { value: string; isEmpty: boolean } {
+    const value = input.currentMode === 'batch' ? input.batchPromptText : input.prompt;
+    return {
+        value,
+        isEmpty: value.trim().length === 0
+    };
+}
 
 const RadioItemWithIcon = ({
     value,
@@ -143,9 +200,9 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border text-muted-foreground enabled:hover:border-foreground/20 enabled:hover:bg-accent enabled:hover:text-accent-foreground data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground flex aspect-auto h-auto min-h-10 w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 [&_[data-slot=radio-group-indicator]]:hidden'>
-            <Icon className='h-4 w-4 text-current opacity-70' />
-            <span>{label}</span>
+            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-7 lg:flex-row lg:px-1 lg:text-[11px] 2xl:px-1.5 2xl:text-xs [&_[data-slot=radio-group-indicator]]:hidden [&_[data-slot=radio-group-item-content]]:gap-1 lg:[&_[data-slot=radio-group-item-content]]:gap-0.5 2xl:[&_[data-slot=radio-group-item-content]]:gap-1'>
+            <Icon className='h-3 w-3 shrink-0 text-current opacity-50 lg:hidden 2xl:block' />
+            <span className='max-w-full min-w-0 truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );
 
@@ -180,6 +237,12 @@ function getBackendLabel(backend: GenerationFormData['image_backend'], t: (key: 
     return t('upstream.serverDefault');
 }
 
+function getWorkbenchBackendLabel(backend: GenerationFormData['image_backend'], t: (key: string) => string): string {
+    if (backend === 'images-api') return t('upstream.backendImages');
+    if (backend === 'responses-image-generation') return t('upstream.backendResponses');
+    return t('upstream.workbenchDefaultRoute');
+}
+
 function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => string): string {
     if (streamMode === 'stream') return t('streaming.modeStream');
     if (streamMode === 'non_stream') return t('streaming.modeNonStream');
@@ -201,9 +264,14 @@ function getOutputFormatLabel(format: GenerationFormData['output_format'], t: (k
 
 export function GenerationForm({
     onSubmit,
+    onSaveInspiration,
+    canApplyRandomInspiration,
+    onPickRandomInspiration,
     isLoading,
     currentMode,
     onModeChange,
+    reuseContext,
+    onClearReuseContext,
     isPasswordRequiredByBackend,
     clientPasswordHash,
     onOpenPasswordDialog,
@@ -211,6 +279,12 @@ export function GenerationForm({
     setModel,
     prompt,
     setPrompt,
+    batchPromptText,
+    setBatchPromptText,
+    failedBatchPrompts = [],
+    canPauseBatch = false,
+    isBatchPauseRequested = false,
+    onPauseBatch,
     n,
     setN,
     size,
@@ -232,11 +306,16 @@ export function GenerationForm({
     streamMode,
     setStreamMode,
     allowStreamingBatch,
+    enableParallelBatch,
+    setEnableParallelBatch,
     partialImages,
     setPartialImages,
+    allowResponsesImageBackend,
+    hasDefaultResponsesModel,
     imageBackend,
     setImageBackend,
     streamingStrategy,
+    defaultStreamingStrategy,
     setStreamingStrategy,
     responsesModel,
     setResponsesModel,
@@ -245,7 +324,10 @@ export function GenerationForm({
     promptOptimization,
     setPromptOptimization,
     forceWeb,
-    setForceWeb
+    setForceWeb,
+    estimatedCostLabel,
+    defaultAdvancedOpen = false,
+    defaultAdvancedTab = 'output'
 }: GenerationFormProps) {
     const { locale, t } = useI18n();
     const showCompression = outputFormat === 'jpeg' || outputFormat === 'webp';
@@ -264,8 +346,10 @@ export function GenerationForm({
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
 
-    const effectiveStreamingStrategy: ImageStreamingStrategy =
-        streamingStrategy === 'server-default' ? 'auto' : streamingStrategy;
+    const effectiveStreamingStrategy = resolveImageUpstreamEffectiveStreamingStrategy({
+        streamingStrategy,
+        defaultStreamingStrategy
+    });
     const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
     const concreteSize = readConcreteSize({ size, model, customWidth, customHeight });
     const recommendStreaming = Boolean(
@@ -278,20 +362,55 @@ export function GenerationForm({
                 streamEnabled: streamMode !== 'non_stream'
             })
     );
-    const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(false);
-    const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>('route');
+    const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(defaultAdvancedOpen);
+    const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>(defaultAdvancedTab);
+    const isBatchMode = currentMode === 'batch';
+    const isReuseMode = currentMode === 'reuse';
+    const batchPrompts = React.useMemo(() => readBatchPromptLines(batchPromptText), [batchPromptText]);
+    const parallelBatchTargetCount = isBatchMode ? batchPrompts.length : n[0];
+    const parallelBatchToggle = resolveStreamingBatchToggleState({
+        allowStreamingBatch,
+        userEnabled: enableParallelBatch,
+        targetCount: parallelBatchTargetCount,
+        streamMode,
+        streamingStrategy: effectiveStreamingStrategy
+    });
+    const canEnableParallelBatch = parallelBatchToggle.canEnable;
+    const parallelBatchChecked = parallelBatchToggle.checked;
+    const parallelBatchUnavailableKey = parallelBatchToggle.unavailableReasonKey;
+    const hasFailedBatchPrompts = isBatchMode && failedBatchPrompts.length > 0;
+    const requiresResponsesModel =
+        imageBackend === 'responses-image-generation' && !hasDefaultResponsesModel && !responsesModel.trim();
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
-        if (!prompt.trim()) return t('ux.disabledPrompt');
+        if (isBatchMode && batchPrompts.length === 0) return t('ux.disabledBatchPrompts');
+        if (!isBatchMode && !prompt.trim()) return t('ux.disabledPrompt');
+        if (requiresResponsesModel) return t('upstream.responsesModelRequired');
         if (customSizeInvalid) return customSizeError || t('ux.disabledCustomSize');
         return '';
-    }, [customSizeError, customSizeInvalid, isLoading, prompt, t]);
+    }, [
+        batchPrompts.length,
+        customSizeError,
+        customSizeInvalid,
+        isBatchMode,
+        isLoading,
+        prompt,
+        requiresResponsesModel,
+        t
+    ]);
     const advancedSummary = [
         `${t('form.quality')}: ${getQualityLabel(quality, t)}`,
         `${t('form.outputFormat')}: ${getOutputFormatLabel(outputFormat, t)}`,
         getBackendLabel(imageBackend, t)
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
+    const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
+    const workbenchBackendLabel = getWorkbenchBackendLabel(imageBackend, t);
+    const footerPromptTarget = resolveGenerationFooterPromptTarget({
+        currentMode,
+        prompt,
+        batchPromptText
+    });
 
     React.useEffect(() => {
         if (streamingDisabledByStrategy && streamMode !== 'non_stream') {
@@ -318,7 +437,7 @@ export function GenerationForm({
             return;
         }
         const formData: GenerationFormData = {
-            prompt,
+            prompt: isBatchMode && batchPrompts.length > 0 ? batchPrompts[0] : prompt,
             n: n[0],
             size,
             customWidth,
@@ -333,179 +452,240 @@ export function GenerationForm({
             responsesModel,
             thinking,
             promptOptimization,
-            forceWeb
+            forceWeb,
+            enableParallelBatch: parallelBatchChecked
         };
+        if (isBatchMode) {
+            formData.batchPrompts = batchPrompts;
+        }
         if (showCompression) {
             formData.output_compression = compression[0];
         }
         onSubmit(formData);
     };
 
+    const reuseFailedBatchPrompts = () => {
+        setBatchPromptText(failedBatchPrompts.join('\n'));
+    };
+
     return (
-        <Card className='bg-card text-card-foreground border-border flex w-full flex-col overflow-hidden rounded-lg border lg:h-full'>
-            <CardHeader className='border-border flex items-start justify-between border-b pb-4'>
-                <div>
-                    <div className='flex items-center'>
-                        <CardTitle className='py-1 text-lg font-medium'>{t('generate.title')}</CardTitle>
-                        {isPasswordRequiredByBackend && (
-                            <Button
-                                variant='ghost'
-                                size='icon'
-                                onClick={onOpenPasswordDialog}
-                                className='text-muted-foreground hover:text-foreground ml-2'
-                                aria-label={t('password.configure')}>
-                                {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
-                            </Button>
-                        )}
-                    </div>
-                    <CardDescription className='mt-1'>{t('generate.description')}</CardDescription>
-                </div>
+        <Card className='workbench-panel text-card-foreground border-border flex w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 lg:h-full'>
+            <CardHeader className='border-border/70 border-b px-3 pt-2 !pb-2'>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
-                <CardContent className='space-y-5 p-4 pb-6 lg:flex-1 lg:overflow-y-auto'>
-                    <div className='border-border bg-muted/20 grid gap-3 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]'>
-                        <div className='space-y-1.5'>
-                            <Label htmlFor='model-select'>{t('form.model')}</Label>
-                            <Select
-                                value={model}
-                                onValueChange={(value) => setModel(value as GenerationFormData['model'])}
-                                disabled={isLoading}
-                                name='model'>
-                                <SelectTrigger id='model-select' className='w-full'>
-                                    <SelectValue placeholder={t('form.selectModel')} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
-                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
-                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
-                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className='space-y-1.5'>
-                            <Label htmlFor='stream-mode-select'>{t('streaming.mode')}</Label>
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <div>
-                                        <Select
-                                            value={streamMode}
-                                            onValueChange={(value) => setStreamMode(value as ImageStreamMode)}
-                                            disabled={isLoading || streamingDisabledByStrategy}
-                                            name='stream_mode'>
-                                            <SelectTrigger id='stream-mode-select' className='w-full'>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value='auto'>{t('streaming.modeAuto')}</SelectItem>
-                                                <SelectItem value='stream'>{t('streaming.modeStream')}</SelectItem>
-                                                <SelectItem value='non_stream'>
-                                                    {t('streaming.modeNonStream')}
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </TooltipTrigger>
-                                <TooltipContent className='max-w-[250px]'>
-                                    {streamingDisabledByStrategy
-                                        ? t('streaming.disabledByStrategy')
-                                        : allowStreamingBatch && n[0] > 1 && streamMode !== 'non_stream'
-                                          ? t('streaming.batchDescription')
-                                          : t('streaming.description')}
-                                </TooltipContent>
-                            </Tooltip>
-                        </div>
-                        {recommendStreaming && (
-                            <p className='text-xs text-amber-700 sm:col-span-2 dark:text-amber-300'>
+                <CardContent className='literary-scrollbar space-y-2.5 p-4 pb-28 lg:max-h-[calc(100%-9.75rem)] lg:flex-none lg:overflow-y-auto lg:px-4 lg:py-3 2xl:space-y-2.5'>
+                    <div className='flex items-center'>
+                        <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
+                            {t('workbench.creationSheet')}
+                        </CardTitle>
+                        {isPasswordRequiredByBackend && (
+                            <Button
+                                variant='ghost'
+                                size='sm'
+                                onClick={onOpenPasswordDialog}
+                                className='text-muted-foreground hover:text-foreground ml-auto min-h-11 min-w-11 px-2 lg:min-h-7 lg:min-w-0'
+                                aria-label={t('password.configure')}>
+                                {clientPasswordHash ? (
+                                    <Lock className='h-4 w-4' />
+                                ) : (
+                                    <LockOpen className='h-4 w-4' />
+                                )}
+                            </Button>
+                        )}
+                    </div>
+                    <div className='space-y-1.5 lg:space-y-1'>
+                        {!isBatchMode && (
+                            <>
+                                <div className='flex items-center'>
+                                    <Label htmlFor='prompt' className='text-foreground text-sm font-medium'>
+                                        {t('workbench.promptTitle')}
+                                    </Label>
+                                    {prompt.trim() && (
+                                        <button
+                                            type='button'
+                                            onClick={() => setPrompt('')}
+                                            disabled={isLoading}
+                                            className='text-muted-foreground hover:text-foreground focus-visible:ring-ring -mr-2 ml-auto min-h-11 min-w-11 rounded-md px-2 text-xs transition-[color,box-shadow] focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 lg:mr-0 lg:min-h-7 lg:min-w-0 lg:px-0'>
+                                            {t('common.clear')}
+                                        </button>
+                                    )}
+                                </div>
+                                <div className='relative'>
+                                    <Textarea
+                                        id='prompt'
+                                        name='prompt'
+                                        placeholder={t('form.promptPlaceholder')}
+                                        value={prompt}
+                                        onChange={(e) => setPrompt(e.target.value)}
+                                        required
+                                        disabled={isLoading}
+                                        className='min-h-[104px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-8 leading-6 shadow-inner lg:min-h-[92px]'
+                                    />
+                                    <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
+                                        {prompt.trim().length} / 1000
+                                    </span>
+                                </div>
+                            </>
+                        )}
+                        {recommendStreaming && !isBatchMode && (
+                            <p className='text-xs text-amber-700 dark:text-amber-300'>
                                 {t('streaming.highResolutionRecommendation')}
                             </p>
                         )}
+                        {isReuseMode && (
+                            <div className='border-primary/25 dark:bg-muted/40 rounded-md border bg-[oklch(0.965_0.03_76)] px-3 py-2 text-xs leading-5 shadow-sm'>
+                                {reuseContext ? (
+                                    <div className='space-y-2'>
+                                        <div className='flex items-start justify-between gap-3'>
+                                            <div className='min-w-0'>
+                                                <p className='text-foreground font-medium'>{t('reuse.appliedTitle')}</p>
+                                                <p className='text-muted-foreground truncate'>
+                                                    {reuseContext.sourceLabel}
+                                                </p>
+                                            </div>
+                                            <button
+                                                type='button'
+                                                onClick={onClearReuseContext}
+                                                disabled={isLoading}
+                                                className='text-muted-foreground hover:text-foreground focus-visible:ring-ring -mr-2 min-h-11 shrink-0 rounded-md px-2 transition-[color,box-shadow] focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50 lg:mr-0 lg:min-h-7 lg:px-0'>
+                                                {t('common.clear')}
+                                            </button>
+                                        </div>
+                                        <div className='flex flex-wrap gap-1'>
+                                            {reuseContext.restoredFields.map((field) => (
+                                                <span
+                                                    key={field}
+                                                    className='border-primary/20 bg-background/70 text-primary rounded-full border px-2 py-0.5'>
+                                                    {field}
+                                                </span>
+                                            ))}
+                                        </div>
+                                        <p className='text-muted-foreground max-h-10 overflow-hidden break-words'>
+                                            {reuseContext.promptPreview}
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <p className='text-muted-foreground'>{t('mode.reuseHint')}</p>
+                                )}
+                            </div>
+                        )}
+                        {isBatchMode && (
+                            <div className='border-border/75 bg-background/65 space-y-2 rounded-md border p-3 shadow-sm'>
+                                <div className='flex items-center justify-between gap-3'>
+                                    <Label htmlFor='batch-prompt-list'>{t('batch.promptList')}</Label>
+                                    <span className='text-muted-foreground shrink-0 text-xs'>
+                                        {t('batch.promptCount', { count: batchPrompts.length })}
+                                    </span>
+                                </div>
+                                <Textarea
+                                    id='batch-prompt-list'
+                                    name='batchPrompts'
+                                    value={batchPromptText}
+                                    onChange={(event) => setBatchPromptText(event.target.value)}
+                                    disabled={isLoading}
+                                    className='min-h-[132px] rounded-md bg-[oklch(0.978_0.016_82)] px-3 py-2 leading-6 shadow-inner'
+                                    placeholder={t('batch.promptPlaceholder')}
+                                />
+                                {hasFailedBatchPrompts && (
+                                    <div className='border-destructive/25 bg-destructive/5 text-muted-foreground flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs leading-5'>
+                                        <span>
+                                            {t('batch.failedReuseHint', {
+                                                count: failedBatchPrompts.length
+                                            })}
+                                        </span>
+                                        <Button
+                                            type='button'
+                                            variant='outline'
+                                            size='sm'
+                                            onClick={reuseFailedBatchPrompts}
+                                            disabled={isLoading}
+                                            className='bg-background/80 min-h-11 px-3 text-xs lg:h-7 lg:min-h-0 lg:px-2'>
+                                            <RotateCcw className='mr-1.5 h-3.5 w-3.5' />
+                                            {t('batch.reuseFailed')}
+                                        </Button>
+                                    </div>
+                                )}
+                                <div
+                                    id='batch-task-summary'
+                                    className='border-border/60 grid gap-2 border-t pt-2 text-xs leading-5 sm:grid-cols-2'>
+                                    <div className='flex gap-2'>
+                                        <ListChecks className='text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0' />
+                                        <div className='min-w-0'>
+                                            <div className='text-foreground font-medium'>{t('batch.summaryTitle')}</div>
+                                            <p className='text-muted-foreground'>{t('batch.summaryPerLine')}</p>
+                                        </div>
+                                    </div>
+                                    <div className='flex gap-2'>
+                                        <RotateCcw className='text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0' />
+                                        <div className='min-w-0'>
+                                            <div className='text-foreground font-medium'>
+                                                {t('batch.summaryFailureTitle')}
+                                            </div>
+                                            <p className='text-muted-foreground'>{t('batch.summaryFailureDetail')}</p>
+                                        </div>
+                                    </div>
+                                    <p className='text-muted-foreground sm:col-span-2'>{t('batch.summaryProgress')}</p>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
-                    <div className='space-y-1.5'>
-                        <Label htmlFor='prompt'>{t('form.prompt')}</Label>
-                        <Textarea
-                            id='prompt'
-                            name='prompt'
-                            placeholder={t('form.promptPlaceholder')}
-                            value={prompt}
-                            onChange={(e) => setPrompt(e.target.value)}
-                            required
-                            disabled={isLoading}
-                            className='min-h-[112px]'
-                        />
-                    </div>
-
-                    <div className='border-border bg-background space-y-2 rounded-md border p-3'>
-                        <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                            {t('form.numberOfImages', { count: n[0] })}
-                        </div>
-                        <Slider
-                            id='n-slider'
-                            name='n'
-                            thumbLabel={t('form.numberOfImages', { count: n[0] })}
-                            min={1}
-                            max={10}
-                            step={1}
-                            value={n}
-                            onValueChange={setN}
-                            disabled={isLoading}
-                            className='mt-3'
-                        />
-                    </div>
-
-                    <div className='border-border bg-background space-y-3 rounded-md border p-3'>
+                    <div className='border-border/70 space-y-2 border-t pt-2'>
                         <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                            {t('form.size')}
+                            {t('workbench.basicSettings')}
                         </div>
-                        <RadioGroup
-                            value={size}
-                            onValueChange={(value) => setSize(value as GenerationFormData['size'])}
-                            disabled={isLoading}
-                            name='size'
-                            aria-label={t('form.size')}
-                            className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
-                            <RadioItemWithIcon
-                                value='auto'
-                                id='size-auto'
-                                label={t('common.auto')}
-                                Icon={Sparkles}
+                        <div className={compactSettingRowClass}>
+                            <div className={compactSettingLabelClass}>{t('form.size')}</div>
+                            <RadioGroup
+                                value={size}
+                                onValueChange={(value) => setSize(value as GenerationFormData['size'])}
                                 disabled={isLoading}
-                            />
-                            {isGptImage2 && (
+                                name='size'
+                                aria-label={t('form.size')}
+                                className='grid grid-cols-5 gap-1.5'>
                                 <RadioItemWithIcon
-                                    value='custom'
-                                    id='size-custom'
-                                    label={t('common.custom')}
-                                    Icon={SquareDashed}
+                                    value='auto'
+                                    id='size-auto'
+                                    label={t('common.auto')}
+                                    Icon={Sparkles}
                                     disabled={isLoading}
                                 />
-                            )}
-                            <RadioItemWithIcon
-                                value='square'
-                                id='size-square'
-                                label={t('common.square')}
-                                Icon={Square}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('square', model)}
-                            />
-                            <RadioItemWithIcon
-                                value='landscape'
-                                id='size-landscape'
-                                label={t('common.landscape')}
-                                Icon={RectangleHorizontal}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('landscape', model)}
-                            />
-                            <RadioItemWithIcon
-                                value='portrait'
-                                id='size-portrait'
-                                label={t('common.portrait')}
-                                Icon={RectangleVertical}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('portrait', model)}
-                            />
-                        </RadioGroup>
+                                {isGptImage2 && (
+                                    <RadioItemWithIcon
+                                        value='custom'
+                                        id='size-custom'
+                                        label={t('common.custom')}
+                                        Icon={SquareDashed}
+                                        disabled={isLoading}
+                                    />
+                                )}
+                                <RadioItemWithIcon
+                                    value='square'
+                                    id='size-square'
+                                    label={t('common.square')}
+                                    Icon={Square}
+                                    disabled={isLoading}
+                                    tooltip={getPresetTooltip('square', model)}
+                                />
+                                <RadioItemWithIcon
+                                    value='landscape'
+                                    id='size-landscape'
+                                    label={t('common.landscape')}
+                                    Icon={RectangleHorizontal}
+                                    disabled={isLoading}
+                                    tooltip={getPresetTooltip('landscape', model)}
+                                />
+                                <RadioItemWithIcon
+                                    value='portrait'
+                                    id='size-portrait'
+                                    label={t('common.portrait')}
+                                    Icon={RectangleVertical}
+                                    disabled={isLoading}
+                                    tooltip={getPresetTooltip('portrait', model)}
+                                />
+                            </RadioGroup>
+                        </div>
                         {isGptImage2 && size === 'custom' && (
                             <div className='bg-muted/30 border-border space-y-2 rounded-md border p-3'>
                                 <div className='flex items-center gap-3'>
@@ -556,9 +736,107 @@ export function GenerationForm({
                                 <p className='text-muted-foreground text-xs'>{t('form.customConstraints')}</p>
                             </div>
                         )}
+
+                        <div className={compactSettingRowClass}>
+                            <div className={compactSettingLabelClass}>
+                                {isBatchMode
+                                    ? t('form.batchNumberOfImages', { count: batchPrompts.length })
+                                    : t('form.numberOfImages', { count: n[0] })}
+                            </div>
+                            {isBatchMode ? (
+                                <div className='border-border bg-muted/25 text-muted-foreground rounded-md border px-3 py-2 text-xs leading-5'>
+                                    {t('mode.batchHint')}
+                                </div>
+                            ) : (
+                                <RadioGroup
+                                    value={String(n[0])}
+                                    onValueChange={(value) => setN([Number(value)])}
+                                    disabled={isLoading}
+                                    name='n'
+                                    aria-label={t('form.numberOfImages', { count: n[0] })}
+                                    className='grid grid-cols-4 gap-1.5'>
+                                    {[1, 2, 4, 8].map((value) => (
+                                        <RadioItemWithIcon
+                                            key={value}
+                                            value={String(value)}
+                                            id={`n-${value}`}
+                                            label={String(value)}
+                                            Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                            disabled={isLoading}
+                                        />
+                                    ))}
+                                </RadioGroup>
+                            )}
+                        </div>
+
+                        <div className={compactSettingRowClass}>
+                            <div className={compactSettingLabelClass}>{t('form.quality')}</div>
+                            <RadioGroup
+                                value={quality}
+                                onValueChange={(value) => setQuality(value as GenerationFormData['quality'])}
+                                disabled={isLoading}
+                                name='quality'
+                                aria-label={t('form.quality')}
+                                className='grid grid-cols-3 gap-1.5'>
+                                <RadioItemWithIcon
+                                    value='medium'
+                                    id='quality-medium-quick'
+                                    label={t('common.standard')}
+                                    Icon={Tally1}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='high'
+                                    id='quality-high-quick'
+                                    label={t('common.high')}
+                                    Icon={Tally2}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='auto'
+                                    id='quality-auto-quick'
+                                    label={t('common.auto')}
+                                    Icon={Sparkles}
+                                    disabled={isLoading}
+                                />
+                            </RadioGroup>
+                        </div>
+
+                        <div className={compactSettingRowClass}>
+                            <div className={compactSettingLabelClass}>{t('form.outputFormat')}</div>
+                            <RadioGroup
+                                value={outputFormat}
+                                onValueChange={(value) => setOutputFormat(value as GenerationFormData['output_format'])}
+                                disabled={isLoading}
+                                name='output_format'
+                                aria-label={t('form.outputFormat')}
+                                className='grid grid-cols-3 gap-1.5'>
+                                <RadioItemWithIcon
+                                    value='jpeg'
+                                    id='format-jpeg-quick'
+                                    label='JPG'
+                                    Icon={FileImage}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='png'
+                                    id='format-png-quick'
+                                    label='PNG'
+                                    Icon={FileImage}
+                                    disabled={isLoading}
+                                />
+                                <RadioItemWithIcon
+                                    value='webp'
+                                    id='format-webp-quick'
+                                    label='WEBP'
+                                    Icon={FileImage}
+                                    disabled={isLoading}
+                                />
+                            </RadioGroup>
+                        </div>
                     </div>
 
-                    <div className='bg-muted/20 border-border rounded-md border'>
+                    <div className='border-border bg-muted/20 rounded-md border'>
                         <button
                             type='button'
                             onClick={() => setIsAdvancedOpen((open) => !open)}
@@ -568,9 +846,11 @@ export function GenerationForm({
                             <span className='flex min-w-0 items-center gap-2'>
                                 <SlidersHorizontal className='h-4 w-4 shrink-0' />
                                 <span className='min-w-0'>
-                                    <span className='text-foreground block'>{t('ux.advanced')}</span>
+                                    <span className='text-foreground block'>
+                                        {isAdvancedOpen ? t('ux.professionalMode') : t('ux.easyMode')}
+                                    </span>
                                     <span className='text-muted-foreground block truncate text-xs font-normal'>
-                                        {advancedSummary}
+                                        {isAdvancedOpen ? advancedSummary : t('ux.easyModeSummary')}
                                     </span>
                                 </span>
                             </span>
@@ -584,17 +864,42 @@ export function GenerationForm({
                                     value={advancedTab}
                                     onValueChange={(value) => setAdvancedTab(value as AdvancedTab)}
                                     className='gap-3'>
-                                    <TabsList className='grid h-auto w-full grid-cols-3 rounded-md'>
-                                        <TabsTrigger value='route' className='min-h-9'>
-                                            {t('ux.route')}
-                                        </TabsTrigger>
-                                        <TabsTrigger value='output' className='min-h-9'>
+                                    <TabsList className='grid h-auto w-full grid-cols-4 rounded-md'>
+                                        <TabsTrigger value='output' className='min-h-11 lg:min-h-9'>
                                             {t('ux.output')}
                                         </TabsTrigger>
-                                        <TabsTrigger value='stream' className='min-h-9'>
+                                        <TabsTrigger value='model' className='min-h-11 lg:min-h-9'>
+                                            {t('ux.modelRoute')}
+                                        </TabsTrigger>
+                                        <TabsTrigger value='stream' className='min-h-11 lg:min-h-9'>
                                             {t('ux.streaming')}
                                         </TabsTrigger>
+                                        <TabsTrigger value='route' className='min-h-11 lg:min-h-9'>
+                                            {t('ux.route')}
+                                        </TabsTrigger>
                                     </TabsList>
+                                    <TabsContent value='model' className='space-y-5'>
+                                        <div className='space-y-1.5'>
+                                            <Label htmlFor='model-select'>{t('form.model')}</Label>
+                                            <Select
+                                                value={model}
+                                                onValueChange={(value) =>
+                                                    setModel(value as GenerationFormData['model'])
+                                                }
+                                                disabled={isLoading}
+                                                name='model'>
+                                                <SelectTrigger id='model-select' className='min-h-11 w-full lg:min-h-9'>
+                                                    <SelectValue placeholder={t('form.selectModel')} />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
+                                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
+                                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
+                                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </TabsContent>
                                     <TabsContent value='route' className='space-y-5'>
                                         <div className='grid gap-3 sm:grid-cols-2'>
                                             <div className='space-y-1.5'>
@@ -606,14 +911,16 @@ export function GenerationForm({
                                                     }
                                                     disabled={isLoading}
                                                     name='image_backend'>
-                                                    <SelectTrigger id='image-backend-select'>
+                                                    <SelectTrigger id='image-backend-select' className='min-h-11 lg:min-h-9'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
                                                         <SelectItem value='images-api'>
                                                             {t('upstream.backendImages')}
                                                         </SelectItem>
-                                                        <SelectItem value='responses-image-generation'>
+                                                        <SelectItem
+                                                            value='responses-image-generation'
+                                                            disabled={!allowResponsesImageBackend}>
                                                             {t('upstream.backendResponses')}
                                                         </SelectItem>
                                                         <SelectItem value='server-default'>
@@ -635,7 +942,9 @@ export function GenerationForm({
                                                     }
                                                     disabled={isLoading}
                                                     name='image_streaming_strategy'>
-                                                    <SelectTrigger id='streaming-strategy-select'>
+                                                    <SelectTrigger
+                                                        id='streaming-strategy-select'
+                                                        className='min-h-11 lg:min-h-9'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
@@ -643,13 +952,37 @@ export function GenerationForm({
                                                             {t('upstream.strategyAuto')}
                                                         </SelectItem>
                                                         <SelectItem value='off'>{t('upstream.strategyOff')}</SelectItem>
-                                                        <SelectItem value='openai-sse'>
+                                                        <SelectItem
+                                                            value='openai-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend,
+                                                                    streamingStrategy: 'openai-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyOpenAiSse')}
                                                         </SelectItem>
-                                                        <SelectItem value='newapi-keepalive-sse'>
+                                                        <SelectItem
+                                                            value='newapi-keepalive-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend,
+                                                                    streamingStrategy: 'newapi-keepalive-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyKeepaliveSse')}
                                                         </SelectItem>
-                                                        <SelectItem value='responses-sse'>
+                                                        <SelectItem
+                                                            value='responses-sse'
+                                                            disabled={
+                                                                !isImageUpstreamStreamingStrategySelectable({
+                                                                    imageBackend,
+                                                                    streamingStrategy: 'responses-sse',
+                                                                    allowResponsesImageBackend
+                                                                })
+                                                            }>
                                                             {t('upstream.strategyResponsesSse')}
                                                         </SelectItem>
                                                         <SelectItem value='force-sse'>
@@ -661,6 +994,20 @@ export function GenerationForm({
                                                     </SelectContent>
                                                 </Select>
                                             </div>
+                                        </div>
+                                        <div className='border-border bg-muted/20 text-muted-foreground space-y-1.5 rounded-md border p-3 text-xs leading-5'>
+                                            <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
+                                                <ShieldAlert className='text-muted-foreground h-4 w-4' />
+                                                {t('upstream.routeImpactTitle')}
+                                            </div>
+                                            {getImageUpstreamRouteImpactKeys({
+                                                backend: imageBackend,
+                                                streamingStrategy,
+                                                defaultStreamingStrategy,
+                                                allowResponsesImageBackend
+                                            }).map((key) => (
+                                                <p key={key}>{t(key)}</p>
+                                            ))}
                                         </div>
 
                                         {imageBackend === 'responses-image-generation' && (
@@ -682,8 +1029,13 @@ export function GenerationForm({
                                                             disabled={isLoading}
                                                             autoComplete='off'
                                                             spellCheck={false}
-                                                            placeholder='gpt-5.4'
+                                                            placeholder='OPENAI_RESPONSES_API_MODEL'
                                                         />
+                                                        {requiresResponsesModel && (
+                                                            <p className='text-destructive text-xs'>
+                                                                {t('upstream.responsesModelRequired')}
+                                                            </p>
+                                                        )}
                                                     </div>
                                                     <div className='space-y-1.5'>
                                                         <Label htmlFor='thinking-select'>
@@ -696,7 +1048,7 @@ export function GenerationForm({
                                                             }
                                                             disabled={isLoading}
                                                             name='thinking'>
-                                                            <SelectTrigger id='thinking-select'>
+                                                            <SelectTrigger id='thinking-select' className='min-h-11 lg:min-h-9'>
                                                                 <SelectValue />
                                                             </SelectTrigger>
                                                             <SelectContent>
@@ -725,7 +1077,9 @@ export function GenerationForm({
                                                             }
                                                             disabled={isLoading}
                                                             name='promptOptimization'>
-                                                            <SelectTrigger id='prompt-optimization-select'>
+                                                            <SelectTrigger
+                                                                id='prompt-optimization-select'
+                                                                className='min-h-11 lg:min-h-9'>
                                                                 <SelectValue />
                                                             </SelectTrigger>
                                                             <SelectContent>
@@ -778,6 +1132,73 @@ export function GenerationForm({
                                         )}
                                     </TabsContent>
                                     <TabsContent value='stream' className='space-y-5'>
+                                        <div className='space-y-1.5'>
+                                            <Label htmlFor='stream-mode-select'>{t('streaming.mode')}</Label>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <div>
+                                                        <Select
+                                                            value={streamMode}
+                                                            onValueChange={(value) =>
+                                                                setStreamMode(value as ImageStreamMode)
+                                                            }
+                                                            disabled={isLoading || streamingDisabledByStrategy}
+                                                            name='stream_mode'>
+                                                            <SelectTrigger
+                                                                id='stream-mode-select'
+                                                                disabled={isLoading || streamingDisabledByStrategy}
+                                                                className='min-h-11 w-full lg:min-h-9'>
+                                                                <SelectValue />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value='auto'>
+                                                                    {t('streaming.modeAuto')}
+                                                                </SelectItem>
+                                                                <SelectItem value='stream'>
+                                                                    {t('streaming.modeStream')}
+                                                                </SelectItem>
+                                                                <SelectItem value='non_stream'>
+                                                                    {t('streaming.modeNonStream')}
+                                                                </SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                </TooltipTrigger>
+                                                <TooltipContent className='max-w-[250px]'>
+                                                    {streamingDisabledByStrategy
+                                                        ? t('streaming.disabledByStrategy')
+                                                        : allowStreamingBatch && n[0] > 1 && streamMode !== 'non_stream'
+                                                          ? t('streaming.batchDescription')
+                                                          : t('streaming.description')}
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </div>
+                                        <div className='border-border bg-muted/20 flex items-start gap-3 rounded-md border p-3'>
+                                            <label
+                                                htmlFor='parallel-batch-enabled'
+                                                className='-m-2 flex min-h-11 min-w-11 cursor-pointer items-start justify-center p-2 has-disabled:cursor-not-allowed'>
+                                                <Checkbox
+                                                    id='parallel-batch-enabled'
+                                                    checked={parallelBatchChecked}
+                                                    onCheckedChange={(value) => setEnableParallelBatch(value === true)}
+                                                    disabled={isLoading || !canEnableParallelBatch}
+                                                    aria-label={t('streaming.parallelBatch')}
+                                                    className='mt-0.5'
+                                                />
+                                            </label>
+                                            <div className='grid gap-1'>
+                                                <Label
+                                                    htmlFor='parallel-batch-enabled'
+                                                    className='text-foreground text-sm leading-none font-medium'>
+                                                    {t('streaming.parallelBatch')}
+                                                </Label>
+                                                <p className='text-muted-foreground text-xs leading-5'>
+                                                    {canEnableParallelBatch
+                                                        ? t('streaming.parallelBatchDescription')
+                                                        : t(parallelBatchUnavailableKey)}
+                                                </p>
+                                            </div>
+                                        </div>
                                         {streamMode !== 'non_stream' && (
                                             <div className='space-y-3'>
                                                 <div className='flex items-center gap-2'>
@@ -788,7 +1209,7 @@ export function GenerationForm({
                                                         <TooltipTrigger asChild>
                                                             <button
                                                                 type='button'
-                                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-9 w-9 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95'
+                                                                className='text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80 focus-visible:ring-ring -my-2 inline-flex h-11 w-11 cursor-help items-center justify-center rounded-sm transition-[background-color,color,transform] focus-visible:ring-2 focus-visible:outline-none active:scale-95 lg:h-9 lg:w-9'
                                                                 aria-label={t('streaming.costHint')}>
                                                                 <HelpCircle className='h-4 w-4' />
                                                             </button>
@@ -1002,19 +1423,87 @@ export function GenerationForm({
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='border-border hidden border-t p-4 lg:flex'>
+                <CardFooter className='border-border bg-card/88 hidden border-t p-3 lg:flex lg:shrink-0'>
                     <div className='w-full space-y-2'>
+                        <div className='flex flex-wrap items-center gap-1.5 text-xs'>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
+                                {model}
+                            </span>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
+                                {workbenchBackendLabel}
+                            </span>
+                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
+                                {streamStatusLabel}
+                            </span>
+                            {parallelBatchChecked && (
+                                <span className='border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] text-[oklch(0.38_0.075_148)] rounded-full border px-2 py-1'>
+                                    {t('streaming.parallelBatchEnabled')}
+                                </span>
+                            )}
+                            <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
+                                {estimatedCostLabel}
+                            </span>
+                        </div>
                         {submitDisabledReason && (
                             <p className='text-muted-foreground text-center text-xs'>{submitDisabledReason}</p>
                         )}
-                        <Button
-                            type='button'
-                            onClick={handleSubmit}
-                            disabled={isLoading || !!submitDisabledReason}
-                            className='flex w-full items-center justify-center gap-2'>
-                            {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
-                            {isLoading ? t('generate.loading') : t('generate.submit')}
-                        </Button>
+                        <div className='grid gap-2 sm:grid-cols-[1fr_auto]'>
+                            <Button
+                                type='button'
+                                onClick={handleSubmit}
+                                disabled={isLoading || !!submitDisabledReason}
+                                className='flex w-full items-center justify-center gap-2 border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white'>
+                                {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
+                                {isLoading ? t('generate.loading') : t('generate.submit')}
+                            </Button>
+                            {canPauseBatch && (
+                                <Button
+                                    type='button'
+                                    variant='outline'
+                                    onClick={() => onPauseBatch?.()}
+                                    disabled={isBatchPauseRequested}
+                                    title={t('batch.pauseHint')}
+                                    className='bg-background/80 min-h-10 gap-2 px-3'>
+                                    {isBatchPauseRequested ? (
+                                        <Loader2 className='h-4 w-4 animate-spin' />
+                                    ) : (
+                                        <Pause className='h-4 w-4' />
+                                    )}
+                                    <span className='whitespace-nowrap'>
+                                        {isBatchPauseRequested ? t('batch.pauseRequested') : t('batch.pause')}
+                                    </span>
+                                </Button>
+                            )}
+                        </div>
+                        {canPauseBatch && (
+                            <p className='text-muted-foreground text-center text-xs'>{t('batch.pauseHint')}</p>
+                        )}
+                        <div className='grid grid-cols-2 gap-2'>
+                            <button
+                                type='button'
+                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
+                                disabled={footerPromptTarget.isEmpty || isLoading}
+                                onClick={() => onSaveInspiration(footerPromptTarget.value)}>
+                                <Bookmark className='h-3.5 w-3.5' />
+                                {t('workbench.saveInspiration')}
+                            </button>
+                            <button
+                                type='button'
+                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground flex min-h-11 items-center justify-center gap-2 rounded-md border px-3 text-xs transition-[background-color,border-color,color,transform] enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
+                                disabled={isLoading || !canApplyRandomInspiration}
+                                onClick={() => {
+                                    const nextPrompt = onPickRandomInspiration().trim();
+                                    if (!nextPrompt) return;
+                                    if (currentMode === 'batch') {
+                                        setBatchPromptText(nextPrompt);
+                                        return;
+                                    }
+                                    setPrompt(nextPrompt);
+                                }}>
+                                <WandSparkles className='h-3.5 w-3.5' />
+                                {t('workbench.randomInspiration')}
+                            </button>
+                        </div>
                     </div>
                 </CardFooter>
             </div>
