@@ -2,7 +2,7 @@
 
 ## Scope
 
-This review verifies the first-stage product improvement boundary and the follow-up narrowing: product contract, user validation script, safer sharing defaults, local result feedback, public deployment safety and Agent API positioning.
+This review verifies the first-stage product improvement boundary and the follow-up narrowing: product contract, user validation script, safer sharing defaults, local result feedback, public deployment safety and Agent API positioning. A 2026-06-07 follow-up records residual gate checks that do not require billable image generation or a fresh deployment.
 
 ## Evidence
 
@@ -15,7 +15,9 @@ This review verifies the first-stage product improvement boundary and the follow
 | Share API contract | `node --test --import tsx src/app/api/shares/route.test.ts` | 0 | 21 tests passed, covering share creation, access-code behavior, expiry and content serving. |
 | Script tests | `npm run test:scripts` | 0 | 187 tests passed. |
 | HF Space local doctor | `npm run doctor:hf-space -- --skip-remote` | 0 | Local checks passed; remote Space checks were intentionally skipped. |
-| HF Space remote doctor | `npm run doctor:hf-space` | 0 | Remote Space was accessible; remote variables matched the Space-free runtime contract; `remote-secrets` confirmed `APP_PASSWORD` and `AGENT_API_TOKEN`; generation credential was configured. |
+| HF Space remote doctor | `npm run doctor:hf-space` | 0 | 2026-06-07 follow-up passed. Remote Space was accessible; remote variables matched the Space-free runtime contract; `remote-secrets` confirmed `APP_PASSWORD` and `AGENT_API_TOKEN`; generation credential was configured. |
+| Independent upstream dry-run readiness | `npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local` | 0 | 2026-06-07 follow-up passed without billable calls. The report returned `ok=true`, `billable=false`, `configuration_complete=true` and five configured independent targets, but all five cases were skipped with `requires --allow-billable`; `final_gate_satisfied=false`. |
+| Independent upstream final gate without billable authorization | `npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets` | 1 | Expected failure. The report returned `billable=false`, `configuration_complete=true`, `missing_required_count=5` and `skipped_required_cases` for `original-images-json`, `gaoren-images-sse`, `sub2api-images-sse`, `sub2api-responses-json` and `gpt2image-responses-sse`; no real image generation was authorized. |
 | Diff check | `git diff --check` | 0 | No whitespace or patch-format issues. |
 
 ## Product Contract
@@ -37,7 +39,7 @@ This review verifies the first-stage product improvement boundary and the follow
 - `APP_PASSWORD` gate: README, customer instructions and HF Space docs all state that public customer-visible deployments must configure page access protection.
 - `AGENT_API_TOKEN` gate: Agent-facing automation must configure an Agent token when exposed publicly; the full remote doctor confirmed the target Space currently has this secret.
 - Free-tier persistence boundary: HF Space docs keep `memory` mode and temporary file-system behavior visible; this is not represented as production-grade persistence.
-- Remote Space evidence: `npm run doctor:hf-space` returned `remote-secrets` pass for `APP_PASSWORD` and `AGENT_API_TOKEN`, but `npm run deploy:space` plus a real browser check are still required for customer-visible readiness.
+- Remote Space evidence: the 2026-06-07 `npm run doctor:hf-space` follow-up returned `remote-secrets` pass for `APP_PASSWORD` and `AGENT_API_TOKEN`, but `npm run deploy:space` plus a real browser check are still required for customer-visible readiness.
 
 ## Agent API Boundary
 
@@ -47,8 +49,8 @@ This review verifies the first-stage product improvement boundary and the follow
 
 ## Residual Risks
 
-- Real 5 to 10 user validation has not been executed. The script exists, but the evidence table is not populated with actual sessions.
-- Real billable upstream image generation has not been executed in this gate. The work did not claim live OpenAI or third-party image generation success.
+- Real 5 to 10 user validation has not been executed. The script exists, but the evidence table is not populated with actual target-user sessions.
+- Independent real upstream configuration is complete, but real billable upstream image generation has not been executed in this gate. The final command remains `npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable`, which requires explicit user authorization because it can trigger billable image generation.
 - `npm run deploy:space` and a real browser check were not executed for the follow-up narrowing. The remote doctor confirms configuration and accessibility, but it does not prove a fresh deployment from this branch or a customer-visible Space session.
 - The new local result feedback loop is client-side metadata only; it does not change server contracts or persist beyond the current history storage path.
 - Multi-instance persistence, production object storage and customer SaaS readiness remain outside Stage 1 by product contract.
