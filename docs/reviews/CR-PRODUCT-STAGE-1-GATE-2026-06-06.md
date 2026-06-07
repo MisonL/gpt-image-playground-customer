@@ -2,7 +2,7 @@
 
 ## Scope
 
-This review verifies the first-stage product improvement boundary and the follow-up narrowing: product contract, user validation script, safer sharing defaults, local result feedback, public deployment safety and Agent API positioning. A 2026-06-07 follow-up records residual gate checks that do not require billable image generation or a fresh deployment, plus the remaining local Docker smoke blocker.
+This review verifies the first-stage product improvement boundary and the follow-up narrowing: product contract, user validation script, safer sharing defaults, local result feedback, public deployment safety and Agent API positioning. A 2026-06-07 follow-up records residual gate checks that do not require billable image generation or a fresh deployment.
 
 ## Evidence
 
@@ -21,7 +21,7 @@ This review verifies the first-stage product improvement boundary and the follow
 | Independent upstream dry-run readiness | `npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local` | 0 | 2026-06-07 follow-up passed without billable calls. The report returned `ok=true`, `billable=false`, `configuration_complete=true` and five configured independent targets, but all five cases were skipped with `requires --allow-billable`; `final_gate_satisfied=false`. |
 | Independent upstream final gate without billable authorization | `npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets` | 1 | Expected failure. The report returned `billable=false`, `configuration_complete=true`, `missing_required_count=5` and `skipped_required_cases` for `original-images-json`, `gaoren-images-sse`, `sub2api-images-sse`, `sub2api-responses-json` and `gpt2image-responses-sse`; no real image generation was authorized. |
 | Local upstream fixture final gate | `npm run smoke:image-upstream-local` | 0 | 2026-06-07 follow-up passed. Local fixture covered all 5 independent cases and returned `local_fixture=true`, `configuration_complete=true`, `final_gate_satisfied=true`; this verifies the final-gate script path, not third-party upstream availability. |
-| HF Space local container smoke | `npm run smoke:hf-space` | 1 | 2026-06-07 follow-up failed during Docker build before app smoke execution. BuildKit and legacy builder both failed at `apk add --no-cache python3 make g++ pkgconfig` with Alpine package `I/O error` or `TLS: unspecified error`; a separate `docker run --rm node:24-alpine ... apk add ...` probe returned `apk-ok`. |
+| HF Space local container smoke | `npm run smoke:hf-space` | 0 | 2026-06-07 follow-up passed after optimizing `Dockerfile` to reuse the `deps` stage for `builder`, avoiding a duplicate Alpine build-dependency install. The smoke returned `state_backend=memory`, `image_storage_mode=indexeddb` and `agent_contract_check=true`. |
 | Diff check | `git diff --check` | 0 | No whitespace or patch-format issues. |
 
 ## Product Contract
@@ -44,7 +44,7 @@ This review verifies the first-stage product improvement boundary and the follow
 - `AGENT_API_TOKEN` gate: Agent-facing automation must configure an Agent token when exposed publicly; the full remote doctor confirmed the target Space currently has this secret.
 - Free-tier persistence boundary: HF Space docs keep `memory` mode and temporary file-system behavior visible; this is not represented as production-grade persistence.
 - Remote Space evidence: the 2026-06-07 `npm run doctor:hf-space` follow-up returned `remote-secrets` pass for `APP_PASSWORD` and `AGENT_API_TOKEN`, but `npm run deploy:space` plus a real browser check are still required for customer-visible readiness.
-- Local container smoke evidence: `npm run smoke:hf-space` did not reach the app smoke assertions because Docker build failed while installing Alpine packages. The minimal `node:24-alpine` container can install the same packages, so this is recorded as a local Docker build-layer blocker rather than an application contract failure.
+- Local container smoke evidence: after the Dockerfile stage reuse optimization, `npm run smoke:hf-space` reached the app smoke assertions and passed with the expected free-tier approximation: memory state backend, IndexedDB client storage mode and non-billable Agent contract checks.
 
 ## Agent API Boundary
 
@@ -57,6 +57,5 @@ This review verifies the first-stage product improvement boundary and the follow
 - Real 5 to 10 user validation has not been executed. The script exists, but the evidence table is not populated with actual target-user sessions.
 - Independent real upstream configuration is complete, but real billable upstream image generation has not been executed in this gate. The final command remains `npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable`, which requires explicit user authorization because it can trigger billable image generation.
 - `npm run deploy:space` and a real browser check were not executed for the follow-up narrowing. The remote doctor confirms configuration and accessibility, but it does not prove a fresh deployment from this branch or a customer-visible Space session.
-- HF Space local container smoke remains blocked in this workstation's Docker build path by Alpine `apk` I/O/TLS errors before app startup. This still needs a clean Docker build environment or Docker Desktop/build cache repair before it can be used as evidence.
 - The new local result feedback loop is client-side metadata only; it does not change server contracts or persist beyond the current history storage path.
 - Multi-instance persistence, production object storage and customer SaaS readiness remain outside Stage 1 by product contract.
