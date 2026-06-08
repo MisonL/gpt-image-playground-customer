@@ -1,6 +1,9 @@
-import { DEFAULT_SHARE_EXPIRY_VALUE, getShareExpiryMinutes } from './share-dialog';
-import { I18nProvider } from '@/lib/i18n';
-import { useI18n } from '@/lib/i18n';
+import {
+    DEFAULT_SHARE_EXPIRY_VALUE,
+    ShareExpiryField,
+    getShareExpiryMinutes
+} from './share-dialog';
+import { I18nProvider, useI18n } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
@@ -19,6 +22,16 @@ function renderShareRiskHint() {
     );
 }
 
+function renderOpenShareDialog() {
+    return renderToStaticMarkup(
+        <I18nProvider>
+            <ShareExpiryField expiry='1440' onExpiryChange={noop} />
+        </I18nProvider>
+    );
+}
+
+const noop = () => {};
+
 describe('ShareDialog', () => {
     it('defaults to a one-day time-limited share', () => {
         assert.equal(DEFAULT_SHARE_EXPIRY_VALUE, '1440');
@@ -30,5 +43,11 @@ describe('ShareDialog', () => {
 
         assert.match(html, /无访问码/);
         assert.match(html, /链接获得者/);
+    });
+
+    it('associates the expiry label with the select trigger', () => {
+        const html = renderOpenShareDialog();
+
+        assert.match(html, /share-expiry/);
     });
 });

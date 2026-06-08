@@ -37,10 +37,10 @@ type ShareDialogProps = {
 };
 
 const expiryOptions = [
-    { value: 'none', minutes: null },
-    { value: '60', minutes: 60 },
-    { value: '1440', minutes: 1440 },
-    { value: '10080', minutes: 10080 }
+    { value: 'none', minutes: null, labelKey: 'share.expiryNone' },
+    { value: '60', minutes: 60, labelKey: 'share.expiryOneHour' },
+    { value: '1440', minutes: 1440, labelKey: 'share.expiryOneDay' },
+    { value: '10080', minutes: 10080, labelKey: 'share.expirySevenDays' }
 ] as const;
 
 export const DEFAULT_SHARE_EXPIRY_VALUE = '1440';
@@ -48,6 +48,30 @@ const MIN_ACCESS_CODE_LENGTH = 8;
 
 export function getShareExpiryMinutes(value: string): number | null {
     return expiryOptions.find((option) => option.value === value)?.minutes ?? expiryOptions[0].minutes;
+}
+
+export function ShareExpiryField(props: {
+    expiry: string;
+    onExpiryChange: (value: string) => void;
+}) {
+    const { t } = useI18n();
+    return (
+        <div className='grid gap-2'>
+            <Label htmlFor='share-expiry'>{t('share.expiry')}</Label>
+            <Select value={props.expiry} onValueChange={props.onExpiryChange}>
+                <SelectTrigger id='share-expiry' className='w-full'>
+                    <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                    {expiryOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                            {t(option.labelKey)}
+                        </SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
+        </div>
+    );
 }
 
 export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, onCreate }: ShareDialogProps) {
@@ -85,20 +109,7 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                         />
                         <p className='text-muted-foreground text-xs'>{t('share.publicRiskHint')}</p>
                     </div>
-                    <div className='grid gap-2'>
-                        <Label>{t('share.expiry')}</Label>
-                        <Select value={expiry} onValueChange={setExpiry}>
-                            <SelectTrigger className='w-full'>
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value='none'>{t('share.expiryNone')}</SelectItem>
-                                <SelectItem value='60'>{t('share.expiryOneHour')}</SelectItem>
-                                <SelectItem value='1440'>{t('share.expiryOneDay')}</SelectItem>
-                                <SelectItem value='10080'>{t('share.expirySevenDays')}</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
+                    <ShareExpiryField expiry={expiry} onExpiryChange={setExpiry} />
                     {accessCodeError ? <p className='text-destructive text-sm'>{accessCodeError}</p> : null}
                     {error ? <p className='text-destructive text-sm'>{error}</p> : null}
                     {shareUrl ? (
@@ -138,7 +149,9 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                 <DialogFooter>
                     <Button
                         type='button'
-                        onClick={() => onCreate({ accessCode: trimmedAccessCode, expiresInMinutes: getShareExpiryMinutes(expiry) })}
+                        onClick={() =>
+                            onCreate({ accessCode: trimmedAccessCode, expiresInMinutes: getShareExpiryMinutes(expiry) })
+                        }
                         disabled={isCreating || Boolean(accessCodeError)}>
                         {isCreating ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
                         {t('share.create')}

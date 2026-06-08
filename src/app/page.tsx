@@ -399,6 +399,7 @@ export default function HomePage() {
     const [shareUrl, setShareUrl] = React.useState<string | null>(null);
     const [shareError, setShareError] = React.useState<string | null>(null);
     const [isCreatingShare, setIsCreatingShare] = React.useState(false);
+    const [shareDialogSessionId, setShareDialogSessionId] = React.useState(0);
     const [isMobileCreationDrawerOpen, setIsMobileCreationDrawerOpen] = React.useState(false);
     const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
     const mobileCreationDrawerCloseButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -2204,6 +2205,7 @@ export default function HomePage() {
         setShareTargetStorageMode(storageMode);
         setShareUrl(null);
         setShareError(null);
+        setShareDialogSessionId((current) => current + 1);
         setShareDialogOpen(true);
     }, []);
 
@@ -2489,6 +2491,7 @@ export default function HomePage() {
                 />
             ) : null}
             <ShareDialog
+                key={shareDialogSessionId}
                 open={shareDialogOpen}
                 onOpenChange={setShareDialogOpen}
                 isCreating={isCreatingShare}
