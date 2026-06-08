@@ -23,7 +23,7 @@ GPT Image Playground 是一个面向中文小红书和电商内容运营者的�
 - 使用 OpenAI 兼容接口时，快速确认 API URL、模型、尺寸、质量、输出格式和错误响应是否正确。
 
 <p align="center">
-  <img src="./readme-images/interface.jpg" alt="GPT Image Playground 界面" width="900"/>
+  <img src="./readme-images/interface.jpg?v=20260608-07b596b" alt="GPT Image Playground 界面" width="900"/>
 </p>
 
 ## 快速开始
@@ -166,7 +166,7 @@ http://localhost:4783
 编辑模式支持最多 10 张源图，上传字段必须使用 `image_0` 到 `image_9`。遮罩必须与源图尺寸一致，绘制或上传后会随编辑请求一起提交。
 
 <p align="center">
-  <img src="./readme-images/mask-creation.jpg" alt="遮罩创建" width="460"/>
+  <img src="./readme-images/mask-creation.jpg?v=20260608-07b596b" alt="遮罩创建" width="460"/>
 </p>
 
 ## 历史与费用
@@ -174,11 +174,11 @@ http://localhost:4783
 历史面板会记录每次生成或编辑的参数和结果。返回 usage 的接口会显示 token 明细和估算费用，方便对比不同模型和参数的成本。
 
 <p align="center">
-  <img src="./readme-images/history.jpg" alt="历史面板" width="900"/>
+  <img src="./readme-images/history.jpg?v=20260608-07b596b" alt="历史面板" width="900"/>
 </p>
 
 <p align="center">
-  <img src="./readme-images/cost-breakdown.jpg" alt="费用明细" width="460"/>
+  <img src="./readme-images/cost-breakdown.jpg?v=20260608-07b596b" alt="费用明细" width="460"/>
 </p>
 
 ## API 设置
