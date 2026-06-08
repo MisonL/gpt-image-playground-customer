@@ -9,13 +9,16 @@ app_port: 4783
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-339933)
 
-GPT Image Playground 是一个用于本地部署的 `gpt-image-2` 图片服务：在浏览器里调用 OpenAI Images API 或兼容接口，支持流式预览、4K 图片输出、图片编辑、遮罩编辑、历史记录和费用估算。
+GPT Image Playground 是一个面向中文小红书和电商内容运营者的本地部署 `gpt-image-2` 图片创作工作台：在浏览器里调用 OpenAI Images API 或兼容接口，支持流式预览、4K 图片输出、图片编辑、遮罩编辑、历史记录、结果反馈和费用估算。
 
-它和普通图片生成页面的区别是：围绕 `gpt-image-2` 的高分辨率生成能力设计，支持 2K/4K 预设和自定义尺寸，流式输出过程可见，结果默认保存在本地，参数和费用记录可追溯。
+它和普通图片生成页面的区别是：围绕 `gpt-image-2` 的高分辨率生成能力和单个真实发布任务设计，支持 2K/4K 预设和自定义尺寸，流式输出过程可见，结果默认保存在本地，参数、费用和结果质量标记可追溯。
+
+第一阶段产品边界以 `docs/product/product-contract.md` 为准：主线是给中文内容运营者产出首版视觉稿的本地和内网 AI 图片创作工作台，Agent API 是自动化接口，不是自治 Agent 平台。
 
 适合这些场景：
 
 - 在本机或内网服务器部署一个可控的 `gpt-image-2` 图片生成服务。
+- 给小红书笔记、商品详情页或活动海报快速生成首版封面、配图或氛围图。
 - 验证 `gpt-image-2` 的流式预览、4K 输出、自定义尺寸和编辑参数。
 - 使用 OpenAI 兼容接口时，快速确认 API URL、模型、尺寸、质量、输出格式和错误响应是否正确。
 
@@ -132,6 +135,7 @@ http://localhost:4783
 - 历史记录：保留提示词、参数、图片、耗时、token 使用量和估算费用。
 - 连续工作流：从生成结果或历史记录继续编辑、做变体、复用提示词、对比、下载、分享或保存为灵感。
 - 下载与分享：单图结果可直接下载，分享链接支持访问码和有效期。
+- 结果反馈：最近生成可以标记为 `可用` 或 `需修改`，便于回看质量。
 - 页面访问保护：可通过 `APP_PASSWORD` 给网页和受保护图片访问加访问码。
 - Agent 状态后端：支持 `memory`、`sqlite`、`postgres`，覆盖临时演示、单实例和集中状态库场景。
 - 双语和主题：支持中文、英文、亮色、暗色。
@@ -198,7 +202,7 @@ http://your-internal-compatible-api.example.com/v1
 
 ## Agent API
 
-Agent API 面向自动化调用，不要求 Agent 模拟网页表单。接口统一使用结构化错误、`Idempotency-Key` 和产物 ID。
+Agent API 面向自动化调用，不要求 Agent 模拟网页表单。它是给自动化客户端使用的机器接口，不是自治 Agent 平台。接口统一使用结构化错误、`Idempotency-Key` 和产物 ID。
 自动化客户端应先读取 `GET /api/agent/capabilities`，按其中的 `routing_rules`、`agent_streaming`、`agent_jobs`、`supported.enabled_image_backends` 和 `supported.image_backend_requirements` 选择路径，不要硬编码当前部署默认值。
 
 | 接口 | 用途 |

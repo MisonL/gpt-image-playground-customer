@@ -1,0 +1,61 @@
+import {
+    DEFAULT_SHARE_EXPIRY_VALUE,
+    ShareExpiryField,
+    getShareExpiryMinutes
+} from './share-dialog';
+import { I18nProvider, useI18n } from '@/lib/i18n';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+
+function ShareRiskHintProbe() {
+    const { t } = useI18n();
+    return <p>{t('share.publicRiskHint')}</p>;
+}
+
+function renderShareRiskHint() {
+    return renderToStaticMarkup(
+        <I18nProvider>
+            <ShareRiskHintProbe />
+        </I18nProvider>
+    );
+}
+
+function renderOpenShareDialog() {
+    return renderToStaticMarkup(
+        <I18nProvider>
+            <ShareExpiryField expiry='1440' onExpiryChange={noop} />
+        </I18nProvider>
+    );
+}
+
+const noop = () => {};
+
+describe('ShareDialog', () => {
+    it('defaults to a one-day time-limited share', () => {
+        assert.equal(DEFAULT_SHARE_EXPIRY_VALUE, '1440');
+        assert.equal(getShareExpiryMinutes(DEFAULT_SHARE_EXPIRY_VALUE), 1440);
+    });
+
+    it('falls back to the one-day default for unknown expiry values', () => {
+        assert.equal(getShareExpiryMinutes('unexpected'), 1440);
+    });
+
+    it('keeps explicit never-expiring shares when selected', () => {
+        assert.equal(getShareExpiryMinutes('none'), null);
+    });
+
+    it('explains public sharing risk for no-access-code links', () => {
+        const html = renderShareRiskHint();
+
+        assert.match(html, /无访问码/);
+        assert.match(html, /链接获得者/);
+    });
+
+    it('associates the expiry label with the select trigger', () => {
+        const html = renderOpenShareDialog();
+
+        assert.match(html, /share-expiry/);
+    });
+});

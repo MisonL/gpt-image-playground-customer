@@ -4,13 +4,10 @@ RUN apk add --no-cache python3 make g++ pkgconfig
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:24-alpine AS builder
-WORKDIR /app
+FROM deps AS builder
 ENV NEXT_TELEMETRY_DISABLED=1
 ARG NEXT_PUBLIC_IMAGE_STORAGE_MODE=fs
 ENV NEXT_PUBLIC_IMAGE_STORAGE_MODE=${NEXT_PUBLIC_IMAGE_STORAGE_MODE}
-RUN apk add --no-cache python3 make g++ pkgconfig
-COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 

@@ -6,6 +6,7 @@
 
 - 手机浏览器可以访问 Space 网页并正常生图。
 - 电脑上的 Agent 可以通过 `/api/agent/*` 调用同一个 Space 生图。
+- 首战场景是中文内容运营者为小红书笔记、商品详情页或活动海报生成首版视觉稿，不是公开 SaaS。
 - 状态后端使用 `memory`，不依赖 SQLite、PostgreSQL 或外部数据库。
 - 图片 Web 结果优先保存在浏览器 IndexedDB，减少服务端临时盘依赖。
 
@@ -157,6 +158,8 @@ AGENT_API_TOKEN=<long-random-agent-token>
 
 公网部署建议至少设置访问码 `APP_PASSWORD` 和 `AGENT_API_TOKEN`。如果不设置 `APP_PASSWORD`，任何人都可以打开网页并消耗服务端 API Key。
 
+如果要把这个 Space 当成客户可见的公网服务，`npm run doctor:hf-space` 的 `remote-secrets` 必须通过，且应同时看到 `APP_PASSWORD` 和 `AGENT_API_TOKEN` 已配置。没有这两个值时，只适合本地或受控内网试用，不适合直接给客户公开。
+
 如果使用服务端渠道池，改用 `OPENAI_CHANNEL_N_*` Secrets：
 
 ```dotenv
@@ -225,6 +228,19 @@ npm run smoke:hf-space
 - Agent API 仍会把产物图片写入容器临时文件系统，以便提供 `content_url` 下载。重启后这些链接不保证继续有效。
 - 需要长期保存图片、分享链接或 Agent replay 状态时，不应使用免费层纯内存模式。应切换到 PostgreSQL 加持久卷或外部对象存储。
 
+## 公网客户门槛
+
+如果把 Space 对外提供给客户使用，至少要满足以下门槛：
+
+- 先执行 `npm run deploy:space`，确保当前干净 git HEAD 已上传到固定 Space。
+- 再用真实浏览器打开 Space，确认页面能进入并完成一次真实的浏览器检查。
+- 仅有 `npm run doctor:hf-space` 的远端可达与 secret 检查，不足以证明客户可见上线。
+- `APP_PASSWORD` 已设置，网页不会裸露给匿名访问者。
+- `AGENT_API_TOKEN` 已设置，自动化调用不会回退到页面访问码哈希。
+- `npm run doctor:hf-space` 的 `remote-secrets` 检查通过。
+- 共享链接明确保留访问码和有效期的默认控制，不把无访问码永久链接当成默认发布形态。
+- 免费层重启丢失分享元数据和 Agent replay 的前提已被客户知晓。
+
 ## 免费层 Keepalive
 
 本仓库提供 GitHub Actions 定时 keepalive，降低 CPU Basic 因长时间无访问进入休眠的概率：
@@ -269,7 +285,8 @@ git diff --check
 真实 Hugging Face gate：
 
 1. 提交代码后执行 `npm run deploy:space`，等待 Space 新 commit 进入 `RUNNING`。
-2. 手机打开 Space 页面，确认能进入页面并发起一次真实生成。
+2. 用真实浏览器打开 Space，确认页面可进入并至少完成一次页面检查。
 3. 电脑执行 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 契约检查。
 4. 如有可用测试额度，再执行一次真实 Agent 生成。
 5. 重启 Space 后确认旧 Agent replay 和旧临时产物丢失符合预期。
+6. 如果未执行第 1 步和第 2 步，必须在门禁报告里明确标注残余外部门禁未验证。
