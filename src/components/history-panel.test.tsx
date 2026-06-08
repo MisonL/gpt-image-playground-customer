@@ -65,6 +65,7 @@ function renderHistoryPanel(
                 onApplyPrompt={noop}
                 onSaveInspiration={noop}
                 onSendHistoryToEdit={noop}
+                onMarkResultFeedback={noop}
                 onDeleteInspiration={noop}
                 onClearHistory={noop}
                 getImageSrc={() => '/api/image/history-card.png'}
@@ -118,6 +119,27 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /收藏这条历史提示词/);
         assert.match(html, /复用这条历史记录到创作单/);
         assert.match(html, /用这条历史记录的首张图片继续编辑/);
+        assert.match(html, /结果反馈/);
+        assert.match(html, /未标记/);
+        assert.match(html, /aria-label="标记本次结果可用"/);
+        assert.match(html, /aria-label="标记本次结果需要修改"/);
+    });
+
+    it('renders saved result feedback on completed history cards', () => {
+        const html = renderHistoryPanel([
+            {
+                ...historyItem,
+                resultFeedback: {
+                    value: 'needs_revision',
+                    updatedAt: Date.UTC(2026, 4, 31, 12, 18)
+                }
+            }
+        ]);
+
+        assert.match(html, /结果反馈/);
+        assert.match(html, /需修改/);
+        assert.match(html, /aria-label="标记本次结果需要修改"/);
+        assert.match(html, /aria-pressed="true"/);
     });
 
     it('renders recent history as a mobile horizontal snap album', () => {
@@ -146,6 +168,8 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /用户真实失败提示词/);
         assert.doesNotMatch(html, /<img/);
         assert.doesNotMatch(html, /新图已入册 0 张/);
+        assert.doesNotMatch(html, /结果反馈/);
+        assert.doesNotMatch(html, /标记本次结果可用/);
     });
 
     it('renders inspirations as a mobile horizontal snap album', () => {

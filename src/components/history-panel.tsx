@@ -17,7 +17,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { getModelRates, type GptImageModel } from '@/lib/cost-utils';
 import type { GenerationActivityItem } from '@/lib/generation-activity';
-import type { HistoryMetadata } from '@/lib/history-metadata';
+import type { HistoryMetadata, ResultFeedbackValue } from '@/lib/history-metadata';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
@@ -35,7 +35,9 @@ import {
     Bookmark,
     Plus,
     ChevronDown,
-    AlertTriangle
+    AlertTriangle,
+    ThumbsUp,
+    ThumbsDown
 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
@@ -48,6 +50,7 @@ type HistoryPanelProps = {
     onApplyPrompt: (prompt: string, source: PromptApplySource) => void;
     onSaveInspiration: (prompt: string) => void;
     onSendHistoryToEdit: (item: HistoryMetadata) => void | Promise<void>;
+    onMarkResultFeedback: (item: HistoryMetadata, value: ResultFeedbackValue) => void;
     onDeleteInspiration: (id: number) => void;
     onClearHistory: () => void;
     getImageSrc: (filename: string) => string | undefined;
@@ -215,6 +218,7 @@ function HistoryPanelImpl({
     onApplyPrompt,
     onSaveInspiration,
     onSendHistoryToEdit,
+    onMarkResultFeedback,
     onDeleteInspiration,
     onClearHistory,
     getImageSrc,
@@ -542,6 +546,7 @@ function HistoryPanelImpl({
                             const isMultiImage = imageCount > 1;
                             const itemKey = item.timestamp;
                             const hasPrompt = item.prompt.trim().length > 0;
+                            const resultFeedback = item.resultFeedback;
                             const originalStorageMode = item.storageModeUsed || 'fs';
                             const outputFormat = item.output_format || 'png';
                             const costBadge = getCostBadge(item, {
@@ -917,6 +922,58 @@ function HistoryPanelImpl({
                                             title={item.prompt || t('history.noPrompt')}>
                                             {item.prompt || t('history.noPrompt')}
                                         </p>
+                                        {!isFailedItem && (
+                                            <div className='mt-2 space-y-1'>
+                                                <div className='flex items-center justify-between gap-2'>
+                                                    <span className='text-muted-foreground text-[11px]'>
+                                                        {t('history.resultFeedback')}
+                                                    </span>
+                                                    <span className='text-muted-foreground text-[11px]'>
+                                                        {resultFeedback
+                                                            ? resultFeedback.value === 'usable'
+                                                                ? t('history.resultFeedbackUsable')
+                                                                : t('history.resultFeedbackNeedsRevision')
+                                                            : t('history.resultFeedbackEmpty')}
+                                                    </span>
+                                                </div>
+                                                <div className='grid grid-cols-2 gap-1'>
+                                                    <Button
+                                                        type='button'
+                                                        variant={
+                                                            resultFeedback?.value === 'usable'
+                                                                ? 'secondary'
+                                                                : 'outline'
+                                                        }
+                                                        size='sm'
+                                                        className='min-h-11 min-w-0 px-2 text-[11px] lg:h-7 lg:min-h-0 lg:px-2'
+                                                        onClick={() => onMarkResultFeedback(item, 'usable')}
+                                                        aria-pressed={resultFeedback?.value === 'usable'}
+                                                        aria-label={t('history.markResultUsable')}>
+                                                        <ThumbsUp className='h-3.5 w-3.5' />
+                                                        <span className='truncate'>
+                                                            {t('history.resultFeedbackUsable')}
+                                                        </span>
+                                                    </Button>
+                                                    <Button
+                                                        type='button'
+                                                        variant={
+                                                            resultFeedback?.value === 'needs_revision'
+                                                                ? 'secondary'
+                                                                : 'outline'
+                                                        }
+                                                        size='sm'
+                                                        className='min-h-11 min-w-0 px-2 text-[11px] lg:h-7 lg:min-h-0 lg:px-2'
+                                                        onClick={() => onMarkResultFeedback(item, 'needs_revision')}
+                                                        aria-pressed={resultFeedback?.value === 'needs_revision'}
+                                                        aria-label={t('history.markResultNeedsRevision')}>
+                                                        <ThumbsDown className='h-3.5 w-3.5' />
+                                                        <span className='truncate'>
+                                                            {t('history.resultFeedbackNeedsRevision')}
+                                                        </span>
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        )}
                                         <div className='mt-2 grid grid-cols-3 gap-1'>
                                             <Button
                                                 type='button'

@@ -37,7 +37,9 @@ import {
     resolveHistoryImageClientRequestId,
     uniqueStrings,
     type HistoryMetadata,
-    type RequestMode
+    type RequestMode,
+    type ResultFeedbackValue,
+    updateHistoryResultFeedback
 } from '@/lib/history-metadata';
 import { useI18n } from '@/lib/i18n';
 import {
@@ -397,6 +399,7 @@ export default function HomePage() {
     const [shareUrl, setShareUrl] = React.useState<string | null>(null);
     const [shareError, setShareError] = React.useState<string | null>(null);
     const [isCreatingShare, setIsCreatingShare] = React.useState(false);
+    const [shareDialogSessionId, setShareDialogSessionId] = React.useState(0);
     const [isMobileCreationDrawerOpen, setIsMobileCreationDrawerOpen] = React.useState(false);
     const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
     const mobileCreationDrawerCloseButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -2104,6 +2107,21 @@ export default function HomePage() {
         });
     }, []);
 
+    const handleMarkResultFeedback = React.useCallback((item: HistoryMetadata, value: ResultFeedbackValue) => {
+        const updatedAt = Date.now();
+        setHistory((current) =>
+            updateHistoryResultFeedback({
+                history: current,
+                timestamp: item.timestamp,
+                value,
+                updatedAt
+            })
+        );
+        setActiveResultSource((current) =>
+            current?.timestamp === item.timestamp ? { ...current, resultFeedback: { value, updatedAt } } : current
+        );
+    }, []);
+
     const handleDeleteInspiration = React.useCallback((id: number) => {
         setInspirations((current) => current.filter((item) => item.id !== id));
     }, []);
@@ -2187,6 +2205,7 @@ export default function HomePage() {
         setShareTargetStorageMode(storageMode);
         setShareUrl(null);
         setShareError(null);
+        setShareDialogSessionId((current) => current + 1);
         setShareDialogOpen(true);
     }, []);
 
@@ -2472,6 +2491,7 @@ export default function HomePage() {
                 />
             ) : null}
             <ShareDialog
+                key={shareDialogSessionId}
                 open={shareDialogOpen}
                 onOpenChange={setShareDialogOpen}
                 isCreating={isCreatingShare}
@@ -2864,6 +2884,7 @@ export default function HomePage() {
                                     onApplyPrompt={handleApplyPrompt}
                                     onSaveInspiration={handleSaveInspiration}
                                     onSendHistoryToEdit={handleSendHistoryToEdit}
+                                    onMarkResultFeedback={handleMarkResultFeedback}
                                     onDeleteInspiration={handleDeleteInspiration}
                                     onClearHistory={handleClearHistory}
                                     getImageSrc={getImageSrc}
