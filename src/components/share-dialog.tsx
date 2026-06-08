@@ -46,8 +46,17 @@ const expiryOptions = [
 export const DEFAULT_SHARE_EXPIRY_VALUE = '1440';
 const MIN_ACCESS_CODE_LENGTH = 8;
 
+function getDefaultShareExpiryMinutes(): number | null {
+    const defaultOption = expiryOptions.find((option) => option.value === DEFAULT_SHARE_EXPIRY_VALUE);
+    if (!defaultOption) {
+        throw new Error('Default share expiry option is not configured.');
+    }
+    return defaultOption.minutes;
+}
+
 export function getShareExpiryMinutes(value: string): number | null {
-    return expiryOptions.find((option) => option.value === value)?.minutes ?? expiryOptions[0].minutes;
+    const option = expiryOptions.find((candidate) => candidate.value === value);
+    return option === undefined ? getDefaultShareExpiryMinutes() : option.minutes;
 }
 
 export function ShareExpiryField(props: {

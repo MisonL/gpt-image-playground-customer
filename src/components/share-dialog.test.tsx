@@ -38,6 +38,14 @@ describe('ShareDialog', () => {
         assert.equal(getShareExpiryMinutes(DEFAULT_SHARE_EXPIRY_VALUE), 1440);
     });
 
+    it('falls back to the one-day default for unknown expiry values', () => {
+        assert.equal(getShareExpiryMinutes('unexpected'), 1440);
+    });
+
+    it('keeps explicit never-expiring shares when selected', () => {
+        assert.equal(getShareExpiryMinutes('none'), null);
+    });
+
     it('explains public sharing risk for no-access-code links', () => {
         const html = renderShareRiskHint();
 
