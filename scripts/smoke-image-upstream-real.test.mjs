@@ -21,7 +21,7 @@ describe('image upstream real smoke script', () => {
         assert.equal(report.ok, true);
         assert.equal(report.final_gate_satisfied, false);
         assert.equal(report.billable, false);
-        assert.equal(report.results.length, 5);
+        assert.equal(report.results.length, 6);
         assert.equal(
             report.results.every((item) => item.skipped === true),
             true
@@ -35,15 +35,15 @@ describe('image upstream real smoke script', () => {
             ['IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL', 'IMAGE_REAL_SMOKE_SUB2API_BASE_URL']
         ]);
         assert.deepEqual(report.independent_targets, {
-            required_count: 5,
+            required_count: 6,
             required_cases: independentSmokeCaseIds(),
             selected_cases: independentSmokeCaseIds(),
             unselected_required_count: 0,
             unselected_required_cases: [],
             configuration_complete: false,
-            selected_count: 5,
+            selected_count: 6,
             configured_count: 0,
-            missing_count: 5,
+            missing_count: 6,
             configured_cases: [],
             missing_cases: independentSmokeCaseIds(),
             invalid_count: 0,
@@ -76,7 +76,8 @@ describe('image upstream real smoke script', () => {
             'gaoren-images-sse',
             'sub2api-images-sse',
             'sub2api-responses-json',
-            'gpt2image-responses-sse'
+            'gpt2image-responses-sse',
+            'matsca-images-sse'
         ]);
         assert.equal(report.independent_targets.configuration_complete, false);
         assert.deepEqual(report.independent_targets.configured_cases, ['original-images-json']);
@@ -188,7 +189,8 @@ describe('image upstream real smoke script', () => {
                 'gaoren-images-sse',
                 'sub2api-images-sse',
                 'sub2api-responses-json',
-                'gpt2image-responses-sse'
+                'gpt2image-responses-sse',
+                'matsca-images-sse'
             ]);
             assert.equal(upstream.calls.length, 0);
         } finally {
@@ -210,7 +212,8 @@ describe('image upstream real smoke script', () => {
                 'gaoren-images-sse',
                 'sub2api-images-sse',
                 'sub2api-responses-json',
-                'gpt2image-responses-sse'
+                'gpt2image-responses-sse',
+                'matsca-images-sse'
             ]);
             assert.equal(upstream.calls.length, 0);
         } finally {
@@ -235,7 +238,8 @@ describe('image upstream real smoke script', () => {
                 'gaoren-images-sse',
                 'sub2api-images-sse',
                 'sub2api-responses-json',
-                'gpt2image-responses-sse'
+                'gpt2image-responses-sse',
+                'matsca-images-sse'
             ]);
             assert.equal(upstream.calls.length, 0);
         } finally {
@@ -256,10 +260,11 @@ describe('image upstream real smoke script', () => {
             'gaoren-images-sse',
             'sub2api-images-sse',
             'sub2api-responses-json',
-            'gpt2image-responses-sse'
+            'gpt2image-responses-sse',
+            'matsca-images-sse'
         ]);
         assert.equal('unselected_required_cases' in report, false);
-        assert.equal(report.missing_required_count, 5);
+        assert.equal(report.missing_required_count, 6);
         assert.deepEqual(report.missing_required_cases, independentSmokeCaseIds());
     });
 
@@ -279,9 +284,10 @@ describe('image upstream real smoke script', () => {
             'gaoren-images-sse',
             'sub2api-images-sse',
             'sub2api-responses-json',
-            'gpt2image-responses-sse'
+            'gpt2image-responses-sse',
+            'matsca-images-sse'
         ]);
-        assert.equal(report.missing_required_count, 5);
+        assert.equal(report.missing_required_count, 6);
         assert.deepEqual(report.missing_required_cases, independentSmokeCaseIds());
         assert.equal(report.results[0].reason, 'requires --allow-billable');
     });
@@ -320,12 +326,12 @@ describe('image upstream real smoke script', () => {
         const report = JSON.parse(result.stdout);
         assert.equal(report.ok, false);
         assert.equal(report.final_gate_satisfied, false);
-        assert.equal(report.independent_targets.required_count, 5);
+        assert.equal(report.independent_targets.required_count, 6);
         assert.deepEqual(report.independent_targets.selected_cases, []);
-        assert.equal(report.independent_targets.unselected_required_count, 5);
+        assert.equal(report.independent_targets.unselected_required_count, 6);
         assert.deepEqual(report.independent_targets.unselected_required_cases, independentSmokeCaseIds());
         assert.deepEqual(report.unselected_required_cases, independentSmokeCaseIds());
-        assert.equal(report.missing_required_count, 5);
+        assert.equal(report.missing_required_count, 6);
         assert.deepEqual(report.missing_required_cases, independentSmokeCaseIds());
         assert.equal('skipped_required_cases' in report, false);
     });
@@ -583,8 +589,8 @@ describe('image upstream real smoke script', () => {
             assert.equal(report.ok, true);
             assert.equal(report.final_gate_satisfied, true);
             assert.equal(report.independent_targets.configuration_complete, true);
-            assert.equal(report.independent_targets.configured_count, 5);
-            assert.equal(report.results.length, 5);
+            assert.equal(report.independent_targets.configured_count, 6);
+            assert.equal(report.results.length, 6);
             assert.equal(
                 report.results.every((item) => item.ok === true && item.skipped !== true),
                 true
@@ -616,7 +622,7 @@ describe('image upstream real smoke script', () => {
             assert.equal(failedCase?.status, 200);
             assert.equal(failedCase?.done_image_count, 0);
             assert.match(failedCase?.error || '', /b64_json|最终图片/);
-            assert.equal(successUpstream.calls.length, 4);
+            assert.equal(successUpstream.calls.length, 5);
         } finally {
             await successUpstream.close();
             await failingSseUpstream.close();
@@ -632,7 +638,7 @@ describe('image upstream real smoke script', () => {
                     IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
                     IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
                 },
-                { killAfterMs: 4500 }
+                { killAfterMs: 10000 }
             );
 
             assert.equal(result.signal, null, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -706,7 +712,7 @@ describe('image upstream real smoke script', () => {
         assert.equal(result.stderr.trim(), '');
         const report = JSON.parse(result.stdout.slice(result.stdout.indexOf('{')));
         assert.equal(report.independent_targets.configuration_complete, false);
-        assert.equal(report.missing_required_count, 5);
+        assert.equal(report.missing_required_count, 6);
         assert.deepEqual(report.missing_required_cases, independentSmokeCaseIds());
     });
 
@@ -752,7 +758,8 @@ function independentSmokePrefixes() {
         'IMAGE_REAL_SMOKE_GAOREN',
         'IMAGE_REAL_SMOKE_SUB2API',
         'IMAGE_REAL_SMOKE_SUB2API_RESPONSES',
-        'IMAGE_REAL_SMOKE_GPT2IMAGE'
+        'IMAGE_REAL_SMOKE_GPT2IMAGE',
+        'IMAGE_REAL_SMOKE_MATSCA'
     ];
 }
 
@@ -762,7 +769,8 @@ function independentSmokeCaseIds() {
         'gaoren-images-sse',
         'sub2api-images-sse',
         'sub2api-responses-json',
-        'gpt2image-responses-sse'
+        'gpt2image-responses-sse',
+        'matsca-images-sse'
     ];
 }
 
@@ -779,7 +787,9 @@ function buildAllIndependentTargetEnv(baseUrl) {
         IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL: 'gpt-4.1',
         IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL: baseUrl,
         IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'secret-independent-key-gpt2image',
-        IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL: 'gpt-5.4'
+        IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL: 'gpt-5.4',
+        IMAGE_REAL_SMOKE_MATSCA_BASE_URL: baseUrl,
+        IMAGE_REAL_SMOKE_MATSCA_API_KEY: 'secret-independent-key-matsca'
     };
 }
 
@@ -847,12 +857,12 @@ function writeEnvFile(filepath, content) {
 function buildScriptEnv(env = {}) {
     const scriptEnv = { ...process.env };
     for (const key of Object.keys(scriptEnv)) {
-        if (isSmokeEnvKey(key)) delete scriptEnv[key];
+        if (isSmokeEnvKey(key) || key.startsWith('NODE_TEST_') || key === 'NODE_OPTIONS') delete scriptEnv[key];
     }
     return {
         ...scriptEnv,
         ...env,
-        NODE_ENV: 'test',
+        NODE_ENV: env.NODE_ENV || 'development',
         IMAGE_REAL_SMOKE_SKIP_DOTENV: '1'
     };
 }

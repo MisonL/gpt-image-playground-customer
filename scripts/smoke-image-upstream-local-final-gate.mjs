@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const REAL_SMOKE_SCRIPT = fileURLToPath(new URL('./smoke-image-upstream-real.mjs', import.meta.url));
 const DEFAULT_TIMEOUT_MS = 30_000;
-const LOCAL_FINAL_GATE_CASE_COUNT = 5;
+const LOCAL_FINAL_GATE_CASE_COUNT = 6;
 const LOCAL_FINAL_GATE_PARENT_TIMEOUT_BUFFER_MS = 15_000;
 const MAX_LOCAL_FINAL_GATE_CASE_TIMEOUT_MS = Math.floor(
     (Number.MAX_SAFE_INTEGER - LOCAL_FINAL_GATE_PARENT_TIMEOUT_BUFFER_MS) / LOCAL_FINAL_GATE_CASE_COUNT
@@ -29,7 +29,7 @@ function printHelp() {
   npm run smoke:image-upstream-local
   npm run smoke:image-upstream-local -- --timeout-ms 30000
 
-Starts the local image upstream fixture and runs all five independent image upstream smoke cases through the real-smoke final gate. This is a local fixture gate, not proof that third-party upstream deployments are reachable.`);
+Starts the local image upstream fixture and runs all six independent image upstream smoke cases through the real-smoke final gate. This is a local fixture gate, not proof that third-party upstream deployments are reachable.`);
 }
 
 async function main() {
@@ -165,7 +165,9 @@ function buildLocalFinalGateEnv(baseUrl, timeoutMs) {
         IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL: 'gpt-5.4',
         IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL: baseUrl,
         IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'local-fixture-key-gpt2image',
-        IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL: 'gpt-5.4'
+        IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL: 'gpt-5.4',
+        IMAGE_REAL_SMOKE_MATSCA_BASE_URL: baseUrl,
+        IMAGE_REAL_SMOKE_MATSCA_API_KEY: 'local-fixture-key-matsca'
     };
 }
 
@@ -218,8 +220,8 @@ function closeServer(server) {
 function assertFinalGateReport(report) {
     if (report?.final_gate_satisfied !== true)
         throw new Error('local final gate did not satisfy final_gate_satisfied=true');
-    if (!Array.isArray(report.results) || report.results.length !== 5) {
-        throw new Error('local final gate did not run all five independent upstream cases');
+    if (!Array.isArray(report.results) || report.results.length !== LOCAL_FINAL_GATE_CASE_COUNT) {
+        throw new Error('local final gate did not run all six independent upstream cases');
     }
     const failed = report.results.find((item) => item.ok !== true || item.skipped === true);
     if (failed) throw new Error(`local final gate case failed: ${failed.id || 'unknown'}`);

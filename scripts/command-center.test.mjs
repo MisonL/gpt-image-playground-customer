@@ -99,7 +99,8 @@ describe('Command center scripts', () => {
             'gaoren-images-sse',
             'sub2api-images-sse',
             'sub2api-responses-json',
-            'gpt2image-responses-sse'
+            'gpt2image-responses-sse',
+            'matsca-images-sse'
         ]);
         assert.deepEqual(missing.missing_env_any['sub2api-responses-json'][0], [
             'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL',
@@ -120,10 +121,12 @@ describe('Command center scripts', () => {
             IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL: 'gpt-4.1',
             IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL: 'https://gpt2image.example/v1',
             IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'gpt2image-secret',
-            IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL: 'gpt-5.4'
+            IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL: 'gpt-5.4',
+            IMAGE_REAL_SMOKE_MATSCA_BASE_URL: 'https://matsca.example/v1',
+            IMAGE_REAL_SMOKE_MATSCA_API_KEY: 'matsca-secret'
         });
         assert.equal(configured.configuration_complete, true);
-        assert.equal(configured.configured_count, 5);
+        assert.equal(configured.configured_count, 6);
         assert.equal(configured.missing_count, 0);
         assert.doesNotMatch(JSON.stringify(configured), /secret|example\/v1/);
     });
@@ -137,15 +140,18 @@ describe('Command center scripts', () => {
             IMAGE_REAL_SMOKE_SUB2API_BASE_URL: 'https://sub2api.example/v1',
             IMAGE_REAL_SMOKE_SUB2API_API_KEY: 'sub2api-secret',
             IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL: 'https://gpt2image.example/v1',
-            IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'gpt2image-secret'
+            IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY: 'gpt2image-secret',
+            IMAGE_REAL_SMOKE_MATSCA_BASE_URL: 'https://matsca.example/v1',
+            IMAGE_REAL_SMOKE_MATSCA_API_KEY: 'matsca-secret'
         });
 
         assert.equal(status.configuration_complete, false);
-        assert.equal(status.configured_count, 3);
+        assert.equal(status.configured_count, 4);
         assert.deepEqual(status.configured_cases, [
             'original-images-json',
             'gaoren-images-sse',
-            'sub2api-images-sse'
+            'sub2api-images-sse',
+            'matsca-images-sse'
         ]);
         assert.deepEqual(status.missing_cases, ['sub2api-responses-json', 'gpt2image-responses-sse']);
         assert.deepEqual(status.missing_env_any['sub2api-responses-json'][0], [
@@ -173,7 +179,8 @@ describe('Command center scripts', () => {
             'gaoren-images-sse',
             'sub2api-images-sse',
             'sub2api-responses-json',
-            'gpt2image-responses-sse'
+            'gpt2image-responses-sse',
+            'matsca-images-sse'
         ]);
         assert.deepEqual(status.missing_env_any['sub2api-responses-json'][0], [
             'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL',
@@ -190,7 +197,7 @@ describe('Command center scripts', () => {
 
         assert.equal(status.configuration_complete, false);
         assert.equal(status.configured_count, 0);
-        assert.equal(status.missing_count, 4);
+        assert.equal(status.missing_count, 5);
         assert.equal(status.invalid_count, 1);
         assert.deepEqual(status.invalid_cases, ['original-images-json']);
         assert.deepEqual(status.invalid_env['original-images-json'], [
@@ -226,7 +233,9 @@ describe('Command center scripts', () => {
                 'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_RESPONSES_MODEL=gpt-4.1',
                 'IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL=https://real-gpt2image.example/v1',
                 'IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY=real-gpt2image-secret',
-                'IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL=gpt-5.4'
+                'IMAGE_REAL_SMOKE_GPT2IMAGE_RESPONSES_MODEL=gpt-5.4',
+                'IMAGE_REAL_SMOKE_MATSCA_BASE_URL=https://real-matsca.example/v1',
+                'IMAGE_REAL_SMOKE_MATSCA_API_KEY=real-matsca-secret'
             ].join('\n')
         );
 
@@ -249,7 +258,8 @@ describe('Command center scripts', () => {
                 'gaoren-images-sse',
                 'sub2api-images-sse',
                 'sub2api-responses-json',
-                'gpt2image-responses-sse'
+                'gpt2image-responses-sse',
+                'matsca-images-sse'
             ]);
             assert.doesNotMatch(JSON.stringify(status), /secret|example\/v1/);
         } finally {
