@@ -20,6 +20,12 @@ const CASES = [
         stream: true,
         strategy: 'responses-sse',
         backend: 'responses-image-generation'
+    },
+    {
+        id: 'matsca-images-sse',
+        prefix: 'IMAGE_REAL_SMOKE_MATSCA',
+        stream: true,
+        strategy: 'newapi-keepalive-sse'
     }
 ];
 const SERVER_CHANNEL_CASES = [
@@ -83,11 +89,12 @@ try {
         if (selectedCases.length === 0) throw new Error(`未知真实 smoke 场景：${options.caseId}`);
         const billablePreflight = buildBillablePreflight(selectedCases);
         const results = [];
-        let routeHandlers;
+        const routeHandlersByEndpoint = {};
         for (const testCase of selectedCases) {
-            const loadHandlers = async () => {
-                routeHandlers ||= await loadRouteHandlers();
-                return routeHandlers;
+            const loadHandlers = async (caseConfig) => {
+                const endpoint = readRouteHandlerEndpoint(caseConfig);
+                routeHandlersByEndpoint[endpoint] ||= await loadRouteHandlers(endpoint);
+                return routeHandlersByEndpoint[endpoint];
             };
             const result = await runCase(loadHandlers, testCase, billablePreflight);
             results.push(result);
@@ -270,6 +277,7 @@ function restoreProcessEnv() {
 }
 
 function configureRouteEnv() {
+    if (process.env.NODE_ENV === 'test') process.env.NODE_ENV = 'development';
     process.env.APP_LOG_LEVEL = 'warn';
     process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE = 'indexeddb';
     process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
@@ -277,13 +285,17 @@ function configureRouteEnv() {
     process.env.IMAGE_OUTPUT_DIR = process.env.IMAGE_OUTPUT_DIR || 'generated-images/.real-smoke';
 }
 
-async function loadRouteHandlers() {
+function readRouteHandlerEndpoint(testCase) {
+    return testCase.endpoint === 'agent-generate' ? 'agentGenerate' : 'images';
+}
+
+async function loadRouteHandlers(endpoint) {
+    if (endpoint === 'agentGenerate') {
+        const agentGenerateRoute = await import('../src/app/api/agent/images/generate/route.ts');
+        return { agentGenerate: readPostHandler(agentGenerateRoute, '/api/agent/images/generate') };
+    }
     const imageRoute = await import('../src/app/api/images/route.ts');
-    const agentGenerateRoute = await import('../src/app/api/agent/images/generate/route.ts');
-    return {
-        images: readPostHandler(imageRoute, '/api/images'),
-        agentGenerate: readPostHandler(agentGenerateRoute, '/api/agent/images/generate')
-    };
+    return { images: readPostHandler(imageRoute, '/api/images') };
 }
 
 function readPostHandler(routeModule, label) {
@@ -311,15 +323,19 @@ async function runCase(loadRouteHandlersForBillable, testCase, preflight = {}) {
         };
     }
     const startedAt = Date.now();
-    const routeHandlers = await loadRouteHandlersForBillable();
     const abortController = new AbortController();
     return withCaseTimeout(
-        runBillableCase(routeHandlers, testCase, target, startedAt, abortController.signal),
+        () => runBillableCaseAfterLoadingHandlers(loadRouteHandlersForBillable, testCase, target, startedAt, abortController.signal),
         testCase,
         target,
         startedAt,
         abortController
     );
+}
+
+async function runBillableCaseAfterLoadingHandlers(loadRouteHandlersForBillable, testCase, target, startedAt, signal) {
+    const routeHandlers = await loadRouteHandlersForBillable(testCase);
+    return runBillableCase(routeHandlers, testCase, target, startedAt, signal);
 }
 
 async function runBillableCase(routeHandlers, testCase, target, startedAt, signal) {
@@ -350,7 +366,7 @@ async function runBillableCase(routeHandlers, testCase, target, startedAt, signa
     }
 }
 
-function withCaseTimeout(promise, testCase, target, startedAt, abortController) {
+function withCaseTimeout(run, testCase, target, startedAt, abortController) {
     return new Promise((resolve, reject) => {
         let settled = false;
         const timeout = setTimeout(() => {
@@ -366,7 +382,7 @@ function withCaseTimeout(promise, testCase, target, startedAt, abortController) 
                 error: `real upstream smoke timed out after ${options.timeoutMs}ms`
             });
         }, options.timeoutMs);
-        promise.then(
+        run().then(
             (value) => {
                 if (settled) return;
                 settled = true;
@@ -780,9 +796,10 @@ function printUsage() {
   IMAGE_REAL_SMOKE_SUB2API_BASE_URL / IMAGE_REAL_SMOKE_SUB2API_API_KEY
   IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL / IMAGE_REAL_SMOKE_SUB2API_RESPONSES_API_KEY
   IMAGE_REAL_SMOKE_GPT2IMAGE_BASE_URL / IMAGE_REAL_SMOKE_GPT2IMAGE_API_KEY
+  IMAGE_REAL_SMOKE_MATSCA_BASE_URL / IMAGE_REAL_SMOKE_MATSCA_API_KEY
   IMAGE_REAL_SMOKE_SERVER_* 可覆盖当前服务端渠道的 MODEL / SIZE / QUALITY / RESPONSES_MODEL
 
-可选 --case：all、original-images-json、gaoren-images-sse、sub2api-images-sse、sub2api-responses-json、gpt2image-responses-sse。
+可选 --case：all、original-images-json、gaoren-images-sse、sub2api-images-sse、sub2api-responses-json、gpt2image-responses-sse、matsca-images-sse。
 添加 --include-server-channel 后还可运行：server-channel-images-json、server-channel-images-sse、server-channel-responses-sse、server-channel-responses-json、server-channel-agent-images-sse、server-channel-agent-responses-sse。
 默认只检查配置并跳过真实生图；必须加 --allow-billable 才会调用 /api/images 或 /api/agent/images/generate。
 可用 --env-file 指向独立真实上游凭据文件；shell 环境变量优先级高于 --env-file，--env-file 优先级高于 .env.local。

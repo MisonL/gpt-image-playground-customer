@@ -16,7 +16,8 @@ const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
         fallbackPrefix: 'IMAGE_REAL_SMOKE_SUB2API',
         requiresResponsesModel: true
     },
-    { id: 'gpt2image-responses-sse', prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE', requiresResponsesModel: true }
+    { id: 'gpt2image-responses-sse', prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE', requiresResponsesModel: true },
+    { id: 'matsca-images-sse', prefix: 'IMAGE_REAL_SMOKE_MATSCA' }
 ];
 const IMAGE_UPSTREAM_FINAL_GATE_COMMAND =
     'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable';
