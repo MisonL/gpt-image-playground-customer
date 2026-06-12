@@ -1509,7 +1509,7 @@ export function GenerationForm({
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='border-border bg-card/88 hidden border-t p-3 lg:flex lg:shrink-0'>
+                <CardFooter className='border-border bg-card/88 flex shrink-0 border-t p-3'>
                     <div className='w-full space-y-2'>
                         <div className='flex flex-wrap items-center gap-1.5 text-xs'>
                             <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
