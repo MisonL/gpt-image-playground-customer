@@ -15,9 +15,14 @@ import {
     DialogClose
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import { getModelRates, type GptImageModel } from '@/lib/cost-utils';
 import type { GenerationActivityItem } from '@/lib/generation-activity';
-import type { HistoryMetadata, ResultFeedbackValue } from '@/lib/history-metadata';
+import {
+    RESULT_FEEDBACK_NOTE_MAX_LENGTH,
+    type HistoryMetadata,
+    type ResultFeedbackValue
+} from '@/lib/history-metadata';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
@@ -51,7 +56,9 @@ type HistoryPanelProps = {
     onSaveInspiration: (prompt: string) => void;
     onSendHistoryToEdit: (item: HistoryMetadata) => void | Promise<void>;
     onMarkResultFeedback: (item: HistoryMetadata, value: ResultFeedbackValue) => void;
+    onUpdateResultFeedbackNote: (item: HistoryMetadata, note: string) => void;
     onDeleteInspiration: (id: number) => void;
+    onDownloadHistoryItem: (item: HistoryMetadata) => void;
     onClearHistory: () => void;
     getImageSrc: (filename: string) => string | undefined;
     onDeleteItemRequest: (item: HistoryMetadata) => void;
@@ -219,7 +226,9 @@ function HistoryPanelImpl({
     onSaveInspiration,
     onSendHistoryToEdit,
     onMarkResultFeedback,
+    onUpdateResultFeedbackNote,
     onDeleteInspiration,
+    onDownloadHistoryItem,
     onClearHistory,
     getImageSrc,
     onDeleteItemRequest,
@@ -547,6 +556,12 @@ function HistoryPanelImpl({
                             const itemKey = item.timestamp;
                             const hasPrompt = item.prompt.trim().length > 0;
                             const resultFeedback = item.resultFeedback;
+                            const resultFeedbackNote = resultFeedback?.note ?? '';
+                            const resultFeedbackLabel = resultFeedback
+                                ? resultFeedback.value === 'usable'
+                                    ? t('history.resultFeedbackUsable')
+                                    : t('history.resultFeedbackNeedsRevision')
+                                : t('history.resultFeedbackEmpty');
                             const originalStorageMode = item.storageModeUsed || 'fs';
                             const outputFormat = item.output_format || 'png';
                             const costBadge = getCostBadge(item, {
@@ -930,10 +945,8 @@ function HistoryPanelImpl({
                                                     </span>
                                                     <span className='text-muted-foreground text-[11px]'>
                                                         {resultFeedback
-                                                            ? resultFeedback.value === 'usable'
-                                                                ? t('history.resultFeedbackUsable')
-                                                                : t('history.resultFeedbackNeedsRevision')
-                                                            : t('history.resultFeedbackEmpty')}
+                                                            ? `${resultFeedbackLabel} ${formatStatusTime(resultFeedback.updatedAt)}`
+                                                            : resultFeedbackLabel}
                                                     </span>
                                                 </div>
                                                 <div className='grid grid-cols-2 gap-1'>
@@ -972,6 +985,26 @@ function HistoryPanelImpl({
                                                         </span>
                                                     </Button>
                                                 </div>
+                                                <label className='sr-only' htmlFor={`result-feedback-note-${itemKey}`}>
+                                                    {t('history.resultFeedbackNote')}
+                                                </label>
+                                                <Textarea
+                                                    id={`result-feedback-note-${itemKey}`}
+                                                    value={resultFeedbackNote}
+                                                    placeholder={
+                                                        resultFeedback
+                                                            ? t('history.resultFeedbackNotePlaceholder')
+                                                            : t('history.resultFeedbackNoteDisabled')
+                                                    }
+                                                    disabled={!resultFeedback}
+                                                    rows={2}
+                                                    maxLength={RESULT_FEEDBACK_NOTE_MAX_LENGTH}
+                                                    className='min-h-12 resize-none px-2 py-1.5 text-[11px] leading-4 shadow-none md:text-xs'
+                                                    onChange={(event) =>
+                                                        resultFeedback &&
+                                                        onUpdateResultFeedbackNote(item, event.currentTarget.value)
+                                                    }
+                                                />
                                             </div>
                                         )}
                                         <div className='mt-2 grid grid-cols-3 gap-1'>
@@ -1009,6 +1042,17 @@ function HistoryPanelImpl({
                                                 <span className='truncate'>{t('history.continueEdit')}</span>
                                             </Button>
                                         </div>
+                                        <Button
+                                            type='button'
+                                            variant='outline'
+                                            size='sm'
+                                            className='mt-1 min-h-11 w-full min-w-0 px-2 text-[11px] lg:h-7 lg:min-h-0 lg:px-1'
+                                            disabled={isFailedItem || imageCount === 0}
+                                            onClick={() => onDownloadHistoryItem(item)}
+                                            aria-label={t('history.downloadBatch')}>
+                                            <FileImage className='h-3.5 w-3.5' />
+                                            <span className='truncate'>{t('history.downloadBatch')}</span>
+                                        </Button>
                                         {isMultiImage && (
                                             <div className='mt-2 space-y-1.5'>
                                                 <Button
@@ -1280,6 +1324,29 @@ function HistoryPanelImpl({
                                                                 </dd>
                                                             </div>
                                                         </dl>
+                                                        {!isFailedItem && (
+                                                            <div>
+                                                                <p className='mb-1 text-sm font-medium'>
+                                                                    {t('history.resultFeedback')}
+                                                                </p>
+                                                                <div className='border-border bg-card/70 space-y-2 rounded-md border p-3 text-sm'>
+                                                                    <div className='flex items-center justify-between gap-3'>
+                                                                        <span className='text-muted-foreground'>
+                                                                            {resultFeedback
+                                                                                ? formatTimestamp(resultFeedback.updatedAt)
+                                                                                : t('history.resultFeedbackEmpty')}
+                                                                        </span>
+                                                                        <span className='text-foreground font-medium'>
+                                                                            {resultFeedbackLabel}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className='text-muted-foreground max-h-[120px] overflow-y-auto break-words whitespace-pre-wrap'>
+                                                                        {resultFeedbackNote ||
+                                                                            t('history.resultFeedbackNoteEmpty')}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                         <div>
                                                             <p className='mb-1 text-sm font-medium'>
                                                                 {t('history.prompt')}

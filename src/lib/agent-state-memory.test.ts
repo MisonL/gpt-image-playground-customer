@@ -1,6 +1,7 @@
 import { MemoryAgentStateStore } from './agent-state-memory';
 import type { AgentImageResponse } from './agent-api-contracts';
 import { hashAgentPayload, type AgentArtifactRecord } from './agent-state-store';
+import type { FeedbackRecord } from './feedback-store';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { access, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -137,6 +138,41 @@ describe('MemoryAgentStateStore', () => {
         );
     });
 
+    it('upserts and reads result feedback for page requests', async () => {
+        const store = new MemoryAgentStateStore();
+        await store.init();
+        const first: FeedbackRecord = {
+            targetType: 'page_request',
+            targetId: 'web-feedback-request',
+            value: 'usable',
+            note: 'first mark',
+            source: 'webui',
+            updatedAt: '2026-05-12T00:00:00.000Z'
+        };
+        const second: FeedbackRecord = {
+            ...first,
+            value: 'needs_revision',
+            note: 'needs copy changes',
+            updatedAt: '2026-05-12T00:01:00.000Z'
+        };
+
+        await store.upsertFeedbackBatch([first, second, { ...first, note: 'stale retry' }]);
+
+        assert.deepEqual(await store.readFeedback('page_request', 'web-feedback-request'), second);
+        assert.deepEqual(await store.listFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-feedback-request' }]), [
+            second
+        ]);
+        assert.equal(
+            await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-feedback-request' }], {
+                deletedAt: '2026-05-12T00:00:30.000Z'
+            }),
+            0
+        );
+        assert.deepEqual(await store.readFeedback('page_request', 'web-feedback-request'), second);
+        assert.equal(await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-feedback-request' }]), 1);
+        assert.equal(await store.readFeedback('page_request', 'web-feedback-request'), undefined);
+    });
+
     it('purges expired terminal requests and their artifact files', async () => {
         const store = new MemoryAgentStateStore();
         await store.init();
@@ -185,6 +221,82 @@ describe('MemoryAgentStateStore', () => {
         } finally {
             await rm(tempDir, { recursive: true, force: true });
         }
+    });
+
+    it('purges feedback rows for expired agent requests and artifacts', async () => {
+        const store = new MemoryAgentStateStore();
+        await store.init();
+        const requestJson = { prompt: 'memory feedback purge' };
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-memory-feedback-purge',
+            requestHash: hashAgentPayload(requestJson),
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 1,
+            now: new Date('2026-05-12T00:00:00.000Z')
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+        const artifact = buildArtifact({ id: 'artifact-memory-feedback-purge', requestId: begin.record.requestId });
+        await store.completeRequest({
+            requestId: begin.record.requestId,
+            response: {
+                request_id: begin.record.requestId,
+                idempotency_key: 'idem-memory-feedback-purge',
+                cached: false,
+                images: [],
+                created_at: '2026-05-12T00:00:00.500Z'
+            },
+            artifacts: [artifact],
+            now: new Date('2026-05-12T00:00:00.500Z')
+        });
+        await store.upsertFeedback({
+            targetType: 'agent_request',
+            targetId: begin.record.requestId,
+            value: 'usable',
+            source: 'agent',
+            updatedAt: '2026-05-12T00:00:00.600Z'
+        });
+        await store.upsertFeedback({
+            targetType: 'agent_artifact',
+            targetId: artifact.id,
+            value: 'needs_revision',
+            source: 'agent',
+            updatedAt: '2026-05-12T00:00:00.700Z'
+        });
+
+        assert.equal(await store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')), 1);
+        assert.equal(await store.readFeedback('agent_request', begin.record.requestId), undefined);
+        assert.equal(await store.readFeedback('agent_artifact', artifact.id), undefined);
+    });
+
+    it('deletes artifact feedback when deleting artifact metadata', async () => {
+        const store = new MemoryAgentStateStore();
+        await store.init();
+        const requestJson = { prompt: 'memory artifact feedback delete' };
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-memory-artifact-feedback-delete',
+            requestHash: hashAgentPayload(requestJson),
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+        const artifact = buildArtifact({ id: 'artifact-memory-feedback-delete', requestId: begin.record.requestId });
+        await store.saveArtifacts([artifact]);
+        await store.upsertFeedback({
+            targetType: 'agent_artifact',
+            targetId: artifact.id,
+            value: 'usable',
+            source: 'agent',
+            updatedAt: '2026-05-12T00:00:00.000Z'
+        });
+
+        assert.equal(await store.deleteArtifact(artifact.id), true);
+        assert.equal(await store.readFeedback('agent_artifact', artifact.id), undefined);
     });
 
     it('does not replace a different artifact row when filename collides', async () => {

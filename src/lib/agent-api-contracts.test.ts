@@ -1,8 +1,10 @@
 import {
+    AGENT_PAGE_REQUEST_DIAGNOSTICS_NO_MATCH_HINT,
     AGENT_SCHEMA_VERSION,
     PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH,
     buildAgentAuthCapabilities,
     buildAgentCapabilities,
+    buildPageRequestDiagnosticsCapabilities,
     readAgentLeaseMs,
     readAgentPublicBaseUrl,
     readAgentRecoveryIntervalMs,
@@ -15,6 +17,15 @@ import { RequestValidationError } from './image-request-utils';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+function restoreEnv(snapshot: NodeJS.ProcessEnv) {
+    for (const key of Object.keys(process.env)) {
+        if (!(key in snapshot)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(snapshot)) {
+        process.env[key] = value;
+    }
+}
+
 describe('validateAgentGenerateRequest', () => {
     it('accepts a minimal JSON generate request and applies Agent defaults', () => {
         assert.deepEqual(validateAgentGenerateRequest({ prompt: 'draw a stable test image' }), {
@@ -23,7 +34,8 @@ describe('validateAgentGenerateRequest', () => {
             n: 1,
             size: '1024x1024',
             quality: 'high',
-            output_format: 'png',
+            output_format: 'webp',
+            output_compression: 100,
             background: 'auto',
             moderation: 'auto',
             response_mode: 'path',
@@ -48,7 +60,8 @@ describe('validateAgentGenerateRequest', () => {
                 n: 1,
                 size: '1024x1024',
                 quality: 'high',
-                output_format: 'png',
+                output_format: 'webp',
+                output_compression: 100,
                 background: 'auto',
                 moderation: 'auto',
                 response_mode: 'path',
@@ -58,6 +71,60 @@ describe('validateAgentGenerateRequest', () => {
                 partial_images: 3
             }
         );
+    });
+
+    it('rejects Responses backend partial image counts outside the backend contract', () => {
+        assert.throws(
+            () =>
+                validateAgentGenerateRequest({
+                    prompt: 'draw a responses image',
+                    image_backend: 'responses-image-generation',
+                    partial_images: 0
+                }),
+            (error) => {
+                assert.ok(error instanceof RequestValidationError);
+                assert.equal(error.status, 422);
+                const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                assert.match(details.fields.partial_images, /1 到 3/);
+                return true;
+            }
+        );
+    });
+
+    it('uses deployed upstream profile limits when validating Agent partial image counts', () => {
+        const originalEnv = { ...process.env };
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://img.matsca.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'configured';
+            process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+            process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'configured';
+            process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'configured';
+
+            const imagesRequest = validateAgentGenerateRequest({
+                prompt: 'draw through matsca images api',
+                image_backend: 'images-api',
+                partial_images: 4
+            });
+            assert.equal(imagesRequest.partial_images, 4);
+            assert.throws(
+                () =>
+                    validateAgentGenerateRequest({
+                        prompt: 'draw through matsca responses',
+                        image_backend: 'responses-image-generation',
+                        partial_images: 4
+                    }),
+                (error) => {
+                    assert.ok(error instanceof RequestValidationError);
+                    assert.equal(error.status, 422);
+                    const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                    assert.match(details.fields.partial_images, /1 到 3/);
+                    return true;
+                }
+            );
+        } finally {
+            restoreEnv(originalEnv);
+        }
     });
 
     it('rejects non-string Agent upstream strategy fields instead of defaulting them', () => {
@@ -119,22 +186,51 @@ describe('validateAgentGenerateRequest', () => {
         );
     });
 
-    it('rejects transparent background for gpt-image-2', () => {
+    it('accepts Matsca-compatible gpt-image-2 fields before upstream execution', () => {
+        const originalEnv = { ...process.env };
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://img.matsca.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'configured';
+            process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+            const request = validateAgentGenerateRequest({
+                prompt: 'transparent object',
+                model: 'gpt-image-2',
+                size: '123x456',
+                background: 'transparent',
+                partial_images: 0
+            });
+
+            assert.equal(request.size, '123x456');
+            assert.equal(request.background, 'transparent');
+            assert.equal(request.partial_images, 0);
+        } finally {
+            restoreProcessEnv(originalEnv);
+        }
+    });
+
+    it('rejects OpenAI-compatible gpt-image-2 sizes that violate the active profile contract', () => {
         assert.throws(
             () =>
                 validateAgentGenerateRequest({
-                    prompt: 'transparent object',
+                    prompt: 'invalid official size',
                     model: 'gpt-image-2',
-                    background: 'transparent'
+                    size: '123x456'
                 }),
-            /transparent/
+            (error) => {
+                assert.ok(error instanceof RequestValidationError);
+                assert.equal(error.status, 422);
+                const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                assert.match(details.fields.size, /16/);
+                return true;
+            }
         );
     });
 
-    it('rejects gpt-image-2 sizes outside the image size contract', () => {
+    it('rejects gpt-image-2 sizes that are not positive integer dimensions', () => {
         for (const { size, pattern } of [
-            { size: '512x512', pattern: /至少/ },
-            { size: '3840x3840', pattern: /不能超过/ }
+            { size: '0x512', pattern: /正数/ },
+            { size: 'abc', pattern: /WIDTH|WxH|auto/ }
         ]) {
             assert.throws(
                 () =>
@@ -211,14 +307,73 @@ describe('buildAgentCapabilities', () => {
 
         assert.equal(capabilities.defaults.state_backend, 'postgres');
         assert.equal(capabilities.schema_version, AGENT_SCHEMA_VERSION);
+        assert.deepEqual(capabilities.image_transport, {
+            upstream_timeout_ms: 900_000,
+            stream_data_interval_timeout_ms: 900_000,
+            upstream_max_retries: 0
+        });
         assert.equal(capabilities.defaults.image_backend, 'images-api');
         assert.equal(capabilities.defaults.stream_mode, 'auto');
         assert.equal(capabilities.defaults.streaming_strategy, 'auto');
         assert.equal(capabilities.defaults.partial_images, 2);
+        assert.equal(capabilities.upstream_profile.activeProfile, 'openai-compatible');
+        assert.equal(capabilities.upstream_profile.serverProfile, 'openai-compatible');
+        assert.equal(capabilities.upstream_profile.serverProfileMixed, false);
+        assert.equal(capabilities.upstream_profile.requestProfile, 'openai-compatible');
+        assert.equal(capabilities.upstream_profile.activeConstraints.id, 'openai-compatible');
+        assert.deepEqual(capabilities.limits.partial_images, { min: 1, max: 3 });
+        assert.deepEqual(capabilities.limits.partial_images_by_backend, {
+            'images-api': { min: 1, max: 3 },
+            'responses-image-generation': { min: 1, max: 3 }
+        });
+        assert.equal(capabilities.limits.max_images, 10);
+        assert.deepEqual(capabilities.limits.generate_images, { min: 1, max: 10 });
+        assert.deepEqual(capabilities.limits.edit_images, { min: 1, max: 10 });
+        assert.equal(capabilities.limits.upload_images.max, 10);
+        assert.equal(capabilities.limits.max_upload_mb, 25);
+        assert.equal(capabilities.limits.upstream_profile, 'openai-compatible');
+        assert.equal(capabilities.limits.upstream_profile_mixed, false);
         assert.equal(capabilities.auth.required, true);
         assert.deepEqual(capabilities.auth.schemes, ['bearer']);
         assert.equal(capabilities.storage.postgres_configured, true);
         assert.equal('sqlite_path' in capabilities.storage, false);
+        assert.deepEqual(capabilities.page_request_diagnostics.endpoints, {
+            single: AGENT_ENDPOINTS.page_request_diagnostics,
+            batch: AGENT_ENDPOINTS.page_request_diagnostics_batch
+        });
+        assert.equal(capabilities.page_request_diagnostics.supported, true);
+        assert.equal(capabilities.page_request_diagnostics.source, 'app_log');
+        assert.equal(capabilities.page_request_diagnostics.retention.storage, 'bounded_local_jsonl');
+        assert.equal(capabilities.page_request_diagnostics.retention.max_entries, 300);
+        assert.equal(capabilities.page_request_diagnostics.retention.default_max_entries, 300);
+        assert.equal(capabilities.page_request_diagnostics.retention.min_entries, 100);
+        assert.equal(capabilities.page_request_diagnostics.retention.max_configured_entries, 5000);
+        assert.equal(capabilities.page_request_diagnostics.retention.configured_by, 'APP_LOG_MAX_ENTRIES');
+        assert.equal(capabilities.page_request_diagnostics.retention.persisted_across_process_restart, true);
+        assert.equal(capabilities.page_request_diagnostics.retention.bounded, true);
+        assert.equal(capabilities.page_request_diagnostics.retention.not_agent_state_backend, true);
+        assert.deepEqual(capabilities.page_request_diagnostics.retention.loss_modes, [
+            'entry_evicted_by_max_entries',
+            'log_level_filter',
+            'local_log_file_missing_or_cleared'
+        ]);
+        assert.equal(capabilities.page_request_diagnostics.no_match_hint, AGENT_PAGE_REQUEST_DIAGNOSTICS_NO_MATCH_HINT);
+        assert.equal(capabilities.agent_request_diagnostics.supported, true);
+        assert.equal(capabilities.agent_request_diagnostics.source, 'agent_state');
+        assert.deepEqual(capabilities.agent_request_diagnostics.endpoints, {
+            lookup: AGENT_ENDPOINTS.agent_request_diagnostics_lookup,
+            single: AGENT_ENDPOINTS.agent_request_diagnostics
+        });
+        assert.deepEqual(capabilities.agent_request_diagnostics.lookup, {
+            by_request_id: true,
+            by_idempotency_key: true
+        });
+        assert.deepEqual(capabilities.agent_request_diagnostics.retention, {
+            storage: 'agent_state',
+            ttl_seconds: 86400,
+            bounded: true,
+            loss_modes: ['request_expired_by_ttl', 'artifact_deleted_or_purged', 'state_backend_reset']
+        });
         assert.equal(capabilities.idempotency.header, 'Idempotency-Key');
         assert.ok(capabilities.supported.models.includes('gpt-image-2'));
         assert.equal(capabilities.model_limits['gpt-image-2'].max_edge, 3840);
@@ -226,6 +381,8 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.model_limits['gpt-image-2'].max_pixels, 8294400);
         assert.equal(capabilities.model_limits['gpt-image-2'].min_pixels, 655360);
         assert.equal(capabilities.model_limits['gpt-image-2'].max_aspect, 3);
+        assert.equal(capabilities.model_limits['gpt-image-2'].size_policy, 'openai-compatible');
+        assert.equal(capabilities.model_limits['gpt-image-2'].allow_transparent_background, false);
         assert.deepEqual(capabilities.model_limits['gpt-image-2'].large_image_risk.applies_to, [
             'max_edge>2048',
             'long_running_upstream'
@@ -284,6 +441,13 @@ describe('buildAgentCapabilities', () => {
             capabilities.agent_streaming.page_sse.agent_usage,
             'recommended_for_high_resolution_generate_edit_and_complex_batch'
         );
+        assert.deepEqual(capabilities.upstream_request_headers.default, {
+            user_agent_effective: 'gpt-image-playground/2.0.0',
+            has_extra_headers: false,
+            allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
+            configured_header_names: []
+        });
+        assert.deepEqual(capabilities.upstream_request_headers.channels, []);
         assert.deepEqual(capabilities.routing_rules.high_resolution_edit.when, ['operation=edit', 'max_edge>2048']);
         assert.deepEqual(capabilities.routing_rules.high_resolution_edit.conditions, {
             operation: 'edit',
@@ -357,6 +521,18 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.deepEqual(capabilities.supported.stream_modes, ['auto', 'stream', 'non_stream']);
         assert.equal(capabilities.endpoints.create_generate_job, AGENT_ENDPOINTS.create_generate_job);
+        assert.equal(capabilities.endpoints.page_request_feedback_batch, AGENT_ENDPOINTS.page_request_feedback_batch);
+        assert.equal(capabilities.endpoints.page_request_feedback, AGENT_ENDPOINTS.page_request_feedback);
+        assert.equal(
+            capabilities.endpoints.page_request_diagnostics_batch,
+            AGENT_ENDPOINTS.page_request_diagnostics_batch
+        );
+        assert.equal(capabilities.endpoints.page_request_diagnostics, AGENT_ENDPOINTS.page_request_diagnostics);
+        assert.equal(
+            capabilities.endpoints.agent_request_diagnostics_lookup,
+            AGENT_ENDPOINTS.agent_request_diagnostics_lookup
+        );
+        assert.equal(capabilities.endpoints.agent_request_diagnostics, AGENT_ENDPOINTS.agent_request_diagnostics);
         assert.equal(capabilities.agent_jobs.supported, true);
         assert.equal(capabilities.agent_jobs.mode, 'job_polling');
         assert.deepEqual(capabilities.agent_jobs.intended_for, [
@@ -369,6 +545,129 @@ describe('buildAgentCapabilities', () => {
         assert.match(capabilities.agent_jobs.current_guidance, /\/api\/images SSE/);
         assert.match(capabilities.agent_jobs.current_guidance, /不自动回退/);
         assert.match(capabilities.agent_jobs.current_guidance, /job/);
+    });
+
+    it('reports Matsca server-channel upload and image-count limits in Agent capabilities', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_CHANNEL_1_ID: 'matsca',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://img.matsca.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_UPSTREAM_PROFILE: 'matsca',
+            OPENAI_CHANNEL_1_MATSCA_APP_ID: 'configured',
+            OPENAI_CHANNEL_1_MATSCA_APP_SECRET: 'configured'
+        });
+
+        assert.equal(capabilities.upstream_profile.activeProfile, 'matsca');
+        assert.equal(capabilities.upstream_profile.serverProfile, 'matsca');
+        assert.equal(capabilities.upstream_profile.serverProfileMixed, false);
+        assert.equal(capabilities.upstream_profile.requestProfile, 'openai-compatible');
+        assert.equal(capabilities.upstream_profile.activeConstraints.id, 'matsca');
+        assert.equal(capabilities.limits.max_images, 4);
+        assert.deepEqual(capabilities.limits.generate_images, { min: 1, max: 4 });
+        assert.deepEqual(capabilities.limits.edit_images, { min: 1, max: 4 });
+        assert.equal(capabilities.limits.upload_images.max, 8);
+        assert.equal(capabilities.limits.max_upload_mb, 10);
+        assert.equal(capabilities.limits.max_total_upload_mb, 80);
+        assert.deepEqual(capabilities.limits.partial_images, { min: 0, max: 4 });
+        assert.deepEqual(capabilities.limits.partial_images_by_backend, {
+            'images-api': { min: 0, max: 4 },
+            'responses-image-generation': { min: 1, max: 3 }
+        });
+        assert.equal(capabilities.limits.upstream_profile, 'matsca');
+        assert.equal(capabilities.limits.upstream_profile_mixed, false);
+        assert.equal(capabilities.model_limits['gpt-image-2'].size_policy, 'positive-integer');
+        assert.equal(capabilities.model_limits['gpt-image-2'].allow_transparent_background, true);
+    });
+
+    it('reports provider manifest constraints in Agent capabilities', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_CHANNEL_1_ID: 'custom',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://custom.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'custom_provider',
+                base_profile: 'openai-compatible',
+                base_url: 'https://provider.internal.example/v1',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: {
+                    generate_count: { min: 1, max: 2 },
+                    edit_count: { min: 1, max: 1 },
+                    partial_images: { min: 1, max: 2 },
+                    upload: { max_images: 3, max_single_bytes: 10485760 }
+                }
+            })
+        });
+
+        assert.equal(capabilities.upstream_profile.activeConstraints.providerManifest?.id, 'custom_provider');
+        assert.equal(JSON.stringify(capabilities).includes('provider.internal.example'), false);
+        assert.deepEqual(capabilities.limits.generate_images, { min: 1, max: 2 });
+        assert.deepEqual(capabilities.limits.edit_images, { min: 1, max: 1 });
+        assert.equal(capabilities.limits.max_images, 1);
+        assert.equal(capabilities.limits.upload_images.max, 3);
+        assert.equal(capabilities.limits.max_upload_mb, 10);
+        assert.deepEqual(capabilities.limits.partial_images, { min: 1, max: 2 });
+    });
+
+    it('reports mixed Agent limits when only one OpenAI-compatible channel has provider constraints', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_CHANNEL_1_ID: 'custom',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://custom.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'custom_provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: {
+                    generate_count: { min: 1, max: 2 },
+                    upload: { max_images: 3, max_single_bytes: 10485760 }
+                }
+            }),
+            OPENAI_CHANNEL_2_ID: 'official',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://api.openai.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'configured',
+            OPENAI_CHANNEL_2_UPSTREAM_PROFILE: 'openai-compatible'
+        });
+
+        assert.equal(capabilities.upstream_profile.serverProfileMixed, true);
+        assert.equal(capabilities.limits.upstream_profile_mixed, true);
+        assert.deepEqual(capabilities.limits.generate_images, { min: 1, max: 2 });
+        assert.equal(capabilities.limits.upload_images.max, 3);
+        assert.equal(capabilities.limits.max_upload_mb, 10);
+    });
+
+    it('uses conservative Agent limits for mixed upstream profiles', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_CHANNEL_1_ID: 'matsca',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://img.matsca.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_UPSTREAM_PROFILE: 'matsca',
+            OPENAI_CHANNEL_1_MATSCA_APP_ID: 'configured',
+            OPENAI_CHANNEL_1_MATSCA_APP_SECRET: 'configured',
+            OPENAI_CHANNEL_2_ID: 'official',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://api.openai.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'configured',
+            OPENAI_CHANNEL_2_UPSTREAM_PROFILE: 'openai-compatible'
+        });
+
+        assert.equal(capabilities.upstream_profile.activeProfile, 'openai-compatible');
+        assert.equal(capabilities.upstream_profile.serverProfile, 'openai-compatible');
+        assert.equal(capabilities.upstream_profile.serverProfileMixed, true);
+        assert.equal(capabilities.upstream_profile.requestProfile, 'openai-compatible');
+        assert.equal(capabilities.upstream_profile.activeConstraints.generateCount.max, 4);
+        assert.equal(capabilities.upstream_profile.activeConstraints.upload.maxImages, 8);
+        assert.deepEqual(capabilities.limits.partial_images, { min: 1, max: 3 });
+        assert.deepEqual(capabilities.limits.partial_images_by_backend, {
+            'images-api': { min: 1, max: 3 },
+            'responses-image-generation': { min: 1, max: 3 }
+        });
+        assert.equal(capabilities.limits.max_images, 4);
+        assert.deepEqual(capabilities.limits.generate_images, { min: 1, max: 4 });
+        assert.deepEqual(capabilities.limits.edit_images, { min: 1, max: 4 });
+        assert.equal(capabilities.limits.upload_images.max, 8);
+        assert.equal(capabilities.limits.max_upload_mb, 10);
+        assert.equal(capabilities.limits.max_total_upload_mb, 80);
+        assert.equal(capabilities.limits.upstream_profile_mixed, true);
+        assert.equal(capabilities.model_limits['gpt-image-2'].allow_transparent_background, false);
     });
 
     it('exposes only the runtime-accepted bearer auth scheme when Agent token is configured', () => {
@@ -421,6 +720,21 @@ describe('buildAgentCapabilities', () => {
         });
     });
 
+    it('propagates the configured app log retention window into Agent diagnostics capabilities', () => {
+        assert.deepEqual(buildPageRequestDiagnosticsCapabilities({ APP_LOG_MAX_ENTRIES: '450' }).retention, {
+            storage: 'bounded_local_jsonl',
+            max_entries: 450,
+            default_max_entries: 300,
+            min_entries: 100,
+            max_configured_entries: 5000,
+            configured_by: 'APP_LOG_MAX_ENTRIES',
+            persisted_across_process_restart: true,
+            loss_modes: ['entry_evicted_by_max_entries', 'log_level_filter', 'local_log_file_missing_or_cleared'],
+            bounded: true,
+            not_agent_state_backend: true
+        });
+    });
+
     it('exposes access-code hash auth only when no Agent token is configured', () => {
         assert.deepEqual(buildAgentAuthCapabilities({ APP_PASSWORD: 'page-access-code' }), {
             required: true,
@@ -457,18 +771,45 @@ describe('buildAgentCapabilities', () => {
         assert.ok(AGENT_ENDPOINTS.create_generate_job in document.paths);
         assert.ok(AGENT_ENDPOINTS.job in document.paths);
         assert.ok(AGENT_ENDPOINTS.job_result in document.paths);
+        assert.ok(AGENT_ENDPOINTS.page_request_feedback_batch in document.paths);
+        assert.ok(AGENT_ENDPOINTS.page_request_feedback in document.paths);
+        assert.ok(AGENT_ENDPOINTS.page_request_diagnostics_batch in document.paths);
+        assert.ok(AGENT_ENDPOINTS.page_request_diagnostics in document.paths);
+        assert.ok(AGENT_ENDPOINTS.agent_request_diagnostics_lookup in document.paths);
+        assert.ok(AGENT_ENDPOINTS.agent_request_diagnostics in document.paths);
         assert.ok('AgentCapabilities' in document.components.schemas);
         assert.ok('AgentImageResponse' in document.components.schemas);
         assert.ok('AgentJobStatusResponse' in document.components.schemas);
         assert.ok('AgentArtifact' in document.components.schemas);
+        assert.ok('ResultFeedback' in document.components.schemas);
+        assert.ok('FeedbackTarget' in document.components.schemas);
+        assert.ok('PageRequestFeedbackBatchRequest' in document.components.schemas);
+        assert.ok('PageRequestFeedbackBatchResponse' in document.components.schemas);
+        assert.ok('PageRequestFeedbackResponse' in document.components.schemas);
+        assert.ok('PageRequestDiagnosticsBatchRequest' in document.components.schemas);
+        assert.ok('PageRequestDiagnosticsBatchItem' in document.components.schemas);
+        assert.ok('PageRequestDiagnosticsBatchResponse' in document.components.schemas);
+        assert.ok('PageRequestDiagnosticsResponse' in document.components.schemas);
+        assert.ok('PageRequestDiagnosticsNote' in document.components.schemas);
+        assert.ok('PageRequestDiagnosticContext' in document.components.schemas);
         assert.ok('EditRequest' in document.components.schemas);
         assert.ok('AgentError' in document.components.schemas);
         assert.ok('AgentModelLimits' in document.components.schemas);
+        assert.ok('ImageUpstreamProfile' in document.components.schemas);
         assert.ok('AgentStreamingCapabilities' in document.components.schemas);
+        assert.ok('AgentPageRequestDiagnosticsCapabilities' in document.components.schemas);
+        assert.ok('AppLogRetentionMetadata' in document.components.schemas);
         assert.ok('AgentJobCapabilities' in document.components.schemas);
         assert.ok('AgentRoutingRules' in document.components.schemas);
         assert.ok('AgentRoutingRule' in document.components.schemas);
         assert.ok('AgentErrorDiagnostics' in document.components.schemas);
+        assert.ok('AgentImageResponseTiming' in document.components.schemas);
+        assert.ok('AgentImageResponseExecution' in document.components.schemas);
+        assert.ok('UpstreamRequestHeaderSummary' in document.components.schemas);
+        assert.ok('AgentRequestDiagnosticsCapabilities' in document.components.schemas);
+        assert.ok('AgentRequestDiagnosticsRetention' in document.components.schemas);
+        assert.ok('AgentRequestDiagnosticsLookupResponse' in document.components.schemas);
+        assert.ok('AgentRequestDiagnostics' in document.components.schemas);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['403']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['429']);
@@ -479,6 +820,14 @@ describe('buildAgentCapabilities', () => {
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['422']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['429']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['502']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.page_request_feedback_batch].post.responses['200']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.page_request_feedback].get.responses['200']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.page_request_diagnostics_batch].post.responses['200']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.page_request_diagnostics].get.responses['200']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.agent_request_diagnostics_lookup].get.responses['200']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.agent_request_diagnostics_lookup].get.responses['404']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.agent_request_diagnostics].get.responses['200']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.agent_request_diagnostics].get.responses['404']);
         const generateProperties = document.components.schemas.GenerateRequest.properties;
         assert.deepEqual(generateProperties.image_backend.enum, ['images-api', 'responses-image-generation']);
         assert.deepEqual(generateProperties.streaming_strategy.enum, [
@@ -490,13 +839,23 @@ describe('buildAgentCapabilities', () => {
             'force-sse'
         ]);
         assert.deepEqual(generateProperties.stream_mode.enum, ['auto', 'stream', 'non_stream']);
-        assert.ok('partial_images' in generateProperties);
+        assert.deepEqual(generateProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
+        assert.deepEqual(generateProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
+        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.partial_images, {
+            type: 'integer',
+            minimum: 1,
+            maximum: 3,
+            default: 2
+        });
+        assert.deepEqual(generateProperties.background.enum, ['opaque', 'auto']);
         const editProperties: Record<string, unknown> = document.components.schemas.EditRequest.properties;
         assert.equal('image_backend' in editProperties, false);
         assert.equal('output_format' in editProperties, false);
         assert.equal('output_compression' in editProperties, false);
         assert.equal('background' in editProperties, false);
         assert.equal('moderation' in editProperties, false);
+        assert.deepEqual(editProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
+        assert.deepEqual(editProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
         assert.deepEqual(document.components.schemas.EditRequest.required, ['prompt']);
         assert.match(document.components.schemas.EditRequest.description, /至少提供一个 image_0\.\.image_9/);
         assert.deepEqual(
@@ -508,6 +867,90 @@ describe('buildAgentCapabilities', () => {
         }
         const capabilityProperties = document.components.schemas.AgentCapabilities.properties;
         assert.equal(capabilityProperties.routing_rules.$ref, '#/components/schemas/AgentRoutingRules');
+        assert.equal(capabilityProperties.image_transport.$ref, '#/components/schemas/ImageTransportCapabilities');
+        assert.equal(
+            document.components.schemas.ImageTransportCapabilities.properties.upstream_timeout_ms.const,
+            900000
+        );
+        assert.equal(
+            capabilityProperties.upstream_request_headers.properties.default.$ref,
+            '#/components/schemas/UpstreamRequestHeaderSummary'
+        );
+        assert.equal(capabilityProperties.upstream_profile.properties.serverProfile.const, 'openai-compatible');
+        assert.equal(
+            capabilityProperties.upstream_profile.properties.activeConstraints.$ref,
+            '#/components/schemas/ImageUpstreamProfile'
+        );
+        assert.equal(capabilityProperties.limits.properties.partial_images.properties.min.const, 1);
+        assert.equal(capabilityProperties.limits.properties.partial_images.properties.max.const, 3);
+        assert.equal(
+            capabilityProperties.limits.properties.partial_images_by_backend.properties['responses-image-generation']
+                .properties.max.const,
+            3
+        );
+        assert.equal(
+            capabilityProperties.page_request_diagnostics.$ref,
+            '#/components/schemas/AgentPageRequestDiagnosticsCapabilities'
+        );
+        assert.equal(
+            document.components.schemas.AgentPageRequestDiagnosticsCapabilities.properties.retention.$ref,
+            '#/components/schemas/AppLogRetentionMetadata'
+        );
+        assert.equal(
+            document.components.schemas.AgentPageRequestDiagnosticsCapabilities.properties.endpoints.properties.single
+                .const,
+            AGENT_ENDPOINTS.page_request_diagnostics
+        );
+        assert.equal(
+            document.components.schemas.AgentPageRequestDiagnosticsCapabilities.properties.endpoints.properties.batch
+                .const,
+            AGENT_ENDPOINTS.page_request_diagnostics_batch
+        );
+        assert.equal(document.components.schemas.AppLogRetentionMetadata.properties.max_entries.const, 300);
+        assert.equal(
+            document.components.schemas.AppLogRetentionMetadata.properties.configured_by.const,
+            'APP_LOG_MAX_ENTRIES'
+        );
+        assert.deepEqual(document.components.schemas.AppLogRetentionMetadata.properties.loss_modes.const, [
+            'entry_evicted_by_max_entries',
+            'log_level_filter',
+            'local_log_file_missing_or_cleared'
+        ]);
+        assert.equal(
+            document.components.schemas.PageRequestDiagnosticsResponse.required.includes('diagnostics_retention'),
+            true
+        );
+        assert.equal(
+            document.components.schemas.PageRequestDiagnosticsResponse.properties.diagnostics_retention.$ref,
+            '#/components/schemas/AppLogRetentionMetadata'
+        );
+        assert.equal(
+            document.components.schemas.PageRequestDiagnosticsResponse.properties.diagnostics_note.$ref,
+            '#/components/schemas/PageRequestDiagnosticsNote'
+        );
+        assert.equal(
+            document.components.schemas.PageRequestDiagnosticsBatchResponse.required.includes('diagnostics_retention'),
+            true
+        );
+        assert.equal(
+            document.components.schemas.PageRequestDiagnosticsBatchResponse.properties.diagnostics_retention.$ref,
+            '#/components/schemas/AppLogRetentionMetadata'
+        );
+        assert.equal(
+            document.components.schemas.PageRequestDiagnosticsNote.properties.retention.$ref,
+            '#/components/schemas/AppLogRetentionMetadata'
+        );
+        assert.equal(
+            document.components.schemas.PageRequestDiagnosticEvent.properties.diagnostics.$ref,
+            '#/components/schemas/PageRequestDiagnosticContext'
+        );
+        assert.equal(document.components.schemas.PageRequestDiagnosticContext.additionalProperties, false);
+        assert.deepEqual(document.components.schemas.PageRequestDiagnosticContext.properties.transport_error, {
+            type: 'boolean'
+        });
+        assert.deepEqual(document.components.schemas.PageRequestDiagnosticContext.properties.partial_images, {
+            type: 'number'
+        });
         const routingRuleProperties = document.components.schemas.AgentRoutingRule.properties;
         assert.equal(routingRuleProperties.conditions.$ref, '#/components/schemas/AgentRoutingCondition');
         assert.equal(routingRuleProperties.action.$ref, '#/components/schemas/AgentRoutingAction');
@@ -602,6 +1045,41 @@ describe('buildAgentCapabilities', () => {
         assert.match(document.components.schemas.EditRequest.description, /\/api\/images/);
         assert.ok('upstream_event_type' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('partial_image_count' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.ok('transport_error_kind' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.ok('retry_after_ms' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.ok('cooldown_until' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.ok('cooldown_target' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.equal(document.components.schemas.ResultFeedback.properties.note.maxLength, 500);
+    });
+
+    it('describes Matsca server-channel limits in OpenAPI request schemas', () => {
+        const document = buildAgentOpenApiDocument({
+            OPENAI_CHANNEL_1_ID: 'matsca',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://img.matsca.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_UPSTREAM_PROFILE: 'matsca',
+            OPENAI_CHANNEL_1_MATSCA_APP_ID: 'configured',
+            OPENAI_CHANNEL_1_MATSCA_APP_SECRET: 'configured'
+        });
+
+        assert.equal(document.components.schemas.GenerateRequest.properties.n.maximum, 4);
+        assert.equal(document.components.schemas.EditRequest.properties.n.maximum, 4);
+        assert.equal(document.components.schemas.GenerateRequest.properties.partial_images.minimum, 0);
+        assert.equal(document.components.schemas.GenerateRequest.properties.partial_images.maximum, 4);
+        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.partial_images, {
+            type: 'integer',
+            minimum: 1,
+            maximum: 3,
+            default: 2
+        });
+        assert.equal(document.components.schemas.EditRequest.properties.partial_images.minimum, 0);
+        assert.equal(document.components.schemas.EditRequest.properties.partial_images.maximum, 4);
+        assert.match(document.components.schemas.EditRequest.description, /image_0\.\.image_7/);
+        assert.deepEqual(
+            document.components.schemas.EditRequest.anyOf,
+            Array.from({ length: 8 }, (_, index) => ({ required: [`image_${index}`] }))
+        );
+        assert.equal('image_8' in document.components.schemas.EditRequest.properties, false);
     });
 
     it('describes public capabilities without server-local SQLite paths', () => {
@@ -680,6 +1158,10 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}'].get.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}'].delete.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}/content'].get.security, expectedSecurity);
+        assert.deepEqual(document.paths['/api/agent/page-requests/{id}/feedback'].get.security, expectedSecurity);
+        assert.deepEqual(document.paths['/api/agent/diagnostics/requests'].get.security, expectedSecurity);
+        assert.deepEqual(document.paths['/api/agent/diagnostics/requests/{id}'].get.security, expectedSecurity);
+        assert.deepEqual(document.paths['/api/agent/diagnostics/page-requests/{id}'].get.security, expectedSecurity);
     });
 
     it('describes artifact metadata responses without server file paths', () => {
@@ -697,3 +1179,14 @@ describe('buildAgentCapabilities', () => {
         assert.ok('size_bytes' in schema.properties);
     });
 });
+
+function restoreProcessEnv(snapshot: NodeJS.ProcessEnv): void {
+    for (const key of Object.keys(process.env)) {
+        if (!(key in snapshot)) {
+            delete process.env[key];
+        }
+    }
+    for (const [key, value] of Object.entries(snapshot)) {
+        process.env[key] = value;
+    }
+}

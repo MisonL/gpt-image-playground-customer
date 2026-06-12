@@ -29,6 +29,31 @@ import {
 } from '@/lib/generation-activity';
 import { resolveHistoryCompareImage } from '@/lib/history-compare';
 import {
+    buildHistoryFeedbackDeletePayload,
+    buildHistoryFeedbackDeleteTargets,
+    buildHistoryFeedbackSyncPayload,
+    buildHistoryFeedbackSyncInputs,
+    parseHistoryFeedbackDeleteQueue,
+    parseHistoryFeedbackSyncQueue,
+    pruneHistoryFeedbackDeleteQueueForSyncQueue,
+    removeHistoryFeedbackDeleteQueuePayload,
+    removeHistoryFeedbackDeleteQueueTargets,
+    removeHistoryFeedbackSyncQueueItem,
+    removeHistoryFeedbackSyncQueueTargets,
+    removeHistoryFeedbackSyncQueueTargetsForDelete,
+    serializeHistoryFeedbackDeleteQueue,
+    serializeHistoryFeedbackSyncQueue,
+    shouldFeedbackDeleteClearSync,
+    shouldFeedbackSyncClearDelete,
+    shouldReplaceHistoryFeedbackDeletePayload,
+    upsertHistoryFeedbackDeleteQueue,
+    upsertHistoryFeedbackSyncQueue,
+    type HistoryFeedbackDeletePayload,
+    type HistoryFeedbackTarget,
+    type HistoryFeedbackSyncInput,
+    type HistoryFeedbackSyncPayload
+} from '@/lib/history-feedback-sync';
+import {
     buildCompletedHistoryEntry,
     buildFailedHistoryEntry,
     buildHistoryGenerationFormData,
@@ -53,12 +78,21 @@ import {
     type ImageUpstreamFormBackend
 } from '@/lib/image-upstream-form';
 import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import {
+    IMAGE_UPSTREAM_PROFILES,
+    summarizeImageUpstreamProfile,
+    type ImageUpstreamProfile,
+    type ImageUpstreamProfileId,
+    type PartialImagesCount
+} from '@/lib/image-upstream-profile';
 import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
 import { resolveMobilePrimaryDisabledReason } from '@/lib/mobile-primary-action-state';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
 import { sha256Hex } from '@/lib/sha256';
 import { createImageShareFromBlob } from '@/lib/share-client';
-import { getPresetDimensions, validateGptImage2Size } from '@/lib/size-utils';
+import { createZipBlob } from '@/lib/zip-export';
+import { hasReachedEditSourceImageLimit } from '@/lib/edit-source-limits';
+import { getPresetDimensions, validateGptImage2Size, validatePositiveIntegerImageSize } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
     BatchPausedError,
@@ -91,18 +125,67 @@ type MobileDrawerPointerStart = {
     y: number;
 };
 
-const MAX_EDIT_IMAGES = 10;
 const apiSettingsLocalStorageKey = 'openaiImageApiSettings';
 const inspirationsLocalStorageKey = 'openaiImageInspirations';
+const resultFeedbackSyncQueueLocalStorageKey = 'openaiImageResultFeedbackSyncQueue';
+const resultFeedbackDeleteQueueLocalStorageKey = 'openaiImageResultFeedbackDeleteQueue';
 const emptyApiSettings: ApiSettings = { apiKey: '', baseUrl: '' };
 const sseEventDelimiterPattern = /\r?\n\r?\n/;
-type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, 1 | 2 | 3, boolean];
+const feedbackApiTargetBatchSize = 20;
+const resultFeedbackSyncQueueMaxItems = 100;
+const resultFeedbackDeleteQueueMaxItems = 100;
+const completedResultFeedbackSyncKeyMaxItems = 1000;
+const resultFeedbackSyncMaxAttempts = 3;
+const resultFeedbackSyncRetryDelaysMs = [1000, 3000] as const;
+const resultFeedbackDeleteMaxAttempts = 3;
+const resultFeedbackDeleteRetryDelaysMs = [1000, 3000] as const;
+const resultFeedbackRequestTimeoutMs = 10_000;
+
+type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, PartialImagesCount, boolean];
 type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
+type FeedbackSyncInput = HistoryFeedbackSyncInput;
+type FeedbackSyncPayload = HistoryFeedbackSyncPayload;
+type FeedbackSyncScheduleOptions = {
+    pruneQueuedTargets?: boolean;
+};
+
+function createFeedbackRequestSignal(signal: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), resultFeedbackRequestTimeoutMs);
+    const abortFromCaller = () => controller.abort();
+    if (signal.aborted) {
+        abortFromCaller();
+    } else {
+        signal.addEventListener('abort', abortFromCaller, { once: true });
+    }
+    return {
+        signal: controller.signal,
+        cleanup: () => {
+            window.clearTimeout(timeoutId);
+            signal.removeEventListener('abort', abortFromCaller);
+        }
+    };
+}
 
 function getImageBackendLabel(backend: ImageUpstreamFormBackend, t: (key: string) => string): string {
     if (backend === 'images-api') return t('upstream.backendImages');
     if (backend === 'responses-image-generation') return t('upstream.backendResponses');
     return t('upstream.workbenchDefaultRoute');
+}
+
+function haveHistoryFeedbackTargetOverlap(left: HistoryFeedbackTarget[], right: HistoryFeedbackTarget[]): boolean {
+    const rightIds = new Set(right.map((target) => target.id));
+    return left.some((target) => rightIds.has(target.id));
+}
+
+function rememberCompletedResultFeedbackSyncKey(keys: Set<string>, key: string): void {
+    keys.delete(key);
+    keys.add(key);
+    while (keys.size > completedResultFeedbackSyncKeyMaxItems) {
+        const oldestKey = keys.values().next().value;
+        if (typeof oldestKey !== 'string') return;
+        keys.delete(oldestKey);
+    }
 }
 
 function createClientRequestId(): string {
@@ -257,6 +340,13 @@ type RuntimeCapabilities = {
         hasDefaultModel?: boolean;
         missingEnv?: string[];
     };
+    upstreamProfile?: {
+        activeProfile: ImageUpstreamProfileId;
+        serverProfile: ImageUpstreamProfileId;
+        serverProfileMixed: boolean;
+        requestProfile: ImageUpstreamProfileId;
+        activeConstraints?: ImageUpstreamProfile;
+    };
 };
 
 class ApiRequestError extends Error {
@@ -382,6 +472,18 @@ export default function HomePage() {
     const [history, setHistory] = React.useState<HistoryMetadata[]>([]);
     const [inspirations, setInspirations] = React.useState<InspirationItem[]>([]);
     const hasLoadedStoredHistoryRef = React.useRef(false);
+    const hasProcessedQueuedResultFeedbackDeletesRef = React.useRef(false);
+    const hasProcessedQueuedResultFeedbackSyncsRef = React.useRef(false);
+    const scheduledResultFeedbackSyncKeysRef = React.useRef<Set<string>>(new Set());
+    const scheduledResultFeedbackSyncPayloadsRef = React.useRef<Map<string, FeedbackSyncPayload>>(new Map());
+    const completedResultFeedbackSyncKeysRef = React.useRef<Set<string>>(new Set());
+    const scheduledResultFeedbackDeleteKeysRef = React.useRef<Set<string>>(new Set());
+    const scheduledResultFeedbackDeletePayloadsRef = React.useRef<Map<string, HistoryFeedbackDeletePayload>>(new Map());
+    const scheduleResultFeedbackDeletePayloadRef =
+        React.useRef<((payload: HistoryFeedbackDeletePayload) => void) | null>(null);
+    const resultFeedbackRetryTimersRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+    const resultFeedbackSyncAbortControllersRef = React.useRef<Map<string, AbortController>>(new Map());
+    const resultFeedbackDeleteAbortControllersRef = React.useRef<Map<string, AbortController>>(new Map());
     const blobUrlCacheRef = React.useRef<Map<string, string>>(new Map());
     const [isPasswordDialogOpen, setIsPasswordDialogOpen] = React.useState(false);
     const [isApiSettingsDialogOpen, setIsApiSettingsDialogOpen] = React.useState(false);
@@ -427,7 +529,7 @@ export default function HomePage() {
     const [editCustomWidth, setEditCustomWidth] = React.useState<number>(1024);
     const [editCustomHeight, setEditCustomHeight] = React.useState<number>(1024);
     const [editQuality, setEditQuality] = React.useState<EditingFormData['quality']>('auto');
-    const [editOutputFormat, setEditOutputFormat] = React.useState<EditingFormData['output_format']>('png');
+    const [editOutputFormat, setEditOutputFormat] = React.useState<EditingFormData['output_format']>('webp');
     const [editCompression, setEditCompression] = React.useState([100]);
     const [editModeration, setEditModeration] = React.useState<EditingFormData['moderation']>('auto');
     const [editBrushSize, setEditBrushSize] = React.useState([20]);
@@ -462,7 +564,7 @@ export default function HomePage() {
     const [genCustomWidth, setGenCustomWidth] = React.useState<number>(1024);
     const [genCustomHeight, setGenCustomHeight] = React.useState<number>(1024);
     const [genQuality, setGenQuality] = React.useState<GenerationFormData['quality']>('high');
-    const [genOutputFormat, setGenOutputFormat] = React.useState<GenerationFormData['output_format']>('png');
+    const [genOutputFormat, setGenOutputFormat] = React.useState<GenerationFormData['output_format']>('webp');
     const [genCompression, setGenCompression] = React.useState([100]);
     const [genBackground, setGenBackground] = React.useState<GenerationFormData['background']>('auto');
     const [genModeration, setGenModeration] = React.useState<GenerationFormData['moderation']>('auto');
@@ -485,7 +587,7 @@ export default function HomePage() {
 
     // 流式状态，由生成和编辑模式共用。
     const [streamMode, setStreamMode] = React.useState<ImageStreamMode>('auto');
-    const [partialImages, setPartialImages] = React.useState<1 | 2 | 3>(1);
+    const [partialImages, setPartialImages] = React.useState<PartialImagesCount>(1);
     const [enableParallelBatch, setEnableParallelBatch] = React.useState(false);
     const [activeRequestStreaming, setActiveRequestStreaming] = React.useState(false);
     // 流式预览图，存储流式过程中的局部图片 base64 data URL。
@@ -494,6 +596,16 @@ export default function HomePage() {
     const [isBatchPauseRequested, setIsBatchPauseRequested] = React.useState(false);
     const batchPauseRequestedRef = React.useRef(false);
     const defaultStreamingStrategy = runtimeCapabilities?.streaming?.defaultStrategy ?? 'auto';
+    const activeUpstreamProfileSummary = summarizeImageUpstreamProfile({
+        requestApiBaseUrl: apiSettings.baseUrl,
+        serverProfileIds: runtimeCapabilities?.upstreamProfile ? [runtimeCapabilities.upstreamProfile.serverProfile] : []
+    });
+    const hasRequestApiBaseUrl = apiSettings.baseUrl.trim().length > 0;
+    const activeUpstreamProfile = hasRequestApiBaseUrl
+        ? activeUpstreamProfileSummary.activeConstraints
+        : runtimeCapabilities?.upstreamProfile?.activeConstraints || IMAGE_UPSTREAM_PROFILES['openai-compatible'];
+    const activeUpstreamProfileMixed =
+        !hasRequestApiBaseUrl && runtimeCapabilities?.upstreamProfile?.serverProfileMixed === true;
     const allowResponsesImageBackend = isResponsesImageBackendRuntimeEnabled(runtimeCapabilities ?? {});
     const allowResponsesHistoryRoute = shouldAllowResponsesHistoryRoute({
         runtimeCapabilitiesAvailable: runtimeCapabilities !== null,
@@ -515,10 +627,20 @@ export default function HomePage() {
               ? genPrompt
               : editPrompt;
     const hasEditSourceImage = editImageFiles.length > 0;
+    const maxEditSourceImages = activeUpstreamProfile.upload.maxImages;
+    const usesPositiveIntegerCustomSize = activeUpstreamProfile.gptImage2.sizePolicy === 'positive-integer';
     const currentGenerateSizeValidation =
-        genSize === 'custom' ? validateGptImage2Size(genCustomWidth, genCustomHeight) : { valid: true as const };
+        genSize === 'custom'
+            ? usesPositiveIntegerCustomSize
+                ? validatePositiveIntegerImageSize(genCustomWidth, genCustomHeight)
+                : validateGptImage2Size(genCustomWidth, genCustomHeight)
+            : { valid: true as const };
     const currentEditSizeValidation =
-        editSize === 'custom' ? validateGptImage2Size(editCustomWidth, editCustomHeight) : { valid: true as const };
+        editSize === 'custom'
+            ? usesPositiveIntegerCustomSize
+                ? validatePositiveIntegerImageSize(editCustomWidth, editCustomHeight)
+                : validateGptImage2Size(editCustomWidth, editCustomHeight)
+            : { valid: true as const };
     const canOpenLogs = isPasswordRequiredByBackend === true && !!clientPasswordHash;
     const usesEditControls = workbenchMode === 'edit';
     const activeWorkbenchModel = usesEditControls ? editModel : genModel;
@@ -581,6 +703,50 @@ export default function HomePage() {
             cancelled = true;
         };
     }, [allowResponsesImageBackend, runtimeCapabilities]);
+
+    React.useEffect(() => {
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (cancelled) return;
+            if (
+                partialImages < activeUpstreamProfile.partialImages.min ||
+                partialImages > activeUpstreamProfile.partialImages.max
+            ) {
+                setPartialImages(
+                    Math.min(
+                        activeUpstreamProfile.partialImages.max,
+                        Math.max(activeUpstreamProfile.partialImages.min, partialImages)
+                    ) as PartialImagesCount
+                );
+            }
+            if (genBackground === 'transparent' && !activeUpstreamProfile.gptImage2.allowTransparentBackground) {
+                setGenBackground('auto');
+            }
+            setGenN((current) =>
+                current[0] < activeUpstreamProfile.generateCount.min || current[0] > activeUpstreamProfile.generateCount.max
+                    ? [
+                          Math.min(
+                              activeUpstreamProfile.generateCount.max,
+                              Math.max(activeUpstreamProfile.generateCount.min, current[0])
+                          )
+                      ]
+                    : current
+            );
+            setEditN((current) =>
+                current[0] < activeUpstreamProfile.editCount.min || current[0] > activeUpstreamProfile.editCount.max
+                    ? [
+                          Math.min(
+                              activeUpstreamProfile.editCount.max,
+                              Math.max(activeUpstreamProfile.editCount.min, current[0])
+                          )
+                      ]
+                    : current
+            );
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [activeUpstreamProfile, editN, genBackground, genN, partialImages]);
     const activeLogClientRequestIds = React.useMemo(() => {
         if (!latestImageBatch || latestImageBatch.length === 0) return [];
         if (typeof imageOutputView === 'number') {
@@ -1027,8 +1193,13 @@ export default function HomePage() {
                 return;
             }
 
-            if (editImageFiles.length >= MAX_EDIT_IMAGES) {
-                alert(t('alert.pasteMaxImages', { count: MAX_EDIT_IMAGES }));
+            if (
+                hasReachedEditSourceImageLimit({
+                    currentCount: editImageFiles.length,
+                    maxImages: maxEditSourceImages
+                })
+            ) {
+                alert(t('alert.pasteMaxImages', { count: maxEditSourceImages }));
                 return;
             }
 
@@ -1055,7 +1226,7 @@ export default function HomePage() {
         return () => {
             window.removeEventListener('paste', handlePaste);
         };
-    }, [mode, editImageFiles.length, t, updateEditSourceImagePreviewUrls]);
+    }, [mode, editImageFiles.length, maxEditSourceImages, t, updateEditSourceImagePreviewUrls]);
 
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
@@ -1208,7 +1379,7 @@ export default function HomePage() {
             options: {
                 forceSingleImage?: boolean;
                 streamMode: ImageStreamMode;
-                partialImages: 1 | 2 | 3;
+                partialImages: PartialImagesCount;
                 passwordHash?: string | null;
             }
         ) => {
@@ -1310,7 +1481,7 @@ export default function HomePage() {
                 retryFormData?: GenerationFormData | EditingFormData;
                 retryMode?: RequestMode;
                 retryStreamMode?: ImageStreamMode;
-                retryPartialImages?: 1 | 2 | 3;
+                retryPartialImages?: PartialImagesCount;
                 retryEnableParallelBatch?: boolean;
             } = {}
         ): Promise<{ images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails }> => {
@@ -1450,7 +1621,7 @@ export default function HomePage() {
         formData: GenerationFormData | EditingFormData,
         requestMode: RequestMode = mode,
         requestStreamMode: ImageStreamMode = streamMode,
-        requestPartialImages: 1 | 2 | 3 = partialImages,
+        requestPartialImages: PartialImagesCount = partialImages,
         requestEnableParallelBatch = formData.enableParallelBatch,
         requestPasswordHash: string | null = clientPasswordHash
     ) {
@@ -2107,20 +2278,529 @@ export default function HomePage() {
         });
     }, []);
 
-    const handleMarkResultFeedback = React.useCallback((item: HistoryMetadata, value: ResultFeedbackValue) => {
+    const readQueuedResultFeedbackSyncs = React.useCallback((): FeedbackSyncPayload[] => {
+        try {
+            return parseHistoryFeedbackSyncQueue(readLocalStorageValue(resultFeedbackSyncQueueLocalStorageKey));
+        } catch (error) {
+            console.error('读取结果反馈补偿队列失败。', error);
+            return [];
+        }
+    }, []);
+
+    const writeQueuedResultFeedbackSyncs = React.useCallback((queue: FeedbackSyncPayload[]) => {
+        try {
+            if (queue.length === 0) {
+                window.localStorage.removeItem(resultFeedbackSyncQueueLocalStorageKey);
+                return;
+            }
+            window.localStorage.setItem(resultFeedbackSyncQueueLocalStorageKey, serializeHistoryFeedbackSyncQueue(queue));
+        } catch (error) {
+            console.error('写入结果反馈补偿队列失败。', error);
+        }
+    }, []);
+
+    const upsertQueuedResultFeedbackSync = React.useCallback(
+        (payload: FeedbackSyncPayload) => {
+            writeQueuedResultFeedbackSyncs(
+                upsertHistoryFeedbackSyncQueue(
+                    readQueuedResultFeedbackSyncs(),
+                    payload,
+                    resultFeedbackSyncQueueMaxItems
+                )
+            );
+        },
+        [readQueuedResultFeedbackSyncs, writeQueuedResultFeedbackSyncs]
+    );
+
+    const removeQueuedResultFeedbackSync = React.useCallback(
+        (key: string) => {
+            writeQueuedResultFeedbackSyncs(removeHistoryFeedbackSyncQueueItem(readQueuedResultFeedbackSyncs(), key));
+        },
+        [readQueuedResultFeedbackSyncs, writeQueuedResultFeedbackSyncs]
+    );
+
+    const clearScheduledResultFeedbackSync = React.useCallback((key: string) => {
+        const timer = resultFeedbackRetryTimersRef.current.get(key);
+        if (timer) {
+            clearTimeout(timer);
+            resultFeedbackRetryTimersRef.current.delete(key);
+        }
+        const controller = resultFeedbackSyncAbortControllersRef.current.get(key);
+        if (controller) {
+            controller.abort();
+            resultFeedbackSyncAbortControllersRef.current.delete(key);
+        }
+        scheduledResultFeedbackSyncKeysRef.current.delete(key);
+        scheduledResultFeedbackSyncPayloadsRef.current.delete(key);
+    }, []);
+
+    const clearOverlappingResultFeedbackSyncs = React.useCallback((targets: HistoryFeedbackTarget[]) => {
+        scheduledResultFeedbackSyncPayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
+            if (!haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, targets)) return;
+            clearScheduledResultFeedbackSync(scheduledKey);
+        });
+    }, [clearScheduledResultFeedbackSync]);
+
+    const clearResultFeedbackSyncsForDelete = React.useCallback(
+        (payload: HistoryFeedbackDeletePayload) => {
+            scheduledResultFeedbackSyncPayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
+                if (!shouldFeedbackDeleteClearSync(payload, scheduledPayload)) return;
+                clearScheduledResultFeedbackSync(scheduledKey);
+            });
+        },
+        [clearScheduledResultFeedbackSync]
+    );
+
+    const clearScheduledResultFeedbackDelete = React.useCallback((deleteKey: string) => {
+        const retryTimerKey = `delete:${deleteKey}`;
+        const timer = resultFeedbackRetryTimersRef.current.get(retryTimerKey);
+        if (timer) {
+            clearTimeout(timer);
+            resultFeedbackRetryTimersRef.current.delete(retryTimerKey);
+        }
+        const controller = resultFeedbackDeleteAbortControllersRef.current.get(retryTimerKey);
+        if (controller) {
+            controller.abort();
+            resultFeedbackDeleteAbortControllersRef.current.delete(retryTimerKey);
+        }
+        scheduledResultFeedbackDeleteKeysRef.current.delete(deleteKey);
+        scheduledResultFeedbackDeletePayloadsRef.current.delete(deleteKey);
+    }, []);
+
+    const clearResultFeedbackDeletesForSync = React.useCallback((payload: FeedbackSyncPayload, clearLegacyDeletes: boolean) => {
+        const remainingPayloads: HistoryFeedbackDeletePayload[] = [];
+        scheduledResultFeedbackDeletePayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
+            const shouldClear =
+                scheduledPayload.deletedAt === undefined
+                    ? clearLegacyDeletes && haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, payload.targets)
+                    : shouldFeedbackSyncClearDelete(payload, scheduledPayload);
+            if (!shouldClear) return;
+            remainingPayloads.push(...removeHistoryFeedbackDeleteQueueTargets([scheduledPayload], payload.targets));
+            clearScheduledResultFeedbackDelete(scheduledKey);
+        });
+        return remainingPayloads;
+    }, [clearScheduledResultFeedbackDelete]);
+
+    const readQueuedResultFeedbackDeletes = React.useCallback((): HistoryFeedbackDeletePayload[] => {
+        try {
+            return parseHistoryFeedbackDeleteQueue(readLocalStorageValue(resultFeedbackDeleteQueueLocalStorageKey));
+        } catch (error) {
+            console.error('读取结果反馈删除补偿队列失败。', error);
+            return [];
+        }
+    }, []);
+
+    const writeQueuedResultFeedbackDeletes = React.useCallback((queue: HistoryFeedbackDeletePayload[]) => {
+        try {
+            if (queue.length === 0) {
+                window.localStorage.removeItem(resultFeedbackDeleteQueueLocalStorageKey);
+                return;
+            }
+            window.localStorage.setItem(resultFeedbackDeleteQueueLocalStorageKey, serializeHistoryFeedbackDeleteQueue(queue));
+        } catch (error) {
+            console.error('写入结果反馈删除补偿队列失败。', error);
+        }
+    }, []);
+
+    const upsertQueuedResultFeedbackDeletes = React.useCallback(
+        (payload: HistoryFeedbackDeletePayload) => {
+            writeQueuedResultFeedbackDeletes(
+                upsertHistoryFeedbackDeleteQueue(
+                    readQueuedResultFeedbackDeletes(),
+                    payload,
+                    resultFeedbackDeleteQueueMaxItems
+                )
+            );
+        },
+        [readQueuedResultFeedbackDeletes, writeQueuedResultFeedbackDeletes]
+    );
+
+    const removeQueuedResultFeedbackDeletePayload = React.useCallback(
+        (payload: HistoryFeedbackDeletePayload) => {
+            writeQueuedResultFeedbackDeletes(
+                removeHistoryFeedbackDeleteQueuePayload(readQueuedResultFeedbackDeletes(), payload)
+            );
+        },
+        [readQueuedResultFeedbackDeletes, writeQueuedResultFeedbackDeletes]
+    );
+
+    const syncResultFeedback = React.useCallback(
+        async (payload: FeedbackSyncPayload, signal: AbortSignal) => {
+            const hasNoteInput = Object.prototype.hasOwnProperty.call(payload, 'note');
+            const requestSignal = createFeedbackRequestSignal(signal);
+            try {
+                const response = await fetch('/api/feedback', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: requestSignal.signal,
+                    body: JSON.stringify({
+                        targets: payload.targets,
+                        value: payload.value,
+                        updatedAt: new Date(payload.updatedAt).toISOString(),
+                        ...(hasNoteInput ? { note: payload.note ?? '' } : {})
+                    })
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    throw new Error(text || `反馈同步失败，状态码 ${response.status}`);
+                }
+            } finally {
+                requestSignal.cleanup();
+            }
+        },
+        []
+    );
+
+    const scheduleResultFeedbackSyncPayload = React.useCallback(
+        (payload: FeedbackSyncPayload, options: FeedbackSyncScheduleOptions = {}) => {
+            const syncKey = payload.key;
+            if (completedResultFeedbackSyncKeysRef.current.has(syncKey)) return;
+            if (scheduledResultFeedbackSyncKeysRef.current.has(syncKey)) return;
+            const queuedDeletes = readQueuedResultFeedbackDeletes();
+            const clearLegacyDeletes = options.pruneQueuedTargets === true;
+            const isBlockedByDelete = (deletePayload: HistoryFeedbackDeletePayload) => {
+                if (deletePayload.deletedAt === undefined) {
+                    return !clearLegacyDeletes && haveHistoryFeedbackTargetOverlap(deletePayload.targets, payload.targets);
+                }
+                return shouldFeedbackDeleteClearSync(deletePayload, payload);
+            };
+            const hasBlockingDelete =
+                Array.from(scheduledResultFeedbackDeletePayloadsRef.current.values()).some(isBlockedByDelete) ||
+                queuedDeletes.some(isBlockedByDelete);
+            if (hasBlockingDelete) {
+                const nextSyncQueue = queuedDeletes.reduce(
+                    (currentQueue, deletePayload) =>
+                        isBlockedByDelete(deletePayload)
+                            ? removeHistoryFeedbackSyncQueueTargetsForDelete(currentQueue, deletePayload)
+                            : currentQueue,
+                    readQueuedResultFeedbackSyncs()
+                );
+                writeQueuedResultFeedbackSyncs(nextSyncQueue);
+                return;
+            }
+            const remainingDeleteTargets = clearResultFeedbackDeletesForSync(payload, clearLegacyDeletes);
+            writeQueuedResultFeedbackDeletes(
+                clearLegacyDeletes
+                    ? removeHistoryFeedbackDeleteQueueTargets(queuedDeletes, payload.targets)
+                    : pruneHistoryFeedbackDeleteQueueForSyncQueue(queuedDeletes, [payload])
+            );
+            for (const remainingDeletePayload of remainingDeleteTargets) {
+                scheduleResultFeedbackDeletePayloadRef.current?.(remainingDeletePayload);
+            }
+            if (options.pruneQueuedTargets) {
+                writeQueuedResultFeedbackSyncs(
+                    removeHistoryFeedbackSyncQueueTargets(readQueuedResultFeedbackSyncs(), payload.targets)
+                );
+                clearOverlappingResultFeedbackSyncs(payload.targets);
+            }
+            scheduledResultFeedbackSyncKeysRef.current.add(syncKey);
+            scheduledResultFeedbackSyncPayloadsRef.current.set(syncKey, payload);
+
+            const runAttempt = async (attempt: number): Promise<void> => {
+                const controller = new AbortController();
+                resultFeedbackSyncAbortControllersRef.current.set(syncKey, controller);
+                try {
+                    await syncResultFeedback(payload, controller.signal);
+                    rememberCompletedResultFeedbackSyncKey(completedResultFeedbackSyncKeysRef.current, syncKey);
+                    removeQueuedResultFeedbackSync(syncKey);
+                    resultFeedbackSyncAbortControllersRef.current.delete(syncKey);
+                    scheduledResultFeedbackSyncPayloadsRef.current.delete(syncKey);
+                    scheduledResultFeedbackSyncKeysRef.current.delete(syncKey);
+                } catch (syncError) {
+                    resultFeedbackSyncAbortControllersRef.current.delete(syncKey);
+                    if (controller.signal.aborted) return;
+                    upsertQueuedResultFeedbackSync(payload);
+                    if (attempt < resultFeedbackSyncMaxAttempts) {
+                        const delayMs =
+                            resultFeedbackSyncRetryDelaysMs[Math.min(attempt - 1, resultFeedbackSyncRetryDelaysMs.length - 1)];
+                        console.warn('结果反馈同步到服务端失败，将重试。', {
+                            attempt,
+                            nextAttempt: attempt + 1,
+                            delayMs,
+                            syncError
+                        });
+                        const timer = setTimeout(() => {
+                            resultFeedbackRetryTimersRef.current.delete(syncKey);
+                            void runAttempt(attempt + 1);
+                        }, delayMs);
+                        resultFeedbackRetryTimersRef.current.set(syncKey, timer);
+                        return;
+                    }
+                    scheduledResultFeedbackSyncPayloadsRef.current.delete(syncKey);
+                    scheduledResultFeedbackSyncKeysRef.current.delete(syncKey);
+                    console.error('结果反馈同步到服务端失败。', syncError);
+                    setError(createErrorNotice(t('error.resultFeedbackSync')));
+                }
+            };
+
+            void runAttempt(1);
+        },
+        [
+            clearOverlappingResultFeedbackSyncs,
+            clearResultFeedbackDeletesForSync,
+            createErrorNotice,
+            readQueuedResultFeedbackDeletes,
+            readQueuedResultFeedbackSyncs,
+            removeQueuedResultFeedbackSync,
+            syncResultFeedback,
+            t,
+            upsertQueuedResultFeedbackSync,
+            writeQueuedResultFeedbackDeletes,
+            writeQueuedResultFeedbackSyncs
+        ]
+    );
+
+    const scheduleResultFeedbackSync = React.useCallback(
+        (input: FeedbackSyncInput) => {
+            const payload = buildHistoryFeedbackSyncPayload(input);
+            if (!payload) {
+                console.warn('结果反馈仅写入本地历史：缺少可同步的 clientRequestId。', {
+                    timestamp: input.item.timestamp
+                });
+                return;
+            }
+            scheduleResultFeedbackSyncPayload(payload, { pruneQueuedTargets: true });
+        },
+        [scheduleResultFeedbackSyncPayload]
+    );
+
+    const deleteResultFeedbackPayload = React.useCallback(async (payload: HistoryFeedbackDeletePayload, signal: AbortSignal) => {
+        for (let index = 0; index < payload.targets.length; index += feedbackApiTargetBatchSize) {
+            const chunk = payload.targets.slice(index, index + feedbackApiTargetBatchSize);
+            if (chunk.length === 0) continue;
+            const requestSignal = createFeedbackRequestSignal(signal);
+            try {
+                const response = await fetch('/api/feedback', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    signal: requestSignal.signal,
+                    body: JSON.stringify({
+                        targets: chunk,
+                        ...(payload.deletedAt !== undefined ? { deletedAt: new Date(payload.deletedAt).toISOString() } : {})
+                    })
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    throw new Error(text || `反馈删除同步失败，状态码 ${response.status}`);
+                }
+            } finally {
+                requestSignal.cleanup();
+            }
+        }
+    }, []);
+
+    const scheduleResultFeedbackDeletePayload = React.useCallback(
+        (payload: HistoryFeedbackDeletePayload) => {
+            if (payload.targets.length === 0) return;
+            const deleteKey = payload.key;
+            const scheduledPayload = scheduledResultFeedbackDeletePayloadsRef.current.get(deleteKey);
+            if (scheduledPayload) {
+                if (!shouldReplaceHistoryFeedbackDeletePayload(scheduledPayload, payload)) return;
+                clearScheduledResultFeedbackDelete(deleteKey);
+            }
+            clearResultFeedbackSyncsForDelete(payload);
+            writeQueuedResultFeedbackSyncs(
+                removeHistoryFeedbackSyncQueueTargetsForDelete(readQueuedResultFeedbackSyncs(), payload)
+            );
+            upsertQueuedResultFeedbackDeletes(payload);
+
+            scheduledResultFeedbackDeleteKeysRef.current.add(deleteKey);
+            scheduledResultFeedbackDeletePayloadsRef.current.set(deleteKey, payload);
+
+            const retryTimerKey = `delete:${deleteKey}`;
+            const runDeleteAttempt = (attempt: number) => {
+                const controller = new AbortController();
+                resultFeedbackDeleteAbortControllersRef.current.set(retryTimerKey, controller);
+                void deleteResultFeedbackPayload(payload, controller.signal)
+                    .then(() => {
+                        if (resultFeedbackDeleteAbortControllersRef.current.get(retryTimerKey) === controller) {
+                            resultFeedbackDeleteAbortControllersRef.current.delete(retryTimerKey);
+                        }
+                        if (scheduledResultFeedbackDeletePayloadsRef.current.get(deleteKey) !== payload) return;
+                        removeQueuedResultFeedbackDeletePayload(payload);
+                        scheduledResultFeedbackDeleteKeysRef.current.delete(deleteKey);
+                        scheduledResultFeedbackDeletePayloadsRef.current.delete(deleteKey);
+                    })
+                    .catch((deleteError) => {
+                        if (resultFeedbackDeleteAbortControllersRef.current.get(retryTimerKey) === controller) {
+                            resultFeedbackDeleteAbortControllersRef.current.delete(retryTimerKey);
+                        }
+                        if (controller.signal.aborted) return;
+                        if (scheduledResultFeedbackDeletePayloadsRef.current.get(deleteKey) !== payload) return;
+                        if (attempt < resultFeedbackDeleteMaxAttempts) {
+                            const delayMs =
+                                resultFeedbackDeleteRetryDelaysMs[attempt - 1] ??
+                                resultFeedbackDeleteRetryDelaysMs[resultFeedbackDeleteRetryDelaysMs.length - 1];
+                            const retryTimer = setTimeout(() => {
+                                resultFeedbackRetryTimersRef.current.delete(retryTimerKey);
+                                runDeleteAttempt(attempt + 1);
+                            }, delayMs);
+                            resultFeedbackRetryTimersRef.current.set(retryTimerKey, retryTimer);
+                            console.warn('结果反馈从服务端状态删除失败，将重试。', {
+                                attempt,
+                                nextAttempt: attempt + 1,
+                                delayMs,
+                                deleteError
+                            });
+                            return;
+                        }
+                        resultFeedbackRetryTimersRef.current.delete(retryTimerKey);
+                        scheduledResultFeedbackDeleteKeysRef.current.delete(deleteKey);
+                        scheduledResultFeedbackDeletePayloadsRef.current.delete(deleteKey);
+                        console.error('结果反馈从服务端状态删除失败。', deleteError);
+                        setError(createErrorNotice(t('error.resultFeedbackDeleteSync')));
+                    });
+            };
+
+            runDeleteAttempt(1);
+        },
+        [
+            createErrorNotice,
+            clearScheduledResultFeedbackDelete,
+            clearResultFeedbackSyncsForDelete,
+            deleteResultFeedbackPayload,
+            readQueuedResultFeedbackSyncs,
+            removeQueuedResultFeedbackDeletePayload,
+            t,
+            upsertQueuedResultFeedbackDeletes,
+            writeQueuedResultFeedbackSyncs
+        ]
+    );
+
+    const scheduleResultFeedbackDeleteTargets = React.useCallback(
+        (targets: HistoryFeedbackTarget[]) => {
+            const payload = buildHistoryFeedbackDeletePayload(targets, Date.now());
+            if (payload) scheduleResultFeedbackDeletePayload(payload);
+        },
+        [scheduleResultFeedbackDeletePayload]
+    );
+
+    React.useEffect(() => {
+        scheduleResultFeedbackDeletePayloadRef.current = scheduleResultFeedbackDeletePayload;
+        return () => {
+            if (scheduleResultFeedbackDeletePayloadRef.current === scheduleResultFeedbackDeletePayload) {
+                scheduleResultFeedbackDeletePayloadRef.current = null;
+            }
+        };
+    }, [scheduleResultFeedbackDeletePayload]);
+
+    React.useEffect(() => {
+        if (hasProcessedQueuedResultFeedbackDeletesRef.current) return;
+        hasProcessedQueuedResultFeedbackDeletesRef.current = true;
+        const queued = readQueuedResultFeedbackDeletes();
+        if (queued.length === 0) return;
+        const pruned = pruneHistoryFeedbackDeleteQueueForSyncQueue(queued, readQueuedResultFeedbackSyncs());
+        if (pruned.length !== queued.length) {
+            writeQueuedResultFeedbackDeletes(pruned);
+        }
+        if (pruned.length === 0) return;
+        pruned.forEach(scheduleResultFeedbackDeletePayload);
+    }, [
+        readQueuedResultFeedbackDeletes,
+        readQueuedResultFeedbackSyncs,
+        scheduleResultFeedbackDeletePayload,
+        writeQueuedResultFeedbackDeletes
+    ]);
+
+    React.useEffect(() => {
+        if (hasProcessedQueuedResultFeedbackSyncsRef.current) return;
+        hasProcessedQueuedResultFeedbackSyncsRef.current = true;
+        const queued = readQueuedResultFeedbackSyncs();
+        queued.forEach((payload) => scheduleResultFeedbackSyncPayload(payload));
+    }, [readQueuedResultFeedbackSyncs, scheduleResultFeedbackSyncPayload]);
+
+    React.useEffect(() => {
+        if (!hasLoadedStoredHistoryRef.current) return;
+        buildHistoryFeedbackSyncInputs(history).forEach(scheduleResultFeedbackSync);
+    }, [history, scheduleResultFeedbackSync]);
+
+    React.useEffect(() => {
+        const timers = resultFeedbackRetryTimersRef.current;
+        const syncControllers = resultFeedbackSyncAbortControllersRef.current;
+        const deleteControllers = resultFeedbackDeleteAbortControllersRef.current;
+        const scheduledSyncKeys = scheduledResultFeedbackSyncKeysRef.current;
+        const scheduledSyncPayloads = scheduledResultFeedbackSyncPayloadsRef.current;
+        const scheduledDeleteKeys = scheduledResultFeedbackDeleteKeysRef.current;
+        const scheduledDeletePayloads = scheduledResultFeedbackDeletePayloadsRef.current;
+        return () => {
+            timers.forEach((timer) => clearTimeout(timer));
+            timers.clear();
+            syncControllers.forEach((controller) => controller.abort());
+            syncControllers.clear();
+            deleteControllers.forEach((controller) => controller.abort());
+            deleteControllers.clear();
+            scheduledSyncKeys.clear();
+            scheduledSyncPayloads.clear();
+            scheduledDeleteKeys.clear();
+            scheduledDeletePayloads.clear();
+        };
+    }, []);
+
+    const handleMarkResultFeedback = React.useCallback(
+        (item: HistoryMetadata, value: ResultFeedbackValue) => {
+            const updatedAt = Date.now();
+            const currentFeedback =
+                history.find((historyItem) => historyItem.timestamp === item.timestamp)?.resultFeedback ??
+                item.resultFeedback;
+            const currentLocalNote = currentFeedback?.note;
+
+            setHistory((current) =>
+                updateHistoryResultFeedback({
+                    history: current,
+                    timestamp: item.timestamp,
+                    value,
+                    updatedAt
+                })
+            );
+            setActiveResultSource((current) =>
+                current?.timestamp === item.timestamp
+                    ? {
+                          ...current,
+                          resultFeedback: {
+                              value,
+                              updatedAt,
+                              ...(currentLocalNote ? { note: currentLocalNote } : {})
+                          }
+                      }
+                    : current
+            );
+            scheduleResultFeedbackSync({
+                item,
+                value,
+                updatedAt,
+                ...(currentLocalNote ? { note: currentLocalNote } : {})
+            });
+        },
+        [history, scheduleResultFeedbackSync]
+    );
+
+    const handleUpdateResultFeedbackNote = React.useCallback((item: HistoryMetadata, note: string) => {
+        if (!item.resultFeedback) return;
+        const resultFeedbackValue = item.resultFeedback.value;
         const updatedAt = Date.now();
         setHistory((current) =>
             updateHistoryResultFeedback({
                 history: current,
                 timestamp: item.timestamp,
-                value,
-                updatedAt
+                value: resultFeedbackValue,
+                updatedAt,
+                note
             })
         );
         setActiveResultSource((current) =>
-            current?.timestamp === item.timestamp ? { ...current, resultFeedback: { value, updatedAt } } : current
+            current?.timestamp === item.timestamp
+                ? {
+                      ...current,
+                      resultFeedback: {
+                          value: resultFeedbackValue,
+                          updatedAt,
+                          ...(note ? { note } : {})
+                      }
+                  }
+                : current
         );
-    }, []);
+        scheduleResultFeedbackSync({ item, value: resultFeedbackValue, updatedAt, ...(note ? { note } : {}) });
+    }, [scheduleResultFeedbackSync]);
 
     const handleDeleteInspiration = React.useCallback((id: number) => {
         setInspirations((current) => current.filter((item) => item.id !== id));
@@ -2133,6 +2813,7 @@ export default function HomePage() {
                 : t('confirm.clearHistoryFs');
 
         if (window.confirm(confirmationMessage)) {
+            const feedbackDeleteTargets = buildHistoryFeedbackDeleteTargets(history);
             setHistory([]);
             setLatestImageBatch(null);
             setActiveResultSource(null);
@@ -2148,6 +2829,7 @@ export default function HomePage() {
                     blobUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
                     blobUrlCacheRef.current.clear();
                 }
+                scheduleResultFeedbackDeleteTargets(feedbackDeleteTargets);
             } catch (e) {
                 console.error('清空历史记录失败：', e);
                 setError(
@@ -2155,7 +2837,7 @@ export default function HomePage() {
                 );
             }
         }
-    }, [createErrorNotice, t]);
+    }, [createErrorNotice, history, scheduleResultFeedbackDeleteTargets, t]);
 
     const resolveImageBlob = React.useCallback(
         async (filename: string, storageMode: ImageStorageMode = effectiveStorageModeClient): Promise<Blob> => {
@@ -2194,6 +2876,37 @@ export default function HomePage() {
             } catch (error) {
                 setError(
                     createErrorNotice(error instanceof Error ? error.message : t('error.retrieveImage', { filename }))
+                );
+            }
+        },
+        [createErrorNotice, resolveImageBlob, t]
+    );
+
+    const handleDownloadHistoryItem = React.useCallback(
+        async (item: HistoryMetadata) => {
+            try {
+                const storageMode = item.storageModeUsed ?? 'fs';
+                const files = await Promise.all(
+                    item.images.map(async (image, index) => ({
+                        name: `${String(index + 1).padStart(2, '0')}-${image.filename}`,
+                        blob: await resolveImageBlob(image.filename, storageMode),
+                        modifiedAt: new Date(item.timestamp)
+                    }))
+                );
+                const zipBlob = await createZipBlob(files);
+                const url = URL.createObjectURL(zipBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `gpt-image-history-${item.timestamp}.zip`;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                window.setTimeout(() => URL.revokeObjectURL(url), 150);
+            } catch (error) {
+                setError(
+                    createErrorNotice(
+                        error instanceof Error ? error.message : t('error.retrieveImage', { filename: 'history.zip' })
+                    )
                 );
             }
         },
@@ -2249,8 +2962,14 @@ export default function HomePage() {
             return true;
         }
 
-        if (mode === 'edit' && editImageFiles.length >= MAX_EDIT_IMAGES) {
-            setError(createErrorNotice(t('error.maxEditImages', { count: MAX_EDIT_IMAGES })));
+        if (
+            mode === 'edit' &&
+            hasReachedEditSourceImageLimit({
+                currentCount: editImageFiles.length,
+                maxImages: maxEditSourceImages
+            })
+        ) {
+            setError(createErrorNotice(t('error.maxEditImages', { count: maxEditSourceImages })));
             setIsSendingToEdit(false);
             return false;
         }
@@ -2425,6 +3144,7 @@ export default function HomePage() {
                     prev && prev.some((img) => filenamesToDelete.includes(img.filename)) ? null : prev
                 );
                 setActiveResultSource((current) => (current?.timestamp === timestamp ? null : current));
+                scheduleResultFeedbackDeleteTargets(buildHistoryFeedbackDeleteTargets([item]));
             } catch (e: unknown) {
                 console.error('删除条目失败：', e);
                 setError(createErrorNotice(e instanceof Error ? e.message : t('error.deleteUnexpected')));
@@ -2432,7 +3152,7 @@ export default function HomePage() {
                 setItemToDeleteConfirm(null);
             }
         },
-        [clientPasswordHash, createErrorNotice, isPasswordRequiredByBackend, t]
+        [clientPasswordHash, createErrorNotice, isPasswordRequiredByBackend, scheduleResultFeedbackDeleteTargets, t]
     );
 
     const handleRequestDeleteItem = React.useCallback(
@@ -2678,6 +3398,8 @@ export default function HomePage() {
                                         setCompression={setGenCompression}
                                         background={genBackground}
                                         setBackground={setGenBackground}
+                                        upstreamProfile={activeUpstreamProfile}
+                                        upstreamProfileMixed={activeUpstreamProfileMixed}
                                         moderation={genModeration}
                                         setModeration={setGenModeration}
                                         streamMode={streamMode}
@@ -2728,7 +3450,7 @@ export default function HomePage() {
                                                     : nextUrls;
                                             updateEditSourceImagePreviewUrls(resolvedUrls);
                                         }}
-                                        maxImages={MAX_EDIT_IMAGES}
+                                        maxImages={activeUpstreamProfile.upload.maxImages}
                                         editPrompt={editPrompt}
                                         setEditPrompt={setEditPrompt}
                                         editN={editN}
@@ -2745,6 +3467,8 @@ export default function HomePage() {
                                         setEditOutputFormat={setEditOutputFormat}
                                         editCompression={editCompression}
                                         setEditCompression={setEditCompression}
+                                        upstreamProfile={activeUpstreamProfile}
+                                        upstreamProfileMixed={activeUpstreamProfileMixed}
                                         editModeration={editModeration}
                                         setEditModeration={setEditModeration}
                                         editBrushSize={editBrushSize}
@@ -2852,6 +3576,7 @@ export default function HomePage() {
                                               : editN[0]
                                     }
                                     allowResponsesImageBackend={allowResponsesImageBackend}
+                                    upstreamProfileMixed={activeUpstreamProfileMixed}
                                     hasDefaultResponsesModel={hasDefaultResponsesModel}
                                     imageBackend={mode === 'generate' ? genImageBackend : editImageBackend}
                                     onImageBackendChange={
@@ -2885,7 +3610,9 @@ export default function HomePage() {
                                     onSaveInspiration={handleSaveInspiration}
                                     onSendHistoryToEdit={handleSendHistoryToEdit}
                                     onMarkResultFeedback={handleMarkResultFeedback}
+                                    onUpdateResultFeedbackNote={handleUpdateResultFeedbackNote}
                                     onDeleteInspiration={handleDeleteInspiration}
+                                    onDownloadHistoryItem={handleDownloadHistoryItem}
                                     onClearHistory={handleClearHistory}
                                     getImageSrc={getImageSrc}
                                     onDeleteItemRequest={handleRequestDeleteItem}

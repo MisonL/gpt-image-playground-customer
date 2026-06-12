@@ -163,6 +163,49 @@ describe('history metadata helpers', () => {
         });
     });
 
+    it('preserves in-progress result feedback notes and clears empty notes', () => {
+        const base = historyWithSize('2048x2048');
+        const withNote = updateHistoryResultFeedback({
+            history: [base],
+            timestamp: base.timestamp,
+            value: 'usable',
+            updatedAt: 1770000000001,
+            note: '  首版已经可以发给运营确认  '
+        });
+
+        assert.deepEqual(withNote[0].resultFeedback, {
+            value: 'usable',
+            updatedAt: 1770000000001,
+            note: '  首版已经可以发给运营确认  '
+        });
+
+        const preservedNote = updateHistoryResultFeedback({
+            history: withNote,
+            timestamp: base.timestamp,
+            value: 'needs_revision',
+            updatedAt: 1770000000002
+        });
+
+        assert.deepEqual(preservedNote[0].resultFeedback, {
+            value: 'needs_revision',
+            updatedAt: 1770000000002,
+            note: '  首版已经可以发给运营确认  '
+        });
+
+        const clearedNote = updateHistoryResultFeedback({
+            history: preservedNote,
+            timestamp: base.timestamp,
+            value: 'needs_revision',
+            updatedAt: 1770000000003,
+            note: ''
+        });
+
+        assert.deepEqual(clearedNote[0].resultFeedback, {
+            value: 'needs_revision',
+            updatedAt: 1770000000003
+        });
+    });
+
     it('restores compatible history size presets and custom gpt-image-2 dimensions', () => {
         assert.deepEqual(readHistorySizeSelection(historyWithSize('3072x2048'), 'gpt-image-2'), {
             size: 'landscape',

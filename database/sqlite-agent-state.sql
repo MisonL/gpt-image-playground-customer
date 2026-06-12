@@ -64,3 +64,14 @@ CREATE TABLE IF NOT EXISTS image_shares (
     )
 );
 CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
+
+CREATE TABLE IF NOT EXISTS result_feedback (
+    target_type TEXT NOT NULL CHECK (target_type IN ('page_request', 'agent_request', 'agent_artifact')),
+    target_id TEXT NOT NULL,
+    value TEXT NOT NULL CHECK (value IN ('usable', 'needs_revision')),
+    note TEXT,
+    source TEXT NOT NULL CHECK (source IN ('webui', 'agent')),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (target_type, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_result_feedback_updated_at ON result_feedback(updated_at);

@@ -16,7 +16,10 @@ export type ResultFeedbackValue = 'usable' | 'needs_revision';
 export type ResultFeedback = {
     value: ResultFeedbackValue;
     updatedAt: number;
+    note?: string;
 };
+
+export const RESULT_FEEDBACK_NOTE_MAX_LENGTH = 500;
 
 export type HistoryMetadata = {
     timestamp: number;
@@ -68,14 +71,28 @@ export function updateHistoryResultFeedback(input: {
     timestamp: number;
     value: ResultFeedbackValue;
     updatedAt?: number;
+    note?: string;
 }): HistoryMetadata[] {
-    const feedback = {
-        value: input.value,
-        updatedAt: input.updatedAt ?? Date.now()
-    };
-    return input.history.map((item) =>
-        item.timestamp === input.timestamp ? { ...item, resultFeedback: feedback } : item
-    );
+    const hasNoteInput = Object.prototype.hasOwnProperty.call(input, 'note');
+    const updatedAt = input.updatedAt ?? Date.now();
+    return input.history.map((item) => {
+        if (item.timestamp !== input.timestamp) return item;
+        const rawNote = hasNoteInput ? input.note : item.resultFeedback?.note;
+        const note = normalizeResultFeedbackNote(rawNote);
+        return {
+            ...item,
+            resultFeedback: {
+                value: input.value,
+                updatedAt,
+                ...(note ? { note } : {})
+            }
+        };
+    });
+}
+
+function normalizeResultFeedbackNote(note: string | undefined): string | undefined {
+    if (note === undefined || note.length === 0) return undefined;
+    return note.slice(0, RESULT_FEEDBACK_NOTE_MAX_LENGTH);
 }
 
 export function isFailedHistoryItem(item: HistoryMetadata): boolean {

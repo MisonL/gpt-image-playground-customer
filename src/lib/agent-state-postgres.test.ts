@@ -19,11 +19,13 @@ describe('PostgresAgentStateStore schema contract', () => {
         assert.match(POSTGRES_SCHEMA, /idempotency_key TEXT NOT NULL UNIQUE/);
         assert.match(POSTGRES_SCHEMA, /filename TEXT NOT NULL UNIQUE/);
         assert.match(POSTGRES_SCHEMA, /content_filename TEXT NOT NULL UNIQUE/);
+        assert.match(POSTGRES_SCHEMA, /PRIMARY KEY \(target_type, target_id\)/);
         assert.match(POSTGRES_SCHEMA, /checksum TEXT NOT NULL/);
         assert.match(POSTGRES_SCHEMA, /access_code_required = FALSE/);
         assert.match(POSTGRES_SCHEMA, /idx_agent_requests_status_locked_until/);
         assert.match(POSTGRES_SCHEMA, /idx_agent_artifacts_request_id/);
         assert.match(POSTGRES_SCHEMA, /idx_image_shares_expires_at/);
+        assert.match(POSTGRES_SCHEMA, /idx_result_feedback_updated_at/);
     });
 
     it('uses SKIP LOCKED for recovery selection so concurrent workers do not block each other', () => {
@@ -36,6 +38,33 @@ describe('PostgresAgentStateStore schema contract', () => {
         const source = readFileSync(new URL('./agent-state-postgres.ts', import.meta.url), 'utf8');
 
         assert.match(source, /ON CONFLICT \(idempotency_key\) DO NOTHING/);
+    });
+
+    it('guards feedback upserts against stale retry writes and supports deletion', () => {
+        const source = readFileSync(new URL('./agent-state-postgres.ts', import.meta.url), 'utf8');
+
+        assert.match(source, /WHERE result_feedback\.updated_at <= EXCLUDED\.updated_at/);
+        assert.match(source, /async upsertFeedbackBatch/);
+        assert.match(source, /await client\.query\('BEGIN'\)/);
+        assert.match(source, /UNNEST\(\$1::text\[\], \$2::text\[\]\)/);
+        assert.match(source, /feedback\.updated_at <= \$3/);
+    });
+
+    it('reads feedback batches with one ordered query', () => {
+        const source = readFileSync(new URL('./agent-state-postgres.ts', import.meta.url), 'utf8');
+        const listFeedbackSource =
+            source.match(/async listFeedbackByTargets[\s\S]*?\n    async deleteFeedbackByTargets/)?.[0] ?? '';
+
+        assert.match(listFeedbackSource, /WITH ORDINALITY AS target/);
+        assert.doesNotMatch(listFeedbackSource, /for \(const target of targets\)/);
+    });
+
+    it('removes feedback rows when deleting expired requests or artifact metadata', () => {
+        const source = readFileSync(new URL('./agent-state-postgres.ts', import.meta.url), 'utf8');
+
+        assert.match(source, /DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = ANY\(\$1\)/);
+        assert.match(source, /DELETE FROM result_feedback WHERE target_type = 'agent_request' AND target_id = ANY\(\$1\)/);
+        assert.match(source, /DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = \$1/);
     });
 
     it('splits migration SQL without breaking semicolons inside quoted SQL text', () => {
@@ -502,7 +531,7 @@ describe('PostgresAgentStateStore live concurrency contract', { skip: livePostgr
             const result = await admin.query(`SELECT id FROM ${schema}.state_schema_migrations ORDER BY id ASC`);
             assert.deepEqual(
                 result.rows.map((row: { id: string }) => row.id),
-                ['001_agent_state_core', '002_image_shares']
+                ['001_agent_state_core', '002_image_shares', '003_result_feedback']
             );
         } finally {
             await cleanup();

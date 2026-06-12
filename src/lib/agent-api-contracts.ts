@@ -1,9 +1,10 @@
 import { AGENT_ENDPOINTS, AGENT_JOB_ENDPOINTS } from './agent-api-paths.mjs';
 import type { AgentErrorDiagnostics } from './api-error-response';
+import { readAppLogRetentionMetadata, type AppLogRetentionMetadata } from './app-log-retention';
+import { getChannelPoolSummary, parseChannelPoolConfig } from './channel-router';
 import {
     MAX_IMAGE_COUNT,
     MAX_PROMPT_LENGTH,
-    MAX_UPLOAD_BYTES,
     RequestValidationError,
     validateApiBaseUrl,
     type GptImageModel,
@@ -18,7 +19,19 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from './image-upstream-strategy';
+import {
+    summarizeImageUpstreamProfile,
+    summarizeUpstreamRequestHeaders,
+    clampIntegerToRange,
+    getPartialImagesRangeForBackend,
+    type ImageUpstreamProfile,
+    type ImageUpstreamProfileId,
+    type ImageUpstreamProfileSummary,
+    type PartialImagesCount,
+    type UpstreamRequestHeaderSummary
+} from './image-upstream-profile';
 import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
+import { summarizeOpenAIImageTransport } from './openai-image-transport';
 import { readBooleanEnv } from './server-runtime';
 import {
     GPT_IMAGE_2_EDGE_MULTIPLE,
@@ -26,7 +39,8 @@ import {
     GPT_IMAGE_2_MAX_EDGE,
     GPT_IMAGE_2_MAX_PIXELS,
     GPT_IMAGE_2_MIN_PIXELS,
-    validateGptImage2Size
+    validateGptImage2Size,
+    validatePositiveIntegerImageSize
 } from './size-utils';
 
 export const AGENT_API_VERSION = '1.0.0';
@@ -35,9 +49,13 @@ export const AGENT_DEFAULT_SQLITE_PATH = 'generated-images/.agent-state/agent.sq
 export const AGENT_DEFAULT_LEASE_MS = 10 * 60 * 1000;
 export const AGENT_DEFAULT_REQUEST_TTL_SECONDS = 24 * 60 * 60;
 export const AGENT_DEFAULT_RECOVERY_INTERVAL_MS = 30 * 1000;
+export const AGENT_PAGE_REQUEST_DIAGNOSTICS_NO_MATCH_HINT =
+    'matched_log_count=0 表示当前保留窗口内没有匹配日志；可能已被保留条数淘汰、被 APP_LOG_LEVEL 过滤，或本地日志文件被清理。';
 
 export const AGENT_MODELS = ['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2'] as const;
 export const AGENT_OUTPUT_FORMATS = ['png', 'jpeg', 'webp'] as const;
+const AGENT_DEFAULT_OUTPUT_FORMAT = 'webp';
+const AGENT_DEFAULT_LOSSY_OUTPUT_COMPRESSION = 100;
 export const AGENT_RESPONSE_MODES = ['path', 'base64', 'both'] as const;
 export const AGENT_QUALITIES = ['low', 'medium', 'high', 'auto'] as const;
 export const AGENT_BACKGROUNDS = ['transparent', 'opaque', 'auto'] as const;
@@ -73,6 +91,7 @@ export const AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS = [
     'streaming_strategy',
     'partial_images'
 ] as const;
+const AGENT_DEFAULT_PARTIAL_IMAGES = 2;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
 export type AgentAuthScheme = 'bearer' | 'x-app-password-hash';
@@ -91,6 +110,24 @@ export type ImageBackendRuntimeRequirement = {
     missing_env: string[];
 };
 
+export type AgentPageRequestDiagnosticsRetention = AppLogRetentionMetadata & {
+    bounded: true;
+    not_agent_state_backend: true;
+};
+
+export type AgentRequestDiagnosticsRetention = {
+    storage: 'agent_state';
+    ttl_seconds: number;
+    bounded: true;
+    loss_modes: ['request_expired_by_ttl', 'artifact_deleted_or_purged', 'state_backend_reset'];
+};
+
+export type AgentPageRequestDiagnosticsNote = {
+    code: 'no_matching_logs_in_retention_window';
+    message: string;
+    retention: AgentPageRequestDiagnosticsRetention;
+};
+
 export type AgentGenerateRequest = {
     model: GptImageModel;
     prompt: string;
@@ -105,7 +142,7 @@ export type AgentGenerateRequest = {
     image_backend: ImageGenerationBackend;
     stream_mode: ImageStreamMode;
     streaming_strategy: ImageStreamingStrategy;
-    partial_images: 1 | 2 | 3;
+    partial_images: 0 | 1 | 2 | 3 | 4;
 };
 
 export type AgentImageResponseItem = {
@@ -121,6 +158,26 @@ export type AgentImageResponseItem = {
     b64_json?: string;
 };
 
+export type AgentImageResponseTiming = {
+    started_at: string;
+    completed_at: string;
+    elapsed_ms: number;
+    server_elapsed_ms: number;
+};
+
+export type AgentImageResponseExecution = {
+    transport: AgentRoutingTransport;
+    endpoint: string;
+    route_mode: 'agent' | 'job' | 'page_sse';
+    operation: 'generate' | 'edit';
+    image_backend: ImageGenerationBackend;
+    stream_mode: ImageStreamMode;
+    streaming_strategy: ImageStreamingStrategy;
+    selected_channel_id?: string;
+    upstream_host?: string;
+    request_headers: UpstreamRequestHeaderSummary;
+};
+
 export type AgentImageResponse = {
     request_id: string;
     idempotency_key: string;
@@ -128,6 +185,8 @@ export type AgentImageResponse = {
     images: AgentImageResponseItem[];
     usage?: unknown;
     created_at: string;
+    timing?: AgentImageResponseTiming;
+    execution?: AgentImageResponseExecution;
 };
 
 export type AgentJobStatusResponse = {
@@ -161,6 +220,19 @@ export type AgentCapabilities = {
         schemes: AgentAuthScheme[];
     };
     endpoints: Record<string, string>;
+    image_transport: {
+        upstream_timeout_ms: number;
+        stream_data_interval_timeout_ms: number;
+        upstream_max_retries: number;
+    };
+    upstream_profile: ImageUpstreamProfileSummary;
+    upstream_request_headers: {
+        default: UpstreamRequestHeaderSummary;
+        channels: Array<{
+            id: string;
+            request_headers: UpstreamRequestHeaderSummary;
+        }>;
+    };
     defaults: {
         model: GptImageModel;
         response_mode: AgentResponseMode;
@@ -168,13 +240,20 @@ export type AgentCapabilities = {
         image_backend: ImageGenerationBackend;
         stream_mode: ImageStreamMode;
         streaming_strategy: ImageStreamingStrategy;
-        partial_images: 1 | 2 | 3;
+        partial_images: PartialImagesCount;
     };
     limits: {
         max_prompt_length: number;
         max_images: number;
+        generate_images: { min: number; max: number };
+        edit_images: { min: number; max: number };
+        upload_images: { max: number };
         max_upload_mb: number;
+        max_total_upload_mb?: number;
         partial_images: { min: number; max: number };
+        partial_images_by_backend: Record<ImageGenerationBackend, { min: number; max: number }>;
+        upstream_profile: ImageUpstreamProfileId;
+        upstream_profile_mixed: boolean;
     };
     model_limits: {
         'gpt-image-2': {
@@ -183,6 +262,8 @@ export type AgentCapabilities = {
             edge_multiple: number;
             max_aspect: number;
             min_pixels: number;
+            size_policy: ImageUpstreamProfile['gptImage2']['sizePolicy'];
+            allow_transparent_background: boolean;
             recommended_presets: Array<{ name: string; size: string; purpose: string }>;
             large_image_risk: {
                 applies_to: string[];
@@ -277,6 +358,29 @@ export type AgentCapabilities = {
         image_storage_mode: string;
         postgres_configured: boolean;
     };
+    page_request_diagnostics: {
+        supported: true;
+        source: 'app_log';
+        endpoints: {
+            single: string;
+            batch: string;
+        };
+        retention: AgentPageRequestDiagnosticsRetention;
+        no_match_hint: string;
+    };
+    agent_request_diagnostics: {
+        supported: true;
+        source: 'agent_state';
+        endpoints: {
+            lookup: string;
+            single: string;
+        };
+        lookup: {
+            by_request_id: true;
+            by_idempotency_key: true;
+        };
+        retention: AgentRequestDiagnosticsRetention;
+    };
     idempotency: {
         required: boolean;
         header: string;
@@ -368,7 +472,13 @@ function readModel(body: Record<string, unknown>, fields: FieldErrors): GptImage
     return value;
 }
 
-function readSize(body: Record<string, unknown>, model: GptImageModel, fields: FieldErrors, fallback: string): string {
+function readSize(
+    body: Record<string, unknown>,
+    model: GptImageModel,
+    fields: FieldErrors,
+    fallback: string,
+    upstreamProfile: Pick<ImageUpstreamProfile, 'gptImage2'>
+): string {
     const value = readStringField(body, 'size', fallback);
     if (!value) {
         fields.size = '必须是字符串';
@@ -384,7 +494,10 @@ function readSize(body: Record<string, unknown>, model: GptImageModel, fields: F
             fields.size = '必须是 auto 或 WxH 格式的尺寸值';
             return value;
         }
-        const validation = validateGptImage2Size(Number(match[1]), Number(match[2]));
+        const validation =
+            upstreamProfile.gptImage2.sizePolicy === 'positive-integer'
+                ? validatePositiveIntegerImageSize(Number(match[1]), Number(match[2]))
+                : validateGptImage2Size(Number(match[1]), Number(match[2]));
         if (!validation.valid) {
             fields.size = validation.reason;
         }
@@ -393,7 +506,7 @@ function readSize(body: Record<string, unknown>, model: GptImageModel, fields: F
 }
 
 function readOutputFormat(body: Record<string, unknown>, fields: FieldErrors): ValidOutputFormat {
-    const rawValue = readStringField(body, 'output_format', 'png');
+    const rawValue = readStringField(body, 'output_format', AGENT_DEFAULT_OUTPUT_FORMAT);
     const normalized = rawValue?.toLowerCase() === 'jpg' ? 'jpeg' : rawValue?.toLowerCase();
     if (!normalized || !isOneOf(normalized, AGENT_OUTPUT_FORMATS)) {
         fields.output_format = `必须是以下值之一：${AGENT_OUTPUT_FORMATS.join(', ')}`;
@@ -481,6 +594,17 @@ function validateAgentImageUpstreamStrategy(input: {
     }
 }
 
+function readPartialImagesForBackend(
+    body: Record<string, unknown>,
+    imageBackend: ImageGenerationBackend,
+    fields: FieldErrors,
+    profile: ImageUpstreamProfile
+): PartialImagesCount {
+    const limits = getPartialImagesRangeForBackend(profile, imageBackend);
+    const fallback = clampDefaultPartialImages(limits);
+    return readIntegerField(body, 'partial_images', fallback, limits.min, limits.max, fields) as PartialImagesCount;
+}
+
 function readQuality(body: Record<string, unknown>, fields: FieldErrors): AgentQuality {
     const value = readStringField(body, 'quality', 'high');
     if (!value || !isOneOf(value, AGENT_QUALITIES)) {
@@ -495,9 +619,6 @@ function readBackground(body: Record<string, unknown>, model: GptImageModel, fie
     if (!value || !isOneOf(value, AGENT_BACKGROUNDS)) {
         fields.background = `必须是以下值之一：${AGENT_BACKGROUNDS.join(', ')}`;
         return 'auto';
-    }
-    if (model === 'gpt-image-2' && value === 'transparent') {
-        fields.background = 'gpt-image-2 不支持 transparent 背景';
     }
     return value;
 }
@@ -517,7 +638,9 @@ function readOutputCompression(
     fields: FieldErrors
 ): number | undefined {
     const value = body.output_compression;
-    if (value === undefined || value === null || value === '') return undefined;
+    if (value === undefined || value === null || value === '') {
+        return outputFormat === 'png' ? undefined : AGENT_DEFAULT_LOSSY_OUTPUT_COMPRESSION;
+    }
     if (outputFormat === 'png') {
         fields.output_compression = '仅适用于 jpeg 或 webp 输出';
         return undefined;
@@ -537,10 +660,11 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     }
     const objectBody = body as Record<string, unknown>;
     const fields: FieldErrors = {};
+    const upstreamLimits = buildAgentUpstreamLimits(process.env);
     const model = readModel(objectBody, fields);
     const prompt = validatePrompt(objectBody.prompt, fields);
     const n = readIntegerField(objectBody, 'n', 1, 1, MAX_IMAGE_COUNT, fields);
-    const size = readSize(objectBody, model, fields, '1024x1024');
+    const size = readSize(objectBody, model, fields, '1024x1024', upstreamLimits.profile);
     const quality = readQuality(objectBody, fields);
     const outputFormat = readOutputFormat(objectBody, fields);
     const outputCompression = readOutputCompression(objectBody, outputFormat, fields);
@@ -550,7 +674,7 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const imageBackend = readAgentImageBackend(objectBody, fields);
     const streamMode = readAgentStreamMode(objectBody, fields);
     const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
-    const partialImages = readIntegerField(objectBody, 'partial_images', 2, 1, 3, fields) as 1 | 2 | 3;
+    const partialImages = readPartialImagesForBackend(objectBody, imageBackend, fields, upstreamLimits.profile);
     validateAgentImageUpstreamStrategy({ imageBackend, streamMode, streamingStrategy, fields });
 
     if (Object.keys(fields).length > 0) {
@@ -640,6 +764,73 @@ export function buildPageSseAuthCapabilities(
     };
 }
 
+export function buildPageRequestDiagnosticsCapabilities(
+    env: Record<string, string | undefined>
+): AgentCapabilities['page_request_diagnostics'] {
+    const retention = buildPageRequestDiagnosticsRetention(env);
+    return {
+        supported: true,
+        source: 'app_log',
+        endpoints: {
+            single: AGENT_ENDPOINTS.page_request_diagnostics,
+            batch: AGENT_ENDPOINTS.page_request_diagnostics_batch
+        },
+        retention,
+        no_match_hint: AGENT_PAGE_REQUEST_DIAGNOSTICS_NO_MATCH_HINT
+    };
+}
+
+export function buildPageRequestDiagnosticsRetention(
+    env: Record<string, string | undefined>
+): AgentPageRequestDiagnosticsRetention {
+    return {
+        ...readAppLogRetentionMetadata(env),
+        bounded: true,
+        not_agent_state_backend: true
+    };
+}
+
+export function buildAgentRequestDiagnosticsCapabilities(
+    env: Record<string, string | undefined>
+): AgentCapabilities['agent_request_diagnostics'] {
+    return {
+        supported: true,
+        source: 'agent_state',
+        endpoints: {
+            lookup: AGENT_ENDPOINTS.agent_request_diagnostics_lookup,
+            single: AGENT_ENDPOINTS.agent_request_diagnostics
+        },
+        lookup: {
+            by_request_id: true,
+            by_idempotency_key: true
+        },
+        retention: buildAgentRequestDiagnosticsRetention(env)
+    };
+}
+
+export function buildAgentRequestDiagnosticsRetention(
+    env: Record<string, string | undefined>
+): AgentRequestDiagnosticsRetention {
+    return {
+        storage: 'agent_state',
+        ttl_seconds: readAgentRequestTtlSeconds(env),
+        bounded: true,
+        loss_modes: ['request_expired_by_ttl', 'artifact_deleted_or_purged', 'state_backend_reset']
+    };
+}
+
+export function buildPageRequestDiagnosticsNoMatchNote(input: {
+    matchedLogCount: number;
+    retention: AgentPageRequestDiagnosticsRetention;
+}): AgentPageRequestDiagnosticsNote | undefined {
+    if (input.matchedLogCount !== 0) return undefined;
+    return {
+        code: 'no_matching_logs_in_retention_window',
+        message: AGENT_PAGE_REQUEST_DIAGNOSTICS_NO_MATCH_HINT,
+        retention: input.retention
+    };
+}
+
 function readEnabledImageBackends(
     requirements: Record<ImageGenerationBackend, ImageBackendRuntimeRequirement>
 ): ImageGenerationBackend[] {
@@ -692,11 +883,17 @@ function readPositiveIntegerEnv(env: Record<string, string | undefined>, fieldNa
 export function buildAgentCapabilities(env: Record<string, string | undefined>): AgentCapabilities {
     const imageBackendRequirements = buildImageBackendRequirements(env);
     const enabledImageBackends = readEnabledImageBackends(imageBackendRequirements);
+    const upstreamLimits = buildAgentUpstreamLimits(env);
+    const partialImagesByBackend = buildAgentPartialImagesByBackend(upstreamLimits.profile);
+    const defaultPartialImages = clampDefaultPartialImages(partialImagesByBackend['images-api']);
     return {
         api_version: AGENT_API_VERSION,
         schema_version: AGENT_SCHEMA_VERSION,
         auth: buildAgentAuthCapabilities(env),
         endpoints: { ...AGENT_ENDPOINTS },
+        image_transport: summarizeOpenAIImageTransport(env),
+        upstream_profile: upstreamLimits.summary,
+        upstream_request_headers: buildAgentUpstreamRequestHeadersCapabilities(env),
         defaults: {
             model: 'gpt-image-2',
             response_mode: 'path',
@@ -704,13 +901,22 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             image_backend: 'images-api',
             stream_mode: 'auto',
             streaming_strategy: 'auto',
-            partial_images: 2
+            partial_images: defaultPartialImages
         },
         limits: {
             max_prompt_length: MAX_PROMPT_LENGTH,
-            max_images: MAX_IMAGE_COUNT,
-            max_upload_mb: MAX_UPLOAD_BYTES / 1024 / 1024,
-            partial_images: { min: 1, max: 3 }
+            max_images: Math.min(upstreamLimits.profile.generateCount.max, upstreamLimits.profile.editCount.max),
+            generate_images: upstreamLimits.profile.generateCount,
+            edit_images: upstreamLimits.profile.editCount,
+            upload_images: { max: upstreamLimits.profile.upload.maxImages },
+            max_upload_mb: upstreamLimits.profile.upload.maxSingleBytes / 1024 / 1024,
+            ...(upstreamLimits.profile.upload.maxTotalBytes !== undefined
+                ? { max_total_upload_mb: upstreamLimits.profile.upload.maxTotalBytes / 1024 / 1024 }
+                : {}),
+            partial_images: upstreamLimits.profile.partialImages,
+            partial_images_by_backend: partialImagesByBackend,
+            upstream_profile: upstreamLimits.profile.id,
+            upstream_profile_mixed: upstreamLimits.summary.serverProfileMixed
         },
         model_limits: {
             'gpt-image-2': {
@@ -719,6 +925,8 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 edge_multiple: GPT_IMAGE_2_EDGE_MULTIPLE,
                 max_aspect: GPT_IMAGE_2_MAX_ASPECT,
                 min_pixels: GPT_IMAGE_2_MIN_PIXELS,
+                size_policy: upstreamLimits.profile.gptImage2.sizePolicy,
+                allow_transparent_background: upstreamLimits.profile.gptImage2.allowTransparentBackground,
                 recommended_presets: [
                     { name: 'square', size: '2048x2048', purpose: '通用正方形构图' },
                     { name: 'landscape', size: '3072x2048', purpose: '横向宽幅构图' },
@@ -910,10 +1118,52 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             image_storage_mode: env.NEXT_PUBLIC_IMAGE_STORAGE_MODE || (env.VERCEL === '1' ? 'indexeddb' : 'fs'),
             postgres_configured: Boolean(env.AGENT_DATABASE_URL || env.AGENT_DB_PASSWORD || env.AGENT_DB_PASSWORD_FILE)
         },
+        page_request_diagnostics: buildPageRequestDiagnosticsCapabilities(env),
+        agent_request_diagnostics: buildAgentRequestDiagnosticsCapabilities(env),
         idempotency: {
             required: true,
             header: 'Idempotency-Key',
             ttl_seconds: readAgentRequestTtlSeconds(env)
         }
+    };
+}
+
+function buildAgentUpstreamRequestHeadersCapabilities(env: Record<string, string | undefined>): AgentCapabilities['upstream_request_headers'] {
+    const channelSummary = getChannelPoolSummary(parseChannelPoolConfig(env));
+    return {
+        default: summarizeUpstreamRequestHeaders(undefined, env),
+        channels: channelSummary.channels.map((channel) => ({
+            id: channel.id,
+            request_headers: channel.requestHeaders
+        }))
+    };
+}
+
+function buildAgentUpstreamLimits(env: Record<string, string | undefined>): {
+    profile: ImageUpstreamProfile;
+    summary: ImageUpstreamProfileSummary;
+} {
+    const serverProfiles = readServerProfiles(env);
+    const summary = summarizeImageUpstreamProfile({ serverProfiles });
+    return {
+        profile: summary.activeConstraints,
+        summary
+    };
+}
+
+function readServerProfiles(env: Record<string, string | undefined>): ImageUpstreamProfile[] {
+    return getChannelPoolSummary(parseChannelPoolConfig(env)).channels.map((channel) => channel.effectiveProfile);
+}
+
+function clampDefaultPartialImages(limits: ImageUpstreamProfile['partialImages']): PartialImagesCount {
+    return clampIntegerToRange(AGENT_DEFAULT_PARTIAL_IMAGES, limits) as PartialImagesCount;
+}
+
+function buildAgentPartialImagesByBackend(
+    profile: ImageUpstreamProfile
+): Record<ImageGenerationBackend, { min: number; max: number }> {
+    return {
+        'images-api': getPartialImagesRangeForBackend(profile, 'images-api'),
+        'responses-image-generation': getPartialImagesRangeForBackend(profile, 'responses-image-generation')
     };
 }
