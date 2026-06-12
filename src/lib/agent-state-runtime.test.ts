@@ -242,6 +242,9 @@ function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () =
         async getRequest() {
             return undefined;
         },
+        async getRequestByIdempotencyKey() {
+            return undefined;
+        },
         async listArtifactsForRequest() {
             return [];
         },

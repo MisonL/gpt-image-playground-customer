@@ -27,6 +27,15 @@ import {
 } from './agent-state-store';
 import type { AgentErrorBody } from './api-error-response';
 import type { AgentImageResponse } from './agent-api-contracts';
+import type {
+    FeedbackDeleteOptions,
+    FeedbackRecord,
+    FeedbackStateStore,
+    FeedbackTarget,
+    FeedbackTargetType,
+    FeedbackValue,
+    FeedbackSource
+} from './feedback-store';
 import type { ImageShareRecord, ImageShareStateStore } from './share-store';
 
 type SqliteRequestRow = {
@@ -74,12 +83,21 @@ type SqliteShareRow = {
     access_code_hash: string | null;
 };
 
+type SqliteFeedbackRow = {
+    target_type: FeedbackTargetType;
+    target_id: string;
+    value: FeedbackValue;
+    note: string | null;
+    source: FeedbackSource;
+    updated_at: string;
+};
+
 type SqliteMigrationRow = {
     id: string;
     checksum?: string | null;
 };
 
-export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateStore {
+export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateStore, FeedbackStateStore {
     private db: Database.Database | undefined;
 
     constructor(private readonly dbPath: string) {}
@@ -138,13 +156,16 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         const nowIso = isoDate(now);
         const expiredRows = db
             .prepare(
-                `SELECT r.request_id, a.filepath
+                `SELECT r.request_id, a.id AS artifact_id, a.filepath
                  FROM agent_requests r
                  LEFT JOIN agent_artifacts a ON a.request_id = r.request_id
                  WHERE r.expires_at < ? AND r.status IN ('succeeded', 'failed', 'orphaned')`
             )
-            .all(nowIso) as Array<{ request_id: string; filepath: string | null }>;
+            .all(nowIso) as Array<{ request_id: string; artifact_id: string | null; filepath: string | null }>;
         const requestIds = [...new Set(expiredRows.map((row) => row.request_id))];
+        const artifactIds = [
+            ...new Set(expiredRows.map((row) => row.artifact_id).filter((id): id is string => typeof id === 'string'))
+        ];
         const artifactFilepaths = [
             ...new Set(
                 expiredRows
@@ -157,7 +178,11 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         ];
         const movedFiles = await moveArtifactFilesForDeletion(artifactFilepaths);
         const transaction = db.transaction(() => {
+            for (const artifactId of artifactIds) {
+                db.prepare("DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = ?").run(artifactId);
+            }
             for (const requestId of requestIds) {
+                db.prepare("DELETE FROM result_feedback WHERE target_type = 'agent_request' AND target_id = ?").run(requestId);
                 db.prepare('DELETE FROM agent_artifacts WHERE request_id = ?').run(requestId);
                 db.prepare('DELETE FROM agent_requests WHERE request_id = ?').run(requestId);
             }
@@ -303,6 +328,13 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         return row ? this.mapRequestRow(row) : undefined;
     }
 
+    async getRequestByIdempotencyKey(idempotencyKey: string): Promise<AgentRequestRecord | undefined> {
+        const row = this.requireDb()
+            .prepare('SELECT * FROM agent_requests WHERE idempotency_key = ?')
+            .get(idempotencyKey) as SqliteRequestRow | undefined;
+        return row ? this.mapRequestRow(row) : undefined;
+    }
+
     async getArtifact(id: string): Promise<AgentArtifactRecord | undefined> {
         const row = this.requireDb().prepare('SELECT * FROM agent_artifacts WHERE id = ?').get(id) as SqliteArtifactRow | undefined;
         return row ? this.mapArtifactRow(row) : undefined;
@@ -313,8 +345,83 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
     }
 
     async deleteArtifact(id: string): Promise<boolean> {
-        const result = this.requireDb().prepare('DELETE FROM agent_artifacts WHERE id = ?').run(id);
+        const result = this.requireDb()
+            .transaction(() => {
+                const deleteResult = this.requireDb().prepare('DELETE FROM agent_artifacts WHERE id = ?').run(id);
+                if (deleteResult.changes > 0) {
+                    this.requireDb()
+                        .prepare("DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = ?")
+                        .run(id);
+                }
+                return deleteResult;
+            })();
         return result.changes > 0;
+    }
+
+    async upsertFeedback(record: FeedbackRecord): Promise<void> {
+        this.requireDb()
+            .prepare(
+                `INSERT INTO result_feedback (target_type, target_id, value, note, source, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(target_type, target_id) DO UPDATE SET
+                    value = excluded.value,
+                    note = excluded.note,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at
+                 WHERE result_feedback.updated_at <= excluded.updated_at`
+            )
+            .run(record.targetType, record.targetId, record.value, record.note ?? null, record.source, record.updatedAt);
+    }
+
+    async upsertFeedbackBatch(records: FeedbackRecord[]): Promise<void> {
+        if (records.length === 0) return;
+        const statement = this.requireDb().prepare(
+            `INSERT INTO result_feedback (target_type, target_id, value, note, source, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(target_type, target_id) DO UPDATE SET
+                value = excluded.value,
+                note = excluded.note,
+                source = excluded.source,
+                updated_at = excluded.updated_at
+             WHERE result_feedback.updated_at <= excluded.updated_at`
+        );
+        this.requireDb()
+            .transaction(() => {
+                for (const record of records) {
+                    statement.run(record.targetType, record.targetId, record.value, record.note ?? null, record.source, record.updatedAt);
+                }
+            })();
+    }
+
+    async readFeedback(targetType: FeedbackTargetType, targetId: string): Promise<FeedbackRecord | undefined> {
+        const row = this.requireDb()
+            .prepare('SELECT * FROM result_feedback WHERE target_type = ? AND target_id = ?')
+            .get(targetType, targetId) as SqliteFeedbackRow | undefined;
+        return row ? this.mapFeedbackRow(row) : undefined;
+    }
+
+    async listFeedbackByTargets(targets: FeedbackTarget[]): Promise<FeedbackRecord[]> {
+        const records: FeedbackRecord[] = [];
+        for (const target of targets) {
+            const record = await this.readFeedback(target.targetType, target.targetId);
+            if (record) records.push(record);
+        }
+        return records;
+    }
+
+    async deleteFeedbackByTargets(targets: FeedbackTarget[], options: FeedbackDeleteOptions = {}): Promise<number> {
+        let deleted = 0;
+        for (const target of targets) {
+            const result = options.deletedAt
+                ? this.requireDb()
+                      .prepare('DELETE FROM result_feedback WHERE target_type = ? AND target_id = ? AND updated_at <= ?')
+                      .run(target.targetType, target.targetId, options.deletedAt)
+                : this.requireDb()
+                      .prepare('DELETE FROM result_feedback WHERE target_type = ? AND target_id = ?')
+                      .run(target.targetType, target.targetId);
+            deleted += result.changes;
+        }
+        return deleted;
     }
 
     async createImageShareRecord(record: ImageShareRecord): Promise<void> {
@@ -470,6 +577,17 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
             ...(row.access_code_hash ? { accessCodeHash: row.access_code_hash } : {})
         };
     }
+
+    private mapFeedbackRow(row: SqliteFeedbackRow): FeedbackRecord {
+        return {
+            targetType: row.target_type,
+            targetId: row.target_id,
+            value: row.value,
+            source: row.source,
+            updatedAt: row.updated_at,
+            ...(row.note ? { note: row.note } : {})
+        };
+    }
 }
 
 function cryptoRandomId(): string {
@@ -556,6 +674,21 @@ CREATE TABLE IF NOT EXISTS image_shares (
     )
 );
 CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
+`
+    },
+    {
+        id: '003_result_feedback',
+        sql: `
+CREATE TABLE IF NOT EXISTS result_feedback (
+    target_type TEXT NOT NULL CHECK (target_type IN ('page_request', 'agent_request', 'agent_artifact')),
+    target_id TEXT NOT NULL,
+    value TEXT NOT NULL CHECK (value IN ('usable', 'needs_revision')),
+    note TEXT,
+    source TEXT NOT NULL CHECK (source IN ('webui', 'agent')),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (target_type, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_result_feedback_updated_at ON result_feedback(updated_at);
 `
     }
 ];

@@ -5,6 +5,13 @@ export type FilterableLogEntry = {
     message?: string;
 };
 
+export type LogScopeDiagnostics = {
+    requestIds: string[];
+    filenames: string[];
+    filenameMatchedRequestIds: string[];
+    copyText: string;
+};
+
 function uniqueStrings(values: string[]): string[] {
     return Array.from(new Set(values.filter((value) => value.length > 0)));
 }
@@ -13,8 +20,7 @@ function parseContext(context: string | undefined): unknown {
     if (!context) return undefined;
     try {
         return JSON.parse(context);
-    } catch (error) {
-        console.warn('解析日志上下文失败。', { context, error });
+    } catch {
         return undefined;
     }
 }
@@ -55,12 +61,42 @@ export function resolveLogClientRequestIds(input: {
     return uniqueStrings(Array.from(requestIds));
 }
 
-export function filterLogsByScope(input: {
-    logs: FilterableLogEntry[];
+export function filterLogsByScope<T extends FilterableLogEntry>(input: {
+    logs: T[];
     clientRequestIds: string[];
     filenames: string[];
-}): FilterableLogEntry[] {
+}): T[] {
     const resolvedIds = new Set(resolveLogClientRequestIds(input));
     if (resolvedIds.size === 0) return [];
-    return input.logs.filter((entry) => entry.clientRequestId && resolvedIds.has(entry.clientRequestId));
+    return input.logs.filter((entry): entry is T => {
+        if (!entry.clientRequestId) return false;
+        return resolvedIds.has(entry.clientRequestId);
+    });
+}
+
+export function buildLogScopeDiagnostics(input: {
+    clientRequestIds: string[];
+    filenames: string[];
+    resolvedClientRequestIds: string[];
+}): LogScopeDiagnostics {
+    const requestIds = uniqueStrings(input.clientRequestIds);
+    const filenames = uniqueStrings(input.filenames);
+    const directRequestIds = new Set(requestIds);
+    const filenameMatchedRequestIds = uniqueStrings(input.resolvedClientRequestIds).filter(
+        (requestId) => !directRequestIds.has(requestId)
+    );
+    return {
+        requestIds,
+        filenames,
+        filenameMatchedRequestIds,
+        copyText: [
+            `requestIds=${formatDiagnosticValues(requestIds)}`,
+            `filenames=${formatDiagnosticValues(filenames)}`,
+            `filenameMatchedRequestIds=${formatDiagnosticValues(filenameMatchedRequestIds)}`
+        ].join('\n')
+    };
+}
+
+function formatDiagnosticValues(values: string[]): string {
+    return values.length > 0 ? values.join(',') : '-';
 }

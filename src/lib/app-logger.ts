@@ -1,9 +1,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readAppLogRetentionMetadata as readRetentionMetadata } from './app-log-retention';
+export {
+    APP_LOG_DEFAULT_MAX_ENTRIES,
+    APP_LOG_MAX_CONFIGURED_ENTRIES,
+    APP_LOG_MAX_ENTRIES_ENV,
+    APP_LOG_MIN_ENTRIES,
+    APP_LOG_RETENTION_LOSS_MODES,
+    APP_LOG_RETENTION_STORAGE,
+    readAppLogRetentionMetadata,
+    type AppLogRetentionMetadata
+} from './app-log-retention';
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
-const MAX_LOG_ENTRIES = 300;
 const LOG_DIR = path.join(
     /* turbopackIgnore: true */ process.cwd(),
     'generated-images',
@@ -81,6 +91,10 @@ function canLog(level: LogLevel): boolean {
     return LOG_LEVELS.indexOf(level) >= LOG_LEVELS.indexOf(readLogLevel());
 }
 
+function readMaxLogEntries(): number {
+    return readRetentionMetadata().max_entries;
+}
+
 function serializeContext(context: unknown): string | undefined {
     if (context === undefined) return undefined;
     if (context instanceof Error) {
@@ -99,7 +113,8 @@ function readClientRequestId(context: unknown): string | undefined {
         return undefined;
     }
     const value = (context as Record<string, unknown>).clientRequestId;
-    return typeof value === 'string' && value.trim() ? value : undefined;
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    return normalized || undefined;
 }
 
 function readFilenames(context: unknown): string[] | undefined {
@@ -108,10 +123,19 @@ function readFilenames(context: unknown): string[] | undefined {
     }
     const value = (context as Record<string, unknown>).filenames;
     if (!Array.isArray(value)) return undefined;
-    const filenames = Array.from(
-        new Set(value.filter((filename): filename is string => typeof filename === 'string' && filename.trim().length > 0))
-    );
+    const filenames = normalizeStringArray(value);
     return filenames.length > 0 ? filenames : undefined;
+}
+
+function normalizeStringArray(value: unknown[]): string[] {
+    return Array.from(
+        new Set(
+            value
+                .filter((item): item is string => typeof item === 'string')
+                .map((item) => item.trim())
+                .filter((item) => item.length > 0)
+        )
+    );
 }
 
 function parsePersistedEntry(line: string): AppLogEntry | undefined {
@@ -125,16 +149,16 @@ function parsePersistedEntry(line: string): AppLogEntry | undefined {
         ) {
             return undefined;
         }
+        const clientRequestId = readClientRequestId(parsed);
+        const filenames = Array.isArray(parsed.filenames) ? normalizeStringArray(parsed.filenames) : [];
         return {
             id: parsed.id,
             at: parsed.at,
             level: parsed.level as LogLevel,
             message: parsed.message,
             ...(typeof parsed.context === 'string' ? { context: parsed.context } : {}),
-            ...(typeof parsed.clientRequestId === 'string' ? { clientRequestId: parsed.clientRequestId } : {}),
-            ...(Array.isArray(parsed.filenames)
-                ? { filenames: parsed.filenames.filter((filename): filename is string => typeof filename === 'string') }
-                : {})
+            ...(clientRequestId ? { clientRequestId } : {}),
+            ...(filenames.length > 0 ? { filenames } : {})
         };
     } catch {
         return undefined;
@@ -146,8 +170,9 @@ function serializePersistedEntries(entries: AppLogEntry[]): string {
 }
 
 function compactEntries() {
-    if (logEntries.length > MAX_LOG_ENTRIES) {
-        logEntries.splice(0, logEntries.length - MAX_LOG_ENTRIES);
+    const maxEntries = readMaxLogEntries();
+    if (logEntries.length > maxEntries) {
+        logEntries.splice(0, logEntries.length - maxEntries);
     }
 }
 
@@ -173,7 +198,7 @@ function hydratePersistedEntries() {
         .filter((line) => line.trim().length > 0)
         .map(parsePersistedEntry)
         .filter((entry): entry is AppLogEntry => entry !== undefined)
-        .slice(-MAX_LOG_ENTRIES);
+        .slice(-readMaxLogEntries());
 
     logEntries.length = 0;
     logEntries.push(...persistedEntries);
@@ -209,7 +234,7 @@ function appendLogEntry(level: LogLevel, message: string, context?: unknown) {
         ...(filenames ? { filenames } : {})
     };
     logEntries.push(entry);
-    const needsRewrite = logEntries.length > MAX_LOG_ENTRIES;
+    const needsRewrite = logEntries.length > readMaxLogEntries();
     compactEntries();
     persistEntries(needsRewrite);
     logSubscribers.forEach((subscriber) => {

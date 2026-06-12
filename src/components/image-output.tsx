@@ -11,7 +11,7 @@ import {
     DialogTitle
 } from '@/components/ui/dialog';
 import { useI18n } from '@/lib/i18n';
-import { filterLogsByScope, resolveLogClientRequestIds } from '@/lib/log-filter';
+import { buildLogScopeDiagnostics, filterLogsByScope, resolveLogClientRequestIds } from '@/lib/log-filter';
 import { cn } from '@/lib/utils';
 import {
     Copy,
@@ -97,6 +97,10 @@ function formatLogTime(value: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
     return date.toLocaleTimeString();
+}
+
+function formatLogScopeValues(values: string[]): string {
+    return values.length > 0 ? values.join(', ') : '-';
 }
 
 function readImageDimensionsFromSource(source: string): Promise<ImageDimensions | null> {
@@ -192,6 +196,7 @@ export function ImageOutput({
     const [isLogDialogOpen, setIsLogDialogOpen] = React.useState(false);
     const [logs, setLogs] = React.useState<LogEntry[]>([]);
     const [logConnectionState, setLogConnectionState] = React.useState<'idle' | 'connected' | 'error'>('idle');
+    const [copiedLogScopeText, setCopiedLogScopeText] = React.useState<string | null>(null);
     const [compareSelection, setCompareSelection] = React.useState<{
         imageBatch: ImageInfo[];
         selectedImageIndex: number;
@@ -206,6 +211,15 @@ export function ImageOutput({
     const filteredLogs = React.useMemo(
         () => filterLogsByScope({ logs, clientRequestIds: resolvedLogClientRequestIds, filenames: [] }) as LogEntry[],
         [logs, resolvedLogClientRequestIds]
+    );
+    const logScopeDiagnostics = React.useMemo(
+        () =>
+            buildLogScopeDiagnostics({
+                clientRequestIds: logClientRequestIds,
+                filenames: logFilenames,
+                resolvedClientRequestIds: resolvedLogClientRequestIds
+            }),
+        [logClientRequestIds, logFilenames, resolvedLogClientRequestIds]
     );
     const hasSelectedImageBatch = !!imageBatch && imageBatch.length > 0;
     const hasLogScope = resolvedLogClientRequestIds.length > 0;
@@ -318,6 +332,24 @@ export function ImageOutput({
         setIsLogDialogOpen(open);
         if (!open) {
             setLogConnectionState('idle');
+            setCopiedLogScopeText(null);
+        }
+    };
+
+    const handleCopyLogScope = async () => {
+        try {
+            if (!navigator.clipboard?.writeText) {
+                throw new Error('Clipboard API unavailable.');
+            }
+            await navigator.clipboard.writeText(logScopeDiagnostics.copyText);
+            setCopiedLogScopeText(logScopeDiagnostics.copyText);
+            window.setTimeout(() => {
+                setCopiedLogScopeText((current) =>
+                    current === logScopeDiagnostics.copyText ? null : current
+                );
+            }, 1500);
+        } catch (error) {
+            console.error('复制日志诊断范围失败。', error);
         }
     };
 
@@ -642,6 +674,36 @@ export function ImageOutput({
                             {t('logs.scopeNone')}
                         </div>
                     )}
+                    <div className='border-border bg-card/70 flex flex-col gap-2 rounded-md border px-3 py-2 text-xs sm:flex-row sm:items-start sm:justify-between'>
+                        <div className='text-muted-foreground min-w-0 space-y-1'>
+                            <p className='break-all'>
+                                {t('logs.scopeRequestIds', {
+                                    value: formatLogScopeValues(logScopeDiagnostics.requestIds)
+                                })}
+                            </p>
+                            <p className='break-all'>
+                                {t('logs.scopeFilenames', {
+                                    value: formatLogScopeValues(logScopeDiagnostics.filenames)
+                                })}
+                            </p>
+                            <p className='break-all'>
+                                {t('logs.scopeResolvedRequestIds', {
+                                    value: formatLogScopeValues(logScopeDiagnostics.filenameMatchedRequestIds)
+                                })}
+                            </p>
+                        </div>
+                        <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            className='shrink-0'
+                            onClick={handleCopyLogScope}>
+                            <Copy className='mr-2 h-4 w-4' />
+                            {copiedLogScopeText === logScopeDiagnostics.copyText
+                                ? t('common.copied')
+                                : t('logs.copyScope')}
+                        </Button>
+                    </div>
                     <div className='literary-scrollbar bg-muted/30 border-border text-foreground/80 h-[420px] overflow-y-auto rounded-md border p-3 font-mono text-xs leading-5'>
                         {visibleLogs.length === 0 ? (
                             <p className='text-muted-foreground'>

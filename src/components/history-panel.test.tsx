@@ -66,7 +66,9 @@ function renderHistoryPanel(
                 onSaveInspiration={noop}
                 onSendHistoryToEdit={noop}
                 onMarkResultFeedback={noop}
+                onUpdateResultFeedbackNote={noop}
                 onDeleteInspiration={noop}
+                onDownloadHistoryItem={noop}
                 onClearHistory={noop}
                 getImageSrc={() => '/api/image/history-card.png'}
                 onDeleteItemRequest={noop}
@@ -119,6 +121,7 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /收藏这条历史提示词/);
         assert.match(html, /复用这条历史记录到创作单/);
         assert.match(html, /用这条历史记录的首张图片继续编辑/);
+        assert.match(html, /aria-label="下载批次"/);
         assert.match(html, /结果反馈/);
         assert.match(html, /未标记/);
         assert.match(html, /aria-label="标记本次结果可用"/);
@@ -140,6 +143,23 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /需修改/);
         assert.match(html, /aria-label="标记本次结果需要修改"/);
         assert.match(html, /aria-pressed="true"/);
+    });
+
+    it('renders result feedback notes in cards and detail dialogs', () => {
+        const html = renderHistoryPanel([
+            {
+                ...historyItem,
+                resultFeedback: {
+                    value: 'usable',
+                    updatedAt: Date.UTC(2026, 4, 31, 12, 18),
+                    note: '首版可直接进入文案排期。'
+                }
+            }
+        ]);
+
+        assert.match(html, /反馈原因/);
+        assert.match(html, /首版可直接进入文案排期。/);
+        assert.match(html, /Record why it is usable or needs revision|记录为什么可用或需要修改/);
     });
 
     it('renders recent history as a mobile horizontal snap album', () => {

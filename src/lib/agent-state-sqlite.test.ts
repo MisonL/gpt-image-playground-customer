@@ -115,6 +115,36 @@ describe('SqliteAgentStateStore', () => {
         );
     });
 
+    it('upserts feedback rows by target type and id', async () => {
+        const first = {
+            targetType: 'page_request' as const,
+            targetId: 'web-sqlite-feedback',
+            value: 'usable' as const,
+            note: 'works for review',
+            source: 'webui' as const,
+            updatedAt: '2026-05-12T00:00:00.000Z'
+        };
+        const second = {
+            ...first,
+            value: 'needs_revision' as const,
+            note: 'needs crop fix',
+            updatedAt: '2026-05-12T00:02:00.000Z'
+        };
+
+        await store.upsertFeedbackBatch([first, second, { ...first, note: 'stale retry' }]);
+
+        assert.deepEqual(await store.readFeedback('page_request', 'web-sqlite-feedback'), second);
+        assert.equal(
+            await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-sqlite-feedback' }], {
+                deletedAt: '2026-05-12T00:01:00.000Z'
+            }),
+            0
+        );
+        assert.deepEqual(await store.readFeedback('page_request', 'web-sqlite-feedback'), second);
+        assert.equal(await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-sqlite-feedback' }]), 1);
+        assert.equal(await store.readFeedback('page_request', 'web-sqlite-feedback'), undefined);
+    });
+
     it('replays stored failures without reacquiring the same idempotency key', async () => {
         const requestJson = { prompt: 'stored failure' };
         const requestHash = hashAgentPayload(requestJson);
@@ -319,6 +349,86 @@ describe('SqliteAgentStateStore', () => {
 
         assert.equal(purged, 1);
         assert.equal(await store.getArtifact('artifact-purge-expired'), undefined);
+    });
+
+    it('purges feedback rows for expired agent requests and artifacts', async () => {
+        const requestJson = { prompt: 'sqlite feedback purge' };
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-sqlite-feedback-purge',
+            requestHash: hashAgentPayload(requestJson),
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 1,
+            now: new Date('2026-05-12T00:00:00.000Z')
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+        const artifact = buildArtifact({
+            id: 'artifact-sqlite-feedback-purge',
+            requestId: begin.record.requestId,
+            filename: 'sqlite-feedback-purge.png'
+        });
+        await store.completeRequest({
+            requestId: begin.record.requestId,
+            response: {
+                request_id: begin.record.requestId,
+                idempotency_key: 'idem-sqlite-feedback-purge',
+                cached: false,
+                images: [],
+                created_at: '2026-05-12T00:00:00.500Z'
+            },
+            artifacts: [artifact],
+            now: new Date('2026-05-12T00:00:00.500Z')
+        });
+        await store.upsertFeedback({
+            targetType: 'agent_request',
+            targetId: begin.record.requestId,
+            value: 'usable',
+            source: 'agent',
+            updatedAt: '2026-05-12T00:00:00.600Z'
+        });
+        await store.upsertFeedback({
+            targetType: 'agent_artifact',
+            targetId: artifact.id,
+            value: 'needs_revision',
+            source: 'agent',
+            updatedAt: '2026-05-12T00:00:00.700Z'
+        });
+
+        assert.equal(await store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')), 1);
+        assert.equal(await store.readFeedback('agent_request', begin.record.requestId), undefined);
+        assert.equal(await store.readFeedback('agent_artifact', artifact.id), undefined);
+    });
+
+    it('deletes artifact feedback when deleting artifact metadata', async () => {
+        const requestJson = { prompt: 'sqlite artifact feedback delete' };
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-sqlite-artifact-feedback-delete',
+            requestHash: hashAgentPayload(requestJson),
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+        const artifact = buildArtifact({
+            id: 'artifact-sqlite-feedback-delete',
+            requestId: begin.record.requestId,
+            filename: 'sqlite-feedback-delete.png'
+        });
+        await store.saveArtifacts([artifact]);
+        await store.upsertFeedback({
+            targetType: 'agent_artifact',
+            targetId: artifact.id,
+            value: 'usable',
+            source: 'agent',
+            updatedAt: '2026-05-12T00:00:00.000Z'
+        });
+
+        assert.equal(await store.deleteArtifact(artifact.id), true);
+        assert.equal(await store.readFeedback('agent_artifact', artifact.id), undefined);
     });
 
     it('deletes artifact files when purging expired terminal requests', async () => {
@@ -735,7 +845,7 @@ describe('SqliteAgentStateStore', () => {
                 .all() as Array<{ id: string }>;
             assert.deepEqual(
                 rows.map((row) => row.id),
-                ['001_agent_state_core', '002_image_shares']
+                ['001_agent_state_core', '002_image_shares', '003_result_feedback']
             );
         } finally {
             db.close();

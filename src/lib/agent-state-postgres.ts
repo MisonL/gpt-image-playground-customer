@@ -24,6 +24,15 @@ import {
 } from './agent-state-store';
 import type { AgentImageResponse } from './agent-api-contracts';
 import type { AgentErrorBody } from './api-error-response';
+import type {
+    FeedbackDeleteOptions,
+    FeedbackRecord,
+    FeedbackStateStore,
+    FeedbackSource,
+    FeedbackTarget,
+    FeedbackTargetType,
+    FeedbackValue
+} from './feedback-store';
 import type { ImageShareRecord, ImageShareStateStore } from './share-store';
 
 type PostgresRequestRow = {
@@ -71,12 +80,21 @@ type PostgresShareRow = {
     access_code_hash: string | null;
 };
 
+type PostgresFeedbackRow = {
+    target_type: FeedbackTargetType;
+    target_id: string;
+    value: FeedbackValue;
+    note: string | null;
+    source: FeedbackSource;
+    updated_at: Date | string;
+};
+
 type PostgresMigrationRow = {
     id: string;
     checksum: string | null;
 };
 
-export class PostgresAgentStateStore implements AgentStateStore, ImageShareStateStore {
+export class PostgresAgentStateStore implements AgentStateStore, ImageShareStateStore, FeedbackStateStore {
     private readonly pool: Pool;
 
     constructor(connectionString: string) {
@@ -154,19 +172,28 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
                 [nowIso]
             );
             const requestIds = expiredResult.rows.map((row: { request_id: string }) => row.request_id);
-            const artifactFilepaths =
+            const artifactRows: Array<{ id: string; filepath: string | null }> =
                 requestIds.length > 0
                     ? (
-                          await client.query('SELECT filepath FROM agent_artifacts WHERE request_id = ANY($1)', [requestIds])
+                          await client.query('SELECT id, filepath FROM agent_artifacts WHERE request_id = ANY($1)', [requestIds])
                       ).rows
-                          .map((row: { filepath: string | null }) => row.filepath)
-                          .filter(
-                              (filepath): filepath is string =>
-                                  typeof filepath === 'string' && isArtifactFilepathAllowed(filepath)
-                    )
                     : [];
+            const artifactIds = artifactRows.map((row) => row.id);
+            const artifactFilepaths = artifactRows
+                .map((row) => row.filepath)
+                .filter((filepath): filepath is string => typeof filepath === 'string' && isArtifactFilepathAllowed(filepath));
             movedFiles = await moveArtifactFilesForDeletion([...new Set(artifactFilepaths)]);
             if (requestIds.length > 0) {
+                if (artifactIds.length > 0) {
+                    await client.query(
+                        "DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = ANY($1)",
+                        [artifactIds]
+                    );
+                }
+                await client.query(
+                    "DELETE FROM result_feedback WHERE target_type = 'agent_request' AND target_id = ANY($1)",
+                    [requestIds]
+                );
                 await client.query('DELETE FROM agent_artifacts WHERE request_id = ANY($1)', [requestIds]);
                 await client.query('DELETE FROM agent_requests WHERE request_id = ANY($1)', [requestIds]);
             }
@@ -255,6 +282,12 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
         return row ? this.mapRequestRow(row) : undefined;
     }
 
+    async getRequestByIdempotencyKey(idempotencyKey: string): Promise<AgentRequestRecord | undefined> {
+        const result = await this.pool.query('SELECT * FROM agent_requests WHERE idempotency_key = $1', [idempotencyKey]);
+        const row = result.rows[0] as PostgresRequestRow | undefined;
+        return row ? this.mapRequestRow(row) : undefined;
+    }
+
     async getArtifact(id: string): Promise<AgentArtifactRecord | undefined> {
         const result = await this.pool.query('SELECT * FROM agent_artifacts WHERE id = $1', [id]);
         const row = result.rows[0] as PostgresArtifactRow | undefined;
@@ -269,8 +302,105 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
     }
 
     async deleteArtifact(id: string): Promise<boolean> {
-        const result = await this.pool.query('DELETE FROM agent_artifacts WHERE id = $1', [id]);
-        return (result.rowCount ?? 0) > 0;
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const result = await client.query('DELETE FROM agent_artifacts WHERE id = $1', [id]);
+            if ((result.rowCount ?? 0) > 0) {
+                await client.query(
+                    "DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = $1",
+                    [id]
+                );
+            }
+            await client.query('COMMIT');
+            return (result.rowCount ?? 0) > 0;
+        } catch (error) {
+            await client.query('ROLLBACK').catch(() => {});
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    async upsertFeedback(record: FeedbackRecord): Promise<void> {
+        await this.pool.query(
+            `INSERT INTO result_feedback (target_type, target_id, value, note, source, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (target_type, target_id) DO UPDATE SET
+                value = EXCLUDED.value,
+                note = EXCLUDED.note,
+                source = EXCLUDED.source,
+                updated_at = EXCLUDED.updated_at
+             WHERE result_feedback.updated_at <= EXCLUDED.updated_at`,
+            [record.targetType, record.targetId, record.value, record.note ?? null, record.source, record.updatedAt]
+        );
+    }
+
+    async upsertFeedbackBatch(records: FeedbackRecord[]): Promise<void> {
+        if (records.length === 0) return;
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            for (const record of records) {
+                await client.query(
+                    `INSERT INTO result_feedback (target_type, target_id, value, note, source, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6)
+                     ON CONFLICT (target_type, target_id) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        note = EXCLUDED.note,
+                        source = EXCLUDED.source,
+                        updated_at = EXCLUDED.updated_at
+                     WHERE result_feedback.updated_at <= EXCLUDED.updated_at`,
+                    [record.targetType, record.targetId, record.value, record.note ?? null, record.source, record.updatedAt]
+                );
+            }
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK').catch(() => {});
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
+
+    async readFeedback(targetType: FeedbackTargetType, targetId: string): Promise<FeedbackRecord | undefined> {
+        const result = await this.pool.query('SELECT * FROM result_feedback WHERE target_type = $1 AND target_id = $2', [
+            targetType,
+            targetId
+        ]);
+        const row = result.rows[0] as PostgresFeedbackRow | undefined;
+        return row ? this.mapFeedbackRow(row) : undefined;
+    }
+
+    async listFeedbackByTargets(targets: FeedbackTarget[]): Promise<FeedbackRecord[]> {
+        if (targets.length === 0) return [];
+        const targetTypes = targets.map((target) => target.targetType);
+        const targetIds = targets.map((target) => target.targetId);
+        const result = await this.pool.query(
+            `SELECT feedback.*
+             FROM result_feedback AS feedback
+             JOIN UNNEST($1::text[], $2::text[]) WITH ORDINALITY AS target(target_type, target_id, ord)
+               ON feedback.target_type = target.target_type
+              AND feedback.target_id = target.target_id
+             ORDER BY target.ord`,
+            [targetTypes, targetIds]
+        );
+        return result.rows.map((row) => this.mapFeedbackRow(row as PostgresFeedbackRow));
+    }
+
+    async deleteFeedbackByTargets(targets: FeedbackTarget[], options: FeedbackDeleteOptions = {}): Promise<number> {
+        if (targets.length === 0) return 0;
+        const targetTypes = targets.map((target) => target.targetType);
+        const targetIds = targets.map((target) => target.targetId);
+        const result = await this.pool.query(
+            `DELETE FROM result_feedback AS feedback
+             USING UNNEST($1::text[], $2::text[]) AS target(target_type, target_id)
+             WHERE feedback.target_type = target.target_type
+               AND feedback.target_id = target.target_id
+               AND ($3::timestamptz IS NULL OR feedback.updated_at <= $3)`,
+            [targetTypes, targetIds, options.deletedAt ?? null]
+        );
+        return result.rowCount ?? 0;
     }
 
     async createImageShareRecord(record: ImageShareRecord): Promise<void> {
@@ -453,6 +583,17 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
         };
     }
 
+    private mapFeedbackRow(row: PostgresFeedbackRow): FeedbackRecord {
+        return {
+            targetType: row.target_type,
+            targetId: row.target_id,
+            value: row.value,
+            source: row.source,
+            updatedAt: toIso(row.updated_at),
+            ...(row.note ? { note: row.note } : {})
+        };
+    }
+
     private async insertArtifacts(client: PoolClient, artifacts: AgentArtifactRecord[]): Promise<void> {
         for (const artifact of artifacts) {
             await this.assertArtifactCanBeInserted(client, artifact);
@@ -581,6 +722,21 @@ CREATE TABLE IF NOT EXISTS image_shares (
     )
 );
 CREATE INDEX IF NOT EXISTS idx_image_shares_expires_at ON image_shares(expires_at);
+`
+    },
+    {
+        id: '003_result_feedback',
+        sql: `
+CREATE TABLE IF NOT EXISTS result_feedback (
+    target_type TEXT NOT NULL CHECK (target_type IN ('page_request', 'agent_request', 'agent_artifact')),
+    target_id TEXT NOT NULL,
+    value TEXT NOT NULL CHECK (value IN ('usable', 'needs_revision')),
+    note TEXT,
+    source TEXT NOT NULL CHECK (source IN ('webui', 'agent')),
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (target_type, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_result_feedback_updated_at ON result_feedback(updated_at);
 `
     }
 ];

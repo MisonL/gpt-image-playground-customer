@@ -1,16 +1,20 @@
 import {
     appLogger,
     clearAppLogEntriesForTest,
+    readAppLogRetentionMetadata,
     readAppLogEntries,
     readPersistedAppLogEntriesForTest,
     setAppLogPersistenceForTest,
     subscribeAppLogs
 } from './app-logger';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 const originalLogLevel = process.env.APP_LOG_LEVEL;
+const originalMaxEntries = process.env.APP_LOG_MAX_ENTRIES;
 const originalNodeEnv = process.env.NODE_ENV;
 const originalTestLogFileName = process.env.APP_LOG_TEST_FILE_NAME;
 const originalDebug = console.debug;
@@ -36,6 +40,11 @@ afterEach(async () => {
     } else {
         process.env.APP_LOG_LEVEL = originalLogLevel;
     }
+    if (originalMaxEntries === undefined) {
+        delete process.env.APP_LOG_MAX_ENTRIES;
+    } else {
+        process.env.APP_LOG_MAX_ENTRIES = originalMaxEntries;
+    }
     if (originalNodeEnv === undefined) {
         delete process.env[nodeEnvKey];
     } else {
@@ -59,6 +68,19 @@ it('keeps the test log override scoped to the fixed app log directory', () => {
     appLogger.info('scoped test log override');
 
     assert.equal(readAppLogEntries().at(-1)?.message, 'scoped test log override');
+});
+
+it('exposes the app log retention boundary for diagnostic contracts', () => {
+    assert.deepEqual(readAppLogRetentionMetadata({ APP_LOG_MAX_ENTRIES: '10' }), {
+        storage: 'bounded_local_jsonl',
+        max_entries: 100,
+        default_max_entries: 300,
+        min_entries: 100,
+        max_configured_entries: 5000,
+        configured_by: 'APP_LOG_MAX_ENTRIES',
+        persisted_across_process_restart: true,
+        loss_modes: ['entry_evicted_by_max_entries', 'log_level_filter', 'local_log_file_missing_or_cleared']
+    });
 });
 
 describe('appLogger', { concurrency: false }, () => {
@@ -186,6 +208,20 @@ describe('appLogger', { concurrency: false }, () => {
         assert.deepEqual(entry.filenames, ['image-a.png', 'image-b.png']);
     });
 
+    it('normalizes request ids and filenames before storing structured log fields', () => {
+        process.env.APP_LOG_LEVEL = 'info';
+        console.info = () => {};
+
+        appLogger.info('dirty structured context', {
+            clientRequestId: ' client-req-trimmed ',
+            filenames: [' image-a.png ', '', 'image-a.png', ' image-b.png ', 1]
+        });
+
+        const [entry] = readAppLogEntries();
+        assert.equal(entry.clientRequestId, 'client-req-trimmed');
+        assert.deepEqual(entry.filenames, ['image-a.png', 'image-b.png']);
+    });
+
     it('hydrates entries from the persisted jsonl log file', async () => {
         process.env.APP_LOG_LEVEL = 'info';
         console.info = () => {};
@@ -204,6 +240,34 @@ describe('appLogger', { concurrency: false }, () => {
         assert.deepEqual(entries[0].filenames, ['persisted.png']);
     });
 
+    it('normalizes structured fields when hydrating persisted jsonl log entries', async () => {
+        const logFile = path.join(
+            os.tmpdir(),
+            'gpt-image-playground-app-logs',
+            process.env[testLogFileNameKey] ?? 'app-test.log.jsonl'
+        );
+        fs.mkdirSync(path.dirname(logFile), { recursive: true });
+        fs.writeFileSync(
+            logFile,
+            `${JSON.stringify({
+                id: 1,
+                at: '2026-05-12T00:00:00.000Z',
+                level: 'info',
+                message: 'dirty persisted message',
+                clientRequestId: ' persisted-req ',
+                filenames: [' persisted.png ', '', 'persisted.png', 1]
+            })}\n`,
+            'utf8'
+        );
+        clearAppLogEntriesForTest({ preservePersistedFile: true });
+
+        const entries = readAppLogEntries();
+
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].clientRequestId, 'persisted-req');
+        assert.deepEqual(entries[0].filenames, ['persisted.png']);
+    });
+
     it('keeps only the newest 300 entries in the persisted log file', async () => {
         process.env.APP_LOG_LEVEL = 'info';
         console.info = () => {};
@@ -216,6 +280,35 @@ describe('appLogger', { concurrency: false }, () => {
         assert.equal(entries.length, 300);
         assert.equal(entries[0].message, 'message 5');
         assert.equal(entries[299].message, 'message 304');
+    });
+
+    it('uses APP_LOG_MAX_ENTRIES for larger diagnostic windows', async () => {
+        process.env.APP_LOG_LEVEL = 'info';
+        process.env.APP_LOG_MAX_ENTRIES = '350';
+        console.info = () => {};
+
+        for (let index = 0; index < 360; index++) {
+            appLogger.info(`message ${index}`);
+        }
+
+        const entries = await readPersistedAppLogEntriesForTest();
+        assert.equal(entries.length, 350);
+        assert.equal(entries[0].message, 'message 10');
+        assert.equal(entries[349].message, 'message 359');
+    });
+
+    it('clamps tiny APP_LOG_MAX_ENTRIES values to keep diagnostics useful', async () => {
+        process.env.APP_LOG_LEVEL = 'info';
+        process.env.APP_LOG_MAX_ENTRIES = '10';
+        console.info = () => {};
+
+        for (let index = 0; index < 120; index++) {
+            appLogger.info(`message ${index}`);
+        }
+
+        const entries = await readPersistedAppLogEntriesForTest();
+        assert.equal(entries.length, 100);
+        assert.equal(entries[0].message, 'message 20');
     });
 
     it('does not store messages filtered out by the configured log level', () => {

@@ -8,7 +8,13 @@ export const AGENT_ENDPOINTS = Object.freeze({
     job_result: '/api/agent/jobs/{id}/result',
     artifact_metadata: '/api/agent/artifacts/{id}',
     artifact_content: '/api/agent/artifacts/{id}/content',
-    artifact_delete: '/api/agent/artifacts/{id}'
+    artifact_delete: '/api/agent/artifacts/{id}',
+    page_request_feedback_batch: '/api/agent/page-requests/feedback',
+    page_request_feedback: '/api/agent/page-requests/{id}/feedback',
+    agent_request_diagnostics_lookup: '/api/agent/diagnostics/requests',
+    agent_request_diagnostics: '/api/agent/diagnostics/requests/{id}',
+    page_request_diagnostics_batch: '/api/agent/diagnostics/page-requests',
+    page_request_diagnostics: '/api/agent/diagnostics/page-requests/{id}'
 });
 
 export const AGENT_JOB_ENDPOINTS = Object.freeze({
@@ -23,6 +29,18 @@ export function buildAgentJobPath(jobId) {
 
 export function buildAgentJobResultPath(jobId) {
     return AGENT_ENDPOINTS.job_result.replace('{id}', encodePathValue(jobId));
+}
+
+export function buildAgentPageRequestFeedbackPath(pageRequestId) {
+    return AGENT_ENDPOINTS.page_request_feedback.replace('{id}', encodePathValue(pageRequestId));
+}
+
+export function buildAgentPageRequestDiagnosticsPath(pageRequestId) {
+    return AGENT_ENDPOINTS.page_request_diagnostics.replace('{id}', encodePathValue(pageRequestId));
+}
+
+export function buildAgentRequestDiagnosticsPath(requestId) {
+    return AGENT_ENDPOINTS.agent_request_diagnostics.replace('{id}', encodePathValue(requestId));
 }
 
 function encodePathValue(value) {
