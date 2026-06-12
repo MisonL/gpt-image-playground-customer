@@ -6,10 +6,14 @@ import {
   normalizeBaseUrl,
   normalizeOutputFormat,
   parseImageSizeValue,
+  readCapabilitiesImageTransportTimeoutMs,
   readConfiguredPositiveInteger,
   readMaxImageEdge,
   readOptionValue,
-  resolveSameOriginUrl
+  readPartialImages,
+  resolveSameOriginUrl,
+  validateAgentEditRequestAgainstCapabilities,
+  validateAgentGenerateRequestAgainstCapabilities
 } from './lib/script-utils.mjs';
 import {
   PAGE_SSE_ENDPOINT,
@@ -19,6 +23,12 @@ import {
   normalizeImageBackendForPage,
   postPageSse
 } from './lib/page-sse-client.mjs';
+import {
+  buildFailureSummary as buildScriptFailureSummary,
+  buildSuccessSummary,
+  completeScriptTiming,
+  startScriptTiming
+} from './lib/script-summary.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,6 +36,8 @@ import path from 'node:path';
 const IMAGE_BACKENDS = new Set(['images-api', 'images', 'responses', 'responses-image-generation']);
 const MODELS = new Set(['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2']);
 const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
+const DEFAULT_OUTPUT_FORMAT = 'webp';
+const DEFAULT_OUTPUT_COMPRESSION = 100;
 const QUALITIES = new Set(['low', 'medium', 'high', 'auto']);
 const BACKGROUNDS = new Set(['transparent', 'opaque', 'auto']);
 const MODERATIONS = new Set(['low', 'auto']);
@@ -40,8 +52,6 @@ const STREAMING_STRATEGIES = new Set([
   'force-sse'
 ]);
 const MAX_EDIT_IMAGES = 10;
-const MIN_PARTIAL_IMAGES = 1;
-const MAX_PARTIAL_IMAGES = 3;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const DEFAULT_BATCH_MAX_ATTEMPTS = 1;
 const DEFAULT_MAX_CONSECUTIVE_FAILURES = 0;
@@ -274,7 +284,7 @@ function normalizeTask(raw, index, parsedOptions) {
   }
   validateTaskFields(raw, id, mode);
   validateTaskSize(raw, id, mode, parsedOptions.dimensionCheck);
-  validateTaskRoutingFields(raw, id);
+  validateTaskRoutingFields(raw, id, mode);
   if (mode === 'edit') validateEditImages(raw, id);
   return {
     id,
@@ -346,7 +356,6 @@ function validateTaskFields(raw, id, mode) {
   if (hasOwn(raw, 'output_format') || hasOwn(raw, 'format')) {
     normalizeEnumValue(readOutputFormatField(raw, id), OUTPUT_FORMATS, `${id}.output_format`);
   }
-  validateBackgroundForModel(raw, id);
   validateOutputCompression(raw, id);
 }
 
@@ -389,14 +398,6 @@ function validateRoutingControlFields(raw, id) {
   }
   if (hasOwn(raw, 'transport') && raw.transport !== 'page_sse') {
     throw new Error(`${id}.transport 必须是 page_sse。`);
-  }
-}
-
-function validateBackgroundForModel(raw, id) {
-  if (!hasOwn(raw, 'background')) return;
-  const model = hasOwn(raw, 'model') ? String(raw.model) : 'gpt-image-2';
-  if (model === 'gpt-image-2' && String(raw.background) === 'transparent') {
-    throw new Error(`${id}.background 对 gpt-image-2 无效：gpt-image-2 不支持 transparent 背景。`);
   }
 }
 
@@ -448,14 +449,13 @@ function readBooleanAlias(value, name) {
 }
 
 function readOutputCompression(raw, id) {
-  if (!hasOwn(raw, 'output_compression')) return undefined;
   const outputFormat = hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
     ? readOutputFormatField(raw, id)
-    : 'png';
+    : DEFAULT_OUTPUT_FORMAT;
   if (outputFormat === 'png') {
     return undefined;
   }
-  const value = raw.output_compression;
+  const value = hasOwn(raw, 'output_compression') ? raw.output_compression : DEFAULT_OUTPUT_COMPRESSION;
   const parsed = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
     throw new Error(`${id}.output_compression 必须是 0 到 100 之间的整数。`);
@@ -467,7 +467,7 @@ function readTaskNormalizations(raw, id) {
   if (!hasOwn(raw, 'output_compression')) return undefined;
   const outputFormat = hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
     ? readOutputFormatField(raw, id)
-    : 'png';
+    : DEFAULT_OUTPUT_FORMAT;
   if (outputFormat !== 'png') return undefined;
   return { output_compression_ignored_for_png: true };
 }
@@ -480,7 +480,7 @@ function readOutputFormatField(raw, id) {
   return normalizeOutputFormat(value);
 }
 
-function validateTaskRoutingFields(raw, id) {
+function validateTaskRoutingFields(raw, id, mode) {
   if ((raw.page_sse === true || raw.transport === 'page_sse') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
     throw new Error(`${id} stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。`);
   }
@@ -490,8 +490,11 @@ function validateTaskRoutingFields(raw, id) {
   if (hasOwn(raw, 'sse_log_path') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
     throw new Error(`${id}.sse_log_path 需要页面 SSE 路径，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`);
   }
-  if (hasPageAdvancedFields(raw) && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off') && raw.mode === 'edit') {
+  if (hasPageAdvancedFields(raw) && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off') && mode === 'edit') {
     throw new Error(`${id} 图生图高级参数需要页面 SSE，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`);
+  }
+  if (mode === 'edit' && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
+    throw new Error(`${id} 默认 WebP edit 任务需要页面 SSE；若要使用 Agent JSON 固定输出，请拆成单张 edit 并显式使用 --agent。`);
   }
 }
 
@@ -550,6 +553,9 @@ async function ensureCapabilities() {
   capabilitiesPromise ??= readCapabilities();
   try {
     capabilities = await capabilitiesPromise;
+    if (options.timeoutMs === undefined) {
+      timeoutMs = readCapabilitiesImageTransportTimeoutMs(capabilities, timeoutMs);
+    }
   } catch (error) {
     capabilitiesPromise = undefined;
     throw error;
@@ -559,6 +565,7 @@ async function ensureCapabilities() {
 
 async function runTask(task) {
   const routing = buildTaskRouting(task);
+  const taskTiming = startScriptTiming();
   try {
     const response =
       routing.transport === 'page_sse'
@@ -567,13 +574,27 @@ async function runTask(task) {
           ? await postEditTask(task)
           : await postGenerateTask(task);
     if (options.dimensionCheck) await assertDimensions(task, response);
-    const output = { ok: true, status: 'succeeded', id: task.id, idempotency_key: task.idempotencyKey, routing, response };
-    appendManifest(manifestPath, { ...baseManifestEntry(task), status: 'succeeded', routing, response: sanitizeResponse(response) });
+    const summary = buildSuccessSummary({
+      result: response,
+      routing,
+      timing: completeScriptTiming(taskTiming),
+      idempotencyKey: task.idempotencyKey
+    });
+    const output = { ok: true, status: 'succeeded', id: task.id, idempotency_key: task.idempotencyKey, routing, response, summary };
+    appendManifest(manifestPath, { ...baseManifestEntry(task), status: 'succeeded', routing, response: sanitizeResponse(response), summary });
     return output;
   } catch (error) {
     const failure = buildTaskFailureOutput(error, routing);
-    const output = { ok: false, status: 'failed', id: task.id, idempotency_key: task.idempotencyKey, ...failure };
-    appendManifest(manifestPath, { ...baseManifestEntry(task), status: 'failed', ...failure });
+    const summary = buildScriptFailureSummary({
+      errorBody: failure,
+      routing: failure.routing || routing,
+      timing: completeScriptTiming(taskTiming),
+      idempotencyKey: task.idempotencyKey,
+      billable: failure.billable !== false,
+      nextAction: failure.next_step
+    });
+    const output = { ok: false, status: 'failed', id: task.id, idempotency_key: task.idempotencyKey, ...failure, summary };
+    appendManifest(manifestPath, { ...baseManifestEntry(task), status: 'failed', ...failure, summary });
     return output;
   }
 }
@@ -690,7 +711,12 @@ function buildTaskFailureOutput(error, routing) {
       next_step: error.pageSseFailure.next_step
     };
   }
-  return { error: errorMessage(error), routing };
+  return {
+    ...(error?.billable === false ? { billable: false } : {}),
+    error: errorMessage(error),
+    routing,
+    ...(typeof error?.nextStep === 'string' ? { next_step: error.nextStep } : {})
+  };
 }
 
 function buildCircuitBreakerSkippedTask(task, consecutiveFailures) {
@@ -770,7 +796,7 @@ function buildTaskRouting(task) {
     endpoint: task.mode === 'edit' ? AGENT_ENDPOINTS.edit : AGENT_ENDPOINTS.generate,
     transport: 'agent_json',
     strength: 'default',
-    reason: 'Normal batch tasks use the Agent JSON response contract.'
+    reason: 'Agent JSON-compatible batch tasks use the Agent response contract.'
   };
 }
 
@@ -780,6 +806,9 @@ function buildPageSseRoutingReason(task) {
   }
   if (task.mode === 'edit' && hasPageAdvancedFields(task.raw)) {
     return 'GPT2Image-compatible edit options require page form-data SSE; Agent JSON edit does not accept those fields.';
+  }
+  if (task.mode === 'edit') {
+    return 'Default WebP edit output uses page form-data SSE; Agent JSON edit has a fixed output contract.';
   }
   if (task.mode === 'edit' && readTaskMaxEdge(task) > 2048) {
     return 'High-resolution edit defaults to page form-data SSE; fall back explicitly after diagnosis if streaming has issues.';
@@ -831,7 +860,7 @@ function buildPageSseRequestPreview(task) {
   if (raw.sse_log_path) preview.sse_log_path = readNonEmptyString(raw.sse_log_path, `${task.id}.sse_log_path`);
   if (raw.background) preview.background = String(raw.background);
   if (raw.moderation) preview.moderation = String(raw.moderation);
-  if (raw.output_compression !== undefined) preview.output_compression = readOutputCompression(raw, task.id);
+  if (readOutputCompression(raw, task.id) !== undefined) preview.output_compression = readOutputCompression(raw, task.id);
   if (readTaskNormalizations(raw, task.id)) preview.normalizations = readTaskNormalizations(raw, task.id);
   if (task.mode === 'edit') {
     preview.image_fields = readEditImagePaths(raw, task.id).map((_, index) => `image_${index}`);
@@ -854,6 +883,7 @@ function shouldUsePageSseForTask(task) {
   if (readResponsesModel(task.raw, task.id)) return true;
   if (task.raw.sse_log_path) return true;
   if (task.mode === 'edit' && hasPageAdvancedFields(task.raw)) return true;
+  if (task.mode === 'edit') return true;
   if (task.mode === 'edit' && readTaskMaxEdge(task) > 2048) return true;
   if (task.mode === 'generate' && readTaskMaxEdge(task) > 2048) {
     return true;
@@ -867,6 +897,18 @@ function isPageSseAllowedForTask(task) {
 
 async function postGenerateTask(task) {
   const body = buildGenerateBody(task.raw);
+  const taskCapabilities = await ensureCapabilities();
+  validateLocalRequest(
+    () =>
+      validateAgentGenerateRequestAgainstCapabilities(
+        {
+          n: body.n,
+          partial_images: body.partial_images ?? taskCapabilities?.defaults?.partial_images,
+          image_backend: body.image_backend
+        },
+        taskCapabilities
+      )
+  );
   const { response, result, text } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.generate}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': task.idempotencyKey, ...authHeaders() },
@@ -878,6 +920,22 @@ async function postGenerateTask(task) {
 
 async function postEditTask(task) {
   const formData = new FormData();
+  const imagePaths = readEditImagePaths(task.raw, task.id);
+  const taskCapabilities = await ensureCapabilities();
+  validateLocalRequest(
+    () =>
+      validateAgentEditRequestAgainstCapabilities(
+        {
+          n: task.raw.n === undefined ? 1 : readConfiguredPositiveInteger(task.raw.n, `${task.id}.n`, 1),
+          partial_images: hasOwn(task.raw, 'partial_images')
+            ? readPartialImages(task.raw.partial_images, `${task.id}.partial_images`)
+            : taskCapabilities?.defaults?.partial_images,
+          imageCount: imagePaths.length,
+          image_backend: task.raw.image_backend
+        },
+        taskCapabilities
+      )
+  );
   appendEditFields(formData, task.raw);
   const { response, result, text } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.edit}`, {
     method: 'POST',
@@ -890,6 +948,7 @@ async function postEditTask(task) {
 
 async function postPageSseTask(task, routing) {
   const pageSseCapabilities = await ensureCapabilities();
+  validatePageSseTaskAgainstCapabilities(task, pageSseCapabilities);
   try {
     assertPageSseReady({
       capabilities: pageSseCapabilities,
@@ -922,10 +981,57 @@ async function postPageSseTask(task, routing) {
   }
 }
 
+function validatePageSseTaskAgainstCapabilities(task, taskCapabilities) {
+  validateLocalRequest(() => {
+    if (task.mode === 'edit') {
+      validateAgentEditRequestAgainstCapabilities(
+        {
+          n: task.raw.n === undefined ? 1 : readConfiguredPositiveInteger(task.raw.n, `${task.id}.n`, 1),
+          partial_images: readTaskPartialImages(task, taskCapabilities),
+          imageCount: readEditImagePaths(task.raw, task.id).length,
+          image_backend: readTaskImageBackend(task.raw)
+        },
+        taskCapabilities
+      );
+      return;
+    }
+    validateAgentGenerateRequestAgainstCapabilities(
+      {
+        n: task.raw.n === undefined ? 1 : readConfiguredPositiveInteger(task.raw.n, `${task.id}.n`, 1),
+        partial_images: readTaskPartialImages(task, taskCapabilities),
+        image_backend: readTaskImageBackend(task.raw)
+      },
+      taskCapabilities
+    );
+  });
+}
+
+function readTaskPartialImages(task, taskCapabilities) {
+  if (hasOwn(task.raw, 'partial_images')) {
+    return readPartialImages(task.raw.partial_images, `${task.id}.partial_images`);
+  }
+  return taskCapabilities?.defaults?.partial_images;
+}
+
+function readTaskImageBackend(raw) {
+  return raw.image_backend ? normalizeImageBackendForPage(String(raw.image_backend)) : undefined;
+}
+
+function validateLocalRequest(callback) {
+  try {
+    callback();
+  } catch (error) {
+    const validationError = new Error(errorMessage(error));
+    validationError.billable = false;
+    validationError.nextStep = '修正任务参数后，使用新的 Idempotency-Key 重试失败任务。';
+    throw validationError;
+  }
+}
+
 function buildGenerateBody(raw) {
   const outputFormat = hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
     ? normalizeOutputFormat(raw.output_format ?? raw.format)
-    : 'png';
+    : DEFAULT_OUTPUT_FORMAT;
   const outputCompression = readOutputCompression(raw, String(raw.id || 'generate'));
   const body = {
     prompt: raw.prompt,
@@ -992,7 +1098,7 @@ function readResponseMode(raw) {
 function readOutputFormat(raw) {
   const outputFormat = hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
     ? normalizeOutputFormat(raw.output_format ?? raw.format)
-    : 'png';
+    : DEFAULT_OUTPUT_FORMAT;
   return normalizeEnumValue(outputFormat, OUTPUT_FORMATS, 'output_format');
 }
 
@@ -1025,14 +1131,6 @@ function normalizeEnumValue(value, allowed, name) {
   const normalized = String(value);
   if (allowed.has(normalized)) return normalized;
   throw new Error(`${name} 的值无效：${normalized}`);
-}
-
-function readPartialImages(value, name) {
-  const parsed = readConfiguredPositiveInteger(value, name, 2);
-  if (parsed < MIN_PARTIAL_IMAGES || parsed > MAX_PARTIAL_IMAGES) {
-    throw new Error(`${name} 必须是 1 到 3 的整数。`);
-  }
-  return parsed;
 }
 
 function readNonNegativeInteger(value, name) {

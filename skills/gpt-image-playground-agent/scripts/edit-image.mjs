@@ -8,11 +8,21 @@ import {
   normalizeBaseUrl,
   normalizeOutputFormat,
   parseRetryAfterValue,
+  readCapabilitiesImageTransportTimeoutMs,
   readConfiguredPositiveInteger,
   readMaxImageEdge,
   readOptionValue,
-  sleep
+  readPartialImages,
+  sleep,
+  validateAgentEditRequestAgainstCapabilities
 } from './lib/script-utils.mjs';
+import {
+  attachSummary,
+  buildFailureSummary,
+  buildSuccessSummary,
+  completeScriptTiming,
+  startScriptTiming
+} from './lib/script-summary.mjs';
 import {
   PAGE_SSE_ENDPOINT,
   assertPageSseReady,
@@ -36,12 +46,13 @@ const IMAGE_BACKENDS = new Set(['images-api', 'images', 'responses', 'responses-
 const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
 const MODERATIONS = new Set(['low', 'auto']);
 const THINKING_VALUES = new Set(['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
-const MIN_PARTIAL_IMAGES = 1;
-const MAX_PARTIAL_IMAGES = 3;
+const DEFAULT_PAGE_OUTPUT_FORMAT = 'webp';
+const DEFAULT_PAGE_OUTPUT_COMPRESSION = 100;
 
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1' || process.argv.includes('--contract-check');
+const scriptTiming = startScriptTiming();
 let options;
 try {
   options = parseArgs(process.argv.slice(2));
@@ -111,9 +122,13 @@ if (options.dryRun || (!contractCheck && !options.allowBillable)) {
           response_mode: options.responseMode,
           ...(options.streamMode ? { stream_mode: options.streamMode } : {}),
           ...(options.streamingStrategy ? { streaming_strategy: options.streamingStrategy } : {}),
-          ...(options.partialImages ? { partial_images: readPartialImages(options.partialImages) } : {}),
-          ...(options.format ? { output_format: readOutputFormat(options) } : {}),
-          ...(readOutputCompression(options) !== undefined ? { output_compression: readOutputCompression(options) } : {}),
+          ...(options.partialImages !== undefined
+            ? { partial_images: readPartialImages(options.partialImages, '--partial-images') }
+            : {}),
+          ...(usesPageOutputOptions(options, routingGuidance) ? { output_format: readOutputFormat(options) } : {}),
+          ...(usesPageOutputOptions(options, routingGuidance) && readOutputCompression(options) !== undefined
+            ? { output_compression: readOutputCompression(options) }
+            : {}),
           ...(options.moderation ? { moderation: options.moderation } : {}),
           ...(options.imageBackend ? { image_backend: normalizeImageBackendForPage(options.imageBackend) } : {}),
           ...(options.responsesModel ? { responsesModel: readNonEmptyString(options.responsesModel, '--responses-model') } : {}),
@@ -153,7 +168,8 @@ function parseArgs(argv) {
     streamMode: undefined,
     streamingStrategy: undefined,
     partialImages: undefined,
-    format: undefined,
+    format: DEFAULT_PAGE_OUTPUT_FORMAT,
+    formatSpecified: false,
     outputCompression: undefined,
     moderation: undefined,
     imageBackend: undefined,
@@ -185,7 +201,10 @@ function parseArgs(argv) {
     else if (arg === '--stream-mode') parsed.streamMode = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--streaming-strategy') parsed.streamingStrategy = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--partial-images') parsed.partialImages = readOptionValue(argv, (index += 1), arg);
-    else if (arg === '--format' || arg === '--output-format') parsed.format = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--format' || arg === '--output-format') {
+      parsed.format = readOptionValue(argv, (index += 1), arg);
+      parsed.formatSpecified = true;
+    }
     else if (arg === '--output-compression') parsed.outputCompression = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--moderation') parsed.moderation = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--image-backend') parsed.imageBackend = readOptionValue(argv, (index += 1), arg);
@@ -240,6 +259,14 @@ function buildEditRoutingGuidance(parsed) {
       reason: 'GPT2Image-compatible edit options require the page form-data SSE endpoint; Agent JSON edit does not accept those fields.'
     };
   }
+  if (usesDefaultPageOutput(parsed) && isPageSseAllowed(parsed)) {
+    return {
+      recommended_endpoint: '/api/images',
+      transport: 'page_sse',
+      strength: 'default',
+      reason: 'Default WebP edit output uses the page form-data SSE endpoint; Agent JSON edit has a fixed output contract.'
+    };
+  }
   if (readMaxImageEdge(parsed.size) > 2048 && isPageSseAllowed(parsed)) {
     return {
       recommended_endpoint: '/api/images',
@@ -252,7 +279,7 @@ function buildEditRoutingGuidance(parsed) {
     recommended_endpoint: '/api/agent/images/edit',
     transport: 'agent_json',
     strength: 'default',
-    reason: 'Normal edit requests can use the Agent JSON response contract.'
+    reason: 'Agent edit uses a fixed output contract and should be selected explicitly with --agent.'
   };
 }
 
@@ -312,10 +339,13 @@ function validateUpstreamStreamingOptions(parsed) {
   if (hasPageOnlyEditOptions(parsed) && !isPageSseAllowed(parsed)) {
     throw new Error('图生图高级参数需要页面 SSE，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。');
   }
+  if (parsed.routeMode !== 'agent' && usesDefaultPageOutput(parsed) && !isPageSseAllowed(parsed)) {
+    throw new Error('默认 WebP 图生图输出需要页面 SSE；若要使用 Agent JSON 固定输出，请添加 --agent。');
+  }
   if (parsed.routeMode === 'agent') {
     assertNoPageOnlyEditOptions(parsed, 'Agent edit');
   }
-  if (parsed.format && !OUTPUT_FORMATS.has(readOutputFormat(parsed))) {
+  if (parsed.formatSpecified && !OUTPUT_FORMATS.has(readOutputFormat(parsed))) {
     throw new Error('--format 必须是 png、jpeg 或 webp。');
   }
   if (parsed.outputCompression !== undefined) readOutputCompression(parsed);
@@ -330,12 +360,12 @@ function validateUpstreamStreamingOptions(parsed) {
     throw new Error('--thinking 必须是 minimal、none、low、medium、high 或 xhigh。');
   }
   if (parsed.promptOptimization !== undefined) readBooleanOption(parsed.promptOptimization, '--prompt-optimization');
-  if (parsed.partialImages) readPartialImages(parsed.partialImages);
+  if (parsed.partialImages !== undefined) readPartialImages(parsed.partialImages, '--partial-images');
 }
 
 function hasPageOnlyEditOptions(parsed) {
   return Boolean(
-    parsed.format ||
+    parsed.formatSpecified ||
       parsed.outputCompression !== undefined ||
       parsed.moderation ||
       parsed.imageBackend ||
@@ -352,14 +382,21 @@ function assertNoPageOnlyEditOptions(parsed, context) {
 }
 
 function readOutputFormat(parsed) {
-  return parsed.format ? normalizeOutputFormat(parsed.format) : 'png';
+  return parsed.format ? normalizeOutputFormat(parsed.format) : DEFAULT_PAGE_OUTPUT_FORMAT;
+}
+
+function usesPageOutputOptions(parsed, routingGuidance) {
+  return routingGuidance.transport === 'page_sse' || parsed.formatSpecified || parsed.outputCompression !== undefined;
+}
+
+function usesDefaultPageOutput(parsed) {
+  return !parsed.formatSpecified && parsed.outputCompression === undefined && readOutputFormat(parsed) === DEFAULT_PAGE_OUTPUT_FORMAT;
 }
 
 function readOutputCompression(parsed) {
-  if (parsed.outputCompression === undefined) return undefined;
   const outputFormat = readOutputFormat(parsed);
   if (outputFormat === 'png') return undefined;
-  const value = String(parsed.outputCompression);
+  const value = parsed.outputCompression === undefined ? String(DEFAULT_PAGE_OUTPUT_COMPRESSION) : String(parsed.outputCompression);
   if (!/^\d+$/.test(value)) throw new Error('--output-compression 必须是 0 到 100 之间的整数。');
   const parsedValue = Number(value);
   if (!Number.isInteger(parsedValue) || parsedValue < 0 || parsedValue > 100) {
@@ -388,14 +425,6 @@ function isPageSseAllowed(parsed) {
   return parsed.streamMode !== 'non_stream' && parsed.streamingStrategy !== 'off';
 }
 
-function readPartialImages(value) {
-  const parsed = readConfiguredPositiveInteger(value, '--partial-images', 2);
-  if (parsed < MIN_PARTIAL_IMAGES || parsed > MAX_PARTIAL_IMAGES) {
-    throw new Error('--partial-images 必须是 1 到 3 的整数。');
-  }
-  return parsed;
-}
-
 async function fetchWithTimeout(url, init) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -416,9 +445,30 @@ function printUsage() {
 let capabilities;
 try {
   capabilities = await readCapabilities();
+  if (options.timeoutMs === undefined) {
+    timeoutMs = readCapabilitiesImageTransportTimeoutMs(capabilities, timeoutMs);
+  }
 } catch (error) {
   console.error(errorMessage(error));
   process.exit(1);
+}
+
+try {
+  validateAgentEditRequestAgainstCapabilities(
+    {
+      n: 1,
+      partial_images:
+        options.partialImages !== undefined
+          ? readPartialImages(options.partialImages, '--partial-images')
+          : capabilities?.defaults?.partial_images,
+      imageCount: 1,
+      image_backend: options.imageBackend
+    },
+    capabilities
+  );
+} catch (error) {
+  console.error(errorMessage(error));
+  process.exit(2);
 }
 
 if (contractCheck) {
@@ -464,7 +514,11 @@ function buildFormData() {
   formData.append('response_mode', options.responseMode);
   if (options.streamMode) formData.append('stream_mode', options.streamMode);
   if (options.streamingStrategy) formData.append('streaming_strategy', options.streamingStrategy);
-  if (options.partialImages) formData.append('partial_images', String(readPartialImages(options.partialImages)));
+  if (options.partialImages !== undefined) {
+    formData.append('partial_images', String(readPartialImages(options.partialImages, '--partial-images')));
+  } else if (capabilities?.defaults?.partial_images !== undefined) {
+    formData.append('partial_images', String(readPartialImages(capabilities.defaults.partial_images, 'capabilities.defaults.partial_images')));
+  }
   formData.append('image_0', new Blob([imageBuffer], { type: imageType }), path.basename(imagePath));
   return formData;
 }
@@ -479,7 +533,7 @@ function buildPageSseFormData() {
   formData.append('response_mode', options.responseMode);
   formData.append('clientRequestId', idempotencyKey);
   formData.append('stream', 'true');
-  if (options.format) formData.append('output_format', readOutputFormat(options));
+  formData.append('output_format', readOutputFormat(options));
   if (readOutputCompression(options) !== undefined) {
     formData.append('output_compression', String(readOutputCompression(options)));
   }
@@ -493,7 +547,11 @@ function buildPageSseFormData() {
   if (options.forceWeb !== undefined) formData.append('force_web', 'true');
   if (options.streamMode) formData.append('stream_mode', options.streamMode);
   if (options.streamingStrategy) formData.append('image_streaming_strategy', options.streamingStrategy);
-  if (options.partialImages) formData.append('partial_images', String(readPartialImages(options.partialImages)));
+  if (options.partialImages !== undefined) {
+    formData.append('partial_images', String(readPartialImages(options.partialImages, '--partial-images')));
+  } else if (capabilities?.defaults?.partial_images !== undefined) {
+    formData.append('partial_images', String(readPartialImages(capabilities.defaults.partial_images, 'capabilities.defaults.partial_images')));
+  }
   if (passwordHash) formData.append('passwordHash', passwordHash);
   formData.append('image_0', new Blob([imageBuffer], { type: imageType }), path.basename(imagePath));
   return formData;
@@ -510,12 +568,12 @@ async function runPageSseEdit() {
   });
   console.log(
     JSON.stringify(
-      {
+      attachSummary({
         ...formatPageSseOutput({
           result,
           baseUrl,
           responseMode: options.responseMode,
-          defaultOutputFormat: 'png'
+          defaultOutputFormat: DEFAULT_PAGE_OUTPUT_FORMAT
         }),
         routing: {
           transport: 'page_sse',
@@ -523,7 +581,16 @@ async function runPageSseEdit() {
           fallback_endpoint: '/api/agent/images/edit',
           fallback_mode: 'manual_after_diagnosis'
         }
-      },
+      }, buildSuccessSummary({
+        result,
+        routing: {
+          transport: 'page_sse',
+          endpoint: PAGE_SSE_ENDPOINT
+        },
+        timing: completeScriptTiming(scriptTiming),
+        idempotencyKey,
+        billable: true
+      })),
       null,
       2
     )
@@ -545,13 +612,23 @@ if (routingGuidance.transport === 'page_sse') {
     await runPageSseEdit();
     process.exit(0);
   } catch (error) {
+    const failureOutput = buildPageSseFailureOutput({
+      error,
+      fallbackEndpoint: '/api/agent/images/edit',
+      errorMessage
+    });
     console.error(
       JSON.stringify(
-        buildPageSseFailureOutput({
-          error,
-          fallbackEndpoint: '/api/agent/images/edit',
-          errorMessage
-        }),
+        attachSummary(failureOutput, buildFailureSummary({
+          errorBody: failureOutput,
+          routing: {
+            transport: 'page_sse',
+            endpoint: PAGE_SSE_ENDPOINT
+          },
+          timing: completeScriptTiming(scriptTiming),
+          idempotencyKey,
+          billable: failureOutput.billable !== false
+        })),
         null,
         2
       )
@@ -583,7 +660,22 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     continue;
   }
   if (response.ok) {
-    console.log(JSON.stringify(enrichImageUrls(result), null, 2));
+    console.log(
+      JSON.stringify(
+        attachSummary(
+          enrichImageUrls(result),
+          buildSuccessSummary({
+            result: enrichImageUrls(result),
+            routing: { transport: 'agent_json', endpoint: '/api/agent/images/edit' },
+            timing: completeScriptTiming(scriptTiming),
+            idempotencyKey,
+            billable: true
+          })
+        ),
+        null,
+        2
+      )
+    );
     process.exit(0);
   }
 
@@ -594,5 +686,21 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
   await sleep(retryAfter);
 }
 
-console.error(JSON.stringify({ ...lastResult, retry_after: lastRetryAfter }, null, 2));
+const failureOutput = { ...lastResult, retry_after: lastRetryAfter };
+console.error(
+  JSON.stringify(
+    attachSummary(
+      failureOutput,
+      buildFailureSummary({
+        errorBody: failureOutput,
+        routing: { transport: 'agent_json', endpoint: '/api/agent/images/edit' },
+        timing: completeScriptTiming(scriptTiming),
+        idempotencyKey,
+        billable: failureOutput?.billable !== false
+      })
+    ),
+    null,
+    2
+  )
+);
 process.exit(1);

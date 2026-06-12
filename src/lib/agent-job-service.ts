@@ -7,11 +7,12 @@ import {
     errorToAgentErrorBody,
     executeAgentGenerate,
     hydrateAgentReplayResponse,
-    saveAgentExecutionArtifacts
+    saveAgentExecutionArtifacts,
+    type AgentGeneratePreparation
 } from './agent-image-service';
 import { AgentApiError, toTerminalAgentErrorBody, type AgentErrorBody } from './api-error-response';
 import type { AgentRequestRecord, AgentStateStore } from './agent-state-store';
-import { buildAgentJobResultPath } from './agent-api-paths.mjs';
+import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './agent-api-paths.mjs';
 import { appLogger } from './app-logger';
 
 const DEFAULT_JOB_RETRY_AFTER_SECONDS = 5;
@@ -95,6 +96,7 @@ export function startAgentGenerateJob(options: {
     requestId: string;
     idempotencyKey: string;
     leaseMs: number;
+    preparation?: AgentGeneratePreparation;
 }): void {
     void runAgentGenerateJob(options).catch((error) => {
         appLogger.error('Agent generate job 后台执行失败。', error);
@@ -113,6 +115,7 @@ async function runAgentGenerateJob(options: {
     requestId: string;
     idempotencyKey: string;
     leaseMs: number;
+    preparation?: AgentGeneratePreparation;
 }): Promise<void> {
     let heartbeat: { stop: () => void } | undefined;
     try {
@@ -122,7 +125,13 @@ async function runAgentGenerateJob(options: {
             headers: options.headers,
             requestId: options.requestId,
             idempotencyKey: options.idempotencyKey,
-            cached: false
+            cached: false,
+            preparation: options.preparation,
+            transport: {
+                transport: 'agent_job_polling',
+                endpoint: AGENT_ENDPOINTS.create_generate_job,
+                route_mode: 'job'
+            }
         });
         await persistAgentJobSuccess(options.store, execution, options.requestId);
     } catch (error) {

@@ -12,6 +12,8 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - [生成图片](#生成图片)
 - [编辑图片](#编辑图片)
 - [产物元数据](#产物元数据)
+- [结果反馈与诊断](#结果反馈与诊断)
+- [WebUI Page API 边界](#webui-page-api-边界)
 - [错误](#错误)
 
 ## 辅助脚本
@@ -23,6 +25,8 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - `scripts/generate-image.mjs`：JSON 文生图调用。
 - `scripts/edit-image.mjs`：multipart 编辑调用。
 - `scripts/batch-images.mjs`：JSONL 批量 generate/edit 调用。
+- `scripts/convert-image-format.mjs`：本地 PNG/JPEG/WebP 互转。
+- `scripts/diagnose-request.mjs`：按页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断。
 - `scripts/probe-upstream-image.mjs`：上游图片接口连通性探针。
 
 生成、编辑和批量脚本默认只做 dry-run，不触发真实生图或编辑。必须显式添加 `--allow-billable` 才会按 capabilities 路由规则调用 `/api/agent/images/generate`、`/api/agent/images/edit`、`/api/agent/jobs/images/generate` 或页面端 `/api/images` SSE。
@@ -32,21 +36,27 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 当服务返回相对 `content_url`、`metadata_url` 或页面 SSE `path` 时，辅助脚本会额外输出 `absolute_content_url`、`absolute_metadata_url` 或 `absolute_path`。
 同一个 `Idempotency-Key` 如果已经进入终态 `failed`，再次调用 generate/edit 或 job result/status 只会回放该失败，且 `retryable=false`。需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
 页面端 `/api/images` SSE 会把同一个业务 key 复用到 `clientRequestId`，因此脚本使用的 `Idempotency-Key` 不能超过 capabilities 中 `agent_streaming.page_sse.client_request_id.max_length` 声明的字符数；超长时会直接报错，不会静默截断。
-脚本会在 dry-run 和真实请求前前置校验 `--size` 或 JSONL `size`。`gpt-image-2` 支持 `auto` 或 `WIDTHxHEIGHT`，且宽高必须为 `16` 的倍数、单边不超过 `3840`、宽高比不超过 `3:1`。最低分辨率按总像素 `min_pixels=655360` 判断，最高分辨率同时受 `max_pixels=8294400` 和 `max_edge=3840` 约束。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。
+脚本会在 dry-run 和真实请求前前置校验 `--size` 或 JSONL `size`。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI-compatible 上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量和上游探针默认请求 `output_format=webp`、`output_compression=100`。
+真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。失败摘要包含 `transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable` 和 `next_action`。回答耗时问题时优先读取 `summary.elapsed_ms`；服务端返回 timing 时同时读取 `summary.server_elapsed_ms`。
 
 生成脚本参数：
 
 - `--model`：默认 `gpt-image-2`。
 - `--size`：默认 `1024x1024`。
 - `--quality`：默认 `high`。
-- `--n`：默认 `1`。
-- `--format`：默认 `png`，`jpg` 会规范化为 `jpeg`。
+- `--n`：默认 `1`，范围以 capabilities 的 `limits.generate_images` 为准。
+- `--format`：默认 `webp`，`jpg` 会规范化为 `jpeg`。
+- `--output-compression`：默认 `100`，仅适用于 `jpeg` 或 `webp`。
 - `--response-mode`：默认 `path`。
 - `--image-backend`：可选，显式选择 `images-api`、`images`、`responses` 或 `responses-image-generation`。
+- `--responses-model` / `--gpt-model`：页面 SSE 专属字段，设置 Responses 顶层模型；必须同时设置 `--image-backend responses-image-generation` 或兼容别名 `responses`。
+- `--thinking`：页面 SSE 专属字段，可选值为 `minimal`、`none`、`low`、`medium`、`high` 或 `xhigh`。
+- `--prompt-optimization`：页面 SSE 专属字段，必须是 `true` 或 `false`。
+- `--force-web`：页面 SSE 专属字段，会发送为 form-data `force_web=true`。
 - `--stream-mode`：可选，显式选择 `auto`、`stream` 或 `non_stream`。
 - `--streaming-strategy`：可选，显式选择 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse` 或 `force-sse`。
-- `--partial-images`：可选，显式设置上游 SSE partial image 数量，范围 `1` 到 `3`。
-- `--timeout-ms`：默认 `420000`。
+- `--partial-images`：可选，显式设置上游 SSE partial image 数量。generate 或页面 SSE 请求包含 `image_backend` 时优先按 capabilities 的 `limits.partial_images_by_backend[image_backend]` 校验；缺少 backend 专属范围时才使用 `limits.partial_images`。
+- `--timeout-ms`：未显式指定时，脚本先用 `420000ms` 读取 capabilities；真实请求会采用 `420000ms` 与 `capabilities.image_transport.upstream_timeout_ms` 中较大的值。
 - `--prompt-file`：从文本文件读取 prompt。
 - `--idempotency-key`：指定稳定幂等键。
 - `--page-sse`：强制使用页面端 `/api/images` form-data SSE。
@@ -54,8 +64,10 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--job`：强制使用 Agent job polling。
 - `--dry-run`：只输出将要发送的 JSON。
 - `--allow-billable`：允许真实调用生图端点。
+- `--preset`：常用 dry-run/真实调用参数集，当前包括 `1k-smoke-agent`、`4k-agent-nonstream`、`4k-page-sse` 和 `4k-upstream-sse-newapi`。dry-run 会展开真实请求字段，不触发计费。
 
 `max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE；如果显式传 `--streaming-strategy off`，即使是大图也保持 `/api/agent/images/generate` 非流式 JSON 路径，用于诊断对照。
+单张 generate 脚本使用 `--responses-model`/`--gpt-model`、`--thinking`、`--prompt-optimization` 或 `--force-web` 时会选择页面端 `/api/images` SSE。显式 `--agent`、`--job`、`stream_mode=non_stream` 或 `streaming_strategy=off` 与这些页面高级字段同时出现时会在网络请求前失败，避免字段被 Agent JSON 忽略。
 当服务端默认 `IMAGE_STREAMING_STRATEGY=off` 且请求未覆盖 `streaming_strategy` 时，运行时默认策略为 `off`；WebUI 会把 server-default 流式请求切到 `non_stream`，并发批量开关不可用。脚本显式传 `--streaming-strategy off` 时同样保持非流式诊断路径。
 
 编辑脚本参数：
@@ -74,8 +86,8 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--dry-run`
 - `--allow-billable`
 
-普通 edit 默认调用 `/api/agent/images/edit`，客户端拿到最终 JSON；`--stream-mode`、`--streaming-strategy` 和 `--partial-images` 只控制 Agent 内部上游流式兼容字段，不代表客户端响应会变成页面 SSE。
-`max_edge>2048` 的高分辨率 edit 默认优先走页面端 `/api/images` form-data SSE；失败后脚本输出结构化失败和备用端点建议，由下一步用 `--agent` 显式回退到 `/api/agent/images/edit` 诊断或执行，不会在同一次请求里静默二次调用。显式 `--page-sse` 会强制页面流式；显式 `--agent` 或 `stream_mode=non_stream` / `streaming_strategy=off` 会走 Agent edit 最终 JSON。
+默认 WebP edit 走页面端 `/api/images` form-data SSE，因为 Agent edit 不接收输出格式字段。显式 `--format`、`--output-compression`、页面高级字段或 `--page-sse` 也会走页面 SSE；失败后脚本输出结构化失败和备用端点建议，不会在同一次请求里静默二次调用。
+显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`。
 
 批量脚本参数：
 
@@ -87,11 +99,11 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--max-attempts`：失败任务最大尝试次数。第二次及后续尝试会追加新的 attempt 级 `Idempotency-Key`，避免复用终态失败 key。
 - `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会并发执行任务并按输入顺序输出结果；适合已确认渠道容量的批量生产。
 - `--max-consecutive-failures`：顺序执行下的连续失败熔断阈值，默认 `0` 表示不熔断。只能与 `--concurrency 1` 同用。
-- `--timeout-ms`
+- `--timeout-ms`：未显式指定时，真实请求会采用 `420000ms` 与 `capabilities.image_transport.upstream_timeout_ms` 中较大的值。
 - `--dry-run`
 - `--allow-billable`
 
-批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径；edit 任务使用这些高级字段会显式走 `/api/images`，因为 Agent JSON edit 不接收这些字段。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
+批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
 并发批量示例：
 
@@ -112,6 +124,8 @@ node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.json
 - `--timeout-ms`
 - `--allow-billable`
 
+上游探针默认使用 `User-Agent: gpt-image-playground/probe`，可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖；输出的 `summary.request_headers` 只暴露脱敏摘要。
+
 上游探针读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL` 作为上游地址，读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY` 作为上游鉴权。base URL 必须是无凭据、无查询参数和无片段的 `http`/`https` 绝对 URL。输出不会包含 key，也不会输出完整 base64。
 
 ## 能力查询
@@ -126,6 +140,9 @@ GET /api/agent/capabilities
 
 - `auth.required`：Agent 端点是否需要鉴权。
 - `auth.schemes`：Agent 端点当前实际接受的鉴权方案。`AGENT_API_TOKEN` 优先于 `APP_PASSWORD`，两者同时配置时只返回 `bearer`。
+- `image_transport.upstream_timeout_ms`：当前服务端图片上游请求超时，脚本未显式传 `--timeout-ms` 时会用它延长默认超时。
+- `image_transport.stream_data_interval_timeout_ms`：已建立图片流的单次数据空闲超时；`0` 表示服务端禁用该空闲计时器。
+- `image_transport.upstream_max_retries`：OpenAI SDK 图片请求自动重试次数；默认 `0`，避免长耗时图片请求被 SDK 自动重试后重复计费。
 - `model_limits.gpt-image-2.max_edge`：最大单边像素，当前为 `3840`。
 - `model_limits.gpt-image-2.max_pixels`：最大总像素，当前为 `8294400`。
 - `model_limits.gpt-image-2.edge_multiple`：宽高必须是该值的倍数，当前为 `16`。
@@ -148,6 +165,8 @@ GET /api/agent/capabilities
 - `agent_streaming.page_sse`：页面端 `/api/images` 的 form-data SSE 能力，不代表 Agent generate/edit 支持流式。
 - `agent_streaming.page_sse.auth`：页面 SSE 的独立表单鉴权。`APP_PASSWORD` 已配置时为 `required=true`、`schemes=["form-password-hash"]`、`form_field="passwordHash"`。
 - `agent_streaming.page_sse.client_request_id`：页面 SSE 的请求 ID 契约。脚本会把 `Idempotency-Key` 写入 form-data `clientRequestId`，最大长度以 `max_length` 为准，当前为 `128`。
+- `upstream_request_headers.default`：默认上游请求头摘要，包含 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`。
+- `upstream_request_headers.channels`：每个服务端渠道的脱敏请求头摘要。该字段不包含 API key、Authorization 值、Matsca app secret 值或任意 header value。
 - `routing_rules.high_resolution_edit`：`edit` 且最大边大于 `2048` 时默认优先使用页面端 `/api/images` SSE，页面流式有问题时显式回退。
 - `routing_rules.complex_ui_batch`：复杂 UI 批量出图推荐使用页面端 `/api/images` SSE。
 - `routing_rules.long_image_recovery`：长图恢复或续跑锚点场景推荐使用页面端 `/api/images` SSE。
@@ -155,10 +174,15 @@ GET /api/agent/capabilities
 - `routing_rules.page_sse_large_generate`：`max_edge>2048` 的单次文生图推荐优先使用 `/api/images` SSE，失败后先诊断，再显式选择 `/api/agent/images/generate` 或 job 路径。
 - `routing_rules.retry_recovery`：终态失败不会用同一 `Idempotency-Key` 重新执行，必须诊断后创建新的业务操作和新的 key。
 - 批量 JSONL 路由控制字段：`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`；脚本会在 dry-run 阶段拒绝字符串布尔值和未知 transport。
+- `GET /api/runtime-capabilities` 不属于 Agent capabilities。它是页面工作台读取的运行态能力摘要，用于展示流式默认值、图片上游传输配置、渠道健康、并发建议、Responses 后端 enablement 和缺失环境变量，不进入 Agent OpenAPI。
 - `defaults.image_backend`：Agent generate 默认 `images-api`。
 - `defaults.stream_mode`：Agent generate 默认 `auto`。auto 会先尝试内部上游 SSE；无法产出最终图时显式回退并暴露可观测标记。
 - `defaults.streaming_strategy`：Agent generate 默认 `auto`。
-- `defaults.partial_images`：Agent generate 默认 `2`，在 `stream_mode` 不为 `non_stream` 时使用。
+- `defaults.partial_images`：Agent generate 默认值会被当前 `limits.partial_images` 约束钳制，在 `stream_mode` 不为 `non_stream` 时使用；客户端发送前仍要按选中 backend 的 `limits.partial_images_by_backend` 复核。
+- `upstream_profile`：当前运行时的上游能力摘要，包含 `activeProfile`、`serverProfile`、`serverProfileMixed`、`requestProfile` 与三组约束对象。
+- `limits.generate_images` / `limits.edit_images` / `limits.upload_images`：当前运行时分别允许的生成张数、编辑输出张数和编辑源图数量范围。
+- `limits.partial_images`：当前运行时默认 profile 允许的 `partial_images` 范围。OpenAI-compatible 通常为 `1..3`，Matsca Images API 通常为 `0..4`；Agent 必须以 capabilities 返回值为准。
+- `limits.partial_images_by_backend`：按图片后端覆盖 `partial_images` 范围。选择 `responses-image-generation` 或兼容别名 `responses` 时必须优先使用该字段中的 `responses-image-generation` 范围，当前通常为 `1..3`。
 - `supported.image_backends`：机器可读的图片后端枚举。
 - `supported.enabled_image_backends`：当前运行时可直接使用的图片后端。
 - `supported.image_backend_requirements`：每个图片后端的 required env、missing env 和 enabled 状态；Responses 后端需要 `ENABLE_RESPONSES_IMAGE_BACKEND` 与 `OPENAI_RESPONSES_API_MODEL`。
@@ -168,8 +192,11 @@ GET /api/agent/capabilities
 - `agent_jobs.mode`：当前为 `job_polling`。
 - `agent_jobs.endpoints`：路径为 `POST /api/agent/jobs/images/generate`、`GET /api/agent/jobs/{id}`、`GET /api/agent/jobs/{id}/result`。
 - `agent_jobs.states`：状态机为 `queued`、`running`、`succeeded`、`failed`、`expired`。
+- `agent_request_diagnostics`：Agent state 请求诊断能力。`endpoints.lookup` 支持 `request_id` 或 `idempotency_key` 查询参数；`endpoints.single` 支持按 `request_id` 路径查询；`retention.ttl_seconds` 与 Agent request TTL 一致。
 
 当 `agent_jobs.supported=true` 且 `mode=job_polling` 时，job 路径仍然可用，但普通大图单次文生图的默认路径已经切到页面端 `/api/images` SSE。高分辨率 edit 和复杂 UI 批量生产默认优先按 `routing_rules` 使用页面端 `/api/images` SSE；页面流式有问题时，先诊断再显式选择 Agent JSON、Agent edit 或 job 路径。当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。大图页面流式失败后不自动回退，先诊断再显式选新路径。
+
+上游请求头策略由服务端统一执行。默认 `User-Agent` 是 `gpt-image-playground/<package-version>`；可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖全局 UA，也可用 `OPENAI_CHANNEL_N_USER_AGENT` 和 `OPENAI_CHANNEL_N_UPSTREAM_HEADERS_JSON` 覆盖单渠道安全 header。`Authorization`、`Accept`、`Content-Type`、`Content-Length` 和 `Host` 等协议头不可由 extra headers 覆盖；固定业务头和鉴权头始终由调用路径设置。
 
 ## Job Polling
 
@@ -235,7 +262,8 @@ Content-Type: application/json
   "n": 1,
   "size": "1024x1024",
   "quality": "high",
-  "output_format": "png",
+  "output_format": "webp",
+  "output_compression": 100,
   "background": "auto",
   "moderation": "auto",
   "response_mode": "path",
@@ -250,6 +278,7 @@ Agent 生成端点对外始终返回最终 JSON，不会对客户端返回 SSE�
 
 - 页面 SSE 使用独立的 `POST /api/images` form-data 路径。
 - 若 capabilities 中 `agent_streaming.upstream_sse.supported=true`，generate 可通过 `request_fields_by_mode.generate` 声明的字段控制服务端内部上游 SSE 消费。`image_backend=responses-image-generation` 当前只支持 generate。
+- 不要向 Agent 生成端点发送 `responsesModel`、`gptModel`、`gpt_model`、`thinking`、`promptOptimization`、`prompt_optimization`、`force_web` 或 `forceWeb`。这些是页面 form-data 高级字段；单张 generate 脚本会在需要时走 `/api/images` SSE。
 - Agent 生成端点最终响应仍是 `AgentImageResponse`。
 - `stream_mode=stream` 强制流式并直接暴露失败。
 - `stream_mode=non_stream` 直接非流式。
@@ -265,18 +294,41 @@ Agent 生成端点对外始终返回最终 JSON，不会对客户端返回 SSE�
   "images": [
     {
       "id": "artifact-uuid",
-      "filename": "1715400000000-abcdef1234567890-0.png",
+      "filename": "1715400000000-abcdef1234567890-0.webp",
       "content_url": "/api/agent/artifacts/artifact-uuid/content",
       "metadata_url": "/api/agent/artifacts/artifact-uuid",
-      "output_format": "png",
-      "mime_type": "image/png",
+      "output_format": "webp",
+      "mime_type": "image/webp",
       "size_bytes": 12345,
       "width": 1024,
       "height": 1024
     }
   ],
   "usage": {},
-  "created_at": "2026-05-12T00:00:00.000Z"
+  "created_at": "2026-05-12T00:00:00.000Z",
+  "timing": {
+    "started_at": "2026-05-12T00:00:00.000Z",
+    "completed_at": "2026-05-12T00:01:04.000Z",
+    "elapsed_ms": 64000,
+    "server_elapsed_ms": 64000
+  },
+  "execution": {
+    "transport": "agent_json",
+    "endpoint": "/api/agent/images/generate",
+    "route_mode": "agent",
+    "operation": "generate",
+    "image_backend": "images-api",
+    "stream_mode": "non_stream",
+    "streaming_strategy": "off",
+    "selected_channel_id": "default",
+    "upstream_host": "api.example.test",
+    "request_headers": {
+      "user_agent_effective": "gpt-image-playground/2.0.0",
+      "has_extra_headers": false,
+      "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
+      "configured_header_names": []
+    }
+  }
 }
 ```
 
@@ -293,17 +345,17 @@ Content-Type: multipart/form-data
 
 - `prompt`：必填。
 - `model`：默认 `gpt-image-2`。
-- `n`：`1..10`，默认 `1`。
+- `n`：默认 `1`，范围以 `GET /api/agent/capabilities` 的 `limits.edit_images` 为准。
 - `size`：`auto` 或支持的尺寸。
 - `quality`：`low`、`medium`、`high` 或 `auto`。
 - `response_mode`：`path`、`base64` 或 `both`。
 - `stream_mode`：可选，`auto`、`stream` 或 `non_stream`。
 - `streaming_strategy`：可选，`off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse` 或 `force-sse`。
-- `partial_images`：可选，`1..3`。
-- `image_0..image_9`：源图片。类似 `image_10`、`image_01` 或 `image_foo` 的图片字段会被显式拒绝。
+- `partial_images`：可选，范围以 `GET /api/agent/capabilities` 的 `limits.partial_images` 为准。Agent edit 不接受 `image_backend`；需要 Responses backend edit 字段时应使用页面端 `/api/images` form-data SSE 路径。
+- `image_0..image_N`：源图片，`N = limits.upload_images.max - 1`。超出当前 profile 上限、跳号、`image_01` 或 `image_foo` 的图片字段会被显式拒绝。
 - `mask`：可选 PNG 遮罩。
 
-Agent edit 不接受 `image_backend`/`imageBackend`、`output_format`/`outputFormat`/`format`、`output_compression`/`outputCompression`、`responses_model`/`responsesModel`、`background` 或 `moderation`。编辑输出格式固定为 PNG；Responses image_generation 后端当前只支持 generate。
+Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`。也不接受 `imageBackend`、`outputFormat`、`format`、`outputCompression`、`responses_model`/`responsesModel`、`background` 或 `moderation`。强制 Agent edit 时编辑输出格式固定为 PNG；默认 WebP 或显式页面输出字段使用页面端 `/api/images` form-data SSE。Responses image_generation 后端当前只支持 generate。
 
 当 `size` 的最大边大于 `2048` 时，默认按 `routing_rules.high_resolution_edit` 使用页面端 `/api/images` form-data SSE 路径；如果页面流式不可用或失败，可显式回退到 Agent edit 最终 JSON 路径进行诊断或执行。
 
@@ -316,6 +368,207 @@ DELETE /api/agent/artifacts/{id}
 ```
 
 所有产物端点都需要和生成接口相同的鉴权。
+
+`GET /api/agent/artifacts/{id}` 返回 Agent 产物元数据；`GET /content` 返回产物图片二进制；`DELETE /api/agent/artifacts/{id}` 会删除 Agent 产物文件和状态库元数据，并把关联请求标记为 `artifact_not_found`。不存在的产物返回 `artifact_not_found`。页面端 `POST /api/image-delete` 是按文件名删除页面图片文件的 WebUI API，使用页面访问码哈希和 `filenames` JSON，不等同于 Agent artifact delete。
+
+## 结果反馈与诊断
+
+```http
+POST /api/agent/page-requests/feedback
+GET /api/agent/page-requests/{id}/feedback
+POST /api/agent/diagnostics/page-requests
+GET /api/agent/diagnostics/page-requests/{id}
+GET /api/agent/diagnostics/requests?request_id={request_id}
+GET /api/agent/diagnostics/requests?idempotency_key={idempotency_key}
+GET /api/agent/diagnostics/requests/{request_id}
+```
+
+这些端点使用 Agent 鉴权，只读返回页面请求反馈、页面请求脱敏日志摘要或 Agent state 请求诊断。
+
+页面请求 `{id}` 是页面端 `/api/images` SSE 的 `clientRequestId`；skill 脚本走页面 SSE 时会把 `Idempotency-Key` 写入该字段，因此通常可以用同一个业务 key 查询。页面诊断摘要来自本地 bounded app log，不是 Agent state 后端的无限历史；`GET /api/agent/capabilities` 的 `page_request_diagnostics.retention` 和诊断 API 响应的 `diagnostics_retention` 会声明当前 `APP_LOG_MAX_ENTRIES` 窗口和可能的日志丢失模式。
+
+Agent request diagnostics 来自 Agent state 后端，适用于 `/api/agent/images/generate`、`/api/agent/images/edit` 和 Agent job 产生的请求。响应包含 `request`、`timeline`、`artifacts`、成功 `response`、失败 `error`、可选 `feedback`、`state_backend`、`diagnostics_retention` 和 `diagnostics_boundary`。该接口不会返回完整 prompt、API key、图片 base64 或本地文件路径。
+
+反馈响应形态：
+
+```json
+{
+  "target": { "type": "page_request", "id": "stable-operation-key" },
+  "feedback": {
+    "target_type": "page_request",
+    "target_id": "stable-operation-key",
+    "value": "usable",
+    "source": "webui",
+    "updated_at": "2026-05-12T00:00:00.000Z",
+    "note": "approved"
+  }
+}
+```
+
+尚无反馈时 `feedback` 为 `null`。诊断端点返回 `scope`、`matched_log_count` 和最多 30 条脱敏事件；事件 `diagnostics` 只包含白名单字段（如 `providerDialect`、`reason`、`image_backend`、`operation`、`upstream_status`、`upstream_event_type`、`transport_error`）且按字段类型过滤，不返回完整日志上下文。可重复传 `filename` 查询参数扩大匹配范围。
+
+批量反馈请求用于脚本和 Agent 客户端一次查询多个页面请求 ID：
+
+```json
+{
+  "ids": ["stable-operation-key", "stable-operation-key-2"]
+}
+```
+
+返回 `targets` 和已存在的 `feedback` 数组；尚无反馈的目标只出现在 `targets` 中。该端点不会写入或删除反馈。
+
+批量诊断请求用于一次查询多个页面请求 ID 的脱敏日志摘要：
+
+```json
+{
+  "ids": ["stable-operation-key", "stable-operation-key-2"],
+  "filenames": ["output.png"]
+}
+```
+
+返回 `targets`、`diagnostics_retention` 和 `diagnostics` 数组。每个诊断项都包含 `client_request_id`、`scope`、`matched_log_count`、`diagnostics_retention` 和最多 30 条脱敏事件。`matched_log_count=0` 时诊断项会额外包含 `diagnostics_note`；它只表示当前保留窗口内没有匹配日志，可能是日志被窗口淘汰、被 `APP_LOG_LEVEL` 过滤，或本地日志文件被清理，不要把它直接解释为请求未发生。
+
+单条无匹配日志响应示例：
+
+```json
+{
+  "scope": {
+    "request_ids": ["stable-operation-key"],
+    "filenames": ["output.png"],
+    "filename_matched_request_ids": [],
+    "copy_text": "requestIds=stable-operation-key filename=output.png"
+  },
+  "matched_log_count": 0,
+  "events": [],
+  "diagnostics_retention": {
+    "storage": "bounded_local_jsonl",
+    "max_entries": 300,
+    "default_max_entries": 300,
+    "min_entries": 100,
+    "max_configured_entries": 5000,
+    "configured_by": "APP_LOG_MAX_ENTRIES",
+    "persisted_across_process_restart": true,
+    "loss_modes": [
+      "entry_evicted_by_max_entries",
+      "log_level_filter",
+      "local_log_file_missing_or_cleared"
+    ],
+    "bounded": true,
+    "not_agent_state_backend": true
+  },
+  "diagnostics_note": {
+    "code": "no_matching_logs_in_retention_window",
+    "message": "没有匹配到页面请求日志；诊断只覆盖最近 300 条本地应用日志，日志可能已被保留条数淘汰、被日志级别过滤，或本地日志文件被清理。",
+    "retention": {
+      "storage": "bounded_local_jsonl",
+      "max_entries": 300,
+      "default_max_entries": 300,
+      "min_entries": 100,
+      "max_configured_entries": 5000,
+      "configured_by": "APP_LOG_MAX_ENTRIES",
+      "persisted_across_process_restart": true,
+      "loss_modes": [
+        "entry_evicted_by_max_entries",
+        "log_level_filter",
+        "local_log_file_missing_or_cleared"
+      ],
+      "bounded": true,
+      "not_agent_state_backend": true
+    }
+  }
+}
+```
+
+优先使用内置脚本：
+
+```text
+node "<skill-root>/scripts/diagnose-request.mjs" --client-request-id stable-operation-key --filename output.png
+node "<skill-root>/scripts/diagnose-request.mjs" --manifest runs/product-set.manifest.jsonl --filename output.png
+node "<skill-root>/scripts/diagnose-request.mjs" --manifest runs/product-set.manifest.jsonl --output runs/diagnosis.json
+node "<skill-root>/scripts/diagnose-request.mjs" --agent-request-id req_abc
+node "<skill-root>/scripts/diagnose-request.mjs" --idempotency-key stable-operation-key
+```
+
+脚本输出会包含 `diagnostics_retention`。当某个请求的 `matched_log_count=0` 时，该请求会额外包含 `diagnostics_note`，说明无匹配日志的保留窗口边界。
+
+单条 Agent state 诊断响应示例：
+
+```json
+{
+  "found": true,
+  "diagnostics": {
+    "request": {
+      "request_id": "req_abc",
+      "idempotency_key": "stable-operation-key",
+      "mode": "generate",
+      "status": "succeeded",
+      "cached": false,
+      "created_at": "2026-05-12T00:00:00.000Z",
+      "updated_at": "2026-05-12T00:01:04.000Z",
+      "expires_at": "2026-05-13T00:00:00.000Z"
+    },
+    "response": {
+      "image_count": 1,
+      "artifact_ids": ["artifact-uuid"],
+      "content_urls": ["/api/agent/artifacts/artifact-uuid/content"],
+      "timing": {
+        "elapsed_ms": 64000,
+        "server_elapsed_ms": 64000
+      },
+      "execution": {
+        "transport": "agent_json",
+        "endpoint": "/api/agent/images/generate",
+        "request_headers": {
+          "user_agent_effective": "gpt-image-playground/2.0.0",
+          "has_extra_headers": false,
+          "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
+          "configured_header_names": []
+        }
+      }
+    },
+    "state_backend": "sqlite",
+    "diagnostics_retention": {
+      "storage": "agent_state",
+      "ttl_seconds": 86400,
+      "bounded": true,
+      "loss_modes": ["request_expired_by_ttl", "artifact_deleted_or_purged", "state_backend_reset"]
+    }
+  }
+}
+```
+
+## WebUI Page API 边界
+
+这些端点服务页面工作台，不属于 Agent JSON API，也不进入 `GET /api/agent/openapi.json`：
+
+- `POST /api/images`：页面 form-data 图片端点。它支持 `mode=generate|edit`、`stream=true` 的页面 SSE、`clientRequestId`、页面 `passwordHash` 表单鉴权，以及 `responsesModel`、`gptModel`、`thinking`、`promptOptimization`、`force_web` 等页面高级字段。skill 脚本只在 capabilities 的 `agent_streaming.page_sse` 或路由规则需要时使用它。
+- `PUT /api/feedback`：页面结果反馈写入端点。页面把最近生成的可用性标记和备注写入服务端状态；Agent 只读查询使用 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback`。
+- `DELETE /api/feedback`：页面结果反馈清理端点。页面删除历史时按 `clientRequestId` 清理对应服务端反馈；该端点不接受 Agent Bearer token。
+- `GET /api/runtime-capabilities`：页面运行态能力摘要。它暴露流式默认值、图片上游传输配置、渠道健康、并发建议和 Responses 后端 enablement，不返回 API key 或本地密钥。
+- `POST /api/shares`：页面分享创建端点。配置 `APP_PASSWORD` 时要求页面访问 cookie；请求是 form-data `image`、`sourceFilename`、`expiresInMinutes` 和可选 `accessCode`。返回分享 token、URL、过期时间和是否需要访问码。
+- `GET /api/shares/{token}` 和 `POST /api/shares/{token}/content`：分享元数据和图片内容端点。私密分享的内容读取通过 JSON `accessCode` 校验，并有访问码失败限流；这不是 Agent artifact 下载。
+- `GET /api/logs`：页面日志 SSE。必须配置 `APP_PASSWORD`，并在 `Authorization: Bearer <sha256(APP_PASSWORD)>` 中发送访问码哈希；查询参数中的哈希会被拒绝。它不接受 `AGENT_API_TOKEN`。Agent 只读诊断使用 `/api/agent/diagnostics/page-requests/{id}`。
+- `POST /api/image-delete`：页面图片文件删除端点。请求 JSON 为 `filenames` 和可选 `passwordHash`，按页面生成文件名删除 `generated-images/` 中的图片；它不删除 Agent 状态库 artifact 记录。
+
+灵感相册和历史复用属于页面工作台和浏览器本地体验。当前没有对应的 Agent capabilities 字段，也不作为机器 API 契约承诺。
+
+### 边界矩阵
+
+| 前端能力或端点 | 归属契约 | 进入 Agent OpenAPI | 自动化口径 |
+| --- | --- | --- | --- |
+| `POST /api/agent/images/generate`、`POST /api/agent/images/edit`、Agent jobs、Agent artifacts | Agent JSON API | 是 | 通过 skill 脚本和 Agent 鉴权调用。 |
+| `POST /api/images` | 页面 form-data SSE API | 否 | 仅在大图、复杂 UI 批量、页面高级字段或路由规则要求时由 skill 显式选择。 |
+| `GET /api/runtime-capabilities` | 页面运行态能力 API | 否 | 页面展示运行态默认值、图片上游传输配置、渠道健康和后端 enablement；不是 Agent capabilities。 |
+| `PUT/DELETE /api/feedback` | 页面结果反馈写入和清理 API | 否 | 页面写入最近生成的结果反馈；删除历史时清理对应反馈。 |
+| `POST /api/agent/page-requests/feedback` | Agent 结果反馈批量只读 API | 是 | 按多个页面 `clientRequestId` 批量查询最新反馈。 |
+| `GET /api/agent/page-requests/{id}/feedback` | Agent 结果反馈只读 API | 是 | 按页面 `clientRequestId` 查询最新反馈。 |
+| `POST /api/agent/diagnostics/page-requests` | Agent 日志诊断批量只读 API | 是 | 按多个页面 `clientRequestId` 批量查询脱敏日志摘要。 |
+| `GET /api/agent/diagnostics/page-requests/{id}` | Agent 日志诊断摘要 API | 是 | 按页面 `clientRequestId` 查询脱敏日志摘要，不直接读取 `/api/logs` SSE。 |
+| `POST /api/shares`、`GET /api/shares/{token}`、`POST /api/shares/{token}/content` | 页面分享 API | 否 | 使用页面 cookie、访问码和分享 token，不复用 Agent artifact 下载契约。 |
+| `GET /api/logs` | 页面日志 SSE API | 否 | 使用页面访问码哈希的 Bearer 头，不接受 `AGENT_API_TOKEN`。 |
+| `POST /api/image-delete` | 页面图片文件删除 API | 否 | 按页面文件名删除 `generated-images/` 文件，不删除 Agent 状态库 artifact。 |
+| 灵感相册 | 浏览器本地工作台状态 | 否 | 只服务页面提示词复用，不作为 Agent capabilities。 |
+| 历史复用 | 浏览器本地历史状态 | 否 | 只服务页面继续编辑、做变体和复用提示词。 |
 
 ## 错误
 
@@ -340,7 +593,13 @@ DELETE /api/agent/artifacts/{id}
       "upstream_event_type": "image_generation.partial_image",
       "partial_image_count": 1,
       "transport_error": false,
+      "transport_error_kind": "upstream_timeout",
       "retry_after_seconds": 15,
+      "retry_after_ms": 15000,
+      "cooldown_until": "2026-05-20T00:00:15.000Z",
+      "cooldown_target": {
+        "channel_id": "default"
+      },
       "channel_cooldown_scope": "channel",
       "response_headers": {
         "date": "Wed, 20 May 2026 00:00:00 GMT",

@@ -36,6 +36,11 @@ export function assertPageSseReady({ capabilities, passwordHash, idempotencyKey 
 export async function postPageSse({ url, formData, timeoutMs, errorMessage, sseLogPath }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAtMs = Date.now();
+  appendPageSseTrace(sseLogPath, 'request_started', {
+    client_request_id: readFormDataString(formData, 'clientRequestId'),
+    endpoint: PAGE_SSE_ENDPOINT
+  });
   try {
     let response;
     try {
@@ -45,19 +50,50 @@ export async function postPageSse({ url, formData, timeoutMs, errorMessage, sseL
         signal: controller.signal
       });
     } catch (error) {
+      appendPageSseTrace(sseLogPath, 'request_failed', {
+        client_request_id: readFormDataString(formData, 'clientRequestId'),
+        endpoint: PAGE_SSE_ENDPOINT,
+        elapsed_ms: Date.now() - startedAtMs,
+        error: errorMessage(error)
+      });
       throw new Error(`请求失败：${url}。${errorMessage(error)}`);
     }
 
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('text/event-stream')) {
-      return await collectPageSseResult(response, controller.signal, errorMessage, sseLogPath);
+      try {
+        return await collectPageSseResult(response, controller.signal, errorMessage, sseLogPath, {
+          startedAtMs,
+          clientRequestId: readFormDataString(formData, 'clientRequestId')
+        });
+      } catch (error) {
+        appendPageSseTrace(sseLogPath, 'request_failed', {
+          client_request_id: readFormDataString(formData, 'clientRequestId'),
+          endpoint: PAGE_SSE_ENDPOINT,
+          elapsed_ms: Date.now() - startedAtMs,
+          error: errorMessage(error)
+        });
+        throw error;
+      }
     }
 
     const text = await response.text();
     if (!response.ok) {
+      appendPageSseTrace(sseLogPath, 'request_failed', {
+        client_request_id: readFormDataString(formData, 'clientRequestId'),
+        endpoint: PAGE_SSE_ENDPOINT,
+        elapsed_ms: Date.now() - startedAtMs,
+        status: response.status
+      });
       throw createPageSseHttpError(response.status, readErrorFromJsonText(text) || text);
     }
-    return parseJsonResponse(text, true, url, errorMessage);
+    const result = parseJsonResponse(text, true, url, errorMessage);
+    appendPageSseTrace(sseLogPath, 'request_completed', {
+      client_request_id: readFormDataString(formData, 'clientRequestId'),
+      endpoint: PAGE_SSE_ENDPOINT,
+      elapsed_ms: Date.now() - startedAtMs
+    });
+    return result;
   } finally {
     clearTimeout(timeout);
   }
@@ -194,7 +230,7 @@ function parseJsonResponse(text, allowEmpty, url, errorMessage) {
   }
 }
 
-async function collectPageSseResult(response, signal, errorMessage, sseLogPath) {
+async function collectPageSseResult(response, signal, errorMessage, sseLogPath, trace = {}) {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('页面 SSE 响应缺少 body。');
   const decoder = new TextDecoder();
@@ -222,6 +258,12 @@ async function collectPageSseResult(response, signal, errorMessage, sseLogPath) 
   if (!state.doneReceived) {
     throw withPageSseDiagnostics(new Error('页面 SSE 缺少最终 done 事件，流式响应可能已提前中断。'), state);
   }
+  appendPageSseTrace(sseLogPath, 'request_completed', {
+    client_request_id: trace.clientRequestId,
+    endpoint: PAGE_SSE_ENDPOINT,
+    elapsed_ms: Date.now() - trace.startedAtMs,
+    final_image_count: state.completedImages.length
+  });
   return { images: state.completedImages, usage: state.usage, actualCost: state.actualCost, sse_diagnostics: buildPageSseDiagnostics(state) };
 }
 
@@ -233,6 +275,21 @@ function appendPageSseLog(filePath, rawEvent) {
   } catch (error) {
     console.warn(`SSE log write failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+function appendPageSseTrace(filePath, event, details) {
+  if (!filePath) return;
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.appendFileSync(filePath, `${JSON.stringify({ at: new Date().toISOString(), event, ...details })}\n`);
+  } catch (error) {
+    console.warn(`SSE log write failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function readFormDataString(formData, name) {
+  const value = formData?.get?.(name);
+  return typeof value === 'string' ? value : undefined;
 }
 
 function createPageSseState() {

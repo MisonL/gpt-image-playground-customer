@@ -49,14 +49,24 @@ export function reportServerCredentialFailure(credential: ChannelCredential | un
     if (!credential || !serverChannelRouter) return;
     if (isChannelFailure(error)) {
         const reason = describeChannelFailure(error, 'channel');
-        serverChannelRouter.reportFailure(credential, { scope: 'channel', reason });
-        appLogger.warn(`暂时冷却 API 渠道：${credential.channelId}`, reason);
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', reason });
+        appLogger.warn(
+            report.cooldownApplied
+                ? `暂时冷却 API 渠道：${credential.channelId}`
+                : `记录 API 渠道失败，未启用冷却：${credential.channelId}`,
+            reason
+        );
         return;
     }
     if (isCredentialFailure(error)) {
         const reason = describeChannelFailure(error, 'credential');
-        serverChannelRouter.reportFailure(credential, { reason });
-        appLogger.warn(`暂时冷却 API 渠道凭证：${credential.channelId}/${credential.id}`, reason);
+        const report = serverChannelRouter.reportFailure(credential, { reason });
+        appLogger.warn(
+            report.cooldownApplied
+                ? `暂时冷却 API 渠道凭证：${credential.channelId}/${credential.id}`
+                : `记录 API 渠道凭证失败，未启用冷却：${credential.channelId}/${credential.id}`,
+            reason
+        );
     }
 }
 

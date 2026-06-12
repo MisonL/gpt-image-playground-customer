@@ -1,7 +1,9 @@
 import {
     parseRetryAfterValue,
+    readCapabilitiesImageTransportTimeoutMs,
     resolveSameOriginUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import { AGENT_ENDPOINTS } from '../src/lib/agent-api-paths.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -40,26 +42,52 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stdout.trim(), '');
     });
 
-    it('rejects invalid image size limits before dry-run or network requests', () => {
-        const generateResult = runSkillScript('generate-image.mjs', ['--size', '2049x2048', 'prompt']);
+    it('rejects malformed or non-positive image sizes before dry-run or network requests', () => {
+        const generateResult = runSkillScript('generate-image.mjs', ['--size', '0x2048', 'prompt']);
         assert.equal(generateResult.status, 2);
-        assert.match(generateResult.stderr, /--size 的宽边和高边都必须是 16 的倍数/);
+        assert.match(generateResult.stderr, /--size 的宽度和高度必须是正数/);
         assert.equal(generateResult.stdout.trim(), '');
 
-        const editResult = runSkillScript('edit-image.mjs', ['--size', '8192x8192', '/tmp/source.png', 'prompt']);
+        const editResult = runSkillScript('edit-image.mjs', ['--size', '2048x0', '/tmp/source.png', 'prompt']);
         assert.equal(editResult.status, 2);
-        assert.match(editResult.stderr, /--size 的最大单边不能超过 3840px/);
+        assert.match(editResult.stderr, /--size 的宽度和高度必须是正数/);
         assert.equal(editResult.stdout.trim(), '');
 
-        const maxPixelsResult = runSkillScript('generate-image.mjs', ['--size', '3840x3840', 'prompt']);
-        assert.equal(maxPixelsResult.status, 2);
-        assert.match(maxPixelsResult.stderr, /--size 的总像素不能超过 8,294,400/);
-        assert.equal(maxPixelsResult.stdout.trim(), '');
-
-        const probeResult = runSkillScript('probe-upstream-image.mjs', ['--size', '512x512']);
+        const probeResult = runSkillScript('probe-upstream-image.mjs', ['--size', 'invalid-size']);
         assert.equal(probeResult.status, 2);
-        assert.match(probeResult.stderr, /--size 的总像素必须至少为 655,360/);
+        assert.match(probeResult.stderr, /--size 必须是 auto 或 WIDTHxHEIGHT/);
         assert.equal(probeResult.stdout.trim(), '');
+    });
+
+    it('converts local images to webp by default', () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-convert-'));
+        try {
+            const inputPath = join(tempRoot, 'source.png');
+            writeFileSync(inputPath, validPngBuffer());
+
+            const result = runSkillScript('convert-image-format.mjs', [inputPath]);
+
+            assert.equal(result.status, 0);
+            assert.equal(result.stderr.trim(), '');
+            const body = JSON.parse(result.stdout);
+            assert.equal(body.ok, true);
+            assert.equal(body.output.format, 'webp');
+            assert.equal(body.output.quality, 100);
+            assert.match(body.output.path, /source\.webp$/);
+            const output = readFileSync(body.output.path);
+            assert.equal(output.toString('ascii', 0, 4), 'RIFF');
+            assert.equal(output.toString('ascii', 8, 12), 'WEBP');
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects invalid conversion quality before writing output', () => {
+        const result = runSkillScript('convert-image-format.mjs', ['--quality', '101', '/tmp/source.png']);
+
+        assert.equal(result.status, 2);
+        assert.match(result.stderr, /--quality 必须是 1 到 100/);
+        assert.equal(result.stdout.trim(), '');
     });
 
     it('rejects invalid retry attempt env values', () => {
@@ -70,6 +98,23 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.status, 2);
         assert.match(result.stderr, /GPT_IMAGE_AGENT_MAX_ATTEMPTS 必须是正整数/);
         assert.equal(result.stdout.trim(), '');
+    });
+
+    it('inherits longer image transport timeout from capabilities by default', () => {
+        assert.equal(
+            readCapabilitiesImageTransportTimeoutMs(
+                { image_transport: { upstream_timeout_ms: 900_000 } },
+                420_000
+            ),
+            900_000
+        );
+        assert.equal(
+            readCapabilitiesImageTransportTimeoutMs(
+                { image_transport: { upstream_timeout_ms: 300_000 } },
+                420_000
+            ),
+            420_000
+        );
     });
 
     it('rejects service base URLs with embedded credentials before dry-run output', () => {
@@ -97,6 +142,71 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stdout.trim(), '');
     });
 
+    it('emits a non-billable upstream probe summary with stable request headers', async () => {
+        let userAgent = '';
+        await withServer(
+            (request, response) => {
+                userAgent = String(request.headers['user-agent'] || '');
+                if (request.url === '/v1/models') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync('probe-upstream-image.mjs', [
+                    '--base-url',
+                    `${baseUrl}/v1`,
+                    '--timeout-ms',
+                    '1000'
+                ]);
+
+                assert.equal(result.status, 0);
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.ok, true);
+                assert.equal(body.billable, false);
+                assert.equal(body.summary.ok, true);
+                assert.equal(body.summary.billable, false);
+                assert.equal(body.summary.transport, 'upstream_probe');
+                assert.equal(body.summary.endpoint.endsWith('/v1/models'), true);
+                assert.equal(body.summary.request_headers.user_agent_effective, 'gpt-image-playground/probe');
+                assert.equal(body.summary.request_headers.has_extra_headers, false);
+                assert.deepEqual(body.summary.request_headers.allowed_header_names, ['authorization', 'user-agent']);
+                assert.deepEqual(body.summary.request_headers.configured_header_names, []);
+                assert.equal(userAgent, 'gpt-image-playground/probe');
+            }
+        );
+    });
+
+    it('reports configured upstream probe authorization without exposing the key', async () => {
+        await withServer(
+            (request, response) => {
+                assert.equal(request.headers.authorization, 'Bearer probe-secret');
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'probe-upstream-image.mjs',
+                    ['--base-url', `${baseUrl}/v1`, '--timeout-ms', '1000'],
+                    { GPT_IMAGE_UPSTREAM_API_KEY: 'probe-secret', OPENAI_UPSTREAM_USER_AGENT: 'custom-probe' }
+                );
+
+                assert.equal(result.status, 0);
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.summary.request_headers.user_agent_effective, 'custom-probe');
+                assert.equal(body.summary.request_headers.has_extra_headers, true);
+                assert.deepEqual(body.summary.request_headers.configured_header_names, [
+                    'authorization',
+                    'user-agent'
+                ]);
+                assert.equal(JSON.stringify(body).includes('probe-secret'), false);
+            }
+        );
+    });
+
     it('does not read prompt files during default generate dry-run', () => {
         const result = runSkillScript('generate-image.mjs', ['--prompt-file', '/tmp/missing-agent-prompt.txt']);
 
@@ -104,6 +214,8 @@ describe('Agent skill script argument validation', () => {
         const body = JSON.parse(result.stdout);
         assert.equal(body.dry_run, true);
         assert.equal(body.billable, false);
+        assert.equal(body.request.output_format, 'webp');
+        assert.equal(body.request.output_compression, 100);
         assert.equal(result.stderr.trim(), '');
     });
 
@@ -126,6 +238,32 @@ describe('Agent skill script argument validation', () => {
         assert.equal(body.request.stream_mode, 'stream');
         assert.equal(body.request.streaming_strategy, 'responses-sse');
         assert.equal(body.request.partial_images, 3);
+        assert.equal(result.stderr.trim(), '');
+    });
+
+    it('routes GPT2Image-compatible generate options through page SSE dry-runs', () => {
+        const result = runSkillScript('generate-image.mjs', [
+            '--image-backend',
+            'responses',
+            '--responses-model',
+            'gpt-5.4-mini',
+            '--thinking',
+            'medium',
+            '--prompt-optimization',
+            'false',
+            '--force-web',
+            'prompt'
+        ]);
+
+        assert.equal(result.status, 0);
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.endpoint, 'http://localhost:4783/api/images');
+        assert.equal(body.routing_guidance.transport, 'page_sse');
+        assert.equal(body.request.image_backend, 'responses');
+        assert.equal(body.request.responsesModel, 'gpt-5.4-mini');
+        assert.equal(body.request.thinking, 'medium');
+        assert.equal(body.request.promptOptimization, false);
+        assert.equal(body.request.force_web, true);
         assert.equal(result.stderr.trim(), '');
     });
 
@@ -161,6 +299,25 @@ describe('Agent skill script argument validation', () => {
         assert.equal(body.routing_guidance.fallback_mode, 'manual_after_diagnosis');
         assert.equal(body.routing_guidance.reason.includes('max_edge>2048'), true);
         assert.equal(result.stderr.trim(), '');
+    });
+
+    it('expands generate presets into concrete dry-run request fields', () => {
+        const agentResult = runSkillScript('generate-image.mjs', ['--preset', '4k-agent-nonstream', 'prompt']);
+        assert.equal(agentResult.status, 0);
+        const agentBody = JSON.parse(agentResult.stdout);
+        assert.equal(agentBody.endpoint, 'http://localhost:4783/api/agent/images/generate');
+        assert.equal(agentBody.request.size, '3840x2160');
+        assert.equal(agentBody.request.quality, 'high');
+        assert.equal(agentBody.request.stream_mode, 'non_stream');
+        assert.equal(agentBody.routing_guidance.transport, 'agent_json');
+
+        const upstreamSseResult = runSkillScript('generate-image.mjs', ['--preset', '4k-upstream-sse-newapi', 'prompt']);
+        assert.equal(upstreamSseResult.status, 0);
+        const upstreamSseBody = JSON.parse(upstreamSseResult.stdout);
+        assert.equal(upstreamSseBody.request.size, '3840x2160');
+        assert.equal(upstreamSseBody.request.stream_mode, 'stream');
+        assert.equal(upstreamSseBody.request.streaming_strategy, 'newapi-keepalive-sse');
+        assert.equal(upstreamSseBody.request.partial_images, 2);
     });
 
     it('does not automatically fall back after a billable page SSE generate failure', async () => {
@@ -576,9 +733,13 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
                     const logLines = readFileSync(logPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
-                    assert.equal(logLines.length, 3);
-                    assert.match(logLines[0].raw_event, /partial_image/);
-                    assert.match(logLines[2].raw_event, /"type":"done"/);
+                    assert.equal(logLines.length, 5);
+                    assert.equal(logLines[0].event, 'request_started');
+                    assert.equal(logLines[0].client_request_id.startsWith('agent-generate-'), true);
+                    assert.match(logLines[1].raw_event, /partial_image/);
+                    assert.match(logLines[3].raw_event, /"type":"done"/);
+                    assert.equal(logLines[4].event, 'request_completed');
+                    assert.equal(typeof logLines[4].elapsed_ms, 'number');
                 }
             );
         } finally {
@@ -1254,6 +1415,13 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stdout);
                 assert.equal(body.images[0].filename, 'agent-off.png');
                 assert.deepEqual(body.routing, { transport: 'agent_json', endpoint: '/api/agent/images/generate' });
+                assert.equal(body.summary.ok, true);
+                assert.equal(body.summary.billable, true);
+                assert.equal(body.summary.idempotency_key.startsWith('agent-generate-'), true);
+                assert.equal(body.summary.transport, 'agent_json');
+                assert.equal(body.summary.endpoint, '/api/agent/images/generate');
+                assert.equal(typeof body.summary.elapsed_ms, 'number');
+                assert.equal(body.summary.next_action, 'done');
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
                     ['GET /api/agent/capabilities', 'POST /api/agent/images/generate']
@@ -1377,9 +1545,139 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.images[0].filename, 'small-page.png');
                 assert.equal(body.images[0].absolute_path, `${baseUrl}/api/image/small-page.png`);
                 assert.deepEqual(body.routing, { transport: 'page_sse', endpoint: '/api/images' });
+                assert.equal(body.summary.ok, true);
+                assert.equal(body.summary.billable, true);
+                assert.equal(body.summary.transport, 'page_sse');
+                assert.equal(body.summary.endpoint, '/api/images');
+                assert.equal(typeof body.summary.elapsed_ms, 'number');
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
                     ['GET /api/agent/capabilities', 'POST /api/images']
+                );
+            }
+        );
+    });
+
+    it('passes GPT2Image-compatible generate options to page SSE form-data', async () => {
+        const requests = [];
+        let pageSseRequestBody = '';
+        await withServer(
+            async (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ agent_streaming: { page_sse: { supported: true } } }));
+                    return;
+                }
+                if (request.url === '/api/images') {
+                    pageSseRequestBody = await readRequestText(request);
+                    response.writeHead(200, { 'content-type': 'text/event-stream' });
+                    response.end(
+                        [
+                            'data: {"type":"completed","filename":"generate.jpg","path":"/generated/generate.jpg"}',
+                            '',
+                            'data: {"type":"done","images":[{"filename":"generate.jpg","path":"/generated/generate.jpg"}]}',
+                            '',
+                            ''
+                        ].join('\n')
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'unexpected Agent generate call' }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--image-backend',
+                        'responses',
+                        '--responses-model',
+                        'gpt-5.4-mini',
+                        '--thinking',
+                        'medium',
+                        '--prompt-optimization',
+                        'false',
+                        '--force-web',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    ['GET /api/agent/capabilities', 'POST /api/images']
+                );
+                assert.match(pageSseRequestBody, /name="mode"\r?\n\r?\ngenerate/);
+                assert.match(pageSseRequestBody, /name="image_backend"\r?\n\r?\nresponses-image-generation/);
+                assert.match(pageSseRequestBody, /name="responsesModel"\r?\n\r?\ngpt-5\.4-mini/);
+                assert.match(pageSseRequestBody, /name="thinking"\r?\n\r?\nmedium/);
+                assert.match(pageSseRequestBody, /name="promptOptimization"\r?\n\r?\nfalse/);
+                assert.match(pageSseRequestBody, /name="force_web"\r?\n\r?\ntrue/);
+            }
+        );
+    });
+
+    it('rejects generate page SSE partial images outside the selected backend capability before POST', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            agent_streaming: { page_sse: { supported: true } },
+                            defaults: { partial_images: 2 },
+                            limits: {
+                                partial_images: { min: 0, max: 4 },
+                                partial_images_by_backend: {
+                                    'images-api': { min: 0, max: 4 },
+                                    'responses-image-generation': { min: 1, max: 3 }
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/images') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'page SSE should not be called' }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--image-backend',
+                        'responses',
+                        '--responses-model',
+                        'gpt-5.4-mini',
+                        '--partial-images',
+                        '0',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 2);
+                assert.equal(result.stdout.trim(), '');
+                assert.match(result.stderr, /partial_images 必须在当前 capabilities 允许的 1 到 3 之间/);
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    ['GET /api/agent/capabilities']
                 );
             }
         );
@@ -1404,6 +1702,81 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(result.stdout.trim(), '');
                 assert.match(result.stderr, /stream_mode=non_stream/);
                 assert.doesNotMatch(result.stderr, /ModuleJob|at buildGenerateRoutingGuidance/);
+                assert.deepEqual(requests, []);
+            }
+        );
+    });
+
+    it('rejects generate page-only options for explicit Agent routes before network requests', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                response.writeHead(500, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'unexpected request' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--agent',
+                        '--image-backend',
+                        'responses',
+                        '--responses-model',
+                        'gpt-5.4-mini',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 2);
+                assert.equal(result.stdout.trim(), '');
+                assert.match(result.stderr, /Agent generate 不接受文生图高级页面字段/);
+                assert.deepEqual(requests, []);
+
+                const jobResult = runSkillScript('generate-image.mjs', [
+                    '--job',
+                    '--image-backend',
+                    'responses',
+                    '--responses-model',
+                    'gpt-5.4-mini',
+                    'prompt'
+                ]);
+                assert.equal(jobResult.status, 2);
+                assert.match(jobResult.stderr, /Agent generate job 不接受文生图高级页面字段/);
+                assert.equal(jobResult.stdout.trim(), '');
+            }
+        );
+    });
+
+    it('rejects generate page-only options when streaming is disabled before network requests', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                response.writeHead(500, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'unexpected request' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--image-backend',
+                        'responses',
+                        '--responses-model',
+                        'gpt-5.4-mini',
+                        '--stream-mode',
+                        'non_stream',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 2);
+                assert.equal(result.stdout.trim(), '');
+                assert.match(result.stderr, /文生图高级页面参数需要页面 SSE/);
                 assert.deepEqual(requests, []);
             }
         );
@@ -1725,7 +2098,7 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
-    it('routes high-resolution edit dry-runs to Agent edit when streaming is explicitly disabled', () => {
+    it('rejects default WebP edit dry-runs when streaming is explicitly disabled', () => {
         const result = runSkillScript('edit-image.mjs', [
             '--size',
             '3072x2048',
@@ -1735,11 +2108,9 @@ describe('Agent skill script argument validation', () => {
             'prompt'
         ]);
 
-        assert.equal(result.status, 0);
-        const body = JSON.parse(result.stdout);
-        assert.equal(body.endpoint, 'http://localhost:4783/api/agent/images/edit');
-        assert.equal(body.routing_guidance.transport, 'agent_json');
-        assert.equal(result.stderr.trim(), '');
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout.trim(), '');
+        assert.match(result.stderr, /默认 WebP 图生图输出需要页面 SSE/);
     });
 
     it('rejects explicit edit page SSE when stream-mode is non_stream before network requests', () => {
@@ -1867,6 +2238,7 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(result.stdout.trim(), '');
                     const body = JSON.parse(result.stderr);
                     assert.equal(body.billable, false);
+                    assert.equal(body.summary.billable, false);
                     assert.equal(body.error.code, 'page_sse_request_rejected');
                     assert.equal(body.error.status, 400);
                     assert.match(body.error.message, /invalid edit request/);
@@ -1913,6 +2285,7 @@ describe('Agent skill script argument validation', () => {
                         'edit-image.mjs',
                         [
                             '--allow-billable',
+                            '--agent',
                             '--stream-mode',
                             'stream',
                             '--streaming-strategy',
@@ -1943,9 +2316,9 @@ describe('Agent skill script argument validation', () => {
     });
 
     it('rejects invalid generate upstream streaming options before dry-run output', () => {
-        const invalidPartialImages = runSkillScript('generate-image.mjs', ['--partial-images', '4', 'prompt']);
+        const invalidPartialImages = runSkillScript('generate-image.mjs', ['--partial-images', '5', 'prompt']);
         assert.equal(invalidPartialImages.status, 2);
-        assert.match(invalidPartialImages.stderr, /--partial-images 必须是 1 到 3 的整数/);
+        assert.match(invalidPartialImages.stderr, /--partial-images 必须是 0 到 4 的整数/);
         assert.equal(invalidPartialImages.stdout.trim(), '');
 
         const invalidBackend = runSkillScript('generate-image.mjs', ['--image-backend', 'unknown-backend', 'prompt']);
@@ -1966,6 +2339,63 @@ describe('Agent skill script argument validation', () => {
         assert.equal(invalidResponseMode.status, 2);
         assert.match(invalidResponseMode.stderr, /--response-mode 必须是 path、base64 或 both/);
         assert.equal(invalidResponseMode.stdout.trim(), '');
+
+        const invalidThinking = runSkillScript('generate-image.mjs', [
+            '--image-backend',
+            'responses',
+            '--responses-model',
+            'gpt-5.4-mini',
+            '--thinking',
+            'unknown',
+            'prompt'
+        ]);
+        assert.equal(invalidThinking.status, 2);
+        assert.match(invalidThinking.stderr, /--thinking 必须是/);
+        assert.equal(invalidThinking.stdout.trim(), '');
+
+        const invalidPromptOptimization = runSkillScript('generate-image.mjs', [
+            '--image-backend',
+            'responses',
+            '--responses-model',
+            'gpt-5.4-mini',
+            '--prompt-optimization',
+            'maybe',
+            'prompt'
+        ]);
+        assert.equal(invalidPromptOptimization.status, 2);
+        assert.match(invalidPromptOptimization.stderr, /--prompt-optimization 必须是 true 或 false/);
+        assert.equal(invalidPromptOptimization.stdout.trim(), '');
+
+        const emptyResponsesModel = runSkillScript('generate-image.mjs', [
+            '--image-backend',
+            'responses',
+            '--responses-model',
+            '   ',
+            'prompt'
+        ]);
+        assert.equal(emptyResponsesModel.status, 2);
+        assert.match(emptyResponsesModel.stderr, /--responses-model 必须是非空字符串/);
+        assert.equal(emptyResponsesModel.stdout.trim(), '');
+
+        const responsesModelWithoutBackend = runSkillScript('generate-image.mjs', [
+            '--responses-model',
+            'gpt-5.4-mini',
+            'prompt'
+        ]);
+        assert.equal(responsesModelWithoutBackend.status, 2);
+        assert.match(responsesModelWithoutBackend.stderr, /--responses-model 必须同时设置 --image-backend/);
+        assert.equal(responsesModelWithoutBackend.stdout.trim(), '');
+
+        const responsesModelImagesBackend = runSkillScript('generate-image.mjs', [
+            '--image-backend',
+            'images-api',
+            '--responses-model',
+            'gpt-5.4-mini',
+            'prompt'
+        ]);
+        assert.equal(responsesModelImagesBackend.status, 2);
+        assert.match(responsesModelImagesBackend.stderr, /--responses-model 仅适用于 --image-backend/);
+        assert.equal(responsesModelImagesBackend.stdout.trim(), '');
 
         const disabledAutoPageSse = runSkillScript('generate-image.mjs', [
             '--size',
@@ -2055,6 +2485,74 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /不要临时编写 Node\/Python\/shell 脚本、curl 命令或手写 fetch\/FormData/);
     });
 
+    it('documents backend-specific partial image limits for Agent clients', () => {
+        const readmeText = readFileSync(join(repoRoot, 'README.md'), 'utf8');
+        const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+        const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
+
+        assert.match(readmeText, /partial_images_by_backend\["responses-image-generation"\]/);
+        assert.match(skillText, /limits\.partial_images_by_backend\[image_backend\]/);
+        assert.match(skillText, /Agent edit 不接受 `image_backend`，其内部上游流式字段按默认 Images API\/profile 范围校验/);
+        assert.match(skillText, /不要把 Matsca `limits\.partial_images=0\.\.4` 误套到 `responses-image-generation`/);
+        assert.match(apiReference, /limits\.partial_images_by_backend\[image_backend\]/);
+        assert.match(apiReference, /Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`/);
+        assert.match(apiReference, /强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API\/profile 范围校验/);
+        assert.match(apiReference, /Agent edit 不接受 `image_backend`；需要 Responses backend edit 字段时应使用页面端 `\/api\/images` form-data SSE 路径/);
+        assert.match(apiReference, /选择 `responses-image-generation` 或兼容别名 `responses` 时必须优先使用该字段/);
+    });
+
+    it('keeps WebUI page APIs out of the Agent OpenAPI contract', () => {
+        const readmeText = readFileSync(join(repoRoot, 'README.md'), 'utf8');
+        const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+        const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
+        const openApiSource = readFileSync(join(repoRoot, 'src/lib/agent-openapi.ts'), 'utf8');
+        const agentEndpointValues = Object.values(AGENT_ENDPOINTS);
+        const pageApiBoundaries = [
+            '/api/images',
+            '/api/runtime-capabilities',
+            '/api/feedback',
+            '/api/shares',
+            '/api/logs',
+            '/api/image-delete'
+        ];
+        const agentReadableDiagnostics = [
+            '/api/agent/page-requests/feedback',
+            '/api/agent/page-requests/{id}/feedback',
+            '/api/agent/diagnostics/page-requests',
+            '/api/agent/diagnostics/page-requests/{id}'
+        ];
+        const localWorkbenchFeatures = ['灵感相册', '历史复用'];
+
+        for (const endpoint of pageApiBoundaries) {
+            assert.match(readmeText, new RegExp(escapeRegExp(endpoint)));
+            assert.match(skillText, new RegExp(escapeRegExp(endpoint)));
+            assert.match(apiReference, new RegExp(escapeRegExp(endpoint)));
+            assert.equal(agentEndpointValues.includes(endpoint), false);
+        }
+
+        for (const feature of localWorkbenchFeatures) {
+            assert.match(readmeText, new RegExp(escapeRegExp(feature)));
+            assert.match(skillText, new RegExp(escapeRegExp(feature)));
+            assert.match(apiReference, new RegExp(escapeRegExp(feature)));
+            assert.match(apiReference, new RegExp(`${escapeRegExp(feature)}[\\s\\S]*不作为机器 API 契约承诺`));
+        }
+
+        for (const endpoint of agentReadableDiagnostics) {
+            assert.match(readmeText, new RegExp(escapeRegExp(endpoint)));
+            assert.match(skillText, new RegExp(escapeRegExp(endpoint)));
+            assert.match(apiReference, new RegExp(escapeRegExp(endpoint)));
+            assert.equal(agentEndpointValues.includes(endpoint), true);
+        }
+
+        assert.match(readmeText, /边界矩阵/);
+        assert.match(apiReference, /### 边界矩阵/);
+        assert.match(openApiSource, /AGENT_ENDPOINTS\.page_request_feedback_batch/);
+        assert.match(openApiSource, /AGENT_ENDPOINTS\.page_request_feedback/);
+        assert.match(openApiSource, /AGENT_ENDPOINTS\.page_request_diagnostics_batch/);
+        assert.match(openApiSource, /AGENT_ENDPOINTS\.page_request_diagnostics/);
+        assert.match(openApiSource, /高分辨率 edit 默认优先使用页面端 \/api\/images form-data SSE/);
+    });
+
     it('runs from a copied standalone skill directory outside the repository', () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-playground-agent-'));
         const copiedSkillRoot = join(tempRoot, 'gpt-image-playground-agent');
@@ -2120,10 +2618,13 @@ describe('Agent skill script argument validation', () => {
             assert.equal(body.tasks[0].request.model, 'gpt-image-2');
             assert.equal(body.tasks[0].request.output_format, 'jpeg');
             assert.equal(body.tasks[0].request.output_compression, 80);
-            assert.equal(body.tasks[1].endpoint, '/api/agent/images/edit');
+            assert.equal(body.tasks[1].endpoint, '/api/images');
+            assert.equal(body.tasks[1].routing.transport, 'page_sse');
             assert.equal(body.tasks[1].idempotency_key, 'demo-0002-edit-item');
             assert.deepEqual(body.tasks[1].request.image_fields, ['image_0', 'image_1']);
             assert.equal(body.tasks[1].request.mask, 'provided');
+            assert.equal(body.tasks[1].request.output_format, 'webp');
+            assert.equal(body.tasks[1].request.output_compression, 100);
             assert.equal('image_path' in body.tasks[1].request, false);
             assert.equal('image_paths' in body.tasks[1].request, false);
             assert.equal('mask_path' in body.tasks[1].request, false);
@@ -2171,17 +2672,18 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
-    it('validates present batch fields even when their values are falsy', () => {
+    it('preserves explicit zero partial image requests in batch dry-run output', () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-'));
         try {
             const inputPath = join(tempRoot, 'tasks.jsonl');
-            writeFileSync(inputPath, JSON.stringify({ id: 'bad-partial', prompt: 'prompt', partial_images: 0 }));
+            writeFileSync(inputPath, JSON.stringify({ id: 'zero-partial', prompt: 'prompt', partial_images: 0 }));
 
             const result = runSkillScript('batch-images.mjs', ['--input', inputPath]);
 
-            assert.equal(result.status, 2);
-            assert.match(result.stderr, /bad-partial\.partial_images 必须是正整数/);
-            assert.equal(result.stdout.trim(), '');
+            assert.equal(result.status, 0);
+            assert.equal(result.stderr.trim(), '');
+            const body = JSON.parse(result.stdout);
+            assert.equal(body.tasks[0].request.partial_images, 0);
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
@@ -2253,6 +2755,135 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('rejects batch Agent JSON requests outside the advertised partial image capability', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-partial-capability-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    id: 'too-many-partials',
+                    prompt: 'prompt',
+                    partial_images: 4
+                })
+            );
+
+            const requests = [];
+            await withServer(
+                (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                limits: {
+                                    partial_images: { min: 1, max: 3 }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: 'generate should not be called' }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        ['GET /api/agent/capabilities']
+                    );
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.results[0].status, 'failed');
+                    assert.match(body.results[0].error, /partial_images 必须在当前 capabilities 允许的 1 到 3 之间/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('rejects batch page SSE partial images outside the selected backend capability before POST', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-page-partial-capability-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(
+                inputPath,
+                JSON.stringify({
+                    id: 'responses-zero-partial',
+                    prompt: 'prompt',
+                    image_backend: 'responses-image-generation',
+                    responsesModel: 'gpt-5.4-mini',
+                    partial_images: 0
+                })
+            );
+
+            const requests = [];
+            await withServer(
+                (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: { page_sse: { supported: true } },
+                                defaults: { partial_images: 2 },
+                                limits: {
+                                    partial_images: { min: 0, max: 4 },
+                                    partial_images_by_backend: {
+                                        'images-api': { min: 0, max: 4 },
+                                        'responses-image-generation': { min: 1, max: 3 }
+                                    }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: 'page SSE should not be called' }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        ['GET /api/agent/capabilities']
+                    );
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.failure_summary.non_billable_count, 1);
+                    assert.equal(body.failure_summary.billable_count, 0);
+                    assert.equal(body.results[0].billable, false);
+                    assert.equal(body.results[0].status, 'failed');
+                    assert.match(body.results[0].error, /partial_images 必须在当前 capabilities 允许的 1 到 3 之间/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('appends batch manifests and skips succeeded tasks during resume', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-'));
         try {
@@ -2311,7 +2942,7 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(body.results[1].status, 'succeeded');
                     assert.deepEqual(
                         requests.map((item) => `${item.method} ${item.url}`),
-                        ['POST /api/agent/images/generate']
+                        ['GET /api/agent/capabilities', 'POST /api/agent/images/generate']
                     );
                     const manifestLines = readFileSync(manifestPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
                     assert.equal(manifestLines.length, 3);
@@ -2490,7 +3121,7 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
-    it('runs batch edit tasks with multipart image input', async () => {
+    it('runs default WebP batch edit tasks through page SSE multipart input', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-'));
         try {
             const inputPath = join(tempRoot, 'tasks.jsonl');
@@ -2501,18 +3132,28 @@ describe('Agent skill script argument validation', () => {
                 JSON.stringify({ mode: 'edit', id: 'edit-one', prompt: 'edit prompt', image_path: imagePath, size: '1024x1024' })
             );
 
+            const requests = [];
             let editRequestBody = '';
             await withServer(
                 async (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
                     if (request.url === '/api/agent/capabilities') {
                         response.writeHead(200, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ ok: true }));
+                        response.end(JSON.stringify({ agent_streaming: { page_sse: { supported: true, endpoint: '/api/images' } } }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/edit') {
+                    if (request.url === '/api/images') {
                         editRequestBody = await readRequestText(request);
-                        response.writeHead(200, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ images: [{ id: 'edit-image', filename: 'edit.png', b64_json: fakePngBase64(2, 1) }] }));
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"edit-one.webp","path":"/generated/edit-one.webp"}',
+                                '',
+                                'data: {"type":"done","images":[{"filename":"edit-one.webp","path":"/generated/edit-one.webp"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
                         return;
                     }
                     response.writeHead(404, { 'content-type': 'application/json' });
@@ -2525,8 +3166,16 @@ describe('Agent skill script argument validation', () => {
 
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.results[0].routing.transport, 'page_sse');
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        ['GET /api/agent/capabilities', 'POST /api/images']
+                    );
                     assert.match(editRequestBody, /name="prompt"\r?\n\r?\nedit prompt/);
                     assert.match(editRequestBody, /name="image_0"; filename="source\.png"/);
+                    assert.match(editRequestBody, /name="output_format"\r?\n\r?\nwebp/);
+                    assert.match(editRequestBody, /name="output_compression"\r?\n\r?\n100/);
                 }
             );
         } finally {
@@ -2600,6 +3249,10 @@ describe('Agent skill script argument validation', () => {
                     const body = JSON.parse(result.stdout);
                     assert.equal(body.results[0].routing.transport, 'page_sse');
                     assert.equal(body.results[0].routing.strength, 'default');
+                    assert.equal(body.results[0].summary.ok, true);
+                    assert.equal(body.results[0].summary.transport, 'page_sse');
+                    assert.equal(body.results[0].summary.endpoint, '/api/images');
+                    assert.equal(typeof body.results[0].summary.elapsed_ms, 'number');
                     assert.deepEqual(
                         requests.map((item) => `${item.method} ${item.url}`),
                         ['GET /api/agent/capabilities', 'POST /api/images']
@@ -2953,6 +3606,10 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(body.results[0].routing.fallback_endpoint, '/api/agent/images/edit');
                     assert.equal(body.results[0].routing.fallback_mode, 'fix_request_before_retry');
                     assert.match(body.results[0].next_step, /请求参数或鉴权/);
+                    assert.equal(body.results[0].summary.ok, false);
+                    assert.equal(body.results[0].summary.billable, false);
+                    assert.equal(body.results[0].summary.transport, 'page_sse');
+                    assert.equal(body.results[0].summary.endpoint, '/api/images');
 
                     const manifestLines = readFileSync(manifestPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
                     assert.equal(manifestLines.length, 1);
@@ -2960,6 +3617,8 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(manifestLines[0].billable, false);
                     assert.equal(manifestLines[0].error.code, 'page_sse_request_rejected');
                     assert.equal(manifestLines[0].routing.transport, 'page_sse');
+                    assert.equal(manifestLines[0].summary.ok, false);
+                    assert.equal(manifestLines[0].summary.billable, false);
                     assert.deepEqual(
                         requests.map((item) => `${item.method} ${item.url}`),
                         ['GET /api/agent/capabilities', 'POST /api/images']
@@ -3353,12 +4012,12 @@ describe('Agent skill script argument validation', () => {
             assert.match(invalidResult.stderr, /bad-size\.size 必须是 auto 或 WIDTHxHEIGHT/);
             assert.equal(invalidResult.stdout.trim(), '');
 
-            const maxPixelsInputPath = join(tempRoot, 'max-pixels.jsonl');
-            writeFileSync(maxPixelsInputPath, JSON.stringify({ id: 'too-many-pixels', prompt: 'prompt', size: '3840x3840' }));
-            const maxPixelsResult = runSkillScript('batch-images.mjs', ['--input', maxPixelsInputPath]);
-            assert.equal(maxPixelsResult.status, 2);
-            assert.match(maxPixelsResult.stderr, /too-many-pixels\.size 的总像素不能超过 8,294,400/);
-            assert.equal(maxPixelsResult.stdout.trim(), '');
+            const nonPositiveInputPath = join(tempRoot, 'non-positive.jsonl');
+            writeFileSync(nonPositiveInputPath, JSON.stringify({ id: 'non-positive-size', prompt: 'prompt', size: '0x3840' }));
+            const nonPositiveResult = runSkillScript('batch-images.mjs', ['--input', nonPositiveInputPath]);
+            assert.equal(nonPositiveResult.status, 2);
+            assert.match(nonPositiveResult.stderr, /non-positive-size\.size 的宽度和高度必须是正数/);
+            assert.equal(nonPositiveResult.stdout.trim(), '');
 
             const invalidModelInputPath = join(tempRoot, 'invalid-model.jsonl');
             writeFileSync(
@@ -3625,9 +4284,10 @@ describe('Agent skill script argument validation', () => {
                 })
             );
             const transparentResult = runSkillScript('batch-images.mjs', ['--input', transparentInputPath]);
-            assert.equal(transparentResult.status, 2);
-            assert.match(transparentResult.stderr, /transparent-background\.background 对 gpt-image-2 无效/);
-            assert.equal(transparentResult.stdout.trim(), '');
+            assert.equal(transparentResult.status, 0);
+            assert.equal(transparentResult.stderr.trim(), '');
+            const transparentBody = JSON.parse(transparentResult.stdout);
+            assert.equal(transparentBody.tasks[0].request.background, 'transparent');
 
             const stringPageSseInputPath = join(tempRoot, 'string-page-sse.jsonl');
             writeFileSync(
@@ -3850,6 +4510,605 @@ describe('Agent skill script argument validation', () => {
             }
         );
     });
+
+    it('diagnoses page request feedback and log summaries through Agent endpoints', async () => {
+        const requests = [];
+        await withServer(
+            async (request, response) => {
+                requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            endpoints: {
+                                page_request_feedback_batch: '/api/agent/page-requests/feedback',
+                                page_request_feedback: '/api/agent/page-requests/{id}/feedback',
+                                page_request_diagnostics: '/api/agent/diagnostics/page-requests/{id}'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/page-requests/feedback' && request.method === 'POST') {
+                    assert.deepEqual(JSON.parse(await readRequestText(request)), { ids: ['web-diag'] });
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            feedback: [
+                                {
+                                    target_type: 'page_request',
+                                    target_id: 'web-diag',
+                                    value: 'usable',
+                                    source: 'webui',
+                                    updated_at: '2026-05-12T00:00:00.000Z',
+                                    note: 'approved'
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/page-requests/web-diag?filename=hero.png') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            scope: {
+                                request_ids: ['web-diag'],
+                                filenames: ['hero.png'],
+                                filename_matched_request_ids: [],
+                                copy_text: 'requestIds=web-diag'
+                            },
+                            matched_log_count: 1,
+                            events: [{ id: 1, at: '2026-05-12T00:00:01.000Z', level: 'info', message: 'ok' }]
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-request.mjs',
+                    ['--client-request-id', 'web-diag', '--filename', 'hero.png'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl, GPT_IMAGE_AGENT_TOKEN: 'diag-token' }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.client_request_id, 'web-diag');
+                assert.equal(body.feedback.value, 'usable');
+                assert.equal(body.diagnostics.matched_log_count, 1);
+                assert.equal(body.request_count, 1);
+                assert.equal(body.requests[0].client_request_id, 'web-diag');
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/page-requests/feedback',
+                        'GET /api/agent/diagnostics/page-requests/web-diag?filename=hero.png'
+                    ]
+                );
+                assert.equal(requests[1].authorization, 'Bearer diag-token');
+                assert.equal(requests[2].authorization, 'Bearer diag-token');
+            }
+        );
+    });
+
+    it('diagnoses repeated request ids and batch manifests without duplicate feedback calls', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'diagnose-request-'));
+        const manifestPath = join(tempRoot, 'batch.manifest.jsonl');
+        const outputPath = join(tempRoot, 'diagnosis.json');
+        writeFileSync(
+            manifestPath,
+            [
+                JSON.stringify({ id: 'task-a', idempotency_key: 'web-diag-a', status: 'succeeded' }),
+                JSON.stringify({ id: 'task-b', client_request_id: 'web-diag-b', status: 'succeeded' })
+            ].join('\n')
+        );
+
+        const requests = [];
+        try {
+            await withServer(
+                async (request, response) => {
+                    requests.push({
+                        method: request.method,
+                        url: request.url,
+                        authorization: request.headers.authorization
+                    });
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                endpoints: {
+                                    page_request_feedback_batch: '/api/agent/page-requests/feedback',
+                                    page_request_diagnostics_batch: '/api/agent/diagnostics/page-requests',
+                                    page_request_diagnostics: '/api/agent/diagnostics/page-requests/{id}'
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/page-requests/feedback' && request.method === 'POST') {
+                        assert.deepEqual(JSON.parse(await readRequestText(request)), {
+                            ids: ['web-diag-a', 'web-diag-b']
+                        });
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                feedback: [
+                                    {
+                                        target_type: 'page_request',
+                                        target_id: 'web-diag-b',
+                                        value: 'needs_revision',
+                                        source: 'webui',
+                                        updated_at: '2026-05-12T00:00:00.000Z'
+                                    }
+                                ]
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/diagnostics/page-requests' && request.method === 'POST') {
+                        assert.deepEqual(JSON.parse(await readRequestText(request)), {
+                            ids: ['web-diag-a', 'web-diag-b'],
+                            filenames: ['hero.png']
+                        });
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                diagnostics: ['web-diag-a', 'web-diag-b'].map((requestId) => ({
+                                    client_request_id: requestId,
+                                    scope: {
+                                        request_ids: [requestId],
+                                        filenames: ['hero.png'],
+                                        filename_matched_request_ids: [],
+                                        copy_text: `requestIds=${requestId}`
+                                    },
+                                    matched_log_count: 1,
+                                    events: [
+                                        { id: 1, at: '2026-05-12T00:00:01.000Z', level: 'info', message: 'ok' }
+                                    ]
+                                }))
+                            })
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'diagnose-request.mjs',
+                        [
+                            '--client-request-id',
+                            'web-diag-a',
+                            '--manifest',
+                            manifestPath,
+                            '--filename',
+                            'hero.png',
+                            '--output',
+                            outputPath
+                        ],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl, GPT_IMAGE_AGENT_TOKEN: 'diag-token' }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.request_count, 2);
+                    assert.deepEqual(
+                        body.requests.map((item) => item.client_request_id),
+                        ['web-diag-a', 'web-diag-b']
+                    );
+                    assert.equal(body.requests[0].feedback, null);
+                    assert.equal(body.requests[1].feedback.value, 'needs_revision');
+                    assert.deepEqual(JSON.parse(readFileSync(outputPath, 'utf8')), body);
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        [
+                            'GET /api/agent/capabilities',
+                            'POST /api/agent/page-requests/feedback',
+                            'POST /api/agent/diagnostics/page-requests'
+                        ]
+                    );
+                    assert.equal(requests[1].authorization, 'Bearer diag-token');
+                    assert.equal(requests[2].authorization, 'Bearer diag-token');
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('reads Agent state diagnostics by request id and idempotency key without page feedback calls', async () => {
+        const requests = [];
+        await withServer(
+            async (request, response) => {
+                requests.push({
+                    method: request.method,
+                    url: request.url,
+                    authorization: request.headers.authorization
+                });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            endpoints: {
+                                agent_request_diagnostics: '/api/agent/diagnostics/requests/{id}',
+                                agent_request_diagnostics_lookup: '/api/agent/diagnostics/requests'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/requests/req_1') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            found: true,
+                            diagnostics: {
+                                request: {
+                                    request_id: 'req_1',
+                                    idempotency_key: 'idem_req_1',
+                                    mode: 'generate',
+                                    status: 'succeeded'
+                                },
+                                response: {
+                                    image_count: 1,
+                                    timing: { elapsed_ms: 61234, server_elapsed_ms: 61000 },
+                                    execution: {
+                                        transport: 'agent_json',
+                                        endpoint: '/api/agent/images/generate',
+                                        request_headers: {
+                                            user_agent_effective: 'gpt-image-playground/2.0.0',
+                                            has_extra_headers: false
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/requests?idempotency_key=idem_2') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            found: true,
+                            diagnostics: {
+                                request: {
+                                    request_id: 'req_2',
+                                    idempotency_key: 'idem_2',
+                                    mode: 'generate',
+                                    status: 'failed'
+                                },
+                                error: {
+                                    code: 'upstream_unavailable',
+                                    retryable: true,
+                                    diagnostics: {
+                                        transport_error_kind: 'dns',
+                                        cooldown_until: '2026-06-11T12:00:00.000Z',
+                                        cooldown_target: { channel_id: 'channel-a' }
+                                    }
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-request.mjs',
+                    ['--agent-request-id', 'req_1', '--idempotency-key', 'idem_2'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl, GPT_IMAGE_AGENT_TOKEN: 'diag-token' }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.billable, false);
+                assert.equal(body.page_request_count, 0);
+                assert.equal(body.request_count, 0);
+                assert.equal(body.agent_request_count, 2);
+                assert.deepEqual(body.requests, []);
+                assert.equal(body.agent_requests[0].lookup.type, 'request_id');
+                assert.equal(body.agent_requests[0].diagnostics.response.timing.elapsed_ms, 61234);
+                assert.equal(
+                    body.agent_requests[0].diagnostics.response.execution.request_headers.user_agent_effective,
+                    'gpt-image-playground/2.0.0'
+                );
+                assert.equal(body.agent_requests[1].lookup.type, 'idempotency_key');
+                assert.equal(body.agent_requests[1].diagnostics.error.diagnostics.transport_error_kind, 'dns');
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'GET /api/agent/diagnostics/requests/req_1',
+                        'GET /api/agent/diagnostics/requests?idempotency_key=idem_2'
+                    ]
+                );
+                assert.equal(requests[1].authorization, 'Bearer diag-token');
+                assert.equal(requests[2].authorization, 'Bearer diag-token');
+            }
+        );
+    });
+
+    it('reports missing Agent state diagnostics as found false without failing the script', async () => {
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ endpoints: {} }));
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/requests/missing-request') {
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ found: false }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-request.mjs',
+                    ['--agent-request-id', 'missing-request'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.agent_request_count, 1);
+                assert.equal(body.agent_found, false);
+                assert.equal(body.agent_diagnostics, null);
+                assert.equal(body.agent_requests[0].found, false);
+            }
+        );
+    });
+
+    it('fails diagnostics when the feedback batch response violates the contract', async () => {
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            endpoints: {
+                                page_request_feedback_batch: '/api/agent/page-requests/feedback',
+                                page_request_diagnostics_batch: '/api/agent/diagnostics/page-requests',
+                                page_request_diagnostics: '/api/agent/diagnostics/page-requests/{id}'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/page-requests/feedback' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ targets: [{ type: 'page_request', id: 'web-diag' }] }));
+                    return;
+                }
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ diagnostics: [] }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-request.mjs',
+                    ['--client-request-id', 'web-diag'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                assert.match(result.stderr, /批量反馈响应缺少 feedback 数组/);
+            }
+        );
+    });
+
+    it('fails diagnostics when the diagnostics batch response violates the contract', async () => {
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            endpoints: {
+                                page_request_feedback_batch: '/api/agent/page-requests/feedback',
+                                page_request_diagnostics_batch: '/api/agent/diagnostics/page-requests',
+                                page_request_diagnostics: '/api/agent/diagnostics/page-requests/{id}'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/page-requests/feedback' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ feedback: [] }));
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/page-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ targets: [{ type: 'page_request', id: 'web-diag' }] }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-request.mjs',
+                    ['--client-request-id', 'web-diag'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                assert.match(result.stderr, /批量诊断响应缺少 diagnostics 数组/);
+            }
+        );
+    });
+
+    it('explains empty page request diagnostics with the advertised log retention boundary', async () => {
+        const retention = {
+            storage: 'bounded_local_jsonl',
+            max_entries: 123,
+            default_max_entries: 300,
+            min_entries: 100,
+            max_configured_entries: 5000,
+            configured_by: 'APP_LOG_MAX_ENTRIES',
+            persisted_across_process_restart: true,
+            loss_modes: ['entry_evicted_by_max_entries', 'log_level_filter', 'local_log_file_missing_or_cleared'],
+            bounded: true,
+            not_agent_state_backend: true
+        };
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            endpoints: {
+                                page_request_feedback_batch: '/api/agent/page-requests/feedback',
+                                page_request_diagnostics_batch: '/api/agent/diagnostics/page-requests',
+                                page_request_diagnostics: '/api/agent/diagnostics/page-requests/{id}'
+                            },
+                            page_request_diagnostics: {
+                                supported: true,
+                                source: 'app_log',
+                                retention
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/page-requests/feedback' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ feedback: [] }));
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/page-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            diagnostics: [
+                                {
+                                    client_request_id: 'missing-log',
+                                    scope: {
+                                        request_ids: ['missing-log'],
+                                        filenames: [],
+                                        filename_matched_request_ids: [],
+                                        copy_text: 'requestIds=missing-log'
+                                    },
+                                    matched_log_count: 0,
+                                    events: []
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-request.mjs',
+                    ['--client-request-id', 'missing-log'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.deepEqual(body.diagnostics_retention, retention);
+                assert.equal(body.diagnostics_note.code, 'no_matching_logs_in_retention_window');
+                assert.equal(body.requests[0].diagnostics_note.code, 'no_matching_logs_in_retention_window');
+                assert.equal(body.requests[0].diagnostics_note.retention.max_entries, 123);
+                assert.match(body.requests[0].diagnostics_note.message, /最近 123 条本地应用日志/);
+            }
+        );
+    });
+
+    it('uses diagnostics API retention when capabilities omit diagnostics metadata', async () => {
+        const retention = {
+            storage: 'bounded_local_jsonl',
+            max_entries: 456,
+            default_max_entries: 300,
+            min_entries: 100,
+            max_configured_entries: 5000,
+            configured_by: 'APP_LOG_MAX_ENTRIES',
+            persisted_across_process_restart: true,
+            loss_modes: ['entry_evicted_by_max_entries', 'log_level_filter', 'local_log_file_missing_or_cleared'],
+            bounded: true,
+            not_agent_state_backend: true
+        };
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            endpoints: {
+                                page_request_feedback_batch: '/api/agent/page-requests/feedback',
+                                page_request_diagnostics_batch: '/api/agent/diagnostics/page-requests',
+                                page_request_diagnostics: '/api/agent/diagnostics/page-requests/{id}'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/page-requests/feedback' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ feedback: [] }));
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/page-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            diagnostics_retention: retention,
+                            diagnostics: [
+                                {
+                                    client_request_id: 'api-retention-only',
+                                    scope: {
+                                        request_ids: ['api-retention-only'],
+                                        filenames: [],
+                                        filename_matched_request_ids: [],
+                                        copy_text: 'requestIds=api-retention-only'
+                                    },
+                                    matched_log_count: 0,
+                                    events: []
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-request.mjs',
+                    ['--client-request-id', 'api-retention-only'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.deepEqual(body.diagnostics_retention, retention);
+                assert.equal(body.diagnostics_note.retention.max_entries, 456);
+                assert.equal(body.requests[0].diagnostics_note.retention.max_entries, 456);
+                assert.match(body.requests[0].diagnostics_note.message, /最近 456 条本地应用日志/);
+            }
+        );
+    });
 });
 
 function runSkillScript(filename, args, env = {}) {
@@ -3956,6 +5215,10 @@ function readRequestText(request) {
     });
 }
 
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function fakePngBuffer(width, height) {
     const buffer = Buffer.alloc(24);
     buffer[0] = 0x89;
@@ -3967,4 +5230,11 @@ function fakePngBuffer(width, height) {
 
 function fakePngBase64(width, height) {
     return fakePngBuffer(width, height).toString('base64');
+}
+
+function validPngBuffer() {
+    return Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
+        'base64'
+    );
 }
