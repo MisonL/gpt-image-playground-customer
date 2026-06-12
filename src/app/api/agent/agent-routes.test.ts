@@ -1,4 +1,5 @@
 import type { AgentErrorCode } from '@/lib/api-error-response';
+import { isFeedbackStateStore } from '@/lib/feedback-store';
 import Database from 'better-sqlite3';
 import type { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
@@ -40,9 +41,24 @@ beforeEach(async () => {
     delete process.env.AGENT_API_TOKEN;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
+    delete process.env.OPENAI_UPSTREAM_USER_AGENT;
+    delete process.env.UPSTREAM_USER_AGENT;
     delete process.env.OPENAI_CHANNEL_1_ID;
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
+    delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID;
+    delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET;
+    delete process.env.OPENAI_CHANNEL_1_USER_AGENT;
+    delete process.env.OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON;
+    delete process.env.OPENAI_CHANNEL_2_ID;
+    delete process.env.OPENAI_CHANNEL_2_API_KEYS;
+    delete process.env.OPENAI_CHANNEL_2_BASE_URL;
+    delete process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_2_MATSCA_APP_ID;
+    delete process.env.OPENAI_CHANNEL_2_MATSCA_APP_SECRET;
+    delete process.env.OPENAI_CHANNEL_2_USER_AGENT;
+    delete process.env.OPENAI_CHANNEL_2_UPSTREAM_HEADERS_JSON;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_INTERVAL_MS;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_TIMEOUT_MS;
@@ -93,6 +109,50 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.auth.schemes, []);
     });
 
+    it('reports deployed upstream profile limits in capabilities without exposing upstream secrets', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://img.matsca.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-matsca-secret';
+        process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+        process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'matsca-app-id';
+        process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'matsca-app-secret';
+        process.env.OPENAI_CHANNEL_1_USER_AGENT = 'channel-agent-secret';
+        process.env.OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON = JSON.stringify({
+            'X-App-Secret': 'channel-header-secret',
+            'X-Trace-Token': 'trace-token-secret'
+        });
+        process.env.OPENAI_UPSTREAM_USER_AGENT = 'global-agent-secret';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.upstream_profile.activeProfile, 'matsca');
+        assert.deepEqual(body.limits.partial_images, { min: 0, max: 4 });
+        assert.equal(body.limits.upload_images.max, 8);
+        assert.equal(body.model_limits['gpt-image-2'].allow_transparent_background, true);
+        assert.equal(body.upstream_request_headers.default.user_agent_effective, 'configured');
+        assert.deepEqual(body.upstream_request_headers.channels, [
+            {
+                id: 'matsca',
+                request_headers: {
+                    user_agent_effective: 'configured',
+                    has_extra_headers: true,
+                    allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
+                    configured_header_names: ['user-agent', 'x-app-id', 'x-app-secret', 'x-trace-token']
+                }
+            }
+        ]);
+        const serialized = JSON.stringify(body);
+        assert.equal(serialized.includes('sk-matsca-secret'), false);
+        assert.equal(serialized.includes('matsca-app-id'), false);
+        assert.equal(serialized.includes('matsca-app-secret'), false);
+        assert.equal(serialized.includes('channel-agent-secret'), false);
+        assert.equal(serialized.includes('channel-header-secret'), false);
+        assert.equal(serialized.includes('trace-token-secret'), false);
+        assert.equal(serialized.includes('global-agent-secret'), false);
+    });
+
     it('reports enabled Responses image backend from the deployed runtime environment', async () => {
         const { getCapabilities } = await loadAgentRoutes();
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
@@ -114,8 +174,55 @@ describe('Agent route integration', () => {
         });
     });
 
-    it('generates through a compatible upstream once and replays the cached response for the same idempotency key', async () => {
-        const { generateImage } = await loadAgentRoutes();
+    it('reports Matsca channel limits from the deployed runtime environment without leaking secrets', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://img.matsca.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-matsca-secret';
+        process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+        process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'app-id-secret';
+        process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'app-secret-value';
+        process.env.OPENAI_CHANNEL_1_USER_AGENT = 'channel-agent-secret';
+        process.env.OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON = JSON.stringify({
+            'X-App-Secret': 'channel-header-secret',
+            'X-Trace-Token': 'trace-token-secret'
+        });
+        process.env.UPSTREAM_USER_AGENT = 'global-agent-secret';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.limits.max_images, 4);
+        assert.equal(body.limits.upload_images.max, 8);
+        assert.equal(body.limits.max_upload_mb, 10);
+        assert.equal(body.limits.max_total_upload_mb, 80);
+        assert.deepEqual(body.limits.partial_images, { min: 0, max: 4 });
+        assert.equal(body.model_limits['gpt-image-2'].allow_transparent_background, true);
+        assert.equal(body.model_limits['gpt-image-2'].size_policy, 'positive-integer');
+        assert.equal(body.upstream_request_headers.default.user_agent_effective, 'configured');
+        assert.deepEqual(body.upstream_request_headers.channels, [
+            {
+                id: 'matsca',
+                request_headers: {
+                    user_agent_effective: 'configured',
+                    has_extra_headers: true,
+                    allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
+                    configured_header_names: ['user-agent', 'x-app-id', 'x-app-secret', 'x-trace-token']
+                }
+            }
+        ]);
+        const serialized = JSON.stringify(body);
+        assert.equal(serialized.includes('sk-matsca-secret'), false);
+        assert.equal(serialized.includes('app-id-secret'), false);
+        assert.equal(serialized.includes('app-secret-value'), false);
+        assert.equal(serialized.includes('channel-agent-secret'), false);
+        assert.equal(serialized.includes('channel-header-secret'), false);
+        assert.equal(serialized.includes('trace-token-secret'), false);
+        assert.equal(serialized.includes('global-agent-secret'), false);
+    });
+
+    it('generates through a compatible upstream once and exposes request diagnostics for the same state record', async () => {
+        const { generateImage, getAgentRequestDiagnostics, lookupAgentRequestDiagnostics } = await loadAgentRoutes();
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
@@ -127,24 +234,141 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
-        const first = await generateImage(agentJsonRequest('route-cache-key', { prompt: 'agent route success' }));
-        assert.equal(first.status, 200);
-        const firstBody = await first.json();
-        assert.equal(firstBody.cached, false);
-        assert.equal(firstBody.images.length, 1);
-        assert.ok(firstBody.images[0].content_url);
-        assert.equal('b64_json' in firstBody.images[0], false);
+        try {
+            const first = await generateImage(agentJsonRequest('route-cache-key', { prompt: 'agent route success' }));
+            assert.equal(first.status, 200);
+            const firstBody = await first.json();
+            assert.equal(firstBody.cached, false);
+            assert.equal(firstBody.images.length, 1);
+            assert.ok(firstBody.images[0].content_url);
+            assert.equal('b64_json' in firstBody.images[0], false);
+            assert.equal(firstBody.execution.transport, 'agent_json');
+            assert.equal(firstBody.execution.endpoint, '/api/agent/images/generate');
+            assert.equal(firstBody.execution.route_mode, 'agent');
+            assert.equal(firstBody.execution.operation, 'generate');
+            assert.equal(firstBody.execution.image_backend, 'images-api');
+            assert.equal(firstBody.execution.stream_mode, 'non_stream');
+            assert.equal(firstBody.execution.streaming_strategy, 'auto');
+            assert.equal(firstBody.execution.upstream_host, new URL(upstream.baseUrl).host);
+            assert.equal(firstBody.execution.request_headers.user_agent_effective, 'gpt-image-playground/2.0.0');
+            assert.equal(firstBody.execution.request_headers.has_extra_headers, false);
+            assert.equal(typeof firstBody.timing.elapsed_ms, 'number');
+            assert.equal(firstBody.timing.elapsed_ms >= 0, true);
+            assert.equal(firstBody.timing.server_elapsed_ms, firstBody.timing.elapsed_ms);
+            assert.equal(typeof firstBody.timing.started_at, 'string');
+            assert.equal(typeof firstBody.timing.completed_at, 'string');
 
-        const second = await generateImage(agentJsonRequest('route-cache-key', { prompt: 'agent route success' }));
-        assert.equal(second.status, 200);
-        const secondBody = await second.json();
-        assert.equal(secondBody.cached, true);
-        assert.equal(second.headers.get('x-idempotent-replay'), 'true');
-        assert.equal(second.headers.get('x-request-id'), firstBody.request_id);
-        assert.equal(secondBody.request_id, firstBody.request_id);
-        assert.equal(upstreamCalls, 1);
+            const second = await generateImage(agentJsonRequest('route-cache-key', { prompt: 'agent route success' }));
+            assert.equal(second.status, 200);
+            const secondBody = await second.json();
+            assert.equal(secondBody.cached, true);
+            assert.equal(second.headers.get('x-idempotent-replay'), 'true');
+            assert.equal(second.headers.get('x-request-id'), firstBody.request_id);
+            assert.equal(secondBody.request_id, firstBody.request_id);
+            assert.deepEqual(secondBody.execution, firstBody.execution);
+            assert.deepEqual(secondBody.timing, firstBody.timing);
+            assert.equal(upstreamCalls, 1);
 
-        await upstream.close();
+            const byRequestId = await getAgentRequestDiagnostics(
+                new Request(`http://localhost/api/agent/diagnostics/requests/${firstBody.request_id}`),
+                { params: Promise.resolve({ id: firstBody.request_id }) }
+            );
+            assert.equal(byRequestId.status, 200);
+            const byRequestIdBody = await byRequestId.json();
+            assert.equal(byRequestIdBody.found, true);
+            assert.equal(byRequestIdBody.diagnostics.request.request_id, firstBody.request_id);
+            assert.equal(byRequestIdBody.diagnostics.request.idempotency_key, 'route-cache-key');
+            assert.equal(byRequestIdBody.diagnostics.request.status, 'succeeded');
+            assert.equal(byRequestIdBody.diagnostics.response.image_count, 1);
+            assert.deepEqual(byRequestIdBody.diagnostics.response.timing, firstBody.timing);
+            assert.deepEqual(byRequestIdBody.diagnostics.response.execution, firstBody.execution);
+            assert.deepEqual(byRequestIdBody.diagnostics.response.content_urls, [firstBody.images[0].content_url]);
+            assert.equal(byRequestIdBody.diagnostics.artifacts[0].id, firstBody.images[0].id);
+            assert.equal(byRequestIdBody.diagnostics.state_backend, 'sqlite');
+            assert.equal(byRequestIdBody.diagnostics.diagnostics_retention.storage, 'agent_state');
+            assert.equal(byRequestIdBody.diagnostics.diagnostics_boundary.not_page_request_log, true);
+            assert.equal(JSON.stringify(byRequestIdBody).includes(PNG_BASE64), false);
+
+            const byIdempotencyKey = await lookupAgentRequestDiagnostics(
+                new Request('http://localhost/api/agent/diagnostics/requests?idempotency_key=route-cache-key')
+            );
+            assert.equal(byIdempotencyKey.status, 200);
+            const byIdempotencyKeyBody = await byIdempotencyKey.json();
+            assert.equal(byIdempotencyKeyBody.diagnostics.request.request_id, firstBody.request_id);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('keeps Agent request diagnostics available when feedback lookup fails', async () => {
+        const { generateImage, getAgentRequestDiagnostics } = await loadAgentRoutes();
+        const upstream = await startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] }));
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const first = await generateImage(agentJsonRequest('route-feedback-diagnostics-key', { prompt: 'agent route success' }));
+            assert.equal(first.status, 200);
+            const firstBody = await first.json();
+            const { ensureAgentStateStoreReady } = await import('@/lib/agent-state-runtime');
+            const store = await ensureAgentStateStoreReady();
+            if (!isFeedbackStateStore(store)) {
+                assert.fail('Agent state store should expose feedback methods for this route test.');
+            }
+            const originalReadFeedback = store.readFeedback.bind(store);
+            store.readFeedback = async () => {
+                throw new Error('feedback store unavailable');
+            };
+
+            try {
+                const response = await getAgentRequestDiagnostics(
+                    new Request(`http://localhost/api/agent/diagnostics/requests/${firstBody.request_id}`),
+                    { params: Promise.resolve({ id: firstBody.request_id }) }
+                );
+                assert.equal(response.status, 200);
+                const body = await response.json();
+                assert.equal(body.found, true);
+                assert.equal(body.diagnostics.request.request_id, firstBody.request_id);
+                assert.equal(body.diagnostics.response.image_count, 1);
+                assert.equal(body.diagnostics.feedback, undefined);
+            } finally {
+                store.readFeedback = originalReadFeedback;
+            }
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects Agent generate image counts outside the selected Matsca profile before calling upstream', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+        process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'app-id';
+        process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'app-secret';
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-matsca-n-limit-key', {
+                    prompt: 'agent matsca n limit',
+                    n: 5
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.details.fields.n, /1 到 4/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
     });
 
     it('does not send upstream stream parameters when Agent streaming_strategy is off', async () => {
@@ -201,6 +425,74 @@ describe('Agent route integration', () => {
             assert.equal(upstreamJson.stream, true);
             assert.equal(upstreamJson.partial_images, 2);
             assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 1);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects OpenAI-compatible Agent generate profile violations before calling upstream', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_UPSTREAM_PROFILE = 'openai-compatible';
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-generate-profile-violation-key', {
+                    prompt: 'transparent object',
+                    background: 'transparent',
+                    partial_images: 0
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('does not consume generate idempotency keys for local profile validation failures', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_UPSTREAM_PROFILE = 'openai-compatible';
+        const idempotencyKey = 'agent-generate-profile-validation-key';
+
+        try {
+            const invalid = await generateImage(
+                agentJsonRequest(idempotencyKey, {
+                    prompt: 'transparent object',
+                    background: 'transparent'
+                })
+            );
+
+            assert.equal(invalid.status, 422);
+            assert.equal(upstreamCalls, 0);
+
+            const corrected = await generateImage(
+                agentJsonRequest(idempotencyKey, {
+                    prompt: 'transparent object',
+                    background: 'auto'
+                })
+            );
+
+            assert.equal(corrected.status, 200);
+            assert.equal(upstreamCalls, 1);
+            const body = await corrected.json();
+            assert.equal(body.idempotency_key, idempotencyKey);
         } finally {
             await upstream.close();
         }
@@ -472,6 +764,58 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('rejects Agent Responses upstream SSE partial_images outside the Responses backend contract', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+
+        const response = await generateImage(
+            agentJsonRequest('agent-responses-partial-range-key', {
+                prompt: 'agent responses partial range',
+                image_backend: 'responses-image-generation',
+                stream_mode: 'stream',
+                streaming_strategy: 'responses-sse',
+                partial_images: 4
+            })
+        );
+
+        assert.equal(response.status, 422);
+        const body = await response.json();
+        assert.equal(body.error.code, 'validation_error');
+        assert.match(body.error.details.fields.partial_images, /1 到 3/);
+    });
+
+    it('rejects Agent Images partial_images outside the selected OpenAI-compatible profile before calling upstream', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-openai-partial-limit-key', {
+                    prompt: 'agent openai partial limit',
+                    stream_mode: 'stream',
+                    streaming_strategy: 'openai-sse',
+                    partial_images: 0
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.details.fields.partial_images, /1 到 3/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('fails Agent Responses upstream SSE requests when the image_generation_call fails', async () => {
         const { generateImage } = await loadAgentRoutes();
         const upstream = await startStreamingResponsesImageUpstream(() => [
@@ -662,7 +1006,7 @@ describe('Agent route integration', () => {
     });
 
     it('returns sanitized upstream diagnostics for failed generate requests', async () => {
-        const { generateImage } = await loadAgentRoutes();
+        const { generateImage, lookupAgentRequestDiagnostics } = await loadAgentRoutes();
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
@@ -682,6 +1026,9 @@ describe('Agent route integration', () => {
             assert.equal(body.error.diagnostics.selected_channel_id, 'default');
             assert.match(body.error.diagnostics.upstream_host, /^127\.0\.0\.1:\d+$/);
             assert.equal(body.error.diagnostics.channel_cooldown_scope, 'channel');
+            assert.equal(body.error.diagnostics.cooldown_target.channel_id, 'default');
+            assert.equal(typeof body.error.diagnostics.retry_after_ms, 'number');
+            assert.equal(typeof body.error.diagnostics.cooldown_until, 'string');
             assert.equal(typeof body.error.diagnostics.elapsed_ms, 'number');
             assert.equal(JSON.stringify(body).includes('test-key'), false);
             const upstreamCallsAfterFirstFailure = upstreamCalls;
@@ -695,6 +1042,22 @@ describe('Agent route integration', () => {
             assert.equal(replayBody.error.retryable, false);
             assert.equal(replayBody.error.request_id, body.error.request_id);
             assert.equal(upstreamCalls, upstreamCallsAfterFirstFailure);
+
+            const diagnostics = await lookupAgentRequestDiagnostics(
+                new Request(`http://localhost/api/agent/diagnostics/requests?idempotency_key=${idempotencyKey}`)
+            );
+            assert.equal(diagnostics.status, 200);
+            const diagnosticsBody = await diagnostics.json();
+            assert.equal(diagnosticsBody.found, true);
+            assert.equal(diagnosticsBody.diagnostics.request.request_id, body.error.request_id);
+            assert.equal(diagnosticsBody.diagnostics.request.status, 'failed');
+            assert.equal(diagnosticsBody.diagnostics.error.code, 'upstream_unavailable');
+            assert.equal(diagnosticsBody.diagnostics.error.retryable, true);
+            assert.equal(diagnosticsBody.diagnostics.error.diagnostics.selected_channel_id, 'default');
+            assert.match(diagnosticsBody.diagnostics.error.diagnostics.upstream_host, /^127\.0\.0\.1:\d+$/);
+            assert.equal(diagnosticsBody.diagnostics.error.diagnostics.cooldown_target.channel_id, 'default');
+            assert.equal(typeof diagnosticsBody.diagnostics.error.diagnostics.retry_after_ms, 'number');
+            assert.equal(JSON.stringify(diagnosticsBody).includes('test-key'), false);
         } finally {
             await upstream.close();
         }
@@ -739,8 +1102,56 @@ describe('Agent route integration', () => {
             assert.equal(resultBody.cached, false);
             assert.equal(resultBody.images.length, 1);
             assert.equal('b64_json' in resultBody.images[0], false);
+            assert.equal(resultBody.execution.transport, 'agent_job_polling');
+            assert.equal(resultBody.execution.endpoint, '/api/agent/jobs/images/generate');
+            assert.equal(resultBody.execution.route_mode, 'job');
+            assert.equal(typeof resultBody.timing.elapsed_ms, 'number');
+            assert.equal(resultBody.timing.elapsed_ms >= 0, true);
         } finally {
             releaseUpstream?.();
+            await upstream.close();
+        }
+    });
+
+    it('does not consume generate job idempotency keys for local profile validation failures', async () => {
+        const { createGenerateJob, getJobResult } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_UPSTREAM_PROFILE = 'openai-compatible';
+        const idempotencyKey = 'route-job-local-validation-key';
+
+        try {
+            const invalid = await createGenerateJob(
+                agentJobJsonRequest(idempotencyKey, {
+                    prompt: 'job transparent object',
+                    background: 'transparent'
+                })
+            );
+
+            assert.equal(invalid.status, 422);
+            assert.equal((await invalid.json()).error.code, 'validation_error');
+            assert.equal(upstreamCalls, 0);
+
+            const corrected = await createGenerateJob(
+                agentJobJsonRequest(idempotencyKey, {
+                    prompt: 'job transparent object',
+                    background: 'auto'
+                })
+            );
+
+            assert.equal(corrected.status, 202);
+            const correctedBody = await corrected.json();
+            assert.equal(correctedBody.job.idempotency_key, idempotencyKey);
+            const result = await waitForJobResult(getJobResult, correctedBody.job.id);
+            assert.equal(result.status, 200);
+            assert.equal((await result.json()).idempotency_key, idempotencyKey);
+            assert.equal(upstreamCalls, 1);
+        } finally {
             await upstream.close();
         }
     });
@@ -1195,6 +1606,9 @@ describe('Agent route integration', () => {
                     expiresAt: '2099-05-13T00:00:00.000Z'
                 };
             },
+            async getRequestByIdempotencyKey() {
+                return undefined;
+            },
             async getArtifact() {
                 return undefined;
             },
@@ -1313,6 +1727,9 @@ describe('Agent route integration', () => {
                     expiresAt: '2026-05-12T00:00:01.000Z'
                 };
             },
+            async getRequestByIdempotencyKey() {
+                return undefined;
+            },
             async getArtifact() {
                 return undefined;
             },
@@ -1359,6 +1776,44 @@ describe('Agent route integration', () => {
         assert.equal(upstreamCalls, 1);
 
         await upstream.close();
+    });
+
+    it('does not consume edit idempotency keys for local input validation failures', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        const idempotencyKey = 'route-edit-local-validation-key';
+        const invalidFormData = new FormData();
+        invalidFormData.append('prompt', 'agent edit without image');
+        invalidFormData.append('model', 'gpt-image-2');
+        invalidFormData.append('stream_mode', 'non_stream');
+
+        try {
+            const invalid = await editImage(
+                new Request('http://localhost/api/agent/images/edit', {
+                    method: 'POST',
+                    headers: { 'Idempotency-Key': idempotencyKey },
+                    body: invalidFormData
+                })
+            );
+
+            assert.equal(invalid.status, 422);
+            assert.equal(upstreamCalls, 0);
+
+            const corrected = await editImage(agentEditRequest(idempotencyKey, 'agent edit without image'));
+
+            assert.equal(corrected.status, 200);
+            assert.equal(upstreamCalls, 1);
+            const body = await corrected.json();
+            assert.equal(body.idempotency_key, idempotencyKey);
+        } finally {
+            await upstream.close();
+        }
     });
 
     it('can consume Agent edit upstream SSE internally while returning final JSON', async () => {
@@ -1450,6 +1905,32 @@ describe('Agent route integration', () => {
         await upstream.close();
     });
 
+    it('rejects Agent edit masks without transparent pixels before contacting upstream', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await editImage(
+                agentEditRequest('route-edit-mask-alpha-key', 'agent edit mask alpha', {}, {
+                    mask: Buffer.from(PNG_BASE64, 'base64')
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.match(body.error.details.fields.mask, /mask 必须包含透明区域/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('rejects unsupported fields on Agent edit requests before calling upstream', async () => {
         const { editImage } = await loadAgentRoutes();
         let upstreamCalls = 0;
@@ -1520,6 +2001,36 @@ describe('Agent route integration', () => {
             assert.equal(body.error.code, 'validation_error');
             assert.match(body.error.details.fields.image_streaming_strategy, /streaming_strategy/);
             assert.match(body.error.details.fields.imageStreamingStrategy, /streaming_strategy/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects OpenAI-compatible Agent edit partial_images violations before calling upstream', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_UPSTREAM_PROFILE = 'openai-compatible';
+
+        try {
+            const response = await editImage(
+                agentEditRequest('route-edit-profile-partial-key', 'agent edit invalid profile partial', {}, {
+                    stream_mode: 'stream',
+                    streaming_strategy: 'force-sse',
+                    partial_images: '0'
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.details.fields.partial_images, /1 到 3/);
             assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();
@@ -1741,6 +2252,9 @@ describe('Agent route integration', () => {
             async getRequest() {
                 return undefined;
             },
+            async getRequestByIdempotencyKey() {
+                return undefined;
+            },
             async getArtifact() {
                 return undefined;
             },
@@ -1806,7 +2320,7 @@ describe('Agent route integration', () => {
             { params: Promise.resolve({ id: artifactId }) }
         );
         assert.equal(allowed.status, 200);
-        assert.equal(allowed.headers.get('content-type'), 'image/png');
+        assert.equal(allowed.headers.get('content-type'), 'image/webp');
         assert.ok((await allowed.arrayBuffer()).byteLength > 0);
 
         const metadata = await getArtifact(
@@ -1869,6 +2383,394 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('persists page feedback and lets Agent clients read it by page request id', async () => {
+        const { putFeedback, getPageRequestFeedback, getPageRequestFeedbackBatch } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = 'feedback-token';
+
+        const saved = await putFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets: [{ type: 'page_request', id: 'web-feedback-agent-route', filename: 'feedback.png' }],
+                    value: 'needs_revision',
+                    note: 'text overlaps subject',
+                    updatedAt: '2026-05-12T00:00:00.000Z'
+                })
+            })
+        );
+        assert.equal(saved.status, 200);
+        const savedBody = await saved.json();
+        assert.equal(savedBody.feedback.length, 1);
+
+        const response = await getPageRequestFeedback(
+            new Request('http://localhost/api/agent/page-requests/web-feedback-agent-route/feedback', {
+                headers: { Authorization: 'Bearer feedback-token' }
+            }),
+            { params: Promise.resolve({ id: 'web-feedback-agent-route' }) }
+        );
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.deepEqual(body.feedback, {
+            target_type: 'page_request',
+            target_id: 'web-feedback-agent-route',
+            value: 'needs_revision',
+            note: 'text overlaps subject',
+            source: 'webui',
+            updated_at: '2026-05-12T00:00:00.000Z'
+        });
+
+        const batchResponse = await getPageRequestFeedbackBatch(
+            new Request('http://localhost/api/agent/page-requests/feedback', {
+                method: 'POST',
+                headers: { Authorization: 'Bearer feedback-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: ['web-feedback-agent-route', 'web-feedback-missing'] })
+            })
+        );
+        assert.equal(batchResponse.status, 200);
+        const batchBody = await batchResponse.json();
+        assert.deepEqual(batchBody.targets, [
+            { type: 'page_request', id: 'web-feedback-agent-route' },
+            { type: 'page_request', id: 'web-feedback-missing' }
+        ]);
+        assert.deepEqual(batchBody.feedback, [body.feedback]);
+    });
+
+    it('returns validation errors for malformed page feedback batch JSON requests', async () => {
+        const { getPageRequestFeedbackBatch } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = 'feedback-malformed-json-token';
+
+        const response = await getPageRequestFeedbackBatch(
+            new Request('http://localhost/api/agent/page-requests/feedback', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer feedback-malformed-json-token',
+                    'Content-Type': 'application/json'
+                },
+                body: '{"ids":'
+            })
+        );
+
+        assert.equal(response.status, 422);
+        const body = await response.json();
+        assert.equal(body.error.code, 'validation_error');
+        assert.equal(body.error.retryable, false);
+    });
+
+    it('returns validation errors for non-string page feedback batch ids', async () => {
+        const { getPageRequestFeedbackBatch } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = 'feedback-invalid-ids-token';
+
+        const response = await getPageRequestFeedbackBatch(
+            new Request('http://localhost/api/agent/page-requests/feedback', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer feedback-invalid-ids-token',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ ids: ['web-feedback-id', 123] })
+            })
+        );
+
+        assert.equal(response.status, 422);
+        const body = await response.json();
+        assert.equal(body.error.code, 'validation_error');
+        assert.equal(body.error.message, 'ids 数组必须只包含字符串 ID。');
+    });
+
+    it('deduplicates page feedback batch ids before applying the max-id limit', async () => {
+        const { getPageRequestFeedbackBatch } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = 'feedback-id-dedupe-token';
+
+        const response = await getPageRequestFeedbackBatch(
+            new Request('http://localhost/api/agent/page-requests/feedback', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer feedback-id-dedupe-token',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ ids: Array.from({ length: 60 }, () => 'web-feedback-same-id') })
+            })
+        );
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.deepEqual(body.targets, [{ type: 'page_request', id: 'web-feedback-same-id' }]);
+        assert.deepEqual(body.feedback, []);
+    });
+
+    it('deduplicates repeated page feedback targets before persisting them', async () => {
+        const { putFeedback, getPageRequestFeedback } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = 'feedback-dedupe-token';
+
+        const saved = await putFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets: [
+                        { type: 'page_request', id: 'web-feedback-duplicate' },
+                        { type: 'page_request', id: 'web-feedback-duplicate' }
+                    ],
+                    value: 'usable',
+                    updatedAt: '2026-05-12T00:00:00.000Z'
+                })
+            })
+        );
+
+        assert.equal(saved.status, 200);
+        const savedBody = await saved.json();
+        assert.deepEqual(
+            savedBody.feedback.map((item: { target_id: string }) => item.target_id),
+            ['web-feedback-duplicate']
+        );
+
+        const response = await getPageRequestFeedback(
+            new Request('http://localhost/api/agent/page-requests/web-feedback-duplicate/feedback', {
+                headers: { Authorization: 'Bearer feedback-dedupe-token' }
+            }),
+            { params: Promise.resolve({ id: 'web-feedback-duplicate' }) }
+        );
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).feedback.value, 'usable');
+    });
+
+    it('returns validation errors for non-serializable WebUI feedback timestamps', async () => {
+        const { putFeedback, deleteFeedback } = await loadAgentRoutes();
+
+        const invalidUpdatedAt = await putFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets: [{ type: 'page_request', id: 'web-feedback-invalid-updated-at' }],
+                    value: 'usable',
+                    updatedAt: 1e20
+                })
+            })
+        );
+        assert.equal(invalidUpdatedAt.status, 400);
+        const invalidUpdatedAtBody = await invalidUpdatedAt.json();
+        assert.equal(invalidUpdatedAtBody.code, 'invalid_feedback_request');
+        assert.equal(invalidUpdatedAtBody.error, '反馈更新时间无效。');
+
+        const invalidDeletedAt = await deleteFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets: [{ type: 'page_request', id: 'web-feedback-invalid-deleted-at' }],
+                    deletedAt: 1e20
+                })
+            })
+        );
+        assert.equal(invalidDeletedAt.status, 400);
+        const invalidDeletedAtBody = await invalidDeletedAt.json();
+        assert.equal(invalidDeletedAtBody.code, 'invalid_feedback_delete_request');
+        assert.equal(invalidDeletedAtBody.error, '反馈删除时间无效。');
+    });
+
+    it('deletes page feedback when the WebUI clears matching page request targets', async () => {
+        const { putFeedback, deleteFeedback, getPageRequestFeedback } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = 'feedback-delete-token';
+
+        const saved = await putFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets: [{ type: 'page_request', id: 'web-feedback-delete-route' }],
+                    value: 'usable',
+                    updatedAt: '2026-05-12T00:00:00.000Z'
+                })
+            })
+        );
+        assert.equal(saved.status, 200);
+
+        const deleted = await deleteFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targets: [{ type: 'page_request', id: 'web-feedback-delete-route' }] })
+            })
+        );
+        assert.equal(deleted.status, 200);
+        assert.equal((await deleted.json()).deleted, 1);
+
+        const response = await getPageRequestFeedback(
+            new Request('http://localhost/api/agent/page-requests/web-feedback-delete-route/feedback', {
+                headers: { Authorization: 'Bearer feedback-delete-token' }
+            }),
+            { params: Promise.resolve({ id: 'web-feedback-delete-route' }) }
+        );
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).feedback, null);
+    });
+
+    it('does not let stale WebUI feedback deletes remove newer feedback', async () => {
+        const { putFeedback, deleteFeedback, getPageRequestFeedback } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = 'feedback-delete-stale-token';
+
+        const saved = await putFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets: [{ type: 'page_request', id: 'web-feedback-delete-stale-route' }],
+                    value: 'needs_revision',
+                    note: 'latest feedback',
+                    updatedAt: '2026-05-12T00:02:00.000Z'
+                })
+            })
+        );
+        assert.equal(saved.status, 200);
+
+        const staleDeleted = await deleteFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets: [{ type: 'page_request', id: 'web-feedback-delete-stale-route' }],
+                    deletedAt: '2026-05-12T00:01:00.000Z'
+                })
+            })
+        );
+        assert.equal(staleDeleted.status, 200);
+        assert.equal((await staleDeleted.json()).deleted, 0);
+
+        const retained = await getPageRequestFeedback(
+            new Request('http://localhost/api/agent/page-requests/web-feedback-delete-stale-route/feedback', {
+                headers: { Authorization: 'Bearer feedback-delete-stale-token' }
+            }),
+            { params: Promise.resolve({ id: 'web-feedback-delete-stale-route' }) }
+        );
+        assert.equal(retained.status, 200);
+        assert.equal((await retained.json()).feedback.note, 'latest feedback');
+
+        const currentDeleted = await deleteFeedback(
+            new Request('http://localhost/api/feedback', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    targets: [{ type: 'page_request', id: 'web-feedback-delete-stale-route' }],
+                    deletedAt: '2026-05-12T00:03:00.000Z'
+                })
+            })
+        );
+        assert.equal(currentDeleted.status, 200);
+        assert.equal((await currentDeleted.json()).deleted, 1);
+
+        const cleared = await getPageRequestFeedback(
+            new Request('http://localhost/api/agent/page-requests/web-feedback-delete-stale-route/feedback', {
+                headers: { Authorization: 'Bearer feedback-delete-stale-token' }
+            }),
+            { params: Promise.resolve({ id: 'web-feedback-delete-stale-route' }) }
+        );
+        assert.equal(cleared.status, 200);
+        assert.equal((await cleared.json()).feedback, null);
+    });
+
+    it('returns machine-readable Agent diagnostics for page request logs', async () => {
+        const { getPageRequestDiagnostics, getPageRequestDiagnosticsBatch } = await loadAgentRoutes();
+        const { appLogger, clearAppLogEntriesForTest } = await import('@/lib/app-logger');
+        process.env.AGENT_API_TOKEN = 'diagnostics-token';
+        clearAppLogEntriesForTest();
+        appLogger.info('流式生成完成。', {
+            clientRequestId: 'web-diagnostics-request',
+            filenames: ['diagnostic.png'],
+            providerDialect: 'sdk_parsed_fallback',
+            normalizedEventCount: 1,
+            reason: 'json_final_fallback',
+            image_backend: 'images-api',
+            operation: 'generate'
+        });
+        appLogger.warn('流式生成回退。', {
+            clientRequestId: 'web-diagnostics-request-2',
+            filenames: ['diagnostic-2.png'],
+            reason: 'json_final_fallback',
+            image_backend: 'images-api',
+            operation: 'generate'
+        });
+
+        const response = await getPageRequestDiagnostics(
+            new Request('http://localhost/api/agent/diagnostics/page-requests/web-diagnostics-request', {
+                headers: { Authorization: 'Bearer diagnostics-token' }
+            }),
+            { params: Promise.resolve({ id: 'web-diagnostics-request' }) }
+        );
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.scope.request_ids[0], 'web-diagnostics-request');
+        assert.equal(body.matched_log_count, 1);
+        assert.equal(body.events[0].client_request_id, 'web-diagnostics-request');
+        assert.equal(body.events[0].diagnostics.providerDialect, 'sdk_parsed_fallback');
+        assert.equal(body.events[0].diagnostics.normalizedEventCount, 1);
+        assert.equal(body.events[0].diagnostics.reason, 'json_final_fallback');
+        assert.equal(body.diagnostics_retention.storage, 'bounded_local_jsonl');
+        assert.equal(body.diagnostics_retention.configured_by, 'APP_LOG_MAX_ENTRIES');
+
+        const missingResponse = await getPageRequestDiagnostics(
+            new Request('http://localhost/api/agent/diagnostics/page-requests/web-diagnostics-missing', {
+                headers: { Authorization: 'Bearer diagnostics-token' }
+            }),
+            { params: Promise.resolve({ id: 'web-diagnostics-missing' }) }
+        );
+        assert.equal(missingResponse.status, 200);
+        const missingBody = await missingResponse.json();
+        assert.equal(missingBody.matched_log_count, 0);
+        assert.equal(missingBody.diagnostics_note.code, 'no_matching_logs_in_retention_window');
+        assert.equal(missingBody.diagnostics_note.retention.max_entries, missingBody.diagnostics_retention.max_entries);
+
+        const batchResponse = await getPageRequestDiagnosticsBatch(
+            new Request('http://localhost/api/agent/diagnostics/page-requests', {
+                method: 'POST',
+                headers: { Authorization: 'Bearer diagnostics-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ids: ['web-diagnostics-request', 'web-diagnostics-request-2'],
+                    filenames: ['diagnostic-2.png']
+                })
+            })
+        );
+        assert.equal(batchResponse.status, 200);
+        const batchBody = await batchResponse.json();
+        assert.deepEqual(batchBody.targets, [
+            { type: 'page_request', id: 'web-diagnostics-request' },
+            { type: 'page_request', id: 'web-diagnostics-request-2' }
+        ]);
+        assert.deepEqual(
+            batchBody.diagnostics.map((item: { client_request_id: string }) => item.client_request_id),
+            ['web-diagnostics-request', 'web-diagnostics-request-2']
+        );
+        assert.equal(batchBody.diagnostics[0].matched_log_count, 2);
+        assert.deepEqual(batchBody.diagnostics[0].scope.filename_matched_request_ids, ['web-diagnostics-request-2']);
+        assert.equal(batchBody.diagnostics[1].matched_log_count, 1);
+        assert.equal(batchBody.diagnostics_retention.storage, 'bounded_local_jsonl');
+        assert.equal(batchBody.diagnostics[0].diagnostics_retention.max_entries, batchBody.diagnostics_retention.max_entries);
+    });
+
+    it('returns validation errors for malformed page diagnostics batch JSON requests', async () => {
+        const { getPageRequestDiagnosticsBatch } = await loadAgentRoutes();
+        process.env.AGENT_API_TOKEN = 'diagnostics-malformed-json-token';
+
+        const response = await getPageRequestDiagnosticsBatch(
+            new Request('http://localhost/api/agent/diagnostics/page-requests', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer diagnostics-malformed-json-token',
+                    'Content-Type': 'application/json'
+                },
+                body: '{"ids":'
+            })
+        );
+
+        assert.equal(response.status, 422);
+        const body = await response.json();
+        assert.equal(body.error.code, 'validation_error');
+        assert.equal(body.error.retryable, false);
+    });
+
     it('does not mark a real upstream success as failed when state completion fails', async () => {
         const { generateImage } = await loadAgentRoutes();
         const { setAgentStateStoreFactoryForTests } = await import('@/lib/agent-state-runtime');
@@ -1919,6 +2821,9 @@ describe('Agent route integration', () => {
                 failCalls += 1;
             },
             async getRequest() {
+                return undefined;
+            },
+            async getRequestByIdempotencyKey() {
                 return undefined;
             },
             async getArtifact() {
@@ -1997,6 +2902,9 @@ describe('Agent route integration', () => {
                 assert.equal(input.error.error.retryable, true);
             },
             async getRequest() {
+                return undefined;
+            },
+            async getRequestByIdempotencyKey() {
                 return undefined;
             },
             async getArtifact() {
@@ -2107,6 +3015,13 @@ async function loadAgentRoutes() {
     const createGenerateJobRoute = await import('./jobs/images/generate/route');
     const jobRoute = await import('./jobs/[id]/route');
     const jobResultRoute = await import('./jobs/[id]/result/route');
+    const feedbackRoute = await import('../feedback/route');
+    const pageRequestFeedbackBatchRoute = await import('./page-requests/feedback/route');
+    const pageRequestFeedbackRoute = await import('./page-requests/[id]/feedback/route');
+    const agentRequestDiagnosticsLookupRoute = await import('./diagnostics/requests/route');
+    const agentRequestDiagnosticsRoute = await import('./diagnostics/requests/[id]/route');
+    const pageRequestDiagnosticsBatchRoute = await import('./diagnostics/page-requests/route');
+    const pageRequestDiagnosticsRoute = await import('./diagnostics/page-requests/[id]/route');
     return {
         getCapabilities: () => capabilitiesRoute.GET(),
         generateImage: (request: Request) => generateRoute.POST(asNextRequest(request)),
@@ -2120,7 +3035,20 @@ async function loadAgentRoutes() {
         deleteArtifact: (request: Request, context: AgentRouteContext) =>
             artifactRoute.DELETE(asNextRequest(request), context),
         getArtifactContent: (request: Request, context: AgentRouteContext) =>
-            artifactContentRoute.GET(asNextRequest(request), context)
+            artifactContentRoute.GET(asNextRequest(request), context),
+        putFeedback: (request: Request) => feedbackRoute.PUT(asNextRequest(request)),
+        deleteFeedback: (request: Request) => feedbackRoute.DELETE(asNextRequest(request)),
+        getPageRequestFeedbackBatch: (request: Request) => pageRequestFeedbackBatchRoute.POST(asNextRequest(request)),
+        getPageRequestFeedback: (request: Request, context: AgentRouteContext) =>
+            pageRequestFeedbackRoute.GET(asNextRequest(request), context),
+        lookupAgentRequestDiagnostics: (request: Request) =>
+            agentRequestDiagnosticsLookupRoute.GET(asNextRequest(request)),
+        getAgentRequestDiagnostics: (request: Request, context: AgentRouteContext) =>
+            agentRequestDiagnosticsRoute.GET(asNextRequest(request), context),
+        getPageRequestDiagnosticsBatch: (request: Request) =>
+            pageRequestDiagnosticsBatchRoute.POST(asNextRequest(request)),
+        getPageRequestDiagnostics: (request: Request, context: AgentRouteContext) =>
+            pageRequestDiagnosticsRoute.GET(asNextRequest(request), context)
     };
 }
 
@@ -2164,6 +3092,7 @@ function agentJobJsonRequest(
 
 type AgentEditRequestFields = {
     image_0?: Buffer;
+    mask?: Buffer;
     [field: string]: string | Buffer | undefined;
 };
 
@@ -2186,13 +3115,16 @@ function agentEditRequest(
     formData.append('prompt', prompt);
     formData.append('model', 'gpt-image-2');
     for (const [key, value] of Object.entries(fields)) {
-        if (key === 'image_0') continue;
+        if (key === 'image_0' || key === 'mask') continue;
         if (typeof value !== 'string') {
             throw new TypeError(`Agent edit test field ${key} must be a string.`);
         }
         formData.append(key, value);
     }
     formData.append('image_0', new File([imageBuffer], 'input.png', { type: 'image/png' }));
+    if (fields.mask) {
+        formData.append('mask', new File([fields.mask], 'mask.png', { type: 'image/png' }));
+    }
     return new Request('http://localhost/api/agent/images/edit', {
         method: 'POST',
         headers: {

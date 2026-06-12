@@ -38,6 +38,9 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_1_ID;
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
+    delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID;
+    delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_INTERVAL_MS;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_TIMEOUT_MS;
@@ -99,7 +102,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(events[0].b64_json, 'partial-base64');
             assert.equal(events[1].type, 'completed');
             assert.equal(events[1].b64_json, PNG_BASE64);
-            assert.equal(events[1].output_format, 'png');
+            assert.equal(events[1].output_format, 'webp');
             assert.equal(events[2].type, 'done');
             assert.equal((events[2].images as Array<Record<string, unknown>>)[0].b64_json, PNG_BASE64);
 
@@ -175,6 +178,103 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
             assert.equal(upstreamJson.stream, true);
             assert.equal(upstreamJson.partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('allows Matsca-compatible Images API streams to request four partial images', async () => {
+        let upstreamBody = '';
+        let upstreamAppId: string | string[] | undefined;
+        let upstreamAppSecret: string | string[] | undefined;
+        const upstream = await startStreamingImageUpstream(async (body, _url, request) => {
+            upstreamBody = body;
+            upstreamAppId = request.headers['x-app-id'];
+            upstreamAppSecret = request.headers['x-app-secret'];
+            return [
+                {
+                    event: 'image.generation.result',
+                    data: {
+                        data: [{ b64_json: PNG_BASE64 }]
+                    }
+                }
+            ];
+        });
+
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+            process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+            process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'app-id';
+            process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'app-secret';
+            process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+            process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+            const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+            resetServerChannelStateForTests();
+            const { POST } = await import('./route');
+
+            const response = await POST(
+                imageFormRequest({
+                    stream: true,
+                    partialImages: '4'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            await readSseEvents(response);
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.partial_images, 4);
+            assert.equal(upstreamAppId, 'app-id');
+            assert.equal(upstreamAppSecret, 'app-secret');
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('allows Matsca-compatible JSON generation fields through server channels', async () => {
+        let upstreamBody = '';
+        let upstreamAppId: string | string[] | undefined;
+        let upstreamAppSecret: string | string[] | undefined;
+        const upstream = await startImagesJsonUpstream(async (body, _url, request) => {
+            upstreamBody = body;
+            upstreamAppId = request.headers['x-app-id'];
+            upstreamAppSecret = request.headers['x-app-secret'];
+            return {
+                data: [{ b64_json: PNG_BASE64 }]
+            };
+        });
+
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+            process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+            process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'app-id';
+            process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'app-secret';
+            process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+            process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+            const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+            resetServerChannelStateForTests();
+            const { POST } = await import('./route');
+
+            const response = await POST(
+                imageFormRequest({
+                    n: '4',
+                    size: '123x456',
+                    background: 'transparent'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.n, 4);
+            assert.equal(upstreamJson.size, '123x456');
+            assert.equal(upstreamJson.background, 'transparent');
+            assert.equal(upstreamAppId, 'app-id');
+            assert.equal(upstreamAppSecret, 'app-secret');
         } finally {
             await upstream.close();
         }
@@ -392,7 +492,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             );
             assert.equal(events[0].b64_json, 'edit-partial-base64');
             assert.equal(events[1].b64_json, PNG_BASE64);
-            assert.equal(events[1].output_format, 'png');
+            assert.equal(events[1].output_format, 'webp');
             assert.equal((events[2].images as Array<Record<string, unknown>>)[0].b64_json, PNG_BASE64);
             assert.equal(upstreamUrl, '/v1/images/edits');
             assert.match(upstreamBody, /name="image\[\]"/);
@@ -835,6 +935,27 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         } finally {
             await upstream.close();
         }
+    });
+
+    it('rejects partial image counts outside the Responses streaming contract', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        const { POST } = await import('./route');
+
+        const response = await POST(
+            imageFormRequest({
+                apiBaseUrl: 'https://img.matsca.com/v1',
+                apiKey: 'test-key',
+                stream: true,
+                imageBackend: 'responses',
+                imageStreamingStrategy: 'responses-sse',
+                partialImages: '4'
+            })
+        );
+
+        assert.equal(response.status, 400);
+        const body = (await response.json()) as Record<string, unknown>;
+        assert.match(String(body.error), /Responses API.*partial_images/);
     });
 
     it('keeps separate Responses final items when their base64 payloads match', async () => {
@@ -1468,6 +1589,35 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(tools[0].output_compression, 85);
             assert.equal(tools[0].prompt_optimization, false);
             assert.equal(tools[0].thinking, 'high');
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects edit masks without transparent pixels before contacting upstream', async () => {
+        const { POST } = await import('./route');
+        let upstreamCalls = 0;
+        const upstream = await startImagesJsonUpstream(async () => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: false,
+                    streamMode: 'non_stream',
+                    mask: new File([Buffer.from(PNG_BASE64, 'base64')], 'mask.png', { type: 'image/png' })
+                })
+            );
+
+            assert.equal(response.status, 400);
+            const body = await response.json();
+            assert.match(body.error, /mask 必须包含透明区域/);
+            assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();
         }

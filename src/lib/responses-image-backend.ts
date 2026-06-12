@@ -1,6 +1,7 @@
 import { asRecord } from './json-record';
 import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
 import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
+import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
@@ -195,7 +196,7 @@ export async function generateImageWithResponsesBackend(
             tool_choice: { type: 'image_generation' },
             tools: [buildResponsesImageTool(input)]
         },
-        input.abortSignal ? { signal: input.abortSignal } : undefined
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
     );
     const imageResults = extractCompletedImageResults(response.output);
 
@@ -223,7 +224,7 @@ export async function editImageWithResponsesBackend(input: ResponsesImageEditInp
             tool_choice: { type: 'image_generation' },
             tools: [await buildResponsesImageEditTool(input)]
         },
-        input.abortSignal ? { signal: input.abortSignal } : undefined
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
     );
     const imageResults = extractCompletedImageResults(response.output);
 
@@ -251,7 +252,7 @@ export async function createResponsesImageStream(input: ResponsesImageStreamInpu
             tool_choice: { type: 'image_generation' },
             tools: [buildResponsesImageTool(input, input.partialImagesCount)]
         },
-        input.abortSignal ? { signal: input.abortSignal } : undefined
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
     );
 }
 
@@ -264,6 +265,6 @@ export async function createResponsesImageEditStream(input: ResponsesImageEditSt
             tool_choice: { type: 'image_generation' },
             tools: [await buildResponsesImageEditTool(input, input.partialImagesCount)]
         },
-        input.abortSignal ? { signal: input.abortSignal } : undefined
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
     );
 }

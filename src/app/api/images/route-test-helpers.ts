@@ -8,8 +8,8 @@ export const PNG_BASE64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
 export function imageFormRequest(input: {
-    apiBaseUrl: string;
-    apiKey: string;
+    apiBaseUrl?: string;
+    apiKey?: string;
     stream?: boolean;
     mode?: 'generate' | 'edit';
     imageBackend?: 'images' | 'responses' | 'images-api' | 'responses-image-generation';
@@ -21,10 +21,13 @@ export function imageFormRequest(input: {
     responsesModel?: string;
     outputFormat?: 'png' | 'jpeg' | 'webp';
     outputCompression?: string;
+    partialImages?: string;
+    background?: string;
     promptOptimization?: string;
     gptModel?: string;
     thinking?: string;
     forceWeb?: string;
+    mask?: File;
     clientRequestId?: string;
     signal?: AbortSignal;
 }): NextRequest {
@@ -34,12 +37,19 @@ export function imageFormRequest(input: {
     formData.append('model', 'gpt-image-2');
     formData.append('n', input.n || '1');
     formData.append('size', input.size || '1024x1024');
-    formData.append('output_format', input.outputFormat || 'png');
-    formData.append('apiBaseUrl', input.apiBaseUrl);
-    formData.append('apiKey', input.apiKey);
+    formData.append('output_format', input.outputFormat || 'webp');
+    if (input.apiBaseUrl) {
+        formData.append('apiBaseUrl', input.apiBaseUrl);
+    }
+    if (input.apiKey) {
+        formData.append('apiKey', input.apiKey);
+    }
     formData.append('clientRequestId', input.clientRequestId ?? 'client-route-stream');
     if (input.outputCompression) {
         formData.append('output_compression', input.outputCompression);
+    }
+    if (input.background) {
+        formData.append('background', input.background);
     }
     if (input.promptOptimization) {
         formData.append('promptOptimization', input.promptOptimization);
@@ -67,10 +77,13 @@ export function imageFormRequest(input: {
     }
     if (input.stream) {
         formData.append('stream', 'true');
-        formData.append('partial_images', '2');
+        formData.append('partial_images', input.partialImages ?? '2');
     }
     if (input.mode === 'edit') {
         formData.append('image_0', new File([Buffer.from(PNG_BASE64, 'base64')], 'input.png', { type: 'image/png' }));
+        if (input.mask) {
+            formData.append('mask', input.mask);
+        }
     }
     return new Request('http://localhost/api/images', {
         method: 'POST',
@@ -80,7 +93,11 @@ export function imageFormRequest(input: {
 }
 
 export async function startStreamingImageUpstream(
-    handler: (body: string, url: string) => Promise<Array<{ event?: string; data: unknown; abortAfter?: boolean }>>
+    handler: (
+        body: string,
+        url: string,
+        request: http.IncomingMessage
+    ) => Promise<Array<{ event?: string; data: unknown; abortAfter?: boolean }>>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         const isImageStreamPath =
@@ -93,7 +110,7 @@ export async function startStreamingImageUpstream(
         const chunks: Buffer[] = [];
         request.on('data', (chunk: Buffer) => chunks.push(chunk));
         await new Promise<void>((resolve) => request.on('end', resolve));
-        const events = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
+        const events = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '', request);
         response.writeHead(200, { 'Content-Type': 'text/event-stream' });
         for (const event of events) {
             if (event.event) {
@@ -113,12 +130,12 @@ export async function startStreamingImageUpstream(
 }
 
 export async function startImagesJsonUpstream(
-    handler: (body: string, url: string) => Promise<unknown | Buffer>
+    handler: (body: string, url: string, request: http.IncomingMessage) => Promise<unknown | Buffer>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         const isImagePath = request.url?.endsWith('/images/generations') || request.url?.endsWith('/images/edits');
         if (request.method === 'GET') {
-            const payload = await handler('', request.url || '');
+            const payload = await handler('', request.url || '', request);
             if (Buffer.isBuffer(payload)) {
                 response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(payload.byteLength) });
                 response.end(payload);
@@ -136,7 +153,7 @@ export async function startImagesJsonUpstream(
         const chunks: Buffer[] = [];
         request.on('data', (chunk: Buffer) => chunks.push(chunk));
         await new Promise<void>((resolve) => request.on('end', resolve));
-        const payload = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
+        const payload = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '', request);
         if (Buffer.isBuffer(payload)) {
             response.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(payload.byteLength) });
             response.end(payload);

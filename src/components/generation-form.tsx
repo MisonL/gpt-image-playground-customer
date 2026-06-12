@@ -32,7 +32,20 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
-import { getPresetDimensions, getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
+import {
+    buildIntegerRangeOptions,
+    clampIntegerToRange,
+    getPartialImagesRangeForBackend,
+    type ImageUpstreamProfile,
+    type PartialImagesCount
+} from '@/lib/image-upstream-profile';
+import {
+    getPresetDimensions,
+    getPresetTooltip,
+    getSizePresetOptions,
+    validateGptImage2Size,
+    validatePositiveIntegerImageSize
+} from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
 import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
@@ -47,9 +60,11 @@ import {
     ShieldCheck,
     ShieldAlert,
     FileImage,
+    CircleOff,
     Tally1,
     Tally2,
     Tally3,
+    Tally4,
     Loader2,
     BrickWall,
     Lock,
@@ -132,6 +147,8 @@ type GenerationFormProps = {
     setCompression: React.Dispatch<React.SetStateAction<number[]>>;
     background: GenerationFormData['background'];
     setBackground: React.Dispatch<React.SetStateAction<GenerationFormData['background']>>;
+    upstreamProfile: ImageUpstreamProfile;
+    upstreamProfileMixed?: boolean;
     moderation: GenerationFormData['moderation'];
     setModeration: React.Dispatch<React.SetStateAction<GenerationFormData['moderation']>>;
     streamMode: ImageStreamMode;
@@ -139,8 +156,8 @@ type GenerationFormProps = {
     allowStreamingBatch: boolean;
     enableParallelBatch: boolean;
     setEnableParallelBatch: React.Dispatch<React.SetStateAction<boolean>>;
-    partialImages: 1 | 2 | 3;
-    setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
+    partialImages: PartialImagesCount;
+    setPartialImages: React.Dispatch<React.SetStateAction<PartialImagesCount>>;
     allowResponsesImageBackend: boolean;
     hasDefaultResponsesModel: boolean;
     imageBackend: GenerationFormData['image_backend'];
@@ -166,6 +183,51 @@ type AdvancedTab = 'output' | 'model' | 'stream' | 'route';
 const compactSettingRowClass =
     'space-y-1.5 lg:grid lg:grid-cols-[3.4rem_minmax(0,1fr)] lg:items-center lg:gap-1.5 lg:space-y-0';
 const compactSettingLabelClass = 'text-muted-foreground text-xs lg:pt-0.5';
+
+function getSizePresetLabel(
+    preset: SizePreset,
+    t: (key: string, values?: Record<string, string | number>) => string
+): string {
+    switch (preset) {
+        case 'auto':
+            return t('common.auto');
+        case 'custom':
+            return t('common.custom');
+        case 'square':
+            return t('common.square');
+        case 'landscape':
+            return t('common.landscape');
+        case 'portrait':
+            return t('common.portrait');
+        case 'square-1k':
+            return '1K';
+        case 'square-2k':
+            return '2K';
+        case 'square-4k':
+            return '4K';
+        case 'wide-4k':
+            return '16:9';
+        case 'tall-4k':
+            return '9:16';
+    }
+}
+
+function getSizePresetIcon(preset: SizePreset): React.ElementType {
+    switch (preset) {
+        case 'auto':
+            return Sparkles;
+        case 'custom':
+            return SquareDashed;
+        case 'landscape':
+        case 'wide-4k':
+            return RectangleHorizontal;
+        case 'portrait':
+        case 'tall-4k':
+            return RectangleVertical;
+        default:
+            return Square;
+    }
+}
 
 export function resolveGenerationFooterPromptTarget(input: {
     currentMode: WorkbenchMode;
@@ -301,6 +363,8 @@ export function GenerationForm({
     setCompression,
     background,
     setBackground,
+    upstreamProfile,
+    upstreamProfileMixed = false,
     moderation,
     setModeration,
     streamMode,
@@ -332,8 +396,13 @@ export function GenerationForm({
     const { locale, t } = useI18n();
     const showCompression = outputFormat === 'jpeg' || outputFormat === 'webp';
     const isGptImage2 = model === 'gpt-image-2';
+    const usesPositiveIntegerCustomSize = upstreamProfile.gptImage2.sizePolicy === 'positive-integer';
     const customSizeValidation =
-        size === 'custom' ? validateGptImage2Size(customWidth, customHeight) : { valid: true as const };
+        size === 'custom'
+            ? usesPositiveIntegerCustomSize
+                ? validatePositiveIntegerImageSize(customWidth, customHeight)
+                : validateGptImage2Size(customWidth, customHeight)
+            : { valid: true as const };
     const customSizeInvalid = size === 'custom' && !customSizeValidation.valid;
     const customPixels = customWidth * customHeight;
     const customRatio =
@@ -406,11 +475,40 @@ export function GenerationForm({
     const streamModeLabel = getStreamModeLabel(streamMode, t);
     const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
     const workbenchBackendLabel = getWorkbenchBackendLabel(imageBackend, t);
+    const sizePresetOptions = getSizePresetOptions({ model, upstreamProfile });
+    const partialImagesRange = React.useMemo(
+        () => getPartialImagesRangeForBackend(upstreamProfile, imageBackend),
+        [imageBackend, upstreamProfile]
+    );
+    const partialImageOptions = buildIntegerRangeOptions(partialImagesRange) as PartialImagesCount[];
+    const generationCountOptions = buildIntegerRangeOptions(upstreamProfile.generateCount);
     const footerPromptTarget = resolveGenerationFooterPromptTarget({
         currentMode,
         prompt,
         batchPromptText
     });
+
+    React.useEffect(() => {
+        if (partialImages < partialImagesRange.min || partialImages > partialImagesRange.max) {
+            setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
+        }
+        if (n[0] < upstreamProfile.generateCount.min || n[0] > upstreamProfile.generateCount.max) {
+            setN([clampIntegerToRange(n[0], upstreamProfile.generateCount)]);
+        }
+        if (background === 'transparent' && !upstreamProfile.gptImage2.allowTransparentBackground) {
+            setBackground('auto');
+        }
+    }, [
+        background,
+        n,
+        partialImages,
+        partialImagesRange,
+        setBackground,
+        setN,
+        setPartialImages,
+        upstreamProfile.generateCount,
+        upstreamProfile.gptImage2.allowTransparentBackground
+    ]);
 
     React.useEffect(() => {
         if (streamingDisabledByStrategy && streamMode !== 'non_stream') {
@@ -425,15 +523,20 @@ export function GenerationForm({
         }
     }, [isGptImage2, size, setSize]);
 
-    // 切换到 gpt-image-2 时重置 transparent 背景，因为该模型不支持。
-    React.useEffect(() => {
-        if (isGptImage2 && background === 'transparent') {
-            setBackground('auto');
-        }
-    }, [isGptImage2, background, setBackground]);
-
     const handleSubmit = () => {
         if (customSizeInvalid) {
+            return;
+        }
+        if (partialImages < partialImagesRange.min || partialImages > partialImagesRange.max) {
+            setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
+            return;
+        }
+        if (n[0] < upstreamProfile.generateCount.min || n[0] > upstreamProfile.generateCount.max) {
+            setN([clampIntegerToRange(n[0], upstreamProfile.generateCount)]);
+            return;
+        }
+        if (background === 'transparent' && !upstreamProfile.gptImage2.allowTransparentBackground) {
+            setBackground('auto');
             return;
         }
         const formData: GenerationFormData = {
@@ -643,47 +746,18 @@ export function GenerationForm({
                                 disabled={isLoading}
                                 name='size'
                                 aria-label={t('form.size')}
-                                className='grid grid-cols-5 gap-1.5'>
-                                <RadioItemWithIcon
-                                    value='auto'
-                                    id='size-auto'
-                                    label={t('common.auto')}
-                                    Icon={Sparkles}
-                                    disabled={isLoading}
-                                />
-                                {isGptImage2 && (
+                                className='grid grid-cols-5 gap-1.5 2xl:grid-cols-6'>
+                                {sizePresetOptions.map((option) => (
                                     <RadioItemWithIcon
-                                        value='custom'
-                                        id='size-custom'
-                                        label={t('common.custom')}
-                                        Icon={SquareDashed}
+                                        key={option.value}
+                                        value={option.value}
+                                        id={`size-${option.value}`}
+                                        label={getSizePresetLabel(option.value, t)}
+                                        Icon={getSizePresetIcon(option.value)}
                                         disabled={isLoading}
+                                        tooltip={getPresetTooltip(option.value, model)}
                                     />
-                                )}
-                                <RadioItemWithIcon
-                                    value='square'
-                                    id='size-square'
-                                    label={t('common.square')}
-                                    Icon={Square}
-                                    disabled={isLoading}
-                                    tooltip={getPresetTooltip('square', model)}
-                                />
-                                <RadioItemWithIcon
-                                    value='landscape'
-                                    id='size-landscape'
-                                    label={t('common.landscape')}
-                                    Icon={RectangleHorizontal}
-                                    disabled={isLoading}
-                                    tooltip={getPresetTooltip('landscape', model)}
-                                />
-                                <RadioItemWithIcon
-                                    value='portrait'
-                                    id='size-portrait'
-                                    label={t('common.portrait')}
-                                    Icon={RectangleVertical}
-                                    disabled={isLoading}
-                                    tooltip={getPresetTooltip('portrait', model)}
-                                />
+                                ))}
                             </RadioGroup>
                         </div>
                         {isGptImage2 && size === 'custom' && (
@@ -698,9 +772,9 @@ export function GenerationForm({
                                             name='customWidth'
                                             type='number'
                                             inputMode='numeric'
-                                            min={16}
-                                            max={3840}
-                                            step={16}
+                                            min={usesPositiveIntegerCustomSize ? 1 : 16}
+                                            max={usesPositiveIntegerCustomSize ? undefined : 3840}
+                                            step={usesPositiveIntegerCustomSize ? 1 : 16}
                                             value={customWidth}
                                             onChange={(e) => setCustomWidth(parseInt(e.target.value, 10) || 0)}
                                             disabled={isLoading}
@@ -716,9 +790,9 @@ export function GenerationForm({
                                             name='customHeight'
                                             type='number'
                                             inputMode='numeric'
-                                            min={16}
-                                            max={3840}
-                                            step={16}
+                                            min={usesPositiveIntegerCustomSize ? 1 : 16}
+                                            max={usesPositiveIntegerCustomSize ? undefined : 3840}
+                                            step={usesPositiveIntegerCustomSize ? 1 : 16}
                                             value={customHeight}
                                             onChange={(e) => setCustomHeight(parseInt(e.target.value, 10) || 0)}
                                             disabled={isLoading}
@@ -755,7 +829,7 @@ export function GenerationForm({
                                     name='n'
                                     aria-label={t('form.numberOfImages', { count: n[0] })}
                                     className='grid grid-cols-4 gap-1.5'>
-                                    {[1, 2, 4, 8].map((value) => (
+                                    {generationCountOptions.map((value) => (
                                         <RadioItemWithIcon
                                             key={value}
                                             value={String(value)}
@@ -1004,7 +1078,8 @@ export function GenerationForm({
                                                 backend: imageBackend,
                                                 streamingStrategy,
                                                 defaultStreamingStrategy,
-                                                allowResponsesImageBackend
+                                                allowResponsesImageBackend,
+                                                serverProfileMixed: upstreamProfileMixed
                                             }).map((key) => (
                                                 <p key={key}>{t(key)}</p>
                                             ))}
@@ -1222,19 +1297,29 @@ export function GenerationForm({
                                                 <RadioGroup
                                                     value={String(partialImages)}
                                                     onValueChange={(value) =>
-                                                        setPartialImages(Number(value) as 1 | 2 | 3)
+                                                        setPartialImages(Number(value) as PartialImagesCount)
                                                     }
                                                     disabled={isLoading}
                                                     name='partial_images'
                                                     aria-label={t('streaming.previewImages')}
-                                                    className='grid grid-cols-3 gap-2'>
-                                                    {[1, 2, 3].map((value) => (
+                                                    className='grid grid-cols-5 gap-2'>
+                                                    {partialImageOptions.map((value) => (
                                                         <RadioItemWithIcon
                                                             key={value}
                                                             value={String(value)}
                                                             id={`partial-${value}`}
                                                             label={String(value)}
-                                                            Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                                            Icon={
+                                                                value === 0
+                                                                    ? CircleOff
+                                                                    : value === 1
+                                                                      ? Tally1
+                                                                      : value === 2
+                                                                        ? Tally2
+                                                                        : value === 3
+                                                                          ? Tally3
+                                                                          : Tally4
+                                                            }
                                                             disabled={isLoading}
                                                         />
                                                     ))}
@@ -1292,44 +1377,45 @@ export function GenerationForm({
                                             </RadioGroup>
                                         </div>
 
-                                        {!isGptImage2 && (
-                                            <div className='space-y-3'>
-                                                <div className='text-foreground block text-sm leading-none font-medium select-none'>
-                                                    {t('form.background')}
-                                                </div>
-                                                <RadioGroup
-                                                    value={background}
-                                                    onValueChange={(value) =>
-                                                        setBackground(value as GenerationFormData['background'])
-                                                    }
-                                                    disabled={isLoading}
-                                                    name='background'
-                                                    aria-label={t('form.background')}
-                                                    className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
-                                                    <RadioItemWithIcon
-                                                        value='auto'
-                                                        id='bg-auto'
-                                                        label={t('common.auto')}
-                                                        Icon={Sparkles}
-                                                        disabled={isLoading}
-                                                    />
-                                                    <RadioItemWithIcon
-                                                        value='opaque'
-                                                        id='bg-opaque'
-                                                        label={t('form.backgroundOpaque')}
-                                                        Icon={BrickWall}
-                                                        disabled={isLoading}
-                                                    />
-                                                    <RadioItemWithIcon
-                                                        value='transparent'
-                                                        id='bg-transparent'
-                                                        label={t('form.backgroundTransparent')}
-                                                        Icon={Eraser}
-                                                        disabled={isLoading}
-                                                    />
-                                                </RadioGroup>
+                                        <div className='space-y-3'>
+                                            <div className='text-foreground block text-sm leading-none font-medium select-none'>
+                                                {t('form.background')}
                                             </div>
-                                        )}
+                                            <RadioGroup
+                                                value={background}
+                                                onValueChange={(value) =>
+                                                    setBackground(value as GenerationFormData['background'])
+                                                }
+                                                disabled={isLoading}
+                                                name='background'
+                                                aria-label={t('form.background')}
+                                                className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
+                                                <RadioItemWithIcon
+                                                    value='auto'
+                                                    id='bg-auto'
+                                                    label={t('common.auto')}
+                                                    Icon={Sparkles}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='opaque'
+                                                    id='bg-opaque'
+                                                    label={t('form.backgroundOpaque')}
+                                                    Icon={BrickWall}
+                                                    disabled={isLoading}
+                                                />
+                                                <RadioItemWithIcon
+                                                    value='transparent'
+                                                    id='bg-transparent'
+                                                    label={t('form.backgroundTransparent')}
+                                                    Icon={Eraser}
+                                                    disabled={
+                                                        isLoading ||
+                                                        !upstreamProfile.gptImage2.allowTransparentBackground
+                                                    }
+                                                />
+                                            </RadioGroup>
+                                        </div>
 
                                         <div className='space-y-3'>
                                             <div className='text-foreground block text-sm leading-none font-medium select-none'>

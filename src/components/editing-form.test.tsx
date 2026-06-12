@@ -1,6 +1,7 @@
 import { EditingForm, type EditingFormData } from './editing-form';
 import { I18nProvider } from '@/lib/i18n';
 import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from '@/lib/image-upstream-profile';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
@@ -22,6 +23,8 @@ type RenderOptions = {
     editResponsesModel?: string;
     editPrompt?: string;
     imageFiles?: File[];
+    upstreamProfile?: ImageUpstreamProfile;
+    upstreamProfileMixed?: boolean;
 };
 
 const noop = () => {};
@@ -41,7 +44,9 @@ function renderEditingForm({
     hasDefaultResponsesModel = true,
     editResponsesModel = '',
     editPrompt = '',
-    imageFiles = []
+    imageFiles = [],
+    upstreamProfile = IMAGE_UPSTREAM_PROFILES['openai-compatible'],
+    upstreamProfileMixed = false
 }: RenderOptions): string {
     return renderToStaticMarkup(
         <I18nProvider>
@@ -61,7 +66,7 @@ function renderEditingForm({
                 sourceImagePreviewUrls={[]}
                 setImageFiles={noop}
                 setSourceImagePreviewUrls={noop}
-                maxImages={10}
+                maxImages={upstreamProfile.upload.maxImages}
                 editPrompt={editPrompt}
                 setEditPrompt={noop}
                 editN={editN}
@@ -78,6 +83,8 @@ function renderEditingForm({
                 setEditOutputFormat={noop}
                 editCompression={[85]}
                 setEditCompression={noop}
+                upstreamProfile={upstreamProfile}
+                upstreamProfileMixed={upstreamProfileMixed}
                 editModeration='auto'
                 setEditModeration={noop}
                 editBrushSize={[20]}
@@ -171,6 +178,70 @@ describe('EditingForm advanced upstream controls', () => {
         assert.doesNotMatch(html, /edit-model-select/);
     });
 
+    it('hides Matsca-only edit stream controls for the default OpenAI-compatible profile', () => {
+        const html = renderEditingForm({ backend: 'server-default', advancedTab: 'stream' });
+
+        assert.doesNotMatch(html, /edit-partial-0/);
+        assert.match(html, /edit-partial-1/);
+        assert.match(html, /edit-partial-3/);
+        assert.doesNotMatch(html, /edit-partial-4/);
+    });
+
+    it('renders Matsca edit stream controls when the active upstream profile allows them', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            advancedTab: 'stream',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.match(html, /edit-partial-0/);
+        assert.match(html, /edit-partial-4/);
+    });
+
+    it('intersects Matsca edit partial image options with the Responses backend contract', () => {
+        const html = renderEditingForm({
+            backend: 'responses-image-generation',
+            advancedTab: 'stream',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.doesNotMatch(html, /edit-partial-0/);
+        assert.match(html, /edit-partial-1/);
+        assert.match(html, /edit-partial-3/);
+        assert.doesNotMatch(html, /edit-partial-4/);
+    });
+
+    it('uses Matsca edit upload limits when the active upstream profile requires them', () => {
+        const imageFiles = Array.from(
+            { length: 9 },
+            (_, index) => new File(['x'], `source-${index}.png`, { type: 'image/png' })
+        );
+        const html = renderEditingForm({
+            backend: 'server-default',
+            advancedOpen: false,
+            editPrompt: '用户真实编辑要求',
+            imageFiles,
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.match(html, /最多 8 张/);
+        assert.match(html, /9 \/ 8 张/);
+        assert.match(html, /最多只能选择 8 张图片。/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*编辑图像[\s\S]*<\/button>/);
+    });
+
+    it('renders profile-aware high resolution edit size presets', () => {
+        const openAiHtml = renderEditingForm({ backend: 'server-default' });
+        const matscaHtml = renderEditingForm({
+            backend: 'server-default',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.match(openAiHtml, /id="edit-size-wide-4k"/);
+        assert.doesNotMatch(openAiHtml, /id="edit-size-square-4k"/);
+        assert.match(matscaHtml, /id="edit-size-square-4k"/);
+    });
+
     it('renders an explicit parallel batch toggle in edit stream settings', () => {
         const html = renderEditingForm({
             backend: 'server-default',
@@ -243,11 +314,12 @@ describe('EditingForm advanced upstream controls', () => {
     });
 
     it('renders Responses-specific edit controls when the Responses backend is selected', () => {
-        const html = renderEditingForm({ backend: 'responses-image-generation' });
+        const html = renderEditingForm({ backend: 'responses-image-generation', upstreamProfileMixed: true });
 
         assert.match(html, /图片生成后端/);
         assert.match(html, /影响说明/);
         assert.match(html, /Responses image_generation 需要实验开关和顶层模型/);
+        assert.match(html, /当前服务端渠道包含不同上游模式/);
         assert.match(html, /自动或服务端默认会优先使用当前推荐的流式策略/);
         assert.match(html, /GPT 顶层模型/);
         assert.match(html, /思考强度/);

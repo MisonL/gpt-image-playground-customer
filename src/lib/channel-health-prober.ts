@@ -5,6 +5,7 @@ import {
     type ChannelRecoveryProbeCandidate,
     type ChannelRouter
 } from './channel-router';
+import { mergeUpstreamHeadersWithFixed } from './image-upstream-profile';
 
 type ProbeFetch = (input: URL, init: RequestInit) => Promise<Response>;
 type ProbeResult = {
@@ -69,10 +70,10 @@ export async function probeChannelModelsEndpoint(input: {
     try {
         const response = await (input.fetchImpl || fetch)(buildModelsUrl(input.credential.baseUrl), {
             method: 'GET',
-            headers: {
+            headers: mergeUpstreamHeadersWithFixed(input.credential.upstreamHeaders, {
                 Authorization: `Bearer ${input.credential.apiKey}`,
                 Accept: 'application/json'
-            },
+            }),
             signal: abortController.signal
         });
         if (!response.ok) {

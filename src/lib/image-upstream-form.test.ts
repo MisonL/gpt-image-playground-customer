@@ -332,6 +332,24 @@ describe('getImageUpstreamRouteImpactKeys', () => {
             ]
         );
     });
+
+    it('includes server mixed-profile diagnostics when the active pool uses different upstream modes', () => {
+        assert.deepEqual(
+            getImageUpstreamRouteImpactKeys({
+                backend: 'server-default',
+                streamingStrategy: 'server-default',
+                defaultStreamingStrategy: 'auto',
+                allowResponsesImageBackend: true,
+                serverProfileMixed: true
+            }),
+            [
+                'upstream.backendImpactServerDefault',
+                'upstream.routeImpactMixedProfile',
+                'upstream.strategyImpactAuto',
+                'upstream.routeImpactCost'
+            ]
+        );
+    });
 });
 
 describe('normalizeImageUpstreamRuntimeFields', () => {

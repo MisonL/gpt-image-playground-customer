@@ -14,6 +14,7 @@ import {
 type WorkbenchProRoutePanelProps = Pick<
     WorkbenchProDockProps,
     | 'allowResponsesImageBackend'
+    | 'upstreamProfileMixed'
     | 'hasDefaultResponsesModel'
     | 'imageBackend'
     | 'onImageBackendChange'
@@ -64,6 +65,7 @@ export function WorkbenchProRoutePanel({
     onStreamingStrategyChange,
     responsesModel,
     onResponsesModelChange,
+    upstreamProfileMixed = false,
     disabled
 }: WorkbenchProRoutePanelProps) {
     const { t } = useI18n();
@@ -132,7 +134,8 @@ export function WorkbenchProRoutePanel({
                     backend: imageBackend,
                     streamingStrategy,
                     defaultStreamingStrategy,
-                    allowResponsesImageBackend
+                    allowResponsesImageBackend,
+                    serverProfileMixed: upstreamProfileMixed
                 }).map((key) => (
                     <p key={key}>{t(key)}</p>
                 ))}

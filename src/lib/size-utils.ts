@@ -1,4 +1,5 @@
 import type { GptImageModel } from '@/lib/cost-utils';
+import type { ImageUpstreamProfile } from '@/lib/image-upstream-profile';
 
 type SizeValidationValues = Record<string, string | number>;
 
@@ -73,7 +74,49 @@ export function validateGptImage2Size(width: number, height: number): SizeValida
     return { valid: true };
 }
 
-export type SizePreset = 'auto' | 'custom' | 'square' | 'landscape' | 'portrait';
+export function validatePositiveIntegerImageSize(width: number, height: number): SizeValidation {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return {
+            valid: false,
+            reason: '宽度和高度必须是正数。',
+            reasonKey: 'sizeError.positive'
+        };
+    }
+    if (!Number.isInteger(width) || !Number.isInteger(height)) {
+        return {
+            valid: false,
+            reason: '宽度和高度必须是整数。',
+            reasonKey: 'sizeError.whole'
+        };
+    }
+    return { valid: true };
+}
+
+export type SizePreset =
+    | 'auto'
+    | 'custom'
+    | 'square'
+    | 'landscape'
+    | 'portrait'
+    | 'square-1k'
+    | 'square-2k'
+    | 'square-4k'
+    | 'wide-4k'
+    | 'tall-4k';
+
+export type SizePresetOption = {
+    value: SizePreset;
+    group: 'automatic' | 'ratio' | 'resolution';
+    dimensions: string | null;
+};
+
+const GPT_IMAGE_2_RESOLUTION_PRESETS: Array<Omit<SizePresetOption, 'dimensions'> & { dimensions: string }> = [
+    { value: 'square-1k', group: 'resolution', dimensions: '1024x1024' },
+    { value: 'square-2k', group: 'resolution', dimensions: '2048x2048' },
+    { value: 'square-4k', group: 'resolution', dimensions: '3840x3840' },
+    { value: 'wide-4k', group: 'resolution', dimensions: '3840x2160' },
+    { value: 'tall-4k', group: 'resolution', dimensions: '2160x3840' }
+];
 
 /**
  * Returns the concrete WxH string for a preset, tailored to the model.
@@ -90,6 +133,16 @@ export function getPresetDimensions(preset: SizePreset, model: GptImageModel): s
             return isGptImage2 ? '3072x2048' : '1536x1024';
         case 'portrait':
             return isGptImage2 ? '2048x3072' : '1024x1536';
+        case 'square-1k':
+            return '1024x1024';
+        case 'square-2k':
+            return '2048x2048';
+        case 'square-4k':
+            return '3840x3840';
+        case 'wide-4k':
+            return '3840x2160';
+        case 'tall-4k':
+            return '2160x3840';
     }
 }
 
@@ -101,6 +154,47 @@ export function getPresetTooltip(preset: SizePreset, model: GptImageModel): stri
     if (!dims) return null;
     const [w, h] = dims.split('x').map(Number);
     const mp = ((w * h) / 1_000_000).toFixed(1);
-    const ratio = preset === 'square' ? '1:1' : preset === 'landscape' ? '3:2' : '2:3';
+    const ratio =
+        preset === 'square' || preset.startsWith('square')
+            ? '1:1'
+            : preset === 'landscape'
+              ? '3:2'
+              : preset === 'portrait'
+                ? '2:3'
+                : preset === 'wide-4k'
+                  ? '16:9'
+                  : '9:16';
     return `${w} x ${h} - ${ratio} - ${mp} MP`;
+}
+
+export function getSizePresetOptions(input: {
+    model: GptImageModel;
+    upstreamProfile: Pick<ImageUpstreamProfile, 'gptImage2'>;
+}): SizePresetOption[] {
+    const options: SizePresetOption[] = [
+        { value: 'auto', group: 'automatic', dimensions: null },
+        ...(['square', 'landscape', 'portrait'] as SizePreset[]).map((value) => ({
+            value,
+            group: 'ratio' as const,
+            dimensions: getPresetDimensions(value, input.model)
+        }))
+    ];
+    if (input.model !== 'gpt-image-2') return options;
+    options.splice(1, 0, { value: 'custom', group: 'automatic', dimensions: null });
+    const resolutionPresets = GPT_IMAGE_2_RESOLUTION_PRESETS.filter((preset) =>
+        supportsPresetDimensions({
+            dimensions: preset.dimensions,
+            upstreamProfile: input.upstreamProfile
+        })
+    );
+    return [...options, ...resolutionPresets];
+}
+
+function supportsPresetDimensions(input: {
+    dimensions: string;
+    upstreamProfile: Pick<ImageUpstreamProfile, 'gptImage2'>;
+}): boolean {
+    if (input.upstreamProfile.gptImage2.sizePolicy === 'positive-integer') return true;
+    const [width, height] = input.dimensions.split('x').map(Number);
+    return validateGptImage2Size(width, height).valid;
 }

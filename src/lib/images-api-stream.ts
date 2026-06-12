@@ -1,4 +1,6 @@
 import type OpenAI from 'openai';
+import { mergeUpstreamHeadersWithFixed, type UpstreamRequestHeaders } from './image-upstream-profile';
+import { readImageUpstreamTimeoutMs } from './openai-image-transport';
 
 export class ImagesApiStreamError extends Error {
     readonly status: number;
@@ -13,15 +15,45 @@ export class ImagesApiStreamError extends Error {
 type ImagesApiStreamInput = {
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamHeaders?: UpstreamRequestHeaders;
     abortSignal?: AbortSignal;
+    timeoutMs?: number;
     params: OpenAI.Images.ImageGenerateParamsStreaming;
 };
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
+type ImagesApiStreamAbortContext = {
+    signal: AbortSignal;
+    cleanup: () => void;
+};
+
 function buildImagesGenerateUrl(apiBaseUrl: string | undefined): string {
     const normalizedBase = (apiBaseUrl || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, '');
     return `${normalizedBase}/images/generations`;
+}
+
+function createAbortContext(input: Pick<ImagesApiStreamInput, 'abortSignal' | 'timeoutMs'>): ImagesApiStreamAbortContext {
+    const { abortSignal } = input;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const timeoutMs = input.timeoutMs ?? readImageUpstreamTimeoutMs();
+    const timeout = timeoutMs > 0 ? setTimeout(abort, timeoutMs) : undefined;
+    if (abortSignal?.aborted) {
+        abort();
+    } else {
+        abortSignal?.addEventListener('abort', abort, { once: true });
+    }
+    let cleanedUp = false;
+    return {
+        signal: controller.signal,
+        cleanup: () => {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            if (timeout) clearTimeout(timeout);
+            abortSignal?.removeEventListener('abort', abort);
+        }
+    };
 }
 
 function readErrorMessage(body: unknown): string | undefined {
@@ -55,8 +87,11 @@ function parseSseDataPayload(raw: string): unknown | undefined {
     return JSON.parse(normalized);
 }
 
-async function* readEventStream(response: Response): AsyncIterable<unknown> {
-    if (!response.body) return;
+async function* readEventStream(response: Response, cleanup: () => void): AsyncIterable<unknown> {
+    if (!response.body) {
+        cleanup();
+        return;
+    }
     const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = '';
     try {
@@ -74,7 +109,13 @@ async function* readEventStream(response: Response): AsyncIterable<unknown> {
         const payload = readSseChunk(buffer);
         if (payload !== undefined) yield payload;
     } finally {
+        try {
+            await reader.cancel();
+        } catch {
+            // The reader may already be closed after a normal stream completion.
+        }
         reader.releaseLock();
+        cleanup();
     }
 }
 
@@ -89,26 +130,41 @@ function readSseChunk(chunk: string): unknown | undefined {
 }
 
 export async function createImagesApiGenerateStream(input: ImagesApiStreamInput): Promise<AsyncIterable<unknown>> {
-    const { abortSignal, apiBaseUrl, apiKey, params } = input;
-    const response = await fetch(buildImagesGenerateUrl(apiBaseUrl), {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            Accept: 'text/event-stream, application/json'
-        },
-        signal: abortSignal,
-        body: JSON.stringify(params)
-    });
+    const { abortSignal, apiBaseUrl, apiKey, params, upstreamHeaders } = input;
+    const abortContext = createAbortContext({ abortSignal, timeoutMs: input.timeoutMs });
+    let response: Response;
+    try {
+        response = await fetch(buildImagesGenerateUrl(apiBaseUrl), {
+            method: 'POST',
+            headers: mergeUpstreamHeadersWithFixed(upstreamHeaders, {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                Accept: 'text/event-stream, application/json'
+            }),
+            signal: abortContext.signal,
+            body: JSON.stringify(params)
+        });
+    } catch (error) {
+        abortContext.cleanup();
+        throw error;
+    }
     if (!response.ok) {
-        throw await readResponseError(response);
+        try {
+            throw await readResponseError(response);
+        } finally {
+            abortContext.cleanup();
+        }
     }
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('text/event-stream')) {
-        return readEventStream(response);
+        return readEventStream(response, abortContext.cleanup);
     }
-    const body = await response.json();
-    return (async function* imagesJsonAsFinalEvent() {
-        yield body;
-    })();
+    try {
+        const body = await response.json();
+        return (async function* imagesJsonAsFinalEvent() {
+            yield body;
+        })();
+    } finally {
+        abortContext.cleanup();
+    }
 }

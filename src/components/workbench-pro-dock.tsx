@@ -5,11 +5,12 @@ import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
 import type { ImageUpstreamFormBackend, ImageUpstreamFormStreamingStrategy } from '@/lib/image-upstream-form';
 import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import type { SizePreset } from '@/lib/size-utils';
 import * as React from 'react';
 
 export type OutputFormat = 'png' | 'jpeg' | 'webp';
 export type Quality = 'low' | 'medium' | 'high' | 'auto';
-export type SizePreset = 'auto' | 'square' | 'landscape' | 'portrait' | 'custom';
+export type { SizePreset };
 
 export type WorkbenchProDockProps = {
     outputFormat: OutputFormat;
@@ -26,6 +27,7 @@ export type WorkbenchProDockProps = {
     onEnableParallelBatchChange: React.Dispatch<React.SetStateAction<boolean>>;
     parallelBatchTargetCount: number;
     allowResponsesImageBackend: boolean;
+    upstreamProfileMixed?: boolean;
     hasDefaultResponsesModel: boolean;
     imageBackend: ImageUpstreamFormBackend;
     onImageBackendChange: React.Dispatch<React.SetStateAction<ImageUpstreamFormBackend>>;

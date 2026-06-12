@@ -1,12 +1,19 @@
 import { GenerationForm, resolveGenerationFooterPromptTarget } from './generation-form';
 import { I18nProvider } from '@/lib/i18n';
 import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from '@/lib/image-upstream-profile';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const noop = () => {};
+
+function readButtonById(html: string, id: string): string {
+    const match = html.match(new RegExp(`<button[^>]*id="${id}"[^>]*>`));
+    assert.ok(match, `missing button ${id}`);
+    return match[0];
+}
 
 function renderGenerationForm(
     options: {
@@ -28,6 +35,8 @@ function renderGenerationForm(
         hasDefaultResponsesModel?: boolean;
         responsesModel?: string;
         imageBackend?: React.ComponentProps<typeof GenerationForm>['imageBackend'];
+        upstreamProfile?: ImageUpstreamProfile;
+        upstreamProfileMixed?: boolean;
     } = {}
 ) {
     return renderToStaticMarkup(
@@ -71,6 +80,8 @@ function renderGenerationForm(
                 setCompression={noop}
                 background='auto'
                 setBackground={noop}
+                upstreamProfile={options.upstreamProfile ?? IMAGE_UPSTREAM_PROFILES['openai-compatible']}
+                upstreamProfileMixed={options.upstreamProfileMixed ?? false}
                 moderation='auto'
                 setModeration={noop}
                 streamMode='auto'
@@ -158,10 +169,15 @@ describe('GenerationForm advanced groups', () => {
     });
 
     it('explains route choices that affect stability and cost', () => {
-        const html = renderGenerationForm({ defaultAdvancedOpen: true, defaultAdvancedTab: 'route' });
+        const html = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'route',
+            upstreamProfileMixed: true
+        });
 
         assert.match(html, /影响说明/);
         assert.match(html, /服务端默认会沿用当前部署配置/);
+        assert.match(html, /当前服务端渠道包含不同上游模式/);
         assert.match(html, /自动或服务端默认会优先使用当前推荐的流式策略/);
         assert.match(html, /费用主要由模型、尺寸、数量和预览图数量决定/);
     });
@@ -228,6 +244,62 @@ describe('GenerationForm advanced groups', () => {
 
         assert.match(html, /model-select/);
         assert.doesNotMatch(html, /image-backend-select/);
+    });
+
+    it('keeps OpenAI-compatible generation controls within its upstream profile', () => {
+        const streamHtml = renderGenerationForm({ defaultAdvancedOpen: true, defaultAdvancedTab: 'stream' });
+        const outputHtml = renderGenerationForm({ defaultAdvancedOpen: true, defaultAdvancedTab: 'output' });
+
+        assert.doesNotMatch(streamHtml, /partial-0/);
+        assert.match(streamHtml, /partial-1/);
+        assert.match(streamHtml, /partial-3/);
+        assert.doesNotMatch(streamHtml, /partial-4/);
+        assert.match(outputHtml, /n-3/);
+        assert.match(outputHtml, /n-10/);
+        assert.match(outputHtml, /n-8/);
+        assert.match(readButtonById(outputHtml, 'bg-transparent'), /disabled=""/);
+    });
+
+    it('renders Matsca generation controls when the active upstream profile allows them', () => {
+        const streamHtml = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'stream',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+        const outputHtml = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'output',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.match(streamHtml, /partial-0/);
+        assert.match(streamHtml, /partial-4/);
+        assert.match(outputHtml, /n-3/);
+        assert.doesNotMatch(outputHtml, /n-8/);
+        assert.doesNotMatch(readButtonById(outputHtml, 'bg-transparent'), /disabled=""/);
+    });
+
+    it('intersects Matsca partial image options with the Responses backend contract', () => {
+        const html = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'stream',
+            imageBackend: 'responses-image-generation',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.doesNotMatch(html, /partial-0/);
+        assert.match(html, /partial-1/);
+        assert.match(html, /partial-3/);
+        assert.doesNotMatch(html, /partial-4/);
+    });
+
+    it('renders profile-aware high resolution size presets', () => {
+        const openAiHtml = renderGenerationForm();
+        const matscaHtml = renderGenerationForm({ upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca });
+
+        assert.match(openAiHtml, /id="size-wide-4k"/);
+        assert.doesNotMatch(openAiHtml, /id="size-square-4k"/);
+        assert.match(matscaHtml, /id="size-square-4k"/);
     });
 
     it('disables random inspiration when no saved prompt is available', () => {

@@ -112,9 +112,15 @@ describe('collectOpenAiImagesFromStream', () => {
 
     it('downloads same-origin GPT2Image URL final images from Responses streams', async () => {
         let imageDownloadCount = 0;
+        let observedAuthorization: string | string[] | undefined;
+        let observedAppId: string | string[] | undefined;
+        let observedAppSecret: string | string[] | undefined;
         const server = http.createServer((request, response) => {
             if (request.url === '/api/storage/generations/final.png') {
                 imageDownloadCount += 1;
+                observedAuthorization = request.headers.authorization;
+                observedAppId = request.headers['x-app-id'];
+                observedAppSecret = request.headers['x-app-secret'];
                 response.writeHead(200, { 'Content-Type': 'image/png' });
                 response.end(Buffer.from(PNG_BASE64, 'base64'));
                 return;
@@ -152,12 +158,22 @@ describe('collectOpenAiImagesFromStream', () => {
                         }
                     }
                 ]),
-                { apiBaseUrl, apiKey: 'test-key' }
+                {
+                    apiBaseUrl,
+                    apiKey: 'test-key',
+                    upstreamHeaders: {
+                        'X-App-ID': 'app-id',
+                        'X-App-Secret': 'app-secret'
+                    }
+                }
             );
 
             assert.equal(result.data?.length, 1);
             assert.equal(result.data?.[0]?.b64_json, PNG_BASE64);
             assert.equal(imageDownloadCount, 1);
+            assert.equal(observedAuthorization, 'Bearer test-key');
+            assert.equal(observedAppId, 'app-id');
+            assert.equal(observedAppSecret, 'app-secret');
         } finally {
             await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
         }
@@ -188,5 +204,26 @@ describe('collectOpenAiImagesFromStream', () => {
                 return true;
             }
         );
+    });
+
+    it('fails explicitly when upstream stream stays idle past the configured interval', async () => {
+        let returnCalled = false;
+        const stream: AsyncIterable<unknown> = {
+            [Symbol.asyncIterator]() {
+                return {
+                    next: () => new Promise<IteratorResult<unknown>>(() => {}),
+                    return: async () => {
+                        returnCalled = true;
+                        return { done: true, value: undefined };
+                    }
+                };
+            }
+        };
+
+        await assert.rejects(
+            () => collectOpenAiImagesFromStream(stream, { streamDataIntervalTimeoutMs: 1 }),
+            /图片流式上游超过 1ms 未返回数据/
+        );
+        assert.equal(returnCalled, true);
     });
 });

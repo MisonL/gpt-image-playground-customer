@@ -3,7 +3,7 @@ import { createChannelRouter, parseChannelPoolConfig } from './channel-router';
 import { readBooleanEnv, readPositiveIntegerEnv } from './server-runtime';
 import { createStreamingAvailabilityRegistry } from './streaming-availability';
 
-const DEFAULT_CHANNEL_FAILURE_COOLDOWN_MS = 60_000;
+const DEFAULT_CHANNEL_FAILURE_COOLDOWN_MS = 30_000;
 const DEFAULT_CHANNEL_RECOVERY_PROBE_INTERVAL_MS = 60_000;
 const DEFAULT_CHANNEL_RECOVERY_PROBE_TIMEOUT_MS = 5_000;
 const DEFAULT_CHANNEL_RECOVERY_PROBE_MAX_PER_TICK = 1;
@@ -26,6 +26,12 @@ export function resetServerChannelStateForTests(): void {
 
 function createServerChannelState() {
     const config = parseChannelPoolConfig(process.env);
+    const failureCooldownEnabled = readBooleanEnvDefault(process.env, 'OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED', true);
+    const failureCooldownMs = readPositiveIntegerEnv(
+        process.env,
+        'OPENAI_CHANNEL_FAILURE_COOLDOWN_MS',
+        DEFAULT_CHANNEL_FAILURE_COOLDOWN_MS
+    );
     const recoveryProbeEnabled =
         config.credentials.length > 0 &&
         readBooleanEnvDefault(process.env, 'OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED', true);
@@ -40,11 +46,8 @@ function createServerChannelState() {
         config.credentials.length > 0
             ? createChannelRouter({
                   ...config,
-                  failureCooldownMs: readPositiveIntegerEnv(
-                      process.env,
-                      'OPENAI_CHANNEL_FAILURE_COOLDOWN_MS',
-                      DEFAULT_CHANNEL_FAILURE_COOLDOWN_MS
-                  ),
+                  failureCooldownEnabled,
+                  failureCooldownMs,
                   requireProbeForRecovery
               })
             : undefined;
@@ -54,7 +57,7 @@ function createServerChannelState() {
     return {
         config,
         router,
-        channelRecovery: { requireProbeForRecovery },
+        channelRecovery: { failureCooldownEnabled, failureCooldownMs, requireProbeForRecovery },
         channelRecoveryProber,
         stopChannelRecoveryProbeScheduler,
         streamingAvailability: createStreamingAvailabilityRegistry()
