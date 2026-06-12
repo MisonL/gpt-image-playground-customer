@@ -122,6 +122,8 @@ let tasks;
 let timeoutMs;
 let capabilities;
 let capabilitiesPromise;
+let runtimeCapabilities;
+let runtimeCapabilitiesPromise;
 try {
   if (!options.input) throw new Error('--input 需要 JSONL 文件路径。');
   baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
@@ -193,8 +195,9 @@ if (!options.allowBillable || options.dryRun) {
 }
 
 try {
+  const capacityFeedback = await resolveBatchCapacityFeedback();
   const completed = options.resume ? readCompletedManifestKeys(manifestPath) : new Set();
-  const { results, failedTasks } = await runPlannedTasks(planned, completed);
+  const { results, failedTasks } = await runPlannedTasks(planned, completed, capacityFeedback.effective_concurrency);
   const failed = results.filter((result) => !result.ok).length;
   console.log(
     JSON.stringify(
@@ -205,7 +208,10 @@ try {
         manifest: manifestPath,
         max_attempts: options.maxAttempts,
         max_consecutive_failures: options.maxConsecutiveFailures,
-        concurrency: options.concurrency,
+        concurrency: capacityFeedback.effective_concurrency,
+        requested_concurrency: capacityFeedback.requested_concurrency,
+        effective_concurrency: capacityFeedback.effective_concurrency,
+        capacity_feedback: capacityFeedback,
         failure_summary: buildFailureSummary(failedTasks),
         resume_fix_list: buildResumeFixList(failedTasks),
         results
@@ -548,6 +554,12 @@ async function readCapabilities() {
   return result;
 }
 
+async function readRuntimeCapabilities() {
+  const { response, result, text } = await fetchJson(`${baseUrl}/api/runtime-capabilities`, { headers: authHeaders() });
+  if (!response.ok) throw new Error(`runtime-capabilities 请求失败，状态码 ${response.status}：${text}`);
+  return result;
+}
+
 async function ensureCapabilities() {
   if (capabilities) return capabilities;
   capabilitiesPromise ??= readCapabilities();
@@ -561,6 +573,76 @@ async function ensureCapabilities() {
     throw error;
   }
   return capabilities;
+}
+
+async function ensureRuntimeCapabilities() {
+  if (runtimeCapabilities) return runtimeCapabilities;
+  runtimeCapabilitiesPromise ??= readRuntimeCapabilities();
+  try {
+    runtimeCapabilities = await runtimeCapabilitiesPromise;
+  } catch (error) {
+    runtimeCapabilitiesPromise = undefined;
+    throw error;
+  }
+  return runtimeCapabilities;
+}
+
+async function resolveBatchCapacityFeedback() {
+  const requested = options.concurrency;
+  if (requested <= 1) {
+    return {
+      queue_policy: 'single_worker_no_runtime_capacity_probe',
+      requested_concurrency: requested,
+      effective_concurrency: requested,
+      adjusted: false
+    };
+  }
+  let runtime;
+  try {
+    runtime = await ensureRuntimeCapabilities();
+  } catch (error) {
+    return {
+      queue_policy: 'runtime_capabilities_unavailable',
+      requested_concurrency: requested,
+      effective_concurrency: requested,
+      adjusted: false,
+      warning: errorMessage(error)
+    };
+  }
+  const recommended = readRuntimeRecommendedConcurrency(runtime);
+  if (recommended < 1) {
+    throw new Error('服务端当前没有可用的健康渠道凭证，不能发起真实批量请求。');
+  }
+  const effective = Math.min(requested, recommended);
+  return {
+    queue_policy: 'client_worker_limited_by_runtime_capabilities',
+    requested_concurrency: requested,
+    effective_concurrency: effective,
+    recommended_concurrency: recommended,
+    adjusted: effective !== requested,
+    channel_queue: readRuntimeChannelQueueSummary(runtime)
+  };
+}
+
+function readRuntimeRecommendedConcurrency(runtime) {
+  const value = runtime?.streamingBatch?.recommendedConcurrency;
+  if (Number.isInteger(value) && value >= 0) return value;
+  const queueCapacity = runtime?.channelQueue?.capacityPerCredential;
+  if (Number.isInteger(queueCapacity) && queueCapacity > 0) return queueCapacity;
+  return options.concurrency;
+}
+
+function readRuntimeChannelQueueSummary(runtime) {
+  const queue = runtime?.channelQueue;
+  if (!queue || typeof queue !== 'object') return undefined;
+  return {
+    enabled: Boolean(queue.enabled),
+    capacity_per_credential: Number.isInteger(queue.capacityPerCredential) ? queue.capacityPerCredential : undefined,
+    max_wait_ms: Number.isInteger(queue.maxWaitMs) ? queue.maxWaitMs : undefined,
+    max_size: Number.isInteger(queue.maxSize) ? queue.maxSize : undefined,
+    active: Number.isInteger(queue.active) ? queue.active : undefined,
+    queued: Number.isInteger(queue.queued) ? queue.queued : undefined
+  };
 }
 
 async function runTask(task) {
@@ -610,7 +692,7 @@ async function runTaskWithAttempts(task) {
   return lastResult;
 }
 
-async function runPlannedTasks(plannedTasks, completed) {
+async function runPlannedTasks(plannedTasks, completed, effectiveConcurrency) {
   const results = new Array(plannedTasks.length);
   const failedTasks = [];
   let consecutiveFailures = 0;
@@ -643,7 +725,7 @@ async function runPlannedTasks(plannedTasks, completed) {
     }
   }
 
-  const workerCount = Math.min(options.concurrency, plannedTasks.length);
+  const workerCount = Math.min(effectiveConcurrency, plannedTasks.length);
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   failedTasks.sort((left, right) => left.index - right.index);
   return { results, failedTasks };

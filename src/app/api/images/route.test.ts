@@ -46,6 +46,10 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_TIMEOUT_MS;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_MAX_PER_TICK;
     delete process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY;
+    delete process.env.OPENAI_CHANNEL_QUEUE_ENABLED;
+    delete process.env.OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS;
+    delete process.env.OPENAI_CHANNEL_QUEUE_MAX_SIZE;
+    delete process.env.OPENAI_MAX_STREAMS_PER_CREDENTIAL;
     delete process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS;
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
     delete process.env.IMAGE_GENERATION_BACKEND;
@@ -229,6 +233,50 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(upstreamJson.partial_images, 4);
             assert.equal(upstreamAppId, 'app-id');
             assert.equal(upstreamAppSecret, 'app-secret');
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('keeps same-credential page SSE requests queued until the active stream is released', async () => {
+        const upstream = await startHangingImagesStreamUpstream();
+
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'official';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+            process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+            process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+            process.env.OPENAI_MAX_STREAMS_PER_CREDENTIAL = '1';
+            process.env.OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS = '1000';
+            const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+            resetServerChannelStateForTests();
+            const { POST } = await import('./route');
+
+            const firstResponse = await POST(
+                imageFormRequest({
+                    stream: true,
+                    clientRequestId: 'client-route-queue-1'
+                })
+            );
+            await upstream.waitForStreamRequest();
+            assert.equal(upstream.calls.length, 1);
+
+            const secondPromise = POST(
+                imageFormRequest({
+                    stream: true,
+                    clientRequestId: 'client-route-queue-2'
+                })
+            );
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            assert.equal(upstream.calls.length, 1);
+
+            await firstResponse.body?.cancel();
+            const secondResponse = await secondPromise;
+            assert.equal(secondResponse.status, 200);
+            assert.equal(secondResponse.headers.get('X-Channel-Queue-Queued'), 'true');
+            assert.equal(upstream.calls.length, 2);
+            await secondResponse.body?.cancel();
         } finally {
             await upstream.close();
         }

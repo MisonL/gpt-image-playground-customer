@@ -23,6 +23,7 @@ import {
 import { AgentApiError, normalizeAgentError, storedAgentErrorResponse, type AgentErrorBody } from './api-error-response';
 import type { AgentErrorDiagnostics } from './api-error-response';
 import { appLogger } from './app-logger';
+import type { ChannelCapacityLease } from './channel-capacity-queue';
 import {
     type ChannelCredential,
     type ChannelFailureReport,
@@ -284,6 +285,25 @@ function buildOpenAiRequestOptions(
     });
 }
 
+async function acquireAgentChannelCapacity(
+    context: CredentialContext,
+    abortSignal?: AbortSignal
+): Promise<ChannelCapacityLease | undefined> {
+    if (!context.selectedCredential) return undefined;
+    const lease = await getServerChannelState().channelCapacityQueue.acquire(context.selectedCredential.id, {
+        signal: abortSignal
+    });
+    appLogger.info('Agent 渠道凭证并发容量已获取。', {
+        channelId: context.selectedCredential.channelId,
+        credentialId: context.selectedCredential.id,
+        queued: lease.queued,
+        waitMs: lease.waitMs,
+        queueCapacity: lease.capacity,
+        queuedCount: lease.queuedCount
+    });
+    return lease;
+}
+
 export async function buildEditRequestHash(formData: FormData): Promise<string> {
     return buildEditRequestHashFromSnapshot(await snapshotAgentEditFormData(formData));
 }
@@ -333,12 +353,16 @@ export async function executeAgentGenerate(options: {
     const credentialContext = options.preparation?.credentialContext ?? prepareAgentGenerate(options.request, options.headers).credentialContext;
     const startedAtMs = Date.now();
     const startedAt = isoDate(new Date(startedAtMs));
+    let channelLease: ChannelCapacityLease | undefined;
     try {
+        channelLease = await acquireAgentChannelCapacity(credentialContext, options.abortSignal);
         const result = await executeAgentGenerateUpstream(
             options.request,
             credentialContext,
             options.abortSignal
         );
+        channelLease?.release();
+        channelLease = undefined;
         return await persistOpenAiImages({
             result,
             mode: 'generate',
@@ -371,6 +395,8 @@ export async function executeAgentGenerate(options: {
     } catch (error) {
         const failureReport = reportServerCredentialFailure(credentialContext.selectedCredential, error);
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs, failureReport));
+    } finally {
+        channelLease?.release();
     }
 }
 
@@ -615,6 +641,7 @@ export async function executeAgentEdit(options: {
     let credentialContext: CredentialContext | undefined;
     const startedAtMs = Date.now();
     const startedAt = isoDate(new Date(startedAtMs));
+    let channelLease: ChannelCapacityLease | undefined;
     try {
         const preparation = options.preparation ?? await prepareAgentEdit(options.formData, options.headers);
         credentialContext = preparation.credentialContext;
@@ -635,6 +662,7 @@ export async function executeAgentEdit(options: {
             partialImages: preparation.streamRequest.partialImages,
             selectedCredential: credentialContext.selectedCredential
         };
+        channelLease = await acquireAgentChannelCapacity(credentialContext, options.abortSignal);
         const result = shouldUseAgentUpstreamStream(streamOptions)
             ? await executeAgentEditStream({
                   credentialContext,
@@ -646,6 +674,8 @@ export async function executeAgentEdit(options: {
                   editParams,
                   buildOpenAiRequestOptions(credentialContext, options.abortSignal)
               );
+        channelLease?.release();
+        channelLease = undefined;
 
         return await persistOpenAiImages({
             result,
@@ -679,6 +709,8 @@ export async function executeAgentEdit(options: {
     } catch (error) {
         const failureReport = reportServerCredentialFailure(credentialContext?.selectedCredential, error);
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs, failureReport));
+    } finally {
+        channelLease?.release();
     }
 }
 

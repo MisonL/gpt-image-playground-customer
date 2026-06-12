@@ -16,6 +16,7 @@ export async function GET() {
         const summary = getChannelPoolSummary(serverChannelState.config);
         const healthSummary = serverChannelState.router?.getHealthSummary();
         const maxStreamsPerCredential = readPositiveIntegerEnv(process.env, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1);
+        const channelQueueSummary = serverChannelState.channelCapacityQueue.summary();
         const responsesImageBackendEnabled = readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND');
         const responsesImageBackendHasDefaultModel = Boolean(process.env.OPENAI_RESPONSES_API_MODEL?.trim());
         const responsesImageBackendMissingEnv = readResponsesImageBackendMissingEnv(process.env);
@@ -51,6 +52,19 @@ export async function GET() {
                 healthyChannelCount: healthSummary?.healthyChannelCount ?? summary.channelCount,
                 unhealthyChannelCount: healthSummary?.unhealthyChannelCount ?? 0,
                 lastFailure: toPublicChannelFailure(healthSummary?.lastFailure)
+            },
+            channelQueue: {
+                enabled: channelQueueSummary.enabled,
+                capacityPerCredential: channelQueueSummary.capacityPerKey,
+                maxWaitMs: channelQueueSummary.maxWaitMs,
+                maxSize: channelQueueSummary.maxSize,
+                active: channelQueueSummary.active,
+                queued: channelQueueSummary.queued,
+                credentials: channelQueueSummary.keys.map((item) => ({
+                    credentialId: item.key,
+                    active: item.active,
+                    queued: item.queued
+                }))
             },
             channelRecovery: {
                 failureCooldownEnabled: serverChannelState.channelRecovery.failureCooldownEnabled,

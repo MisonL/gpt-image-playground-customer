@@ -46,6 +46,7 @@ import {
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { createOpenAIImageClientOptions } from '@/lib/openai-image-transport';
+import type { ChannelCapacityLease } from '@/lib/channel-capacity-queue';
 import type { StreamingAvailabilityKey, StreamingOperation } from '@/lib/streaming-availability';
 import { buildAccessCookie, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
 import crypto from 'crypto';
@@ -175,8 +176,59 @@ function markStreamingUnavailable(input: {
     });
 }
 
+function appendChannelQueueHeaders(response: Response, lease: ChannelCapacityLease | undefined): Response {
+    if (!lease) return response;
+    const headers = new Headers(response.headers);
+    headers.set('X-Channel-Queue-Wait-Ms', String(lease.waitMs));
+    headers.set('X-Channel-Queue-Queued', lease.queued ? 'true' : 'false');
+    headers.set('X-Channel-Queue-Capacity', String(lease.capacity));
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+    });
+}
+
+function releaseChannelLeaseAfterResponse(response: Response, lease: ChannelCapacityLease): Response {
+    if (!response.body) {
+        lease.release();
+        return appendChannelQueueHeaders(response, lease);
+    }
+
+    const reader = response.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+            try {
+                const result = await reader.read();
+                if (result.done) {
+                    lease.release();
+                    controller.close();
+                    return;
+                }
+                controller.enqueue(result.value);
+            } catch (error) {
+                lease.release();
+                controller.error(error);
+            }
+        },
+        async cancel(reason) {
+            lease.release();
+            await reader.cancel(reason);
+        }
+    });
+    return appendChannelQueueHeaders(
+        new Response(body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers
+        }),
+        lease
+    );
+}
+
 export async function POST(request: NextRequest) {
     let selectedServerCredential: ChannelCredential | undefined;
+    let channelLease: ChannelCapacityLease | undefined;
     let clientRequestId: string | undefined;
     let requestLogContext: RequestLogContext | undefined;
     let accessCookie: AccessCookie | undefined;
@@ -319,6 +371,21 @@ export async function POST(request: NextRequest) {
             upstreamExtraHeaders: Boolean(upstreamHeaders)
         });
 
+        if (selectedCredential) {
+            channelLease = await serverChannelState.channelCapacityQueue.acquire(selectedCredential.id, {
+                signal: request.signal
+            });
+            appLogger.info('渠道凭证并发容量已获取。', {
+                ...requestLogContext,
+                channelId: selectedCredential.channelId,
+                credentialId: selectedCredential.id,
+                queued: channelLease.queued,
+                waitMs: channelLease.waitMs,
+                queueCapacity: channelLease.capacity,
+                queuedCount: channelLease.queuedCount
+            });
+        }
+
         const modeResult =
             mode === 'generate'
                 ? await handleGenerateImageMode({
@@ -380,7 +447,10 @@ export async function POST(request: NextRequest) {
                           })
                   });
         if (modeResult instanceof Response) {
-            return modeResult;
+            if (!channelLease) return modeResult;
+            const response = releaseChannelLeaseAfterResponse(modeResult, channelLease);
+            channelLease = undefined;
+            return response;
         }
         const { result, outputFormat: responseOutputFormat } = modeResult;
 
@@ -415,10 +485,14 @@ export async function POST(request: NextRequest) {
                 filenames: savedImagesData.map((image) => image.filename)
             });
 
-            return attachAccessCookie(
+            const response = attachAccessCookie(
                 NextResponse.json({ images: savedImagesData, usage: result.usage, actualCost, clientRequestId }),
                 accessCookie
             );
+            const responseWithHeaders = appendChannelQueueHeaders(response, channelLease);
+            channelLease?.release();
+            channelLease = undefined;
+            return responseWithHeaders;
         } catch (persistError) {
             if (persistError instanceof MissingOpenAiImageDataError) {
                 appLogger.error(`第 ${persistError.index} 个图片数据缺少 b64_json。`, requestLogContext);
@@ -434,9 +508,15 @@ export async function POST(request: NextRequest) {
                 ...requestLogContext
             });
             reportServerCredentialFailure(selectedCredential, { status: 502 });
-            return NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
+            const response = NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
+            const responseWithHeaders = appendChannelQueueHeaders(response, channelLease);
+            channelLease?.release();
+            channelLease = undefined;
+            return responseWithHeaders;
         }
     } catch (error: unknown) {
+        channelLease?.release();
+        channelLease = undefined;
         reportServerCredentialFailure(selectedServerCredential, error);
         appLogger.error('/api/images 处理失败：', {
             ...requestLogContext,

@@ -1,5 +1,6 @@
 import { RequestValidationError } from './image-request-utils';
 import { isChannelFailure } from './channel-router';
+import { ChannelCapacityQueueError } from './channel-capacity-queue';
 import { NextResponse } from 'next/server';
 
 export type AgentErrorCode =
@@ -430,6 +431,24 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
 
     const status = readNumberField(error, 'status') ?? readNumberField(error, 'statusCode');
     const message = error instanceof Error ? error.message : (readStringField(error, 'message') ?? '发生未知错误。');
+    if (error instanceof ChannelCapacityQueueError) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(Number(error.details.max_wait_ms ?? 30_000) / 1000));
+        return new AgentApiError({
+            code: 'upstream_rate_limited',
+            message,
+            status: error.status === 499 ? 499 : 429,
+            retryable: error.retryable,
+            details: {
+                code: error.code,
+                ...error.details
+            },
+            retryAfterSeconds,
+            diagnostics: buildDiagnostics(error, {
+                ...diagnostics,
+                retryAfterSeconds
+            })
+        });
+    }
     if (status === 401 || status === 403) {
         return new AgentApiError({
             code: 'upstream_auth_failed',

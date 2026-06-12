@@ -3051,6 +3051,100 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('limits batch worker concurrency to runtime capacity feedback when requested concurrency is higher', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-capacity-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(
+                inputPath,
+                [
+                    JSON.stringify({ id: 'first', prompt: 'first prompt', idempotency_key: 'first-key' }),
+                    JSON.stringify({ id: 'second', prompt: 'second prompt', idempotency_key: 'second-key' })
+                ].join('\n')
+            );
+
+            let activeGenerateRequests = 0;
+            let maxActiveGenerateRequests = 0;
+            const requests = [];
+            await withServer(
+                async (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
+                    if (request.url === '/api/runtime-capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                streamingBatch: { recommendedConcurrency: 1 },
+                                channelQueue: {
+                                    enabled: true,
+                                    capacityPerCredential: 1,
+                                    maxWaitMs: 420000,
+                                    maxSize: 50,
+                                    active: 0,
+                                    queued: 0
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ ok: true }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        activeGenerateRequests += 1;
+                        maxActiveGenerateRequests = Math.max(maxActiveGenerateRequests, activeGenerateRequests);
+                        await new Promise((resolve) => setTimeout(resolve, 20));
+                        activeGenerateRequests -= 1;
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                images: [
+                                    {
+                                        id: request.headers['idempotency-key'],
+                                        filename: `${request.headers['idempotency-key']}.png`,
+                                        b64_json: fakePngBase64(2, 1)
+                                    }
+                                ]
+                            })
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath, '--concurrency', '2'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.requested_concurrency, 2);
+                    assert.equal(body.effective_concurrency, 1);
+                    assert.equal(body.capacity_feedback.adjusted, true);
+                    assert.equal(body.capacity_feedback.recommended_concurrency, 1);
+                    assert.equal(body.capacity_feedback.channel_queue.enabled, true);
+                    assert.equal(maxActiveGenerateRequests, 1);
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        [
+                            'GET /api/runtime-capabilities',
+                            'GET /api/agent/capabilities',
+                            'POST /api/agent/images/generate',
+                            'POST /api/agent/images/generate'
+                        ]
+                    );
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('does not require capabilities when resume skips every batch task', () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-resume-skip-'));
         try {
