@@ -13,6 +13,7 @@ export type ImageUpstreamRouteImpactKey =
     | 'upstream.backendImpactResponses'
     | 'upstream.backendImpactServerDefault'
     | 'upstream.backendResponsesUnavailable'
+    | 'upstream.routeImpactMixedProfile'
     | 'upstream.strategyImpactAuto'
     | 'upstream.strategyImpactOff'
     | 'upstream.strategyImpactSse'
@@ -71,6 +72,7 @@ export function getImageUpstreamRouteImpactKeys(input: {
     streamingStrategy: ImageUpstreamFormStreamingStrategy;
     defaultStreamingStrategy: ImageStreamingStrategy;
     allowResponsesImageBackend: boolean;
+    serverProfileMixed?: boolean;
 }): ImageUpstreamRouteImpactKey[] {
     const backendKey =
         input.backend === 'images-api'
@@ -93,6 +95,9 @@ export function getImageUpstreamRouteImpactKeys(input: {
     const keys: ImageUpstreamRouteImpactKey[] = [backendKey];
     if (!input.allowResponsesImageBackend) {
         keys.push('upstream.backendResponsesUnavailable');
+    }
+    if (input.serverProfileMixed) {
+        keys.push('upstream.routeImpactMixedProfile');
     }
     keys.push(strategyKey, 'upstream.routeImpactCost');
     return keys;

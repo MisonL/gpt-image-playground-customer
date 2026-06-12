@@ -123,8 +123,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'form.pixelsMeta': '{pixels} 像素（最大值的 {percent}%）- {ratio}',
         'form.ratio': '{ratio}:1 比例',
         'form.noRatio': '-',
-        'form.customConstraints':
-            '限制：边长必须是 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素在 655,360 到 8,294,400 之间。',
+        'form.customConstraints': '限制：宽度和高度必须是正整数；具体上游可能继续返回更严格的尺寸错误。',
         'sizeError.positive': '宽度和高度必须为正数。',
         'sizeError.whole': '宽度和高度必须为整数。',
         'sizeError.multiple': '宽度和高度都必须是 {multiple} 的倍数。',
@@ -172,6 +171,8 @@ const messages: Record<Locale, Record<string, string>> = {
         'upstream.backendImpactImages': 'Images API 路径更贴近图片接口能力，适合常规生成与编辑。',
         'upstream.backendImpactResponses': 'Responses image_generation 需要实验开关和顶层模型，适合兼容测试，不建议作为默认路径。',
         'upstream.backendResponsesUnavailable': '当前运行时未启用 Responses image_generation，页面会保持服务端默认或 Images API 路径。',
+        'upstream.routeImpactMixedProfile':
+            '当前服务端渠道包含不同上游模式，页面会按交集收窄数量、上传和预览能力，避免某个渠道收到不支持的参数。',
         'upstream.responsesRuntimeUnavailable':
             '无法确认当前运行时是否启用 Responses image_generation，因此不会自动改走其他后端。请稍后重试或切换到服务端默认 / Images API 路径。',
         'upstream.responsesModelRequired':
@@ -281,6 +282,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'logs.scopeSelected': '仅显示当前图片相关动态。',
         'logs.scopeNone': '当前没有选中的图片动态范围。',
         'logs.scopeMissing': '当前图片缺少直接请求信息，正在尝试按文件名匹配最近动态。',
+        'logs.scopeRequestIds': '请求 ID：{value}',
+        'logs.scopeFilenames': '文件名：{value}',
+        'logs.scopeResolvedRequestIds': '按文件名匹配到：{value}',
+        'logs.copyScope': '复制诊断范围',
         'logs.clear': '清空动态',
         'logs.count': '{count} 条动态',
         'logs.status.idle': '未连接',
@@ -327,6 +332,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'history.resultFeedbackEmpty': '未标记',
         'history.resultFeedbackUsable': '可用',
         'history.resultFeedbackNeedsRevision': '需修改',
+        'history.resultFeedbackNote': '反馈原因',
+        'history.resultFeedbackNotePlaceholder': '记录为什么可用或需要修改',
+        'history.resultFeedbackNoteDisabled': '先选择可用或需修改',
+        'history.resultFeedbackNoteEmpty': '未记录原因',
         'history.markResultUsable': '标记本次结果可用',
         'history.markResultNeedsRevision': '标记本次结果需要修改',
         'history.deleteInspiration': '删除灵感',
@@ -438,6 +447,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'history.batchImageCount': '{count} 张图',
         'history.batchThumbnails': '批次缩略图',
         'history.batchThumbnail': '批次第 {index} 张图',
+        'history.downloadBatch': '下载批次',
         'history.showCost': '查看成本明细',
         'history.showTotalCost': '查看估算总成本摘要',
         'history.modeCreate': '生成',
@@ -484,6 +494,8 @@ const messages: Record<Locale, Record<string, string>> = {
         'error.historyImageLoad': '图片 {filename} 无法加载。',
         'error.historySomeMissing': '这条历史记录中的部分图片无法加载，可能已被清理或丢失。',
         'error.historyMissingImage': '这条历史记录没有可编辑的图片。',
+        'error.resultFeedbackSync': '结果反馈已写入本地历史，但同步到服务端失败；已加入补偿队列，本页会重试，刷新或重开后也会继续尝试。',
+        'error.resultFeedbackDeleteSync': '本地历史已删除，但服务端反馈清理失败；已加入清理补偿队列，本页会重试，刷新或重开后也会继续尝试。',
         'error.clearHistory': '清空历史失败：{message}',
         'error.maxEditImages': '编辑表单最多只能添加 {count} 张图片。',
         'error.imageNotFoundDb': '本地数据库中找不到图片 {filename}。',
@@ -628,7 +640,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'form.ratio': '{ratio}:1 ratio',
         'form.noRatio': '-',
         'form.customConstraints':
-            'Constraints: multiples of 16, max edge 3840px, aspect ratio <= 3:1, 655,360 to 8,294,400 total pixels.',
+            'Constraints: width and height must be positive whole numbers; the selected upstream may return stricter size errors.',
         'sizeError.positive': 'Width and height must be positive numbers.',
         'sizeError.whole': 'Width and height must be whole numbers.',
         'sizeError.multiple': 'Both edges must be multiples of {multiple}.',
@@ -682,6 +694,8 @@ const messages: Record<Locale, Record<string, string>> = {
             'Responses image_generation requires the experimental flag and a top-level model. Use it for compatibility tests, not as the default path.',
         'upstream.backendResponsesUnavailable':
             'Responses image_generation is not enabled in the current runtime, so the page stays on the server default or Images API path.',
+        'upstream.routeImpactMixedProfile':
+            'The server pool mixes upstream modes, so the page narrows count, upload, and preview capabilities to their shared safe range.',
         'upstream.responsesRuntimeUnavailable':
             'Cannot confirm whether Responses image_generation is enabled in this runtime, so the page will not automatically switch to another backend. Retry later or choose Server default / Images API.',
         'upstream.responsesModelRequired':
@@ -801,6 +815,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'logs.scopeNone': 'No image activity scope is selected.',
         'logs.scopeMissing':
             'The current image has no direct request information. Matching recent activity by filename.',
+        'logs.scopeRequestIds': 'Request IDs: {value}',
+        'logs.scopeFilenames': 'Filenames: {value}',
+        'logs.scopeResolvedRequestIds': 'Matched by filename: {value}',
+        'logs.copyScope': 'Copy diagnostic scope',
         'logs.clear': 'Clear Activity',
         'logs.count': '{count} activity entries',
         'logs.status.idle': 'Disconnected',
@@ -847,6 +865,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'history.resultFeedbackEmpty': 'Unmarked',
         'history.resultFeedbackUsable': 'Usable',
         'history.resultFeedbackNeedsRevision': 'Needs revision',
+        'history.resultFeedbackNote': 'Feedback reason',
+        'history.resultFeedbackNotePlaceholder': 'Record why it is usable or needs revision',
+        'history.resultFeedbackNoteDisabled': 'Choose usable or needs revision first',
+        'history.resultFeedbackNoteEmpty': 'No reason recorded',
         'history.markResultUsable': 'Mark this result as usable',
         'history.markResultNeedsRevision': 'Mark this result as needing revision',
         'history.deleteInspiration': 'Delete inspiration',
@@ -961,6 +983,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'history.batchImageCount': '{count} images',
         'history.batchThumbnails': 'Batch thumbnails',
         'history.batchThumbnail': 'Batch image {index}',
+        'history.downloadBatch': 'Download batch',
         'history.showCost': 'Show cost breakdown',
         'history.showTotalCost': 'Show estimated cost summary',
         'history.modeCreate': 'Create',
@@ -1012,6 +1035,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'error.historySomeMissing':
             'Some images from this history entry could not be loaded (they might have been cleared or are missing).',
         'error.historyMissingImage': 'This history entry has no editable image.',
+        'error.resultFeedbackSync':
+            'Result feedback was saved locally, but server sync failed. It was queued and will retry on this page, then continue after refresh or reopen.',
+        'error.resultFeedbackDeleteSync':
+            'Local history was deleted, but server feedback cleanup failed. Cleanup was queued and will retry on this page, then continue after refresh or reopen.',
         'error.clearHistory': 'Failed to clear history: {message}',
         'error.maxEditImages': 'Cannot add more than {count} images to the edit form.',
         'error.imageNotFoundDb': 'Image {filename} not found in local database.',

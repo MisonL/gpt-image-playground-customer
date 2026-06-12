@@ -1,5 +1,7 @@
 import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
+import { summarizeImageUpstreamProfile } from '@/lib/image-upstream-profile';
 import { readImageStreamMode, readImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import { summarizeOpenAIImageTransport } from '@/lib/openai-image-transport';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { computeStreamingBatchRecommendation } from '@/lib/streaming-batch';
 import { readBooleanEnv, readPositiveIntegerEnv } from '@/lib/server-runtime';
@@ -22,6 +24,15 @@ export async function GET() {
             maxStreamsPerCredential,
             strategy: summary.strategy
         });
+        const upstreamProfile = summarizeImageUpstreamProfile({
+            serverProfiles: summary.channels.map((channel) => channel.effectiveProfile)
+        });
+        const providerManifests = summary.channels
+            .filter((channel) => channel.providerManifest)
+            .map((channel) => ({
+                channelId: channel.id,
+                manifest: channel.providerManifest
+            }));
 
         return NextResponse.json({
             streaming: {
@@ -42,11 +53,16 @@ export async function GET() {
                 lastFailure: toPublicChannelFailure(healthSummary?.lastFailure)
             },
             channelRecovery: {
+                failureCooldownEnabled: serverChannelState.channelRecovery.failureCooldownEnabled,
+                failureCooldownMs: serverChannelState.channelRecovery.failureCooldownMs,
                 requireProbeForRecovery: serverChannelState.channelRecovery.requireProbeForRecovery,
                 pendingProbeCredentialCount: healthSummary?.pendingRecoveryProbeCredentialCount ?? 0,
                 pendingProbeChannelCount: healthSummary?.pendingRecoveryProbeChannelCount ?? 0,
                 probe: serverChannelState.channelRecoveryProber?.summary()
             },
+            upstreamProfile,
+            imageTransport: summarizeOpenAIImageTransport(process.env),
+            providerManifests,
             responsesImageBackend: {
                 enabled: responsesImageBackendEnabled,
                 mode: 'experimental',

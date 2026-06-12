@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 
 const messages: Record<string, string> = {
     'sizeError.multiple': '宽边和高边都必须是 {multiple} 的倍数。',
+    'sizeError.positive': '宽度和高度必须为正数。',
     'upstream.responsesModelRequired': 'Responses image_generation 需要填写 GPT 顶层模型。',
     'ux.disabledBatchPrompts': '请至少填写一条批量提示词。',
     'ux.disabledPrompt': '请输入提示词后再提交。',
@@ -18,9 +19,8 @@ function t(key: string, values?: Record<string, string | number>): string {
 const validSize = { valid: true as const };
 const invalidSize = {
     valid: false as const,
-    reason: '宽边和高边都必须是 16 的倍数。',
-    reasonKey: 'sizeError.multiple',
-    values: { multiple: 16 }
+    reason: '宽度和高度必须为正数。',
+    reasonKey: 'sizeError.positive'
 };
 
 type MobileOptions = Parameters<typeof resolveMobilePrimaryDisabledReason>[0];
@@ -77,7 +77,7 @@ describe('resolveMobilePrimaryDisabledReason', () => {
     it('surfaces custom size validation after required content is present', () => {
         const reason = resolveReason({ generateSizeValidation: invalidSize });
 
-        assert.equal(reason, '宽边和高边都必须是 16 的倍数。');
+        assert.equal(reason, '宽度和高度必须为正数。');
     });
 
     it('blocks mobile generate when Responses backend lacks a top-level model', () => {

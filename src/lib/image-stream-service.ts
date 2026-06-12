@@ -3,7 +3,10 @@ import { writeFileAtomic } from './agent-file-utils';
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
+import { readImageStreamDataIntervalTimeoutMs } from './openai-image-transport';
 import { createBatchId, createImageFilename, outputDir } from './server-runtime';
+import { withStreamDataIntervalTimeout } from './stream-data-interval-timeout';
+import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import type { ActualCostDetails } from './upstream-cost/types';
 import type OpenAI from 'openai';
 import path from 'path';
@@ -45,6 +48,7 @@ type SseWriter = ReturnType<typeof createSseWriter>;
 type ResolveStreamCostInput = {
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamHeaders?: UpstreamRequestHeaders;
     model: string;
     startedAtMs: number;
     expectedImageCount: number;
@@ -58,6 +62,7 @@ export type ImageStreamResponseOptions = {
     storageMode: StorageMode;
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamHeaders?: UpstreamRequestHeaders;
     model: string;
     startedAtMs: number;
     abortSignal?: AbortSignal;
@@ -182,6 +187,7 @@ async function downloadOptionalPartialImage(runtime: StreamRuntime, imageUrl: st
             imageUrl,
             apiBaseUrl: runtime.options.apiBaseUrl,
             apiKey: runtime.options.apiKey,
+            upstreamHeaders: runtime.options.upstreamHeaders,
             abortSignal: runtime.options.abortSignal
         });
     } catch (error) {
@@ -220,6 +226,7 @@ async function emitCompletedImage(
                   imageUrl: normalizedEvent.imageUrl,
                   apiBaseUrl: runtime.options.apiBaseUrl,
                   apiKey: runtime.options.apiKey,
+                  upstreamHeaders: runtime.options.upstreamHeaders,
                   abortSignal: runtime.options.abortSignal
               })
             : undefined);
@@ -273,7 +280,11 @@ async function emitNormalizedEvent(
 }
 
 async function consumeUpstreamStream(runtime: StreamRuntime): Promise<boolean> {
-    for await (const event of runtime.options.stream) {
+    const stream = withStreamDataIntervalTimeout(
+        runtime.options.stream,
+        readImageStreamDataIntervalTimeoutMs()
+    );
+    for await (const event of stream) {
         const diagnostics = normalizeUpstreamImageStreamEventWithDiagnostics(event);
         if (diagnostics.providerDialect === 'sdk_parsed_fallback' && !runtime.state.streamingDegraded) {
             runtime.state.streamingDegraded = true;
@@ -322,6 +333,7 @@ async function emitFallbackImages(runtime: StreamRuntime, result: OpenAI.Images.
                       imageUrl: image.url,
                       apiBaseUrl: runtime.options.apiBaseUrl,
                       apiKey: runtime.options.apiKey,
+                      upstreamHeaders: runtime.options.upstreamHeaders,
                       abortSignal: runtime.options.abortSignal
                   })
                 : undefined);

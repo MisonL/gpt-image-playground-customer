@@ -27,7 +27,19 @@ import {
     resolveImageUpstreamEffectiveStreamingStrategy
 } from '@/lib/image-upstream-form';
 import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
-import { getPresetTooltip, validateGptImage2Size } from '@/lib/size-utils';
+import {
+    buildIntegerRangeOptions,
+    clampIntegerToRange,
+    getPartialImagesRangeForBackend,
+    type ImageUpstreamProfile,
+    type PartialImagesCount
+} from '@/lib/image-upstream-profile';
+import {
+    getPresetTooltip,
+    getSizePresetOptions,
+    validateGptImage2Size,
+    validatePositiveIntegerImageSize
+} from '@/lib/size-utils';
 import type { SizePreset } from '@/lib/size-utils';
 import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
@@ -40,9 +52,11 @@ import {
     Sparkles,
     SlidersHorizontal,
     ChevronDown,
+    CircleOff,
     Tally1,
     Tally2,
     Tally3,
+    Tally4,
     Loader2,
     X,
     ScanEye,
@@ -121,6 +135,8 @@ type EditingFormProps = {
     setEditOutputFormat: React.Dispatch<React.SetStateAction<EditingFormData['output_format']>>;
     editCompression: number[];
     setEditCompression: React.Dispatch<React.SetStateAction<number[]>>;
+    upstreamProfile: ImageUpstreamProfile;
+    upstreamProfileMixed?: boolean;
     editModeration: EditingFormData['moderation'];
     setEditModeration: React.Dispatch<React.SetStateAction<EditingFormData['moderation']>>;
     editBrushSize: number[];
@@ -142,8 +158,8 @@ type EditingFormProps = {
     allowStreamingBatch: boolean;
     enableParallelBatch: boolean;
     setEnableParallelBatch: React.Dispatch<React.SetStateAction<boolean>>;
-    partialImages: 1 | 2 | 3;
-    setPartialImages: React.Dispatch<React.SetStateAction<1 | 2 | 3>>;
+    partialImages: PartialImagesCount;
+    setPartialImages: React.Dispatch<React.SetStateAction<PartialImagesCount>>;
     allowResponsesImageBackend: boolean;
     hasDefaultResponsesModel: boolean;
     editImageBackend: EditingFormData['image_backend'];
@@ -209,6 +225,51 @@ const RadioItemWithIcon = ({
     );
 };
 
+function getSizePresetLabel(
+    preset: SizePreset,
+    t: (key: string, values?: Record<string, string | number>) => string
+): string {
+    switch (preset) {
+        case 'auto':
+            return t('common.auto');
+        case 'custom':
+            return t('common.custom');
+        case 'square':
+            return t('common.square');
+        case 'landscape':
+            return t('common.landscape');
+        case 'portrait':
+            return t('common.portrait');
+        case 'square-1k':
+            return '1K';
+        case 'square-2k':
+            return '2K';
+        case 'square-4k':
+            return '4K';
+        case 'wide-4k':
+            return '16:9';
+        case 'tall-4k':
+            return '9:16';
+    }
+}
+
+function getSizePresetIcon(preset: SizePreset): React.ElementType {
+    switch (preset) {
+        case 'auto':
+            return Sparkles;
+        case 'custom':
+            return SquareDashed;
+        case 'landscape':
+        case 'wide-4k':
+            return RectangleHorizontal;
+        case 'portrait':
+        case 'tall-4k':
+            return RectangleVertical;
+        default:
+            return Square;
+    }
+}
+
 function getBackendLabel(backend: EditingFormData['image_backend'], t: (key: string) => string): string {
     if (backend === 'images-api') return t('upstream.backendImages');
     if (backend === 'responses-image-generation') return t('upstream.backendResponses');
@@ -273,6 +334,8 @@ export function EditingForm({
     setEditOutputFormat,
     editCompression,
     setEditCompression,
+    upstreamProfile,
+    upstreamProfileMixed = false,
     editModeration,
     setEditModeration,
     editBrushSize,
@@ -319,8 +382,13 @@ export function EditingForm({
     const [firstImagePreviewUrl, setFirstImagePreviewUrl] = React.useState<string | null>(null);
 
     const isGptImage2 = editModel === 'gpt-image-2';
+    const usesPositiveIntegerCustomSize = upstreamProfile.gptImage2.sizePolicy === 'positive-integer';
     const customSizeValidation =
-        editSize === 'custom' ? validateGptImage2Size(editCustomWidth, editCustomHeight) : { valid: true as const };
+        editSize === 'custom'
+            ? usesPositiveIntegerCustomSize
+                ? validatePositiveIntegerImageSize(editCustomWidth, editCustomHeight)
+                : validateGptImage2Size(editCustomWidth, editCustomHeight)
+            : { valid: true as const };
     const customSizeInvalid = editSize === 'custom' && !customSizeValidation.valid;
     const editCustomPixels = editCustomWidth * editCustomHeight;
     const editCustomRatio =
@@ -358,6 +426,7 @@ export function EditingForm({
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (imageFiles.length === 0) return t('ux.disabledSourceImage');
+        if (imageFiles.length > maxImages) return t('alert.maxImages', { count: maxImages });
         if (!editPrompt.trim()) return t('ux.disabledPrompt');
         if (editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved) {
             return t('ux.disabledUnsavedMask');
@@ -374,6 +443,7 @@ export function EditingForm({
         editPrompt,
         imageFiles.length,
         isLoading,
+        maxImages,
         requiresResponsesModel,
         t
     ]);
@@ -385,6 +455,12 @@ export function EditingForm({
     const streamModeLabel = getStreamModeLabel(streamMode, t);
     const streamStatusLabel = getStreamingStatusLabel(streamMode, t);
     const workbenchBackendLabel = getWorkbenchBackendLabel(editImageBackend, t);
+    const editSizePresetOptions = getSizePresetOptions({ model: editModel, upstreamProfile });
+    const partialImagesRange = React.useMemo(
+        () => getPartialImagesRangeForBackend(upstreamProfile, editImageBackend),
+        [editImageBackend, upstreamProfile]
+    );
+    const partialImageOptions = buildIntegerRangeOptions(partialImagesRange) as PartialImagesCount[];
 
     // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
@@ -398,6 +474,22 @@ export function EditingForm({
             setStreamMode('non_stream');
         }
     }, [streamingDisabledByStrategy, streamMode, setStreamMode]);
+
+    React.useEffect(() => {
+        if (partialImages < partialImagesRange.min || partialImages > partialImagesRange.max) {
+            setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
+        }
+    }, [
+        partialImages,
+        partialImagesRange,
+        setPartialImages,
+    ]);
+
+    React.useEffect(() => {
+        if (editN[0] < upstreamProfile.editCount.min || editN[0] > upstreamProfile.editCount.max) {
+            setEditN([Math.min(upstreamProfile.editCount.max, Math.max(upstreamProfile.editCount.min, editN[0]))]);
+        }
+    }, [editN, setEditN, upstreamProfile.editCount.max, upstreamProfile.editCount.min]);
 
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
     const visualFeedbackCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
@@ -708,11 +800,23 @@ export function EditingForm({
             alert(t('alert.editNoImage'));
             return;
         }
+        if (imageFiles.length > maxImages) {
+            alert(t('alert.maxImages', { count: maxImages }));
+            return;
+        }
         if (editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved) {
             alert(t('alert.saveMaskBeforeSubmit'));
             return;
         }
         if (customSizeInvalid) {
+            return;
+        }
+        if (partialImages < partialImagesRange.min || partialImages > partialImagesRange.max) {
+            setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
+            return;
+        }
+        if (editN[0] < upstreamProfile.editCount.min || editN[0] > upstreamProfile.editCount.max) {
+            setEditN([clampIntegerToRange(editN[0], upstreamProfile.editCount)]);
             return;
         }
 
@@ -1074,47 +1178,18 @@ export function EditingForm({
                             disabled={isLoading}
                             name='edit-size'
                             aria-label={t('form.size')}
-                            className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
-                            <RadioItemWithIcon
-                                value='auto'
-                                id='edit-size-auto'
-                                label={t('common.auto')}
-                                Icon={Sparkles}
-                                disabled={isLoading}
-                            />
-                            {isGptImage2 && (
+                            className='grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-5'>
+                            {editSizePresetOptions.map((option) => (
                                 <RadioItemWithIcon
-                                    value='custom'
-                                    id='edit-size-custom'
-                                    label={t('common.custom')}
-                                    Icon={SquareDashed}
+                                    key={option.value}
+                                    value={option.value}
+                                    id={`edit-size-${option.value}`}
+                                    label={getSizePresetLabel(option.value, t)}
+                                    Icon={getSizePresetIcon(option.value)}
                                     disabled={isLoading}
+                                    tooltip={getPresetTooltip(option.value, editModel)}
                                 />
-                            )}
-                            <RadioItemWithIcon
-                                value='square'
-                                id='edit-size-square'
-                                label={t('common.square')}
-                                Icon={Square}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('square', editModel)}
-                            />
-                            <RadioItemWithIcon
-                                value='landscape'
-                                id='edit-size-landscape'
-                                label={t('common.landscape')}
-                                Icon={RectangleHorizontal}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('landscape', editModel)}
-                            />
-                            <RadioItemWithIcon
-                                value='portrait'
-                                id='edit-size-portrait'
-                                label={t('common.portrait')}
-                                Icon={RectangleVertical}
-                                disabled={isLoading}
-                                tooltip={getPresetTooltip('portrait', editModel)}
-                            />
+                            ))}
                         </RadioGroup>
                         {isGptImage2 && editSize === 'custom' && (
                             <div className='bg-muted/30 border-border space-y-2 rounded-md border p-3'>
@@ -1128,9 +1203,9 @@ export function EditingForm({
                                             name='editCustomWidth'
                                             type='number'
                                             inputMode='numeric'
-                                            min={16}
-                                            max={3840}
-                                            step={16}
+                                            min={usesPositiveIntegerCustomSize ? 1 : 16}
+                                            max={usesPositiveIntegerCustomSize ? undefined : 3840}
+                                            step={usesPositiveIntegerCustomSize ? 1 : 16}
                                             value={editCustomWidth}
                                             onChange={(e) => setEditCustomWidth(parseInt(e.target.value, 10) || 0)}
                                             disabled={isLoading}
@@ -1146,9 +1221,9 @@ export function EditingForm({
                                             name='editCustomHeight'
                                             type='number'
                                             inputMode='numeric'
-                                            min={16}
-                                            max={3840}
-                                            step={16}
+                                            min={usesPositiveIntegerCustomSize ? 1 : 16}
+                                            max={usesPositiveIntegerCustomSize ? undefined : 3840}
+                                            step={usesPositiveIntegerCustomSize ? 1 : 16}
                                             value={editCustomHeight}
                                             onChange={(e) => setEditCustomHeight(parseInt(e.target.value, 10) || 0)}
                                             disabled={isLoading}
@@ -1357,7 +1432,8 @@ export function EditingForm({
                                                 backend: editImageBackend,
                                                 streamingStrategy: editStreamingStrategy,
                                                 defaultStreamingStrategy,
-                                                allowResponsesImageBackend
+                                                allowResponsesImageBackend,
+                                                serverProfileMixed: upstreamProfileMixed
                                             }).map((key) => (
                                                 <p key={key}>{t(key)}</p>
                                             ))}
@@ -1581,19 +1657,29 @@ export function EditingForm({
                                                 <RadioGroup
                                                     value={String(partialImages)}
                                                     onValueChange={(value) =>
-                                                        setPartialImages(Number(value) as 1 | 2 | 3)
+                                                        setPartialImages(Number(value) as PartialImagesCount)
                                                     }
                                                     disabled={isLoading}
                                                     name='edit-partial_images'
                                                     aria-label={t('streaming.previewImages')}
-                                                    className='grid grid-cols-3 gap-2'>
-                                                    {[1, 2, 3].map((value) => (
+                                                    className='grid grid-cols-5 gap-2'>
+                                                    {partialImageOptions.map((value) => (
                                                         <RadioItemWithIcon
                                                             key={value}
                                                             value={String(value)}
                                                             id={`edit-partial-${value}`}
                                                             label={String(value)}
-                                                            Icon={value === 1 ? Tally1 : value === 2 ? Tally2 : Tally3}
+                                                            Icon={
+                                                                value === 0
+                                                                    ? CircleOff
+                                                                    : value === 1
+                                                                      ? Tally1
+                                                                      : value === 2
+                                                                        ? Tally2
+                                                                        : value === 3
+                                                                          ? Tally3
+                                                                          : Tally4
+                                                            }
                                                             disabled={isLoading}
                                                         />
                                                     ))}
@@ -1747,7 +1833,7 @@ export function EditingForm({
                                                 name='edit-n'
                                                 thumbLabel={t('form.numberOfImages', { count: editN[0] })}
                                                 min={1}
-                                                max={10}
+                                                max={upstreamProfile.editCount.max}
                                                 step={1}
                                                 value={editN}
                                                 onValueChange={setEditN}

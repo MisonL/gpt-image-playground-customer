@@ -71,7 +71,28 @@ describe('normalizeAgentError', () => {
         assert.equal(error.retryAfterSeconds, 15);
         assert.equal(error.upstreamStatus, undefined);
         assert.equal(error.diagnostics?.transport_error, true);
+        assert.equal(error.diagnostics?.transport_error_kind, 'unknown_transport');
         assert.equal(error.diagnostics?.channel_cooldown_scope, 'channel');
+    });
+
+    it('classifies transport failures into machine-readable kinds', () => {
+        assert.equal(
+            normalizeAgentError(Object.assign(new Error('fetch failed'), { code: 'ENOTFOUND' })).diagnostics
+                ?.transport_error_kind,
+            'dns'
+        );
+        assert.equal(
+            normalizeAgentError(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })).diagnostics
+                ?.transport_error_kind,
+            'socket_closed'
+        );
+        assert.equal(
+            normalizeAgentError(Object.assign(new Error('流式图片响应未返回最终图片 b64_json。'), {
+                name: 'MissingFinalImageStreamResultError',
+                status: 502
+            })).diagnostics?.transport_error_kind,
+            'sse_final_missing'
+        );
     });
 
     it('adds sanitized upstream diagnostics without inventing an HTTP status', () => {
@@ -86,7 +107,12 @@ describe('normalizeAgentError', () => {
             {
                 elapsed_ms: 1234,
                 selected_channel_id: 'channel-a',
-                upstream_host: 'api.example.test'
+                upstream_host: 'api.example.test',
+                retry_after_ms: 15000,
+                cooldown_until: '2026-06-11T00:00:15.000Z',
+                cooldown_target: {
+                    channel_id: 'channel-a'
+                }
             }
         );
         const body = createAgentErrorBody(error, 'request-2');
@@ -96,6 +122,9 @@ describe('normalizeAgentError', () => {
         assert.equal(body.error.diagnostics?.selected_channel_id, 'channel-a');
         assert.equal(body.error.diagnostics?.upstream_host, 'api.example.test');
         assert.equal(body.error.diagnostics?.transport_error, true);
+        assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
+        assert.equal(body.error.diagnostics?.cooldown_until, '2026-06-11T00:00:15.000Z');
+        assert.deepEqual(body.error.diagnostics?.cooldown_target, { channel_id: 'channel-a' });
         assert.deepEqual(body.error.diagnostics?.response_headers, { 'cf-ray': 'abc-SJC' });
         assert.equal(JSON.stringify(body).includes('secret'), false);
     });

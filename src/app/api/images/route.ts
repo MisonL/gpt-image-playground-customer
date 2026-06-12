@@ -11,6 +11,11 @@ import {
     readStorageMode,
     validateApiBaseUrl
 } from '@/lib/image-request-utils';
+import {
+    mergeUpstreamHeadersWithFixed,
+    readImageUpstreamProfile,
+    type PartialImagesCount
+} from '@/lib/image-upstream-profile';
 import { handleEditImageMode, handleGenerateImageMode } from '@/lib/image-route-mode-handlers';
 import {
     assertResponsesImageBackendAllowed,
@@ -40,6 +45,7 @@ import {
 } from '@/lib/image-upstream-strategy';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { getServerChannelState } from '@/lib/server-channel-router';
+import { createOpenAIImageClientOptions } from '@/lib/openai-image-transport';
 import type { StreamingAvailabilityKey, StreamingOperation } from '@/lib/streaming-availability';
 import { buildAccessCookie, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
 import crypto from 'crypto';
@@ -77,6 +83,11 @@ function readErrorCode(error: unknown): string | undefined {
         return typeof nested.code === 'string' ? nested.code : undefined;
     }
     return undefined;
+}
+
+function toPartialImagesCount(value: number): PartialImagesCount {
+    if (value === 0 || value === 1 || value === 2 || value === 3 || value === 4) return value;
+    throw new RequestValidationError('partial_images 必须在 0 到 4 之间。');
 }
 
 function createAvailabilityKey(input: StreamResolutionInput): StreamingAvailabilityKey {
@@ -195,6 +206,9 @@ export async function POST(request: NextRequest) {
         const {
             apiKey: effectiveApiKey,
             baseUrl: effectiveApiBaseUrl,
+            upstreamProfile: effectiveUpstreamProfileId,
+            providerProfile,
+            upstreamHeaders,
             selectedCredential
         } = resolveEffectiveCredential({
             requestApiKey,
@@ -218,10 +232,20 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const openai = new OpenAI({
-            apiKey: effectiveApiKey,
-            baseURL: effectiveApiBaseUrl || undefined
-        });
+        const openai = new OpenAI(
+            createOpenAIImageClientOptions({
+                apiKey: effectiveApiKey,
+                baseURL: effectiveApiBaseUrl || undefined,
+                defaultHeaders: mergeUpstreamHeadersWithFixed(upstreamHeaders, {})
+            })
+        );
+        const upstreamProfile =
+            providerProfile ||
+            readImageUpstreamProfile({
+                explicitProfile: effectiveUpstreamProfileId,
+                channelId: selectedCredential?.channelId,
+                baseUrl: effectiveApiBaseUrl
+            });
 
         const effectiveStorageMode = readStorageMode(process.env);
         appLogger.info(`实际图片存储模式：${effectiveStorageMode}`, requestLogContext);
@@ -262,7 +286,9 @@ export async function POST(request: NextRequest) {
         );
 
         const streamMode = readImageStreamMode(formData, process.env);
-        const partialImagesCount = readCount(formData, 'partial_images', 2, 1, 3) as 1 | 2 | 3;
+        const partialImagesCount = toPartialImagesCount(
+            readCount(formData, 'partial_images', 2, upstreamProfile.partialImages.min, upstreamProfile.partialImages.max)
+        );
         const imageBackend = readImageGenerationBackend(formData, process.env, {
             useEnvDefault: mode === 'generate'
         });
@@ -288,7 +314,9 @@ export async function POST(request: NextRequest) {
             streamMode,
             streamEnabled: streamResolution.streamEnabled,
             streamFallbackEnabled: streamResolution.streamFallbackEnabled,
-            streamingMarkedUnavailable: streamResolution.streamingMarkedUnavailable
+            streamingMarkedUnavailable: streamResolution.streamingMarkedUnavailable,
+            upstreamProfile: upstreamProfile.id,
+            upstreamExtraHeaders: Boolean(upstreamHeaders)
         });
 
         const modeResult =
@@ -300,6 +328,8 @@ export async function POST(request: NextRequest) {
                       prompt,
                       streamEnabled: streamResolution.streamEnabled,
                       partialImagesCount,
+                      upstreamProfile,
+                      upstreamHeaders,
                       imageBackend,
                       storageMode: effectiveStorageMode,
                       apiBaseUrl: effectiveApiBaseUrl,
@@ -327,6 +357,8 @@ export async function POST(request: NextRequest) {
                       prompt,
                       streamEnabled: streamResolution.streamEnabled,
                       partialImagesCount,
+                      upstreamProfile,
+                      upstreamHeaders,
                       imageBackend,
                       storageMode: effectiveStorageMode,
                       apiBaseUrl: effectiveApiBaseUrl,
@@ -362,6 +394,7 @@ export async function POST(request: NextRequest) {
                 includeBase64: true,
                 apiBaseUrl: effectiveApiBaseUrl,
                 apiKey: effectiveApiKey,
+                upstreamHeaders,
                 abortSignal: request.signal
             });
             const savedImagesData = savedImages.map((image) => ({

@@ -24,13 +24,15 @@ function createSizedImageFile(size: number, name: string): File {
 
 function createResponsesClient(
     handler: (
-        params: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming
+        params: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming,
+        options?: OpenAI.RequestOptions
     ) => Promise<ResponsesPayload | AsyncIterable<unknown>>
 ): ResponsesClient {
     const create = (async (
-        params: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming
+        params: OpenAI.Responses.ResponseCreateParamsNonStreaming | OpenAI.Responses.ResponseCreateParamsStreaming,
+        options?: OpenAI.RequestOptions
     ): Promise<ResponsesPayload | AsyncIterable<unknown>> => {
-        return handler(params);
+        return handler(params, options);
     }) as ResponsesClient['create'];
     return { create };
 }
@@ -38,9 +40,11 @@ function createResponsesClient(
 describe('generateImageWithResponsesBackend', () => {
     it('calls the Responses API image_generation tool and reads image_generation_call.result', async () => {
         let capturedParams: unknown;
+        let capturedOptions: OpenAI.RequestOptions | undefined;
         const result = await generateImageWithResponsesBackend({
-            responses: createResponsesClient(async (params) => {
+            responses: createResponsesClient(async (params, options) => {
                 capturedParams = params;
+                capturedOptions = options;
                 return {
                     output: [
                         {
@@ -64,6 +68,8 @@ describe('generateImageWithResponsesBackend', () => {
 
         assert.deepEqual(result.data, [{ b64_json: PNG_BASE64 }]);
         assert.deepEqual(result.usage, { input_tokens: 1, output_tokens: 2, total_tokens: 3 });
+        assert.equal(capturedOptions?.timeout, 900_000);
+        assert.equal(capturedOptions?.maxRetries, 0);
         assert.deepEqual(capturedParams, {
             model: 'gpt-4.1',
             input: 'draw a test image',
@@ -309,6 +315,7 @@ describe('generateImageWithResponsesBackend', () => {
 
     it('calls the Responses API image_generation tool in streaming mode with partial images enabled', async () => {
         let capturedParams: unknown;
+        let capturedOptions: OpenAI.RequestOptions | undefined;
         const streamEvents = async function* () {
             yield {
                 type: 'response.output_item.done',
@@ -317,8 +324,9 @@ describe('generateImageWithResponsesBackend', () => {
         };
 
         const stream = await createResponsesImageStream({
-            responses: createResponsesClient(async (params) => {
+            responses: createResponsesClient(async (params, options) => {
                 capturedParams = params;
+                capturedOptions = options;
                 return streamEvents();
             }),
             prompt: 'draw a streaming test image',
@@ -333,6 +341,8 @@ describe('generateImageWithResponsesBackend', () => {
         });
 
         assert.equal(typeof stream[Symbol.asyncIterator], 'function');
+        assert.equal(capturedOptions?.timeout, 900_000);
+        assert.equal(capturedOptions?.maxRetries, 0);
         assert.deepEqual(capturedParams, {
             model: 'gpt-4.1',
             input: 'draw a streaming test image',

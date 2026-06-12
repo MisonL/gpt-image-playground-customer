@@ -6,12 +6,22 @@ import http from 'node:http';
 
 describe('probeChannelModelsEndpoint', () => {
     it('checks the non-billable models endpoint with the selected credential', async () => {
-        const calls: Array<{ method?: string; url?: string; authorization?: string }> = [];
+        const calls: Array<{
+            method?: string;
+            url?: string;
+            authorization?: string;
+            accept?: string | string[];
+            appId?: string | string[];
+            appSecret?: string | string[];
+        }> = [];
         const upstream = await startModelsUpstream((request, response) => {
             calls.push({
                 method: request.method,
                 url: request.url,
-                authorization: request.headers.authorization
+                authorization: request.headers.authorization,
+                accept: request.headers.accept,
+                appId: request.headers['x-app-id'],
+                appSecret: request.headers['x-app-secret']
             });
             response.writeHead(200, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
@@ -23,7 +33,14 @@ describe('probeChannelModelsEndpoint', () => {
                     id: 'official#0',
                     channelId: 'official',
                     apiKey: 'sk-test',
-                    baseUrl: upstream.baseUrl
+                    baseUrl: upstream.baseUrl,
+                    upstreamProfile: 'matsca',
+                    upstreamHeaders: {
+                        Authorization: 'Bearer wrong-key',
+                        Accept: 'text/plain',
+                        'X-App-ID': 'app-id',
+                        'X-App-Secret': 'app-secret'
+                    }
                 },
                 timeoutMs: 5000
             });
@@ -33,7 +50,10 @@ describe('probeChannelModelsEndpoint', () => {
                 {
                     method: 'GET',
                     url: '/v1/models',
-                    authorization: 'Bearer sk-test'
+                    authorization: 'Bearer sk-test',
+                    accept: 'application/json',
+                    appId: 'app-id',
+                    appSecret: 'app-secret'
                 }
             ]);
         } finally {
@@ -53,7 +73,8 @@ describe('probeChannelModelsEndpoint', () => {
                     id: 'official#0',
                     channelId: 'official',
                     apiKey: 'sk-test',
-                    baseUrl: upstream.baseUrl
+                    baseUrl: upstream.baseUrl,
+                    upstreamProfile: 'openai-compatible'
                 },
                 timeoutMs: 5000
             });

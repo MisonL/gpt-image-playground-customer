@@ -25,10 +25,28 @@ export type AgentErrorDiagnostics = {
     upstream_event_type?: string;
     partial_image_count?: number;
     transport_error?: boolean;
+    transport_error_kind?: AgentTransportErrorKind;
     retry_after_seconds?: number;
+    retry_after_ms?: number;
+    cooldown_until?: string;
+    cooldown_target?: {
+        channel_id: string;
+        credential_id?: string;
+    };
     channel_cooldown_scope?: 'credential' | 'channel';
     response_headers?: Record<string, string>;
 };
+
+export type AgentTransportErrorKind =
+    | 'dns'
+    | 'tls'
+    | 'connect_timeout'
+    | 'connection_refused'
+    | 'socket_closed'
+    | 'upstream_timeout'
+    | 'sse_final_missing'
+    | 'fetch_failed'
+    | 'unknown_transport';
 
 export type AgentErrorBody = {
     error: {
@@ -111,6 +129,7 @@ function buildDiagnostics(error: unknown, input: ErrorDiagnosticsInput = {}): Ag
     const upstreamEventType = base.upstream_event_type ?? readStringField(error, 'upstreamEventType');
     const partialImageCount = base.partial_image_count ?? readNumberField(error, 'partialImageCount');
     const transportError = base.transport_error ?? (isTransportError(error) || undefined);
+    const transportErrorKind = base.transport_error_kind ?? classifyTransportErrorKind(error);
     const responseHeaders = base.response_headers ?? readWhitelistedHeaders(error);
     return cleanDiagnostics({
         ...base,
@@ -119,6 +138,7 @@ function buildDiagnostics(error: unknown, input: ErrorDiagnosticsInput = {}): Ag
         ...(partialImageCount !== undefined ? { partial_image_count: partialImageCount } : {}),
         ...(retryAfterSecondsValue !== undefined ? { retry_after_seconds: retryAfterSecondsValue } : {}),
         ...(transportError !== undefined ? { transport_error: transportError } : {}),
+        ...(transportErrorKind !== undefined ? { transport_error_kind: transportErrorKind } : {}),
         ...(responseHeaders ? { response_headers: responseHeaders } : {})
     });
 }
@@ -134,6 +154,10 @@ function cleanDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): Agent
         diagnostics.partial_image_count !== undefined
             ? normalizeNonNegativeInteger(diagnostics.partial_image_count)
             : undefined;
+    const retryAfterMs =
+        diagnostics.retry_after_ms !== undefined
+            ? normalizeNonNegativeInteger(diagnostics.retry_after_ms)
+            : undefined;
     const cleaned: AgentErrorDiagnostics = {
         ...(diagnostics.elapsed_ms !== undefined ? { elapsed_ms: Math.max(0, Math.round(diagnostics.elapsed_ms)) } : {}),
         ...(diagnostics.selected_channel_id ? { selected_channel_id: diagnostics.selected_channel_id } : {}),
@@ -142,7 +166,11 @@ function cleanDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): Agent
         ...(diagnostics.upstream_event_type ? { upstream_event_type: diagnostics.upstream_event_type } : {}),
         ...(partialImageCount !== undefined ? { partial_image_count: partialImageCount } : {}),
         ...(diagnostics.transport_error !== undefined ? { transport_error: diagnostics.transport_error } : {}),
+        ...(diagnostics.transport_error_kind ? { transport_error_kind: diagnostics.transport_error_kind } : {}),
         ...(retryAfterSeconds !== undefined ? { retry_after_seconds: retryAfterSeconds } : {}),
+        ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
+        ...(diagnostics.cooldown_until ? { cooldown_until: diagnostics.cooldown_until } : {}),
+        ...(diagnostics.cooldown_target ? { cooldown_target: diagnostics.cooldown_target } : {}),
         ...(diagnostics.channel_cooldown_scope ? { channel_cooldown_scope: diagnostics.channel_cooldown_scope } : {}),
         ...(responseHeaders ? { response_headers: responseHeaders } : {})
     };
@@ -253,6 +281,8 @@ function inferValidationDetails(message: string): Record<string, unknown> | unde
         fields.size = message;
     } else if (lowerMessage.includes('quality')) {
         fields.quality = message;
+    } else if (lowerMessage.includes('partial_images')) {
+        fields.partial_images = message;
     }
     return Object.keys(fields).length > 0 ? { fields } : undefined;
 }
@@ -269,6 +299,46 @@ function isTransportError(error: unknown): boolean {
         .toLowerCase()
         .replace(/[.!?]+$/, '');
     return message.includes('connection error') || message.includes('request timed out') || message.includes('fetch failed');
+}
+
+function classifyTransportErrorKind(error: unknown): AgentTransportErrorKind | undefined {
+    const name = readStringField(error, 'name') || readConstructorName(error);
+    const code = readStringField(error, 'code') || readCauseChainString(error, 'code');
+    const message = (readStringField(error, 'message') || '')
+        .trim()
+        .toLowerCase();
+
+    if (
+        name === 'MissingFinalImageStreamResultError' ||
+        message.includes('未返回最终图片') ||
+        message.includes('missing final') ||
+        message.includes('final image')
+    ) {
+        return 'sse_final_missing';
+    }
+    if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'dns';
+    if (
+        code === 'CERT_HAS_EXPIRED' ||
+        code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+        code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+        message.includes('certificate') ||
+        message.includes('tls')
+    ) {
+        return 'tls';
+    }
+    if (code === 'ECONNREFUSED') return 'connection_refused';
+    if (code === 'ECONNRESET' || message.includes('socket hang up') || message.includes('other side closed')) {
+        return 'socket_closed';
+    }
+    if (name === 'APIConnectionTimeoutError' || code === 'ETIMEDOUT' || message.includes('connect timeout')) {
+        return 'connect_timeout';
+    }
+    if (message.includes('request timed out') || message.includes('upstream timeout') || message.includes('timeout')) {
+        return 'upstream_timeout';
+    }
+    if (message.includes('fetch failed')) return 'fetch_failed';
+    if (isTransportError(error)) return 'unknown_transport';
+    return undefined;
 }
 
 function readConstructorName(error: unknown): string | undefined {

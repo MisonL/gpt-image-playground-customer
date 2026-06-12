@@ -1,5 +1,8 @@
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
+import { readImageStreamDataIntervalTimeoutMs } from './openai-image-transport';
+import { withStreamDataIntervalTimeout } from './stream-data-interval-timeout';
+import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
@@ -22,8 +25,10 @@ export async function collectOpenAiImagesFromStream(
     options: {
         apiBaseUrl?: string;
         apiKey?: string;
+        upstreamHeaders?: UpstreamRequestHeaders;
         abortSignal?: AbortSignal;
         onStreamingDegraded?: (reason: string) => void;
+        streamDataIntervalTimeoutMs?: number;
     } = {}
 ): Promise<OpenAI.Images.ImagesResponse> {
     const data: Array<{ b64_json: string }> = [];
@@ -32,7 +37,10 @@ export async function collectOpenAiImagesFromStream(
     let upstreamEventType: string | undefined;
     let partialImageCount = 0;
 
-    for await (const event of stream) {
+    for await (const event of withStreamDataIntervalTimeout(
+        stream,
+        options.streamDataIntervalTimeoutMs ?? readImageStreamDataIntervalTimeoutMs()
+    )) {
         const diagnostics = normalizeUpstreamImageStreamEventWithDiagnostics(event);
         if (diagnostics.providerDialect === 'sdk_parsed_fallback') {
             options.onStreamingDegraded?.('json_final_fallback');
@@ -56,6 +64,7 @@ export async function collectOpenAiImagesFromStream(
                               imageUrl: normalizedEvent.imageUrl,
                               apiBaseUrl: options.apiBaseUrl,
                               apiKey: options.apiKey,
+                              upstreamHeaders: options.upstreamHeaders,
                               abortSignal: options.abortSignal
                           })
                         : undefined);

@@ -152,6 +152,7 @@ describe('WorkbenchProDock', () => {
                     onEnableParallelBatchChange={setEnableParallelBatch}
                     parallelBatchTargetCount={1}
                     allowResponsesImageBackend
+                    upstreamProfileMixed
                     hasDefaultResponsesModel
                     imageBackend='server-default'
                     onImageBackendChange={setImageBackend}
@@ -172,6 +173,7 @@ describe('WorkbenchProDock', () => {
         assert.match(html, /流式兼容模式/);
         assert.match(html, /影响说明/);
         assert.match(html, /服务端默认会沿用当前部署配置/);
+        assert.match(html, /当前服务端渠道包含不同上游模式/);
         assert.match(html, /费用主要由模型、尺寸、数量和预览图数量决定/);
     });
 

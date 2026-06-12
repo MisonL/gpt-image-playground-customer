@@ -291,6 +291,53 @@ describe('createImageStreamResponse', () => {
         }
     });
 
+    it('fails explicitly when the page SSE upstream stream stays idle past the configured interval', async () => {
+        const originalTimeout = process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS;
+        process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS = '1';
+        let returnCalled = false;
+        const stream: AsyncIterable<unknown> = {
+            [Symbol.asyncIterator]() {
+                return {
+                    next: () => new Promise<IteratorResult<unknown>>(() => {}),
+                    return: async () => {
+                        returnCalled = true;
+                        return { done: true, value: undefined };
+                    }
+                };
+            }
+        };
+
+        try {
+            const response = createImageStreamResponse({
+                stream,
+                modeLabel: '生成',
+                outputFormat: 'png',
+                storageMode: 'indexeddb',
+                apiKey: 'test-key',
+                model: 'gpt-image-2',
+                startedAtMs: 1000,
+                resolveActualCost,
+                logProviderDiagnostics: false
+            });
+
+            const events = await readSseEvents(response);
+
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['error']
+            );
+            assert.match(String(events[0].error), /图片流式上游超过 1ms 未返回数据/);
+            assert.equal(events[0].status, 502);
+            assert.equal(returnCalled, true);
+        } finally {
+            if (originalTimeout === undefined) {
+                delete process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS;
+            } else {
+                process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS = originalTimeout;
+            }
+        }
+    });
+
     it('deduplicates repeated Responses final image items by item id', async () => {
         const response = createImageStreamResponse({
             stream: upstreamEvents([

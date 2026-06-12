@@ -1,4 +1,5 @@
 import { RequestValidationError } from './image-request-utils';
+import { mergeUpstreamHeadersWithFixed, type UpstreamRequestHeaders } from './image-upstream-profile';
 
 const MAX_REMOTE_IMAGE_BYTES = 25 * 1024 * 1024;
 const REMOTE_IMAGE_DOWNLOAD_TIMEOUT_MS = 30000;
@@ -40,6 +41,7 @@ export async function downloadSameOriginImageAsBase64(input: {
     imageUrl: string;
     apiBaseUrl?: string;
     apiKey?: string;
+    upstreamHeaders?: UpstreamRequestHeaders;
     abortSignal?: AbortSignal;
 }): Promise<string> {
     const url = resolveSameOriginImageUrl(input.imageUrl, input.apiBaseUrl);
@@ -49,7 +51,7 @@ export async function downloadSameOriginImageAsBase64(input: {
     input.abortSignal?.addEventListener('abort', abortListener, { once: true });
     try {
         const response = await fetch(url, {
-            headers: input.apiKey ? { Authorization: `Bearer ${input.apiKey}` } : undefined,
+            headers: buildDownloadHeaders(input.apiKey, input.upstreamHeaders),
             signal: controller.signal
         });
         if (!response.ok) {
@@ -78,6 +80,16 @@ export async function downloadSameOriginImageAsBase64(input: {
         clearTimeout(timeout);
         input.abortSignal?.removeEventListener('abort', abortListener);
     }
+}
+
+function buildDownloadHeaders(
+    apiKey: string | undefined,
+    upstreamHeaders: UpstreamRequestHeaders | undefined
+): UpstreamRequestHeaders | undefined {
+    const headers = apiKey
+        ? mergeUpstreamHeadersWithFixed(upstreamHeaders, { Authorization: `Bearer ${apiKey}` })
+        : { ...(upstreamHeaders || {}) };
+    return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 async function readBoundedResponseBody(response: Response): Promise<Buffer> {
