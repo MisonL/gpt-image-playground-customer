@@ -1,5 +1,6 @@
 import { createChannelHealthProber, type ChannelHealthProber } from './channel-health-prober';
 import { createChannelRouter, parseChannelPoolConfig } from './channel-router';
+import { createChannelCapacityQueue } from './channel-capacity-queue';
 import { readBooleanEnv, readPositiveIntegerEnv } from './server-runtime';
 import { createStreamingAvailabilityRegistry } from './streaming-availability';
 
@@ -7,6 +8,8 @@ const DEFAULT_CHANNEL_FAILURE_COOLDOWN_MS = 30_000;
 const DEFAULT_CHANNEL_RECOVERY_PROBE_INTERVAL_MS = 60_000;
 const DEFAULT_CHANNEL_RECOVERY_PROBE_TIMEOUT_MS = 5_000;
 const DEFAULT_CHANNEL_RECOVERY_PROBE_MAX_PER_TICK = 1;
+const DEFAULT_CHANNEL_QUEUE_MAX_WAIT_MS = 420_000;
+const DEFAULT_CHANNEL_QUEUE_MAX_SIZE = 50;
 
 let cachedServerChannelState: ReturnType<typeof createServerChannelState> | undefined;
 
@@ -26,6 +29,18 @@ export function resetServerChannelStateForTests(): void {
 
 function createServerChannelState() {
     const config = parseChannelPoolConfig(process.env);
+    const maxStreamsPerCredential = readPositiveIntegerEnv(process.env, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1);
+    const channelQueueEnabled = readBooleanEnvDefault(process.env, 'OPENAI_CHANNEL_QUEUE_ENABLED', true);
+    const channelQueueMaxWaitMs = readPositiveIntegerEnv(
+        process.env,
+        'OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS',
+        DEFAULT_CHANNEL_QUEUE_MAX_WAIT_MS
+    );
+    const channelQueueMaxSize = readPositiveIntegerEnv(
+        process.env,
+        'OPENAI_CHANNEL_QUEUE_MAX_SIZE',
+        DEFAULT_CHANNEL_QUEUE_MAX_SIZE
+    );
     const failureCooldownEnabled = readBooleanEnvDefault(process.env, 'OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED', true);
     const failureCooldownMs = readPositiveIntegerEnv(
         process.env,
@@ -60,6 +75,12 @@ function createServerChannelState() {
         channelRecovery: { failureCooldownEnabled, failureCooldownMs, requireProbeForRecovery },
         channelRecoveryProber,
         stopChannelRecoveryProbeScheduler,
+        channelCapacityQueue: createChannelCapacityQueue({
+            enabled: channelQueueEnabled,
+            capacityPerKey: maxStreamsPerCredential,
+            maxWaitMs: channelQueueMaxWaitMs,
+            maxSize: channelQueueMaxSize
+        }),
         streamingAvailability: createStreamingAvailabilityRegistry()
     };
 }

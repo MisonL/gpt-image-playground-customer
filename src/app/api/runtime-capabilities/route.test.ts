@@ -37,6 +37,10 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST;
     delete process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED;
+    delete process.env.OPENAI_CHANNEL_QUEUE_ENABLED;
+    delete process.env.OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS;
+    delete process.env.OPENAI_CHANNEL_QUEUE_MAX_SIZE;
+    delete process.env.OPENAI_MAX_STREAMS_PER_CREDENTIAL;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_INTERVAL_MS;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_TIMEOUT_MS;
@@ -154,6 +158,41 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
 
         assert.equal(body.channelRecovery.failureCooldownEnabled, false);
         assert.equal(body.channelRecovery.failureCooldownMs, 30000);
+        assert.equal(JSON.stringify(body).includes('sk-secret'), false);
+    });
+
+    it('exposes channel queue settings and state without exposing secrets', async () => {
+        process.env.OPENAI_CHANNEL_1_ID = 'official';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://api.openai.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-secret';
+        process.env.OPENAI_MAX_STREAMS_PER_CREDENTIAL = '2';
+        process.env.OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS = '12345';
+        process.env.OPENAI_CHANNEL_QUEUE_MAX_SIZE = '7';
+        process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+        process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as {
+            channelQueue: {
+                enabled: boolean;
+                capacityPerCredential: number;
+                maxWaitMs: number;
+                maxSize: number;
+                active: number;
+                queued: number;
+                credentials: Array<Record<string, unknown>>;
+            };
+        };
+
+        assert.deepEqual(body.channelQueue, {
+            enabled: true,
+            capacityPerCredential: 2,
+            maxWaitMs: 12345,
+            maxSize: 7,
+            active: 0,
+            queued: 0,
+            credentials: []
+        });
         assert.equal(JSON.stringify(body).includes('sk-secret'), false);
     });
 
