@@ -148,6 +148,9 @@ function createReplayStore(artifacts: AgentArtifactRecord[]): AgentStateStore {
         async getRequest() {
             return undefined;
         },
+        async getRequestByIdempotencyKey() {
+            return undefined;
+        },
         async getArtifact() {
             return undefined;
         },

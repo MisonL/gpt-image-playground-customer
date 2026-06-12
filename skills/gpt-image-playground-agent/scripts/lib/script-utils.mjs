@@ -2,11 +2,6 @@ const MAX_RETRY_AFTER_SECONDS = 60;
 const DIGITS_PATTERN = /^\d+$/;
 const IMAGE_SIZE_PATTERN = /^(\d+)x(\d+)$/;
 const LEGACY_IMAGE_SIZES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536']);
-const GPT_IMAGE_2_MIN_PIXELS = 655_360;
-const GPT_IMAGE_2_MAX_PIXELS = 8_294_400;
-const GPT_IMAGE_2_MAX_EDGE = 3840;
-const GPT_IMAGE_2_EDGE_MULTIPLE = 16;
-const GPT_IMAGE_2_MAX_ASPECT = 3;
 
 export function readOptionValue(argv, index, name) {
   const value = argv[index];
@@ -27,6 +22,75 @@ export function readConfiguredPositiveInteger(value, name, fallback) {
     throw new Error(`${name} 必须是正整数。`);
   }
   return parsed;
+}
+
+export function readConfiguredNonNegativeInteger(value, name, fallback) {
+  const rawValue = value === undefined || value === null ? '' : String(value).trim();
+  if (!rawValue) return fallback;
+  if (!DIGITS_PATTERN.test(rawValue)) {
+    throw new Error(`${name} 必须是非负整数。`);
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} 必须是非负整数。`);
+  }
+  return parsed;
+}
+
+export function readCapabilitiesImageTransportTimeoutMs(capabilities, fallback) {
+  const value = capabilities?.image_transport?.upstream_timeout_ms;
+  if (!Number.isSafeInteger(value) || value < 1) return fallback;
+  return Math.max(fallback, value);
+}
+
+export function readPartialImages(value, name = 'partial_images') {
+  const parsed = readConfiguredNonNegativeInteger(value, name, 2);
+  if (parsed < 0 || parsed > 4) {
+    throw new Error(`${name} 必须是 0 到 4 的整数。`);
+  }
+  return parsed;
+}
+
+export function validateAgentGenerateRequestAgainstCapabilities(body, capabilities) {
+  assertNumberWithinCapabilities(body.n, capabilities?.limits?.generate_images, 'n');
+  assertNumberWithinCapabilities(
+    body.partial_images,
+    readPartialImagesLimitForBackend(body.image_backend ?? body.imageBackend, capabilities),
+    'partial_images'
+  );
+}
+
+export function validateAgentEditRequestAgainstCapabilities(input, capabilities) {
+  assertNumberWithinCapabilities(input.n, capabilities?.limits?.edit_images, 'n');
+  assertNumberWithinCapabilities(
+    input.partial_images,
+    readPartialImagesLimitForBackend(input.image_backend ?? input.imageBackend, capabilities),
+    'partial_images'
+  );
+  assertMaxCountWithinCapabilities(input.imageCount, capabilities?.limits?.upload_images?.max, 'image');
+}
+
+function readPartialImagesLimitForBackend(backend, capabilities) {
+  const normalizedBackend =
+    backend === 'responses' || backend === 'responses-image-generation' ? 'responses-image-generation' : 'images-api';
+  return capabilities?.limits?.partial_images_by_backend?.[normalizedBackend] || capabilities?.limits?.partial_images;
+}
+
+function assertNumberWithinCapabilities(value, limits, fieldName) {
+  if (value === undefined || value === null || !limits) return;
+  const min = limits.min;
+  const max = limits.max;
+  if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) return;
+  if (value < min || value > max) {
+    throw new Error(`${fieldName} 必须在当前 capabilities 允许的 ${min} 到 ${max} 之间。`);
+  }
+}
+
+function assertMaxCountWithinCapabilities(value, max, fieldName) {
+  if (value === undefined || value === null || !Number.isSafeInteger(max)) return;
+  if (value > max) {
+    throw new Error(`${fieldName} 数量不能超过当前 capabilities 允许的 ${max}。`);
+  }
 }
 
 export function normalizeBaseUrl(value) {
@@ -63,7 +127,7 @@ export function assertValidImageSizeForModel(value, model, label = 'size') {
   if (value === 'auto') return value;
   const size = parseImageSizeValue(value);
   if (!size) throw new Error(`${label} 必须是 auto 或 WIDTHxHEIGHT。`);
-  assertValidGptImage2Dimensions(size.width, size.height, label);
+  assertPositiveIntegerDimensions(size.width, size.height, label);
   return value;
 }
 
@@ -107,29 +171,11 @@ export function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function assertValidGptImage2Dimensions(width, height, label) {
+function assertPositiveIntegerDimensions(width, height, label) {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new Error(`${label} 的宽度和高度必须是正数。`);
   }
   if (!Number.isInteger(width) || !Number.isInteger(height)) {
     throw new Error(`${label} 的宽度和高度必须是整数。`);
-  }
-  if (width % GPT_IMAGE_2_EDGE_MULTIPLE !== 0 || height % GPT_IMAGE_2_EDGE_MULTIPLE !== 0) {
-    throw new Error(`${label} 的宽边和高边都必须是 ${GPT_IMAGE_2_EDGE_MULTIPLE} 的倍数。`);
-  }
-  if (width > GPT_IMAGE_2_MAX_EDGE || height > GPT_IMAGE_2_MAX_EDGE) {
-    throw new Error(`${label} 的最大单边不能超过 ${GPT_IMAGE_2_MAX_EDGE}px。`);
-  }
-  const long = Math.max(width, height);
-  const short = Math.min(width, height);
-  if (long / short > GPT_IMAGE_2_MAX_ASPECT) {
-    throw new Error(`${label} 的宽高比（长边:短边）必须小于等于 ${GPT_IMAGE_2_MAX_ASPECT}:1。`);
-  }
-  const pixels = width * height;
-  if (pixels < GPT_IMAGE_2_MIN_PIXELS) {
-    throw new Error(`${label} 的总像素必须至少为 ${GPT_IMAGE_2_MIN_PIXELS.toLocaleString()}。`);
-  }
-  if (pixels > GPT_IMAGE_2_MAX_PIXELS) {
-    throw new Error(`${label} 的总像素不能超过 ${GPT_IMAGE_2_MAX_PIXELS.toLocaleString()}。`);
   }
 }

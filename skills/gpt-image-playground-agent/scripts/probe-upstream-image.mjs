@@ -9,8 +9,14 @@ import {
   readConfiguredPositiveInteger,
   readOptionValue
 } from './lib/script-utils.mjs';
+import { completeScriptTiming, startScriptTiming } from './lib/script-summary.mjs';
 
 const HEADER_ALLOWLIST = new Set(['content-type', 'date', 'server', 'cf-ray', 'x-request-id', 'retry-after']);
+const DEFAULT_USER_AGENT = 'gpt-image-playground/probe';
+const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
+const DEFAULT_OUTPUT_FORMAT = 'webp';
+const DEFAULT_OUTPUT_COMPRESSION = 100;
+const scriptTiming = startScriptTiming();
 let options;
 try {
   options = parseArgs(process.argv.slice(2));
@@ -34,10 +40,15 @@ try {
   process.exit(2);
 }
 const apiKey = process.env.GPT_IMAGE_UPSTREAM_API_KEY || process.env.OPENAI_API_KEY || '';
+const userAgent = process.env.OPENAI_UPSTREAM_USER_AGENT || process.env.UPSTREAM_USER_AGENT || DEFAULT_USER_AGENT;
 let timeoutMs;
 try {
   timeoutMs = readConfiguredPositiveInteger(options.timeoutMs, '--timeout-ms', 30000);
   options.size = assertValidImageSizeForModel(options.size, options.model, '--size');
+  if (!OUTPUT_FORMATS.has(normalizeOutputFormat(options.format))) {
+    throw new Error('--format 必须是 png、jpeg 或 webp。');
+  }
+  if (options.outputCompression !== undefined) readOutputCompression(options);
 } catch (error) {
   console.error(errorMessage(error));
   printUsage();
@@ -68,6 +79,7 @@ if (options.allowBillable) {
 }
 
 report.ok = Boolean(report.models.ok && (!report.generation || report.generation.ok));
+report.summary = buildProbeSummary(report);
 console.log(JSON.stringify(report, null, 2));
 process.exit(report.ok ? 0 : 1);
 
@@ -78,7 +90,8 @@ function parseArgs(argv) {
     prompt: 'contract probe',
     size: '1024x1024',
     quality: 'low',
-    format: 'png',
+    format: DEFAULT_OUTPUT_FORMAT,
+    outputCompression: undefined,
     timeoutMs: undefined,
     allowBillable: false,
     help: false
@@ -90,7 +103,8 @@ function parseArgs(argv) {
     else if (arg === '--prompt') parsed.prompt = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--size') parsed.size = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--quality') parsed.quality = readOptionValue(argv, (index += 1), arg);
-    else if (arg === '--format') parsed.format = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--format' || arg === '--output-format') parsed.format = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--output-compression') parsed.outputCompression = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--allow-billable') parsed.allowBillable = true;
     else if (arg === '--help' || arg === '-h') parsed.help = true;
@@ -158,7 +172,8 @@ async function probeGeneration() {
       n: 1,
       size: options.size,
       quality: options.quality,
-      output_format: normalizeOutputFormat(options.format)
+      output_format: normalizeOutputFormat(options.format),
+      ...(readOutputCompression(options) !== undefined ? { output_compression: readOutputCompression(options) } : {})
     })
   });
   return {
@@ -181,6 +196,7 @@ async function fetchJson(url, init) {
       ...init,
       headers: {
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        'User-Agent': userAgent,
         ...(init.headers || {})
       },
       signal: controller.signal
@@ -197,6 +213,36 @@ async function fetchJson(url, init) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function buildProbeSummary(value) {
+  const timing = completeScriptTiming(scriptTiming);
+  const configuredHeaderNames = readProbeConfiguredHeaderNames();
+  return {
+    ok: value.ok,
+    billable: Boolean(value.generation),
+    started_at: timing.started_at,
+    completed_at: timing.completed_at,
+    elapsed_ms: timing.elapsed_ms,
+    transport: 'upstream_probe',
+    endpoint: `${baseUrl}/models`,
+    upstream_host: upstream.host,
+    request_headers: {
+      user_agent_effective: userAgent,
+      has_extra_headers: configuredHeaderNames.some((name) => name !== 'user-agent'),
+      allowed_header_names: ['authorization', 'user-agent'],
+      configured_header_names: configuredHeaderNames
+    },
+    retryable: value.ok ? false : undefined,
+    next_action: value.ok ? 'done' : 'inspect_dns_tls_models'
+  };
+}
+
+function readProbeConfiguredHeaderNames() {
+  const names = [];
+  if (apiKey) names.push('authorization');
+  if (userAgent !== DEFAULT_USER_AGENT) names.push('user-agent');
+  return names.sort();
 }
 
 function summarizeJson(json, text) {
@@ -240,6 +286,18 @@ function readAllowedHeaders(headers) {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function readOutputCompression(parsed) {
+  const outputFormat = normalizeOutputFormat(parsed.format);
+  if (outputFormat === 'png') return undefined;
+  const value = parsed.outputCompression === undefined ? String(DEFAULT_OUTPUT_COMPRESSION) : String(parsed.outputCompression);
+  if (!/^\d+$/.test(value)) throw new Error('--output-compression 必须是 0 到 100 之间的整数。');
+  const parsedValue = Number(value);
+  if (!Number.isInteger(parsedValue) || parsedValue < 0 || parsedValue > 100) {
+    throw new Error('--output-compression 必须是 0 到 100 之间的整数。');
+  }
+  return parsedValue;
+}
+
 function parseJson(text) {
   try {
     return text ? JSON.parse(text) : null;
@@ -251,5 +309,5 @@ function parseJson(text) {
 function printUsage() {
   console.error('用法：probe-upstream-image.mjs [options]');
   console.error('默认只请求 /models；添加 --allow-billable 才会调用 /images/generations。');
-  console.error('常用参数：--base-url --model --prompt --size --quality --format --timeout-ms --allow-billable');
+  console.error('常用参数：--base-url --model --prompt --size --quality --format --output-compression --timeout-ms --allow-billable');
 }

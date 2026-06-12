@@ -2,13 +2,15 @@ import { buildAgentJobStatusResponse, startAgentGenerateJob } from '@/lib/agent-
 import {
     buildGenerateRequestHash,
     parseAgentGenerateRequest,
+    prepareAgentGenerate,
+    resolveExistingAgentRequest,
     readIdempotencyKey
 } from '@/lib/agent-image-service';
 import { readAgentLeaseMs, readAgentRequestTtlSeconds } from '@/lib/agent-api-contracts';
 import { AgentApiError, agentErrorResponse, normalizeAgentError } from '@/lib/api-error-response';
 import { assertAgentAuthorized } from '@/lib/agent-auth';
 import { ensureAgentStateStoreReady } from '@/lib/agent-state-runtime';
-import { createRequestId } from '@/lib/agent-state-store';
+import { createRequestId, type BeginAgentRequestResult } from '@/lib/agent-state-store';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
@@ -17,31 +19,28 @@ export async function POST(request: NextRequest) {
         assertAgentAuthorized(request.headers);
         const imageRequest = await parseAgentGenerateRequest(request);
         const idempotencyKey = readIdempotencyKey(request.headers);
+        const requestHash = buildGenerateRequestHash(imageRequest);
         const store = await ensureAgentStateStoreReady();
+        const existingResponse = jobBeginResultResponse(
+            resolveExistingAgentRequest(
+                await store.getRequestByIdempotencyKey(idempotencyKey),
+                requestHash
+            )
+        );
+        if (existingResponse) return existingResponse;
+        const preparation = prepareAgentGenerate(imageRequest, request.headers);
         const leaseMs = readAgentLeaseMs(process.env);
         const beginResult = await store.beginRequest({
             idempotencyKey,
-            requestHash: buildGenerateRequestHash(imageRequest),
+            requestHash,
             mode: 'generate',
             requestJson: imageRequest,
             leaseMs,
             ttlSeconds: readAgentRequestTtlSeconds(process.env)
         });
 
-        if (beginResult.type === 'conflict') {
-            throw createIdempotencyConflictError();
-        }
-        if (beginResult.type === 'replay' || beginResult.type === 'failed') {
-            requestId = beginResult.record.requestId;
-            return NextResponse.json(buildAgentJobStatusResponse(beginResult.record), {
-                status: 202,
-                headers: { 'X-Idempotent-Replay': 'true', 'X-Request-Id': requestId }
-            });
-        }
-        if (beginResult.type === 'in_progress') {
-            requestId = beginResult.record.requestId;
-            return runningJobResponse(beginResult.record, beginResult.retryAfterSeconds, true);
-        }
+        const storedResponse = jobBeginResultResponse(beginResult);
+        if (storedResponse) return storedResponse;
 
         requestId = beginResult.record.requestId;
         startAgentGenerateJob({
@@ -50,7 +49,8 @@ export async function POST(request: NextRequest) {
             headers: new Headers(request.headers),
             requestId,
             idempotencyKey,
-            leaseMs
+            leaseMs,
+            preparation
         });
         return runningJobResponse(beginResult.record, 5, false);
     } catch (error) {
@@ -65,6 +65,23 @@ function createIdempotencyConflictError(): AgentApiError {
         status: 409,
         retryable: false
     });
+}
+
+function jobBeginResultResponse(beginResult: BeginAgentRequestResult | undefined): NextResponse | undefined {
+    if (!beginResult || beginResult.type === 'acquired') return undefined;
+    if (beginResult.type === 'conflict') {
+        throw createIdempotencyConflictError();
+    }
+    if (beginResult.type === 'replay' || beginResult.type === 'failed') {
+        return NextResponse.json(buildAgentJobStatusResponse(beginResult.record), {
+            status: 202,
+            headers: {
+                'X-Idempotent-Replay': 'true',
+                'X-Request-Id': beginResult.record.requestId
+            }
+        });
+    }
+    return runningJobResponse(beginResult.record, beginResult.retryAfterSeconds, true);
 }
 
 function runningJobResponse(record: Parameters<typeof buildAgentJobStatusResponse>[0], retryAfterSeconds: number, replay: boolean) {

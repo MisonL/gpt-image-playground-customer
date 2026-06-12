@@ -5,6 +5,7 @@ import {
     type ValidOutputFormat
 } from './image-request-utils';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
+import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { createBatchId, createImageFilename, outputDir } from './server-runtime';
 import fs from 'fs/promises';
 import type OpenAI from 'openai';
@@ -63,6 +64,7 @@ export async function persistOpenAiImages(options: {
     batchId?: string;
     apiBaseUrl?: string;
     apiKey?: string;
+    upstreamHeaders?: UpstreamRequestHeaders;
     abortSignal?: AbortSignal;
 }): Promise<PersistedOpenAiImage[]> {
     const result = options.result;
@@ -82,6 +84,7 @@ export async function persistOpenAiImages(options: {
                       imageUrl: imageData.url,
                       apiBaseUrl: options.apiBaseUrl,
                       apiKey: options.apiKey,
+                      upstreamHeaders: options.upstreamHeaders,
                       abortSignal: options.abortSignal
                   })
                 : undefined);

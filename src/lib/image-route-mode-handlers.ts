@@ -2,6 +2,7 @@ import { appLogger } from './app-logger';
 import type { ChannelCredential } from './channel-router';
 import {
     RequestValidationError,
+    assertMaskCompatibility,
     readBackground,
     readCount,
     readEditQuality,
@@ -24,6 +25,12 @@ import {
 import { createImageStreamResponse } from './image-stream-service';
 import { createImagesApiGenerateStream } from './images-api-stream';
 import {
+    mergeUpstreamHeadersWithFixed,
+    type ImageUpstreamProfile,
+    type PartialImagesCount,
+    type UpstreamRequestHeaders
+} from './image-upstream-profile';
+import {
     appendAccessCookie,
     reportServerCredentialFailure,
     resolveRequestActualCostSafely,
@@ -38,6 +45,7 @@ import {
     generateImageWithResponsesBackend,
     type ResponsesImageGenerateInput
 } from './responses-image-backend';
+import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import type OpenAI from 'openai';
 
 type CommonModeInput = {
@@ -46,7 +54,9 @@ type CommonModeInput = {
     model: GptImageModel;
     prompt: string;
     streamEnabled: boolean;
-    partialImagesCount: 1 | 2 | 3;
+    partialImagesCount: PartialImagesCount;
+    upstreamProfile: ImageUpstreamProfile;
+    upstreamHeaders?: UpstreamRequestHeaders;
     storageMode: StorageMode;
     apiBaseUrl?: string;
     apiKey: string;
@@ -104,13 +114,18 @@ type EditOptions = {
     };
 };
 
+function toResponsesPartialImagesCount(value: PartialImagesCount): 1 | 2 | 3 {
+    if (value === 1 || value === 2 || value === 3) return value;
+    throw new RequestValidationError('Responses API 图片后端的 partial_images 必须在 1 到 3 之间。', 400);
+}
+
 function readGenerateOptions(input: CommonModeInput): GenerateOptions {
-    const n = readCount(input.formData, 'n', 1, 1, 10);
-    const size = readSize(input.formData, 'size', '1024x1024', input.model);
+    const n = readCount(input.formData, 'n', 1, input.upstreamProfile.generateCount.min, input.upstreamProfile.generateCount.max);
+    const size = readSize(input.formData, 'size', '1024x1024', input.model, input.upstreamProfile);
     const quality = readGenerateQuality(input.formData);
     const outputFormat = readOutputFormat(input.formData);
     const outputCompression = readOutputCompression(input.formData, outputFormat);
-    const background = readBackground(input.formData, input.model);
+    const background = readBackground(input.formData, input.model, input.upstreamProfile);
     const moderation = readModeration(input.formData);
     const forceWeb = readBooleanAlias(input.formData, 'force_web', 'forceWeb');
     const baseParams: GenerateParams = {
@@ -190,8 +205,11 @@ function readResponsesImageExtensions(
     };
 }
 
-function openAiRequestOptions(input: CommonModeInput): OpenAI.RequestOptions | undefined {
-    return input.abortSignal ? { signal: input.abortSignal } : undefined;
+function openAiRequestOptions(input: CommonModeInput): OpenAI.RequestOptions {
+    return buildOpenAIImageRequestOptions({
+        abortSignal: input.abortSignal,
+        headers: mergeUpstreamHeadersWithFixed(input.upstreamHeaders, {})
+    });
 }
 
 async function createResponsesImageResult(input: CommonModeInput, options: GenerateOptions): Promise<ImageModeResult> {
@@ -258,7 +276,7 @@ async function createResponsesImageStreamResponse(
         outputFormat: options.outputFormat,
         background: options.background,
         moderation: options.moderation,
-        partialImagesCount: input.partialImagesCount,
+        partialImagesCount: toResponsesPartialImagesCount(input.partialImagesCount),
         abortSignal: input.abortSignal,
         ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
         ...readResponsesImageExtensions(input.formData)
@@ -278,6 +296,7 @@ async function createResponsesImageStreamResponse(
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
+        upstreamHeaders: input.upstreamHeaders,
         model: input.model,
         startedAtMs: input.startedAtMs,
         abortSignal: input.abortSignal,
@@ -315,6 +334,7 @@ async function createGenerateStreamResponse(input: CommonModeInput, options: Gen
         stream = await createImagesApiGenerateStream({
             apiBaseUrl: input.apiBaseUrl,
             apiKey: input.apiKey,
+            upstreamHeaders: input.upstreamHeaders,
             abortSignal: input.abortSignal,
             params: streamParams
         });
@@ -330,6 +350,7 @@ async function createGenerateStreamResponse(input: CommonModeInput, options: Gen
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
+        upstreamHeaders: input.upstreamHeaders,
         model: input.model,
         startedAtMs: input.startedAtMs,
         abortSignal: input.abortSignal,
@@ -366,15 +387,15 @@ export async function handleGenerateImageMode(
 }
 
 function readEditOptions(input: CommonModeInput): EditOptions {
-    const n = readCount(input.formData, 'n', 1, 1, 10);
-    const size = readSize(input.formData, 'size', 'auto', input.model);
+    const n = readCount(input.formData, 'n', 1, input.upstreamProfile.editCount.min, input.upstreamProfile.editCount.max);
+    const size = readSize(input.formData, 'size', 'auto', input.model, input.upstreamProfile);
     const quality = readEditQuality(input.formData);
     const outputFormat = readOutputFormat(input.formData);
     const outputCompression = readOutputCompression(input.formData, outputFormat);
     const moderation = readModeration(input.formData);
     const forceWeb = readBooleanAlias(input.formData, 'force_web', 'forceWeb');
-    const imageFiles = readImageFiles(input.formData);
-    const maskFile = readMaskFile(input.formData);
+    const imageFiles = readImageFiles(input.formData, input.upstreamProfile);
+    const maskFile = readMaskFile(input.formData, input.upstreamProfile);
     const baseEditParams: EditOptions['baseEditParams'] = {
         model: input.model,
         prompt: input.prompt,
@@ -463,6 +484,7 @@ async function createEditStreamResponse(input: CommonModeInput, options: EditOpt
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
+        upstreamHeaders: input.upstreamHeaders,
         model: input.model,
         startedAtMs: input.startedAtMs,
         abortSignal: input.abortSignal,
@@ -481,6 +503,7 @@ export async function handleEditImageMode(
     input: CommonModeInput & { imageBackend: ImageBackend }
 ): Promise<ImageModeResult> {
     const options = readEditOptions(input);
+    await assertMaskCompatibility(options.maskFile, options.imageFiles);
     if (input.imageBackend === 'responses-image-generation') {
         if (options.n !== 1) {
             throw new RequestValidationError('Responses API 图片后端当前只支持单张编辑。', 400);
@@ -506,7 +529,7 @@ export async function handleEditImageMode(
             try {
                 stream = await createResponsesImageEditStream({
                     ...responseInput,
-                    partialImagesCount: input.partialImagesCount
+                    partialImagesCount: toResponsesPartialImagesCount(input.partialImagesCount)
                 });
             } catch (error) {
                 if (!input.streamFallbackEnabled) throw error;
@@ -521,6 +544,7 @@ export async function handleEditImageMode(
                 storageMode: input.storageMode,
                 apiBaseUrl: input.apiBaseUrl,
                 apiKey: input.apiKey,
+                upstreamHeaders: input.upstreamHeaders,
                 model: input.model,
                 startedAtMs: input.startedAtMs,
                 abortSignal: input.abortSignal,
