@@ -8,6 +8,7 @@ import {
     resolveEffectiveCredential,
     toPublicChannelFailure
 } from './channel-router';
+import { ChannelCapacityQueueError } from './channel-capacity-queue';
 import { IMAGE_UPSTREAM_PROFILES } from './image-upstream-profile';
 import { RequestValidationError } from './image-request-utils';
 import assert from 'node:assert/strict';
@@ -1118,6 +1119,10 @@ describe('isCredentialFailure', () => {
         assert.equal(isCredentialFailure({ status: 503, error: { code: 'invalid_api_key' } }), true);
         assert.equal(isCredentialFailure({ status: 500, code: 'insufficient_quota' }), true);
     });
+
+    it('does not treat local channel capacity queue errors as credential failures', () => {
+        assert.equal(isCredentialFailure(createCapacityQueueError()), false);
+    });
 });
 
 describe('isChannelFailure', () => {
@@ -1137,6 +1142,10 @@ describe('isChannelFailure', () => {
 
     it('does not treat local validation errors as channel failures even when they use a 500 response', () => {
         assert.equal(isChannelFailure(new RequestValidationError('local config error', 500)), false);
+    });
+
+    it('does not treat local channel capacity queue errors as channel failures', () => {
+        assert.equal(isChannelFailure(createCapacityQueueError()), false);
     });
 
     it('treats upstream connection and timeout failures as channel failures', () => {
@@ -1165,3 +1174,17 @@ describe('isChannelFailure', () => {
         assert.equal(isChannelFailure(messageOnlyConnectionError), true);
     });
 });
+
+function createCapacityQueueError(): ChannelCapacityQueueError {
+    return new ChannelCapacityQueueError({
+        code: 'channel_capacity_queue_timeout',
+        message: '渠道凭证并发队列等待超时，请稍后重试。',
+        status: 429,
+        retryable: true,
+        details: {
+            credential_id: 'official#0',
+            queue_position: 1,
+            max_wait_ms: 420000
+        }
+    });
+}

@@ -17,6 +17,7 @@ import {
     type ImageProviderManifest,
     type ImageProviderManifestSummary
 } from './image-upstream-provider-manifest';
+import { ChannelCapacityQueueError } from './channel-capacity-queue';
 import { RequestValidationError, readPlainHttpApiBaseUrlAllowlist, validateApiBaseUrl } from './image-request-utils';
 
 export type RoutingStrategy = 'sticky' | 'round_robin' | 'random';
@@ -438,6 +439,9 @@ export function resolveEffectiveCredential(options: {
 }
 
 export function isCredentialFailure(error: unknown): boolean {
+    if (error instanceof ChannelCapacityQueueError) {
+        return false;
+    }
     const status = readErrorNumber(error, 'status') ?? readNestedErrorNumber(error, 'status');
     if (status === 401 || status === 403 || status === 429) {
         return true;
@@ -453,6 +457,9 @@ export function isCredentialFailure(error: unknown): boolean {
 }
 
 export function isChannelFailure(error: unknown): boolean {
+    if (error instanceof ChannelCapacityQueueError) {
+        return false;
+    }
     if (error instanceof RequestValidationError || isCredentialFailure(error)) {
         return false;
     }
