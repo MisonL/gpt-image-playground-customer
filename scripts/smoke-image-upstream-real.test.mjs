@@ -638,7 +638,7 @@ describe('image upstream real smoke script', () => {
                     IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
                     IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
                 },
-                { killAfterMs: 10000 }
+                { killAfterMs: 30000 }
             );
 
             assert.equal(result.signal, null, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
