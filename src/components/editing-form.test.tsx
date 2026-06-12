@@ -230,6 +230,17 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*编辑图像[\s\S]*<\/button>/);
     });
 
+    it('keeps the submit footer available outside desktop breakpoints', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            editPrompt: '用户真实编辑要求',
+            imageFiles: [new File(['x'], 'source.png', { type: 'image/png' })]
+        });
+
+        assert.doesNotMatch(html, /data-slot="card-footer" class="[^"]*\bhidden\b[^"]*"/);
+        assert.match(html, /data-slot="card-footer" class="[^"]*\bflex\b[^"]*border-t[^"]*"[\s\S]*编辑图像/);
+    });
+
     it('renders profile-aware high resolution edit size presets', () => {
         const openAiHtml = renderEditingForm({ backend: 'server-default' });
         const matscaHtml = renderEditingForm({

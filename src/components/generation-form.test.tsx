@@ -226,6 +226,13 @@ describe('GenerationForm advanced groups', () => {
         assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*生成图像[\s\S]*<\/button>/);
     });
 
+    it('keeps the submit footer available outside desktop breakpoints', () => {
+        const html = renderGenerationForm();
+
+        assert.doesNotMatch(html, /data-slot="card-footer" class="[^"]*\bhidden\b[^"]*"/);
+        assert.match(html, /data-slot="card-footer" class="[^"]*\bflex\b[^"]*border-t[^"]*"[\s\S]*生成图像/);
+    });
+
     it('allows Responses generation when the runtime has a default top-level model', () => {
         const html = renderGenerationForm({
             defaultAdvancedOpen: true,
