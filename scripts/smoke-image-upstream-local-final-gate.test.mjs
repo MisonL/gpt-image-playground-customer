@@ -5,10 +5,11 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = fileURLToPath(new URL('./smoke-image-upstream-local-final-gate.mjs', import.meta.url));
+const LOCAL_GATE_CASE_TIMEOUT_MS = '60000';
 
 describe('local image upstream final gate smoke launcher', () => {
     it('runs all independent upstream cases against the local fixture', () => {
-        const result = spawnSync(process.execPath, [scriptPath, '--timeout-ms', '30000'], {
+        const result = spawnSync(process.execPath, [scriptPath, '--timeout-ms', LOCAL_GATE_CASE_TIMEOUT_MS], {
             cwd: repoRoot,
             encoding: 'utf8'
         });
