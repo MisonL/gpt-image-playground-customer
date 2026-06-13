@@ -15,6 +15,29 @@ function readButtonById(html: string, id: string): string {
     return match[0];
 }
 
+function readSubmitFooterClass(html: string, submitLabel: string): string {
+    const footerPattern = /<div(?=[^>]*data-slot="card-footer")(?=[^>]*class="([^"]*)")[^>]*>/g;
+    const footers = [...html.matchAll(footerPattern)];
+
+    for (const [index, footer] of footers.entries()) {
+        const start = footer.index;
+        const end = footers[index + 1]?.index ?? html.length;
+        const footerHtml = html.slice(start, end);
+        if (footerHtml.includes(submitLabel)) return footer[1];
+    }
+
+    assert.fail(`missing submit footer for ${submitLabel}`);
+}
+
+function assertSubmitFooterAvailable(html: string, submitLabel: string) {
+    const classNames = readSubmitFooterClass(html, submitLabel).split(/\s+/);
+    const hiddenClassName = classNames.find((className) => className === 'hidden' || className.endsWith(':hidden'));
+
+    assert.equal(hiddenClassName, undefined);
+    assert.equal(classNames.includes('flex'), true);
+    assert.equal(classNames.includes('border-t'), true);
+}
+
 function renderGenerationForm(
     options: {
         currentMode?: 'generate' | 'edit' | 'batch' | 'reuse';
@@ -113,6 +136,14 @@ function renderGenerationForm(
         </I18nProvider>
     );
 }
+
+describe('GenerationForm submit footer', () => {
+    it('keeps the submit footer available outside desktop breakpoints', () => {
+        const html = renderGenerationForm();
+
+        assertSubmitFooterAvailable(html, '生成图像');
+    });
+});
 
 describe('GenerationForm advanced groups', () => {
     it('shows task-specific descriptions in the mode segmented control', () => {
@@ -224,13 +255,6 @@ describe('GenerationForm advanced groups', () => {
 
         assert.match(html, /Responses image_generation 需要填写 GPT 顶层模型/);
         assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*生成图像[\s\S]*<\/button>/);
-    });
-
-    it('keeps the submit footer available outside desktop breakpoints', () => {
-        const html = renderGenerationForm();
-
-        assert.doesNotMatch(html, /data-slot="card-footer" class="[^"]*\bhidden\b[^"]*"/);
-        assert.match(html, /data-slot="card-footer" class="[^"]*\bflex\b[^"]*border-t[^"]*"[\s\S]*生成图像/);
     });
 
     it('allows Responses generation when the runtime has a default top-level model', () => {
