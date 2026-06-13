@@ -29,6 +29,29 @@ type RenderOptions = {
 
 const noop = () => {};
 
+function readSubmitFooterClass(html: string, submitLabel: string): string {
+    const footerPattern = /<div(?=[^>]*data-slot="card-footer")(?=[^>]*class="([^"]*)")[^>]*>/g;
+    const footers = [...html.matchAll(footerPattern)];
+
+    for (const [index, footer] of footers.entries()) {
+        const start = footer.index;
+        const end = footers[index + 1]?.index ?? html.length;
+        const footerHtml = html.slice(start, end);
+        if (footerHtml.includes(submitLabel)) return footer[1];
+    }
+
+    assert.fail(`missing submit footer for ${submitLabel}`);
+}
+
+function assertSubmitFooterAvailable(html: string, submitLabel: string) {
+    const classNames = readSubmitFooterClass(html, submitLabel).split(/\s+/);
+    const hiddenClassName = classNames.find((className) => className === 'hidden' || className.endsWith(':hidden'));
+
+    assert.equal(hiddenClassName, undefined);
+    assert.equal(classNames.includes('flex'), true);
+    assert.equal(classNames.includes('border-t'), true);
+}
+
 function renderEditingForm({
     backend,
     outputFormat = 'png',
@@ -131,6 +154,18 @@ function renderEditingForm({
     );
 }
 
+describe('EditingForm submit footer', () => {
+    it('keeps the submit footer available outside desktop breakpoints', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            editPrompt: '用户真实编辑要求',
+            imageFiles: [new File(['x'], 'source.png', { type: 'image/png' })]
+        });
+
+        assertSubmitFooterAvailable(html, '编辑图像');
+    });
+});
+
 describe('EditingForm advanced upstream controls', () => {
     it('keeps the full professional accordion available on desktop and mobile', () => {
         const html = renderEditingForm({ backend: 'server-default', advancedTab: 'route' });
@@ -228,17 +263,6 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(html, /9 \/ 8 张/);
         assert.match(html, /最多只能选择 8 张图片。/);
         assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*编辑图像[\s\S]*<\/button>/);
-    });
-
-    it('keeps the submit footer available outside desktop breakpoints', () => {
-        const html = renderEditingForm({
-            backend: 'server-default',
-            editPrompt: '用户真实编辑要求',
-            imageFiles: [new File(['x'], 'source.png', { type: 'image/png' })]
-        });
-
-        assert.doesNotMatch(html, /data-slot="card-footer" class="[^"]*\bhidden\b[^"]*"/);
-        assert.match(html, /data-slot="card-footer" class="[^"]*\bflex\b[^"]*border-t[^"]*"[\s\S]*编辑图像/);
     });
 
     it('renders profile-aware high resolution edit size presets', () => {
