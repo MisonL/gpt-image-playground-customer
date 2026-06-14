@@ -5,7 +5,7 @@ app_port: 4783
 
 # GPT Image Playground
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Version](https://img.shields.io/badge/version-2.1.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-339933)
 
@@ -96,8 +96,12 @@ start-windows.bat
 | `AGENT_API_TOKEN` | 设置后，`/api/agent/*` 需要 Bearer token。 |
 | `NEXT_PUBLIC_IMAGE_STORAGE_MODE` | 图片存储模式：`fs` 或 `indexeddb`。 |
 | `AGENT_STATE_BACKEND` | Agent 状态后端：`memory`、`sqlite` 或 `postgres`。 |
-| `IMAGE_STREAMING_STRATEGY` | 默认流式策略：`off`、`auto`、`openai-sse` 等。 |
-| `IMAGE_GENERATION_BACKEND` | 默认图片后端：`images-api` 或 `responses-image-generation`。 |
+| `IMAGE_STREAMING_STRATEGY` | 默认流式策略，默认 `auto`；可设为 `off`、`openai-sse`、`responses-sse` 等。 |
+| `IMAGE_GENERATION_BACKEND` | 默认图片后端，默认 `images-api`；可设为 `responses-image-generation`。 |
+| `OPENAI_MAX_STREAMS_PER_CREDENTIAL` | 单个渠道凭证允许同时执行的图片请求数，默认 `1`。页面并发批量和服务端队列都会使用该容量。 |
+| `OPENAI_CHANNEL_QUEUE_ENABLED` | 渠道凭证并发队列开关，默认 `true`。开启后超出凭证容量的请求会等待可用槽位，而不是立即打到上游。 |
+| `OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS` | 渠道凭证并发队列最大等待时间，默认 `420000`。超时返回可重试的队列错误。 |
+| `OPENAI_CHANNEL_QUEUE_MAX_SIZE` | 每个渠道凭证的最大等待队列长度，默认 `50`。队列满时返回可重试的队列错误。 |
 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED` | 渠道或凭证失败冷却开关，默认 `true`；设为 `false` 时失败只记录，不移出路由池。 |
 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 全局失败冷却时间，默认 `30000`；`OPENAI_CHANNEL_N_FAILURE_COOLDOWN_MS` 可覆盖单个渠道。 |
 | `IMAGE_UPSTREAM_TIMEOUT_MS` | 图片上游请求超时，默认 `900000`。必须是正整数。 |
@@ -200,8 +204,8 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 | 前端能力或端点 | 归属契约 | 进入 Agent OpenAPI | 自动化口径 |
 | --- | --- | --- | --- |
 | `POST /api/agent/images/generate`、`POST /api/agent/images/edit`、Agent jobs、Agent artifacts | Agent JSON API | 是 | 通过 skill 脚本和 Agent 鉴权调用。 |
-| `POST /api/images` | 页面 form-data SSE API | 否 | 仅在大图、复杂 UI 批量、页面高级字段或路由规则要求时由 skill 显式选择。 |
-| `GET /api/runtime-capabilities` | 页面运行态能力 API | 否 | 页面展示运行态默认值、图片上游传输配置、渠道健康和后端 enablement；不是 Agent capabilities。 |
+| `POST /api/images` | 页面 form-data SSE API | 否 | 默认 WebP edit、输出格式字段、大图、复杂 UI 批量、页面高级字段或路由规则要求时由 skill 显式选择。 |
+| `GET /api/runtime-capabilities` | 页面运行态能力 API | 否 | 页面展示运行态默认值、图片上游传输配置、渠道健康、渠道队列和后端 enablement；不是 Agent capabilities。 |
 | `PUT/DELETE /api/feedback` | 页面结果反馈写入和清理 API | 否 | 页面把最近生成的可用性标记和备注写入服务端状态；删除历史时清理对应反馈。 |
 | `POST /api/agent/page-requests/feedback` | Agent 结果反馈批量只读 API | 是 | Agent 按多个页面 `clientRequestId` 批量查询最新反馈。 |
 | `GET /api/agent/page-requests/{id}/feedback` | Agent 结果反馈只读 API | 是 | Agent 按页面 `clientRequestId` 查询最新反馈。 |

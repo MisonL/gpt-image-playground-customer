@@ -2522,7 +2522,7 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /Responses image_generation edit 属于页面 SSE 路径/);
         assert.match(
             skillText,
-            /Docker 默认 `IMAGE_GENERATION_BACKEND=responses-image-generation` 和 `IMAGE_STREAMING_STRATEGY=responses-sse`/
+            /Docker compose 本身不设置这两个默认值，未配置 `\.env\.local` 时仍是 `images-api` 和 `auto`/
         );
         assert.match(skillText, /脚本参数仍写作 `--streaming-strategy responses-sse`/);
         assert.match(skillText, /batch JSONL 字段是 `streaming_strategy`/);
@@ -4916,7 +4916,7 @@ describe('Agent skill script argument validation', () => {
                                         transport: 'agent_json',
                                         endpoint: '/api/agent/images/generate',
                                         request_headers: {
-                                            user_agent_effective: 'gpt-image-playground/2.0.0',
+                                            user_agent_effective: 'gpt-image-playground/2.1.0',
                                             has_extra_headers: false
                                         }
                                     }
@@ -4974,7 +4974,7 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.agent_requests[0].diagnostics.response.timing.elapsed_ms, 61234);
                 assert.equal(
                     body.agent_requests[0].diagnostics.response.execution.request_headers.user_agent_effective,
-                    'gpt-image-playground/2.0.0'
+                    'gpt-image-playground/2.1.0'
                 );
                 assert.equal(body.agent_requests[1].lookup.type, 'idempotency_key');
                 assert.equal(body.agent_requests[1].diagnostics.error.diagnostics.transport_error_kind, 'dns');

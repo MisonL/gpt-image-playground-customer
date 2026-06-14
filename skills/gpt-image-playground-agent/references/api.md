@@ -97,7 +97,7 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 
 图片路径可以用位置参数 `<image-path> <prompt>`，也可以用 `--image <path> <prompt>`；两者不能同时设置。
 默认 WebP edit 走页面端 `/api/images` form-data SSE，因为 Agent edit 不接收输出格式字段。显式 `--format`、`--output-compression`、`--image-backend responses-image-generation`、页面高级字段或 `--page-sse` 也会走页面 SSE；失败后脚本输出结构化失败和备用端点建议，不会在同一次请求里静默二次调用。
-显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。Responses image_generation edit 必须走页面 SSE，可显式设置 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`，也可依赖服务端 Docker 默认 `IMAGE_GENERATION_BACKEND=responses-image-generation` 和 `IMAGE_STREAMING_STRATEGY=responses-sse`。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`。
+显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。Responses image_generation edit 必须走页面 SSE，可显式设置 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`。如果运行时已显式配置 `IMAGE_GENERATION_BACKEND=responses-image-generation` 或兼容别名 `responses`，且 `IMAGE_STREAMING_STRATEGY=responses-sse`，也可依赖服务端默认值；Docker compose 本身不设置这两个默认值，未配置 `.env.local` 时仍是 `images-api` 和 `auto`。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`。
 
 批量脚本参数：
 
@@ -200,7 +200,7 @@ GET /api/agent/capabilities
 - `routing_rules.page_sse_large_generate`：`max_edge>2048` 的单次文生图推荐优先使用 `/api/images` SSE，失败后先诊断，再显式选择 `/api/agent/images/generate` 或 job 路径。
 - `routing_rules.retry_recovery`：终态失败不会用同一 `Idempotency-Key` 重新执行，必须诊断后创建新的业务操作和新的 key。
 - 批量 JSONL 路由控制字段：`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`；脚本会在 dry-run 阶段拒绝字符串布尔值和未知 transport。
-- `GET /api/runtime-capabilities` 不属于 Agent capabilities。它是页面工作台读取的运行态能力摘要，用于展示流式默认值、图片上游传输配置、渠道健康、并发建议、Responses 后端 enablement 和缺失环境变量，不进入 Agent OpenAPI。
+- `GET /api/runtime-capabilities` 不属于 Agent capabilities。它是页面工作台读取的运行态能力摘要，用于展示流式默认值、图片上游传输配置、渠道健康、渠道队列、并发建议、Responses 后端 enablement 和缺失环境变量，不进入 Agent OpenAPI。
 - `defaults.image_backend`：Agent generate 默认 `images-api`。
 - `defaults.stream_mode`：Agent generate 默认 `auto`。auto 会先尝试内部上游 SSE；无法产出最终图时显式回退并暴露可观测标记。
 - `defaults.streaming_strategy`：Agent generate 默认 `auto`。
@@ -349,7 +349,7 @@ Agent 生成端点对外始终返回最终 JSON，不会对客户端返回 SSE�
     "selected_channel_id": "default",
     "upstream_host": "api.example.test",
     "request_headers": {
-      "user_agent_effective": "gpt-image-playground/2.0.0",
+      "user_agent_effective": "gpt-image-playground/2.1.0",
       "has_extra_headers": false,
       "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
       "configured_header_names": []
@@ -360,7 +360,7 @@ Agent 生成端点对外始终返回最终 JSON，不会对客户端返回 SSE�
 
 ## Agent JSON 编辑图片
 
-本节只描述 `/api/agent/images/edit`。如果需求是 Responses image_generation edit，或 Docker 默认 `IMAGE_GENERATION_BACKEND=responses-image-generation` 且 `IMAGE_STREAMING_STRATEGY=responses-sse`，不要调用本端点；使用 `edit-image.mjs --page-sse` 或依赖页面 SSE 默认路径走 `/api/images`。
+本节只描述 `/api/agent/images/edit`。如果需求是 Responses image_generation edit，或运行时已显式配置 `IMAGE_GENERATION_BACKEND=responses-image-generation` 或兼容别名 `responses` 且 `IMAGE_STREAMING_STRATEGY=responses-sse`，不要调用本端点；使用 `edit-image.mjs --page-sse` 或依赖页面 SSE 默认路径走 `/api/images`。Docker compose 本身不设置这两个默认值，未配置 `.env.local` 时仍是 `images-api` 和 `auto`。
 
 ```http
 POST /api/agent/images/edit
@@ -547,7 +547,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --idempotency-key stable-operat
         "transport": "agent_json",
         "endpoint": "/api/agent/images/generate",
         "request_headers": {
-          "user_agent_effective": "gpt-image-playground/2.0.0",
+          "user_agent_effective": "gpt-image-playground/2.1.0",
           "has_extra_headers": false,
           "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
           "configured_header_names": []
@@ -572,7 +572,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --idempotency-key stable-operat
 - `POST /api/images`：页面 form-data 图片端点。它支持 `mode=generate|edit`、`stream=true` 的页面 SSE、`clientRequestId`、页面 `passwordHash` 表单鉴权，以及 `responsesModel`、`gptModel`、`thinking`、`promptOptimization`、`force_web` 等页面高级字段。skill 脚本只在 capabilities 的 `agent_streaming.page_sse` 或路由规则需要时使用它。
 - `PUT /api/feedback`：页面结果反馈写入端点。页面把最近生成的可用性标记和备注写入服务端状态；Agent 只读查询使用 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback`。
 - `DELETE /api/feedback`：页面结果反馈清理端点。页面删除历史时按 `clientRequestId` 清理对应服务端反馈；该端点不接受 Agent Bearer token。
-- `GET /api/runtime-capabilities`：页面运行态能力摘要。它暴露流式默认值、图片上游传输配置、渠道健康、并发建议和 Responses 后端 enablement，不返回 API key 或本地密钥。
+- `GET /api/runtime-capabilities`：页面运行态能力摘要。它暴露流式默认值、图片上游传输配置、渠道健康、渠道队列、并发建议和 Responses 后端 enablement，不返回 API key 或本地密钥。
 - `POST /api/shares`：页面分享创建端点。配置 `APP_PASSWORD` 时要求页面访问 cookie；请求是 form-data `image`、`sourceFilename`、`expiresInMinutes` 和可选 `accessCode`。返回分享 token、URL、过期时间和是否需要访问码。
 - `GET /api/shares/{token}` 和 `POST /api/shares/{token}/content`：分享元数据和图片内容端点。私密分享的内容读取通过 JSON `accessCode` 校验，并有访问码失败限流；这不是 Agent artifact 下载。
 - `GET /api/logs`：页面日志 SSE。必须配置 `APP_PASSWORD`，并在 `Authorization: Bearer <sha256(APP_PASSWORD)>` 中发送访问码哈希；查询参数中的哈希会被拒绝。它不接受 `AGENT_API_TOKEN`。Agent 只读诊断使用 `/api/agent/diagnostics/page-requests/{id}`。
