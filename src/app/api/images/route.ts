@@ -341,12 +341,8 @@ export async function POST(request: NextRequest) {
         const partialImagesCount = toPartialImagesCount(
             readCount(formData, 'partial_images', 2, upstreamProfile.partialImages.min, upstreamProfile.partialImages.max)
         );
-        const imageBackend = readImageGenerationBackend(formData, process.env, {
-            useEnvDefault: mode === 'generate'
-        });
-        const streamingStrategy = readImageStreamingStrategy(formData, process.env, {
-            useEnvDefault: mode === 'generate'
-        });
+        const imageBackend = readImageGenerationBackend(formData, process.env);
+        const streamingStrategy = readImageStreamingStrategy(formData, process.env);
         const streamResolution = resolvePageStream({
             streamMode,
             imageBackend,

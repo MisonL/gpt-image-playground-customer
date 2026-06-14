@@ -34,6 +34,32 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stdout.trim(), '');
     });
 
+    it('accepts --image as an edit image path alias', () => {
+        const result = runSkillScript('edit-image.mjs', ['--image', '/tmp/source.png', 'prompt']);
+
+        assert.equal(result.status, 0);
+        assert.equal(result.stderr.trim(), '');
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.request.image_path, '/tmp/source.png');
+        assert.equal(body.request.prompt, 'prompt');
+    });
+
+    it('rejects mixing --image with positional edit image path', () => {
+        const result = runSkillScript('edit-image.mjs', ['/tmp/source.png', '--image', '/tmp/other.png', 'prompt']);
+
+        assert.equal(result.status, 2);
+        assert.match(result.stderr, /--image 与位置参数 <image-path> 不能同时设置/);
+        assert.equal(result.stdout.trim(), '');
+    });
+
+    it('rejects repeated --image edit image aliases', () => {
+        const result = runSkillScript('edit-image.mjs', ['--image', '/tmp/source.png', '--image', '/tmp/other.png', 'prompt']);
+
+        assert.equal(result.status, 2);
+        assert.match(result.stderr, /--image 只能设置一次/);
+        assert.equal(result.stdout.trim(), '');
+    });
+
     it('rejects invalid upstream probe timeout before network checks', () => {
         const result = runSkillScript('probe-upstream-image.mjs', ['--timeout-ms', 'abc']);
 
@@ -2493,11 +2519,27 @@ describe('Agent skill script argument validation', () => {
         assert.match(readmeText, /partial_images_by_backend\["responses-image-generation"\]/);
         assert.match(skillText, /limits\.partial_images_by_backend\[image_backend\]/);
         assert.match(skillText, /Agent edit 不接受 `image_backend`，其内部上游流式字段按默认 Images API\/profile 范围校验/);
+        assert.match(skillText, /Responses image_generation edit 属于页面 SSE 路径/);
+        assert.match(
+            skillText,
+            /Docker 默认 `IMAGE_GENERATION_BACKEND=responses-image-generation` 和 `IMAGE_STREAMING_STRATEGY=responses-sse`/
+        );
+        assert.match(skillText, /脚本参数仍写作 `--streaming-strategy responses-sse`/);
+        assert.match(skillText, /batch JSONL 字段是 `streaming_strategy`/);
+        assert.match(skillText, /`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段/);
+        assert.match(skillText, /支持位置参数 `<image-path> <prompt>`，也支持 `--image <path> <prompt>` 别名/);
+        assert.match(skillText, /`--image-backend responses-image-generation` 只用于页面 SSE edit/);
         assert.match(skillText, /不要把 Matsca `limits\.partial_images=0\.\.4` 误套到 `responses-image-generation`/);
         assert.match(apiReference, /limits\.partial_images_by_backend\[image_backend\]/);
         assert.match(apiReference, /Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`/);
         assert.match(apiReference, /强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API\/profile 范围校验/);
-        assert.match(apiReference, /Agent edit 不接受 `image_backend`；需要 Responses backend edit 字段时应使用页面端 `\/api\/images` form-data SSE 路径/);
+        assert.match(apiReference, /图片路径可以用位置参数 `<image-path> <prompt>`，也可以用 `--image <path> <prompt>`/);
+        assert.match(apiReference, /Agent edit 不接受 `image_backend`；需要 Responses backend edit 字段时必须使用页面端 `\/api\/images` form-data SSE 路径/);
+        assert.match(apiReference, /Responses image_generation edit 必须走页面 SSE/);
+        assert.match(apiReference, /JSONL 字段名必须使用 `streaming_strategy`/);
+        assert.match(apiReference, /`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段/);
+        assert.match(apiReference, /Responses image_generation 后端仅在页面 SSE `\/api\/images` 中支持编辑功能/);
+        assert.doesNotMatch(apiReference, /Responses image_generation 后端当前只支持 generate/);
         assert.match(apiReference, /选择 `responses-image-generation` 或兼容别名 `responses` 时必须优先使用该字段/);
     });
 
@@ -4264,6 +4306,24 @@ describe('Agent skill script argument validation', () => {
             assert.equal(camelCaseBackendResult.status, 2);
             assert.match(camelCaseBackendResult.stderr, /camel-case-backend\.imageBackend 不是支持的 batch JSONL 字段/);
             assert.equal(camelCaseBackendResult.stdout.trim(), '');
+
+            const formFieldStreamingInputPath = join(tempRoot, 'form-field-streaming.jsonl');
+            writeFileSync(
+                formFieldStreamingInputPath,
+                JSON.stringify({
+                    id: 'form-field-streaming',
+                    prompt: 'prompt',
+                    image_backend: 'responses-image-generation',
+                    image_streaming_strategy: 'responses-sse'
+                })
+            );
+            const formFieldStreamingResult = runSkillScript('batch-images.mjs', ['--input', formFieldStreamingInputPath]);
+            assert.equal(formFieldStreamingResult.status, 2);
+            assert.match(
+                formFieldStreamingResult.stderr,
+                /form-field-streaming\.image_streaming_strategy 不是支持的 batch JSONL 字段/
+            );
+            assert.equal(formFieldStreamingResult.stdout.trim(), '');
 
             const camelCaseResponseModeInputPath = join(tempRoot, 'camel-case-response-mode.jsonl');
             writeFileSync(

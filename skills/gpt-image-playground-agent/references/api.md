@@ -76,9 +76,18 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--size`
 - `--quality`
 - `--response-mode`
+- `--format`
+- `--output-compression`
+- `--moderation`
+- `--image-backend`
+- `--responses-model`
+- `--thinking`
+- `--prompt-optimization`
+- `--force-web`
 - `--stream-mode`
 - `--streaming-strategy`
 - `--partial-images`
+- `--sse-log`
 - `--timeout-ms`
 - `--idempotency-key`
 - `--page-sse`
@@ -86,8 +95,9 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--dry-run`
 - `--allow-billable`
 
-默认 WebP edit 走页面端 `/api/images` form-data SSE，因为 Agent edit 不接收输出格式字段。显式 `--format`、`--output-compression`、页面高级字段或 `--page-sse` 也会走页面 SSE；失败后脚本输出结构化失败和备用端点建议，不会在同一次请求里静默二次调用。
-显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`。
+图片路径可以用位置参数 `<image-path> <prompt>`，也可以用 `--image <path> <prompt>`；两者不能同时设置。
+默认 WebP edit 走页面端 `/api/images` form-data SSE，因为 Agent edit 不接收输出格式字段。显式 `--format`、`--output-compression`、`--image-backend responses-image-generation`、页面高级字段或 `--page-sse` 也会走页面 SSE；失败后脚本输出结构化失败和备用端点建议，不会在同一次请求里静默二次调用。
+显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。Responses image_generation edit 必须走页面 SSE，可显式设置 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`，也可依赖服务端 Docker 默认 `IMAGE_GENERATION_BACKEND=responses-image-generation` 和 `IMAGE_STREAMING_STRATEGY=responses-sse`。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`。
 
 批量脚本参数：
 
@@ -103,7 +113,23 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--dry-run`
 - `--allow-billable`
 
-批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
+批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`streaming_strategy`、`partial_images`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。edit 任务设置 `image_backend=responses-image-generation` 时会走页面 SSE；不要把它改成 Agent edit。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。JSONL 字段名必须使用 `streaming_strategy`；`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段，会被脚本在真实请求前拒绝。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
+
+Responses edit JSONL 正例：
+
+```jsonl
+{"id":"edit-responses","mode":"edit","prompt":"replace the background","image_path":"source.png","image_backend":"responses-image-generation","streaming_strategy":"responses-sse","partial_images":1}
+```
+
+dry-run 预期：`routing.transport=page_sse`、`endpoint=/api/images`、`request.image_backend=responses-image-generation`。
+
+缺少 `image_backend` 的反例：
+
+```jsonl
+{"id":"edit-responses-missing-backend","mode":"edit","prompt":"replace the background","image_path":"source.png","responsesModel":"gpt-4.1"}
+```
+
+dry-run 预期退出码为 `2`，错误包含 `responsesModel 必须同时设置 image_backend=responses-image-generation`。
 
 并发批量示例：
 
@@ -277,7 +303,7 @@ Content-Type: application/json
 Agent 生成端点对外始终返回最终 JSON，不会对客户端返回 SSE。不要向该端点发送 `stream: true`。
 
 - 页面 SSE 使用独立的 `POST /api/images` form-data 路径。
-- 若 capabilities 中 `agent_streaming.upstream_sse.supported=true`，generate 可通过 `request_fields_by_mode.generate` 声明的字段控制服务端内部上游 SSE 消费。`image_backend=responses-image-generation` 当前只支持 generate。
+- 若 capabilities 中 `agent_streaming.upstream_sse.supported=true`，generate 可通过 `request_fields_by_mode.generate` 声明的字段控制服务端内部上游 SSE 消费。Agent JSON 的 `image_backend=responses-image-generation` 当前只支持 generate；Responses backend edit 使用页面端 `/api/images` form-data SSE。
 - 不要向 Agent 生成端点发送 `responsesModel`、`gptModel`、`gpt_model`、`thinking`、`promptOptimization`、`prompt_optimization`、`force_web` 或 `forceWeb`。这些是页面 form-data 高级字段；单张 generate 脚本会在需要时走 `/api/images` SSE。
 - Agent 生成端点最终响应仍是 `AgentImageResponse`。
 - `stream_mode=stream` 强制流式并直接暴露失败。
@@ -332,7 +358,9 @@ Agent 生成端点对外始终返回最终 JSON，不会对客户端返回 SSE�
 }
 ```
 
-## 编辑图片
+## Agent JSON 编辑图片
+
+本节只描述 `/api/agent/images/edit`。如果需求是 Responses image_generation edit，或 Docker 默认 `IMAGE_GENERATION_BACKEND=responses-image-generation` 且 `IMAGE_STREAMING_STRATEGY=responses-sse`，不要调用本端点；使用 `edit-image.mjs --page-sse` 或依赖页面 SSE 默认路径走 `/api/images`。
 
 ```http
 POST /api/agent/images/edit
@@ -351,11 +379,11 @@ Content-Type: multipart/form-data
 - `response_mode`：`path`、`base64` 或 `both`。
 - `stream_mode`：可选，`auto`、`stream` 或 `non_stream`。
 - `streaming_strategy`：可选，`off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse` 或 `force-sse`。
-- `partial_images`：可选，范围以 `GET /api/agent/capabilities` 的 `limits.partial_images` 为准。Agent edit 不接受 `image_backend`；需要 Responses backend edit 字段时应使用页面端 `/api/images` form-data SSE 路径。
+- `partial_images`：可选，范围以 `GET /api/agent/capabilities` 的 `limits.partial_images` 为准。Agent edit 不接受 `image_backend`；需要 Responses backend edit 字段时必须使用页面端 `/api/images` form-data SSE 路径。
 - `image_0..image_N`：源图片，`N = limits.upload_images.max - 1`。超出当前 profile 上限、跳号、`image_01` 或 `image_foo` 的图片字段会被显式拒绝。
 - `mask`：可选 PNG 遮罩。
 
-Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`。也不接受 `imageBackend`、`outputFormat`、`format`、`outputCompression`、`responses_model`/`responsesModel`、`background` 或 `moderation`。强制 Agent edit 时编辑输出格式固定为 PNG；默认 WebP 或显式页面输出字段使用页面端 `/api/images` form-data SSE。Responses image_generation 后端当前只支持 generate。
+Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`。也不接受 `imageBackend`、`outputFormat`、`format`、`outputCompression`、`responses_model`/`responsesModel`、`background` 或 `moderation`。强制 Agent edit 时编辑输出格式固定为 PNG；默认 WebP 或显式页面输出字段使用页面端 `/api/images` form-data SSE。Responses image_generation 后端仅在页面 SSE `/api/images` 中支持编辑功能，Agent JSON 端点暂不支持。
 
 当 `size` 的最大边大于 `2048` 时，默认按 `routing_rules.high_resolution_edit` 使用页面端 `/api/images` form-data SSE 路径；如果页面流式不可用或失败，可显式回退到 Agent edit 最终 JSON 路径进行诊断或执行。
 

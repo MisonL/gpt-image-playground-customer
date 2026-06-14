@@ -1253,15 +1253,23 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
-    it('does not apply the generate backend env default to edit requests', async () => {
+    it('applies the image backend env default to edit requests', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
         process.env.IMAGE_GENERATION_BACKEND = 'responses';
         const { POST } = await import('./route');
-        let upstreamUrl = '';
-        const upstream = await startImagesJsonUpstream(async (_body, url) => {
-            if (url !== '/api/log/token') {
-                upstreamUrl = url;
-            }
-            return { data: [{ b64_json: PNG_BASE64 }] };
+        let upstreamBody = '';
+        const upstream = await startResponsesImageUpstream(async (body) => {
+            upstreamBody = body;
+            return {
+                output: [
+                    {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: PNG_BASE64
+                    }
+                ]
+            };
         });
 
         try {
@@ -1278,15 +1286,206 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(response.status, 200);
             const body = (await response.json()) as { images?: Array<Record<string, unknown>> };
             assert.equal(body.images?.[0]?.b64_json, PNG_BASE64);
-            assert.equal(upstreamUrl, '/v1/images/edits');
+
+            const upstreamJson = JSON.parse(upstreamBody) as {
+                tools?: Array<Record<string, unknown>>;
+                input?: Array<{ content?: Array<Record<string, unknown>> }>;
+            };
+            assert.equal(upstreamJson.tools?.[0]?.type, 'image_generation');
+            assert.equal(upstreamJson.tools?.[0]?.action, 'edit');
+            assert.equal(upstreamJson.input?.[0]?.content?.some((item) => item.type === 'input_image'), true);
         } finally {
             await upstream.close();
         }
     });
 
-    it('does not apply Responses-only streaming strategy env defaults to edit streams', async () => {
+    it('applies Responses streaming strategy env defaults to edit streams', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
         process.env.IMAGE_GENERATION_BACKEND = 'responses';
         process.env.IMAGE_STREAMING_STRATEGY = 'responses-sse';
+        const { POST } = await import('./route');
+        let upstreamBody = '';
+        const upstream = await startStreamingResponsesImageUpstream(async (body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'response.output_item.done',
+                    data: {
+                        type: 'response.output_item.done',
+                        item: { type: 'image_generation_call', status: 'completed', result: PNG_BASE64 }
+                    }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: true
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'done']
+            );
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(
+                upstreamJson.tool_choice && (upstreamJson.tool_choice as Record<string, unknown>).type,
+                'image_generation'
+            );
+            assert.equal(Array.isArray(upstreamJson.tools), true);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('accepts snake-case Responses backend controls on edit page SSE requests', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        const { POST } = await import('./route');
+        let upstreamBody = '';
+        const upstream = await startStreamingResponsesImageUpstream(async (body) => {
+            upstreamBody = body;
+            return [
+                {
+                    event: 'response.output_item.done',
+                    data: {
+                        type: 'response.output_item.done',
+                        item: { type: 'image_generation_call', status: 'completed', result: PNG_BASE64 }
+                    }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: true,
+                    imageBackend: 'responses-image-generation',
+                    imageBackendField: 'image_backend',
+                    imageStreamingStrategy: 'responses-sse',
+                    imageStreamingStrategyField: 'image_streaming_strategy',
+                    partialImages: '1'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'done']
+            );
+
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, true);
+            assert.equal(
+                upstreamJson.tool_choice && (upstreamJson.tool_choice as Record<string, unknown>).type,
+                'image_generation'
+            );
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('lets explicit edit backend and streaming strategy override env defaults', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        process.env.IMAGE_GENERATION_BACKEND = 'responses';
+        process.env.IMAGE_STREAMING_STRATEGY = 'responses-sse';
+        const { POST } = await import('./route');
+        let upstreamUrl = '';
+        let upstreamBody = '';
+        const upstream = await startStreamingImageUpstream(async (body, url) => {
+            upstreamUrl = url;
+            upstreamBody = body;
+            return [
+                {
+                    event: 'image_edit.completed',
+                    data: { type: 'image_edit.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: true,
+                    imageBackend: 'images-api',
+                    imageStreamingStrategy: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['completed', 'done']
+            );
+            assert.equal(upstreamUrl, '/v1/images/edits');
+            assert.match(upstreamBody, /name="stream"/);
+            assert.match(upstreamBody, /name="partial_images"/);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects incompatible edit backend and streaming strategy defaults before contacting upstream', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        process.env.IMAGE_GENERATION_BACKEND = 'responses';
+        process.env.IMAGE_STREAMING_STRATEGY = 'newapi-keepalive-sse';
+        const { POST } = await import('./route');
+        let upstreamCalls = 0;
+        const upstream = await startStreamingImageUpstream(async () => {
+            upstreamCalls += 1;
+            return [
+                {
+                    event: 'image_edit.completed',
+                    data: { type: 'image_edit.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    mode: 'edit',
+                    stream: true
+                })
+            );
+
+            assert.equal(response.status, 400);
+            const body = (await response.json()) as Record<string, unknown>;
+            assert.match(String(body.error), /Responses image_generation/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('keeps Images API edit streams available when env defaults stay on Images API', async () => {
+        process.env.IMAGE_GENERATION_BACKEND = 'images-api';
+        process.env.IMAGE_STREAMING_STRATEGY = 'auto';
         const { POST } = await import('./route');
         let upstreamUrl = '';
         let upstreamBody = '';
