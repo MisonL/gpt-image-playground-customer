@@ -39,7 +39,7 @@ describe('downloadSameOriginImageAsBase64', () => {
 
         assert.equal(result, Buffer.from('png').toString('base64'));
         assert.equal(observedAuthorization, 'Bearer test-key');
-        assert.equal(observedUserAgent, 'gpt-image-playground/2.0.0');
+        assert.equal(observedUserAgent, 'gpt-image-playground/2.1.0');
         assert.equal(observedAppId, 'app-id');
         assert.equal(observedAppSecret, 'app-secret');
     });

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 const originalLogLevel = process.env.APP_LOG_LEVEL;
@@ -23,6 +24,7 @@ const originalWarn = console.warn;
 const originalError = console.error;
 const nodeEnvKey: string = 'NODE_ENV';
 const testLogFileNameKey = 'APP_LOG_TEST_FILE_NAME';
+const sourcePath = fileURLToPath(new URL('./app-logger.ts', import.meta.url));
 
 beforeEach(async () => {
     process.env[nodeEnvKey] = 'test';
@@ -81,6 +83,22 @@ it('exposes the app log retention boundary for diagnostic contracts', () => {
         persisted_across_process_restart: true,
         loss_modes: ['entry_evicted_by_max_entries', 'log_level_filter', 'local_log_file_missing_or_cleared']
     });
+});
+
+it('keeps runtime log file operations out of Next standalone tracing', () => {
+    const source = fs.readFileSync(sourcePath, 'utf8');
+    const tracedRuntimeFileOperations = [
+        'fs.readFileSync(/* turbopackIgnore: true */ logFile',
+        'fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(logFile)',
+        'fs.writeFileSync(/* turbopackIgnore: true */ logFile',
+        'fs.appendFileSync(/* turbopackIgnore: true */ logFile',
+        'fs.rmSync(/* turbopackIgnore: true */ logFile',
+        'fs.promises.readFile(/* turbopackIgnore: true */ logFile'
+    ];
+
+    for (const operation of tracedRuntimeFileOperations) {
+        assert.ok(source.includes(operation), `missing standalone tracing guard: ${operation}`);
+    }
 });
 
 describe('appLogger', { concurrency: false }, () => {

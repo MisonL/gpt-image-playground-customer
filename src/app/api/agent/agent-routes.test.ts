@@ -250,7 +250,7 @@ describe('Agent route integration', () => {
             assert.equal(firstBody.execution.stream_mode, 'non_stream');
             assert.equal(firstBody.execution.streaming_strategy, 'auto');
             assert.equal(firstBody.execution.upstream_host, new URL(upstream.baseUrl).host);
-            assert.equal(firstBody.execution.request_headers.user_agent_effective, 'gpt-image-playground/2.0.0');
+            assert.equal(firstBody.execution.request_headers.user_agent_effective, 'gpt-image-playground/2.1.0');
             assert.equal(firstBody.execution.request_headers.has_extra_headers, false);
             assert.equal(typeof firstBody.timing.elapsed_ms, 'number');
             assert.equal(firstBody.timing.elapsed_ms >= 0, true);

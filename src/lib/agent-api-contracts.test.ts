@@ -442,7 +442,7 @@ describe('buildAgentCapabilities', () => {
             'recommended_for_high_resolution_generate_edit_and_complex_batch'
         );
         assert.deepEqual(capabilities.upstream_request_headers.default, {
-            user_agent_effective: 'gpt-image-playground/2.0.0',
+            user_agent_effective: 'gpt-image-playground/2.1.0',
             has_extra_headers: false,
             allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
             configured_header_names: []

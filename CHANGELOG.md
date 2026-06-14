@@ -8,6 +8,27 @@
 
 暂无。
 
+## [2.1.0] - 2026-06-14
+
+### 新增
+
+- 增加渠道凭证并发队列，超出单凭证容量的请求会按队列等待，并通过运行态能力接口暴露队列容量、等待上限和当前队列状态。
+- Agent skill 脚本支持默认 WebP 高质量输出、图像格式转换、Responses image_generation edit 的页面 SSE 路由，以及批量脚本按运行态容量限制有效并发。
+- 增加 Matsca upstream profile，支持 Matsca 直连渠道的尺寸、`partial_images`、透明背景和上传限制口径。
+
+### 变更
+
+- 图片默认输出格式调整为 WebP，默认压缩质量为 `100`；需要无损归档或透明边缘复核时可显式选择 PNG。
+- 渠道失败冷却默认时间调整为 `30000ms`，并增加 `OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED` 以允许关闭渠道或凭证冷却。
+- 页面端 `/api/images` 的 generate 和 edit 都支持 `IMAGE_GENERATION_BACKEND` 与 `IMAGE_STREAMING_STRATEGY` 运行时默认值，Responses edit 仍明确走页面 SSE 路径。
+- README、`.env.example` 和 Agent skill 文档补齐渠道队列、默认后端、默认流式策略、WebP 输出和 Responses edit 路由说明，避免把 Docker compose 误解为默认 Responses 后端。
+
+### 修复
+
+- 修正移动端提交 footer 的可达性和测试覆盖，避免生成或编辑按钮在窄屏下被遮挡或状态不一致。
+- 修正渠道容量队列错误被误计入上游渠道冷却的问题，队列满或等待超时不再污染渠道健康判断。
+- 修正 `image_backend` 被图片上传字段解析误判的问题，避免页面 SSE edit 里控制字段被当作源图文件。
+
 ## [2.0.0] - 2026-06-06
 
 ### 新增
@@ -117,7 +138,8 @@
 - 支持基于 OpenAI 兼容 Images API 的本地图片生成和编辑流程。
 - 增加 Docker 部署支持和多平台启动脚本。
 
-[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.0.0...HEAD
+[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.4.0...v2.0.0
 [1.4.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.2.0...v1.3.0

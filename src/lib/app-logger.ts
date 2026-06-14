@@ -184,7 +184,7 @@ function hydratePersistedEntries() {
 
     let fileContent: string;
     try {
-        fileContent = fs.readFileSync(logFile, 'utf8');
+        fileContent = fs.readFileSync(/* turbopackIgnore: true */ logFile, 'utf8');
     } catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
             return;
@@ -209,12 +209,12 @@ function persistEntries(rewrite: boolean) {
     if (!shouldPersistEntries()) return;
     const logFile = resolveLogFile();
     try {
-        fs.mkdirSync(path.dirname(logFile), { recursive: true });
+        fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(logFile), { recursive: true });
         if (rewrite) {
-            fs.writeFileSync(logFile, serializePersistedEntries(logEntries), 'utf8');
+            fs.writeFileSync(/* turbopackIgnore: true */ logFile, serializePersistedEntries(logEntries), 'utf8');
             return;
         }
-        fs.appendFileSync(logFile, JSON.stringify(logEntries[logEntries.length - 1]) + '\n', 'utf8');
+        fs.appendFileSync(/* turbopackIgnore: true */ logFile, JSON.stringify(logEntries[logEntries.length - 1]) + '\n', 'utf8');
     } catch (error) {
         console.error('写入持久化日志失败。', error);
     }
@@ -299,7 +299,7 @@ export function clearAppLogEntriesForTest(options: { preservePersistedFile?: boo
     hydratedLogFile = undefined;
     if (!options.preservePersistedFile) {
         try {
-            fs.rmSync(logFile, { force: true });
+            fs.rmSync(/* turbopackIgnore: true */ logFile, { force: true });
         } catch {
             // 测试清理不影响生产路径。
         }
@@ -314,7 +314,7 @@ export function setAppLogPersistenceForTest(enabled: boolean) {
 export async function readPersistedAppLogEntriesForTest(): Promise<AppLogEntry[]> {
     const logFile = resolveLogFile();
     try {
-        const fileContent = await fs.promises.readFile(logFile, 'utf8');
+        const fileContent = await fs.promises.readFile(/* turbopackIgnore: true */ logFile, 'utf8');
         return fileContent
             .split(/\r?\n/)
             .filter((line) => line.trim().length > 0)
