@@ -181,6 +181,7 @@ function parseArgs(argv) {
     timeoutMs: undefined,
     idempotencyKey: undefined,
     imagePath: undefined,
+    imagePathSource: undefined,
     dryRun: false,
     allowBillable: false,
     help: false,
@@ -215,8 +216,17 @@ function parseArgs(argv) {
     else if (arg === '--sse-log') parsed.sseLogPath = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--image') {
+      if (parsed.imagePathSource === 'option') throw new Error('--image 只能设置一次。');
+      if (parsed.imagePath) throw new Error('--image 与位置参数 <image-path> 不能同时设置。');
+      parsed.imagePath = readOptionValue(argv, (index += 1), arg);
+      parsed.imagePathSource = 'option';
+    }
     else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
-    else if (!parsed.imagePath) parsed.imagePath = arg;
+    else if (!parsed.imagePath) {
+      parsed.imagePath = arg;
+      parsed.imagePathSource = 'positional';
+    }
     else parsed.promptParts.push(arg);
   }
   return parsed;
@@ -436,9 +446,9 @@ async function fetchWithTimeout(url, init) {
 }
 
 function printUsage() {
-  console.error('用法：edit-image.mjs [options] <image-path> <prompt>');
+  console.error('用法：edit-image.mjs [options] <image-path> <prompt> 或 edit-image.mjs --image <path> [options] <prompt>');
   console.error('默认只输出 dry-run；添加 --allow-billable 才会真实编辑图片。');
-  console.error('常用参数：--model --size --quality --response-mode --format --output-compression --moderation --image-backend --responses-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --idempotency-key --page-sse --agent --dry-run --allow-billable');
+  console.error('常用参数：--image --model --size --quality --response-mode --format --output-compression --moderation --image-backend --responses-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --idempotency-key --page-sse --agent --dry-run --allow-billable');
   console.error('契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 edit-image.mjs 或 edit-image.mjs --contract-check');
 }
 

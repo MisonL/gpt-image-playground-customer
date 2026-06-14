@@ -80,6 +80,7 @@ describe('readImageFiles', () => {
     it('accepts only documented image_0 through image_9 upload fields', () => {
         const formData = new FormData();
         formData.append('avatar', makePngFile('ignored-avatar.png'));
+        formData.append('image_backend', 'responses-image-generation');
         formData.append('image_streaming_strategy', 'force-sse');
         formData.append('image_1', makePngFile('accepted-1.png'));
         formData.append('image_9', makePngFile('accepted-9.png'));

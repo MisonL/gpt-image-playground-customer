@@ -13,6 +13,7 @@ export function imageFormRequest(input: {
     stream?: boolean;
     mode?: 'generate' | 'edit';
     imageBackend?: 'images' | 'responses' | 'images-api' | 'responses-image-generation';
+    imageBackendField?: 'imageBackend' | 'image_backend';
     imageStreamingStrategy?: 'off' | 'auto' | 'openai-sse' | 'newapi-keepalive-sse' | 'responses-sse' | 'force-sse';
     imageStreamingStrategyField?: 'imageStreamingStrategy' | 'image_streaming_strategy';
     streamMode?: 'auto' | 'stream' | 'non_stream';
@@ -64,7 +65,7 @@ export function imageFormRequest(input: {
         formData.append('forceWeb', input.forceWeb);
     }
     if (input.imageBackend) {
-        formData.append('imageBackend', input.imageBackend);
+        formData.append(input.imageBackendField || 'imageBackend', input.imageBackend);
     }
     if (input.imageStreamingStrategy) {
         formData.append(input.imageStreamingStrategyField || 'imageStreamingStrategy', input.imageStreamingStrategy);
