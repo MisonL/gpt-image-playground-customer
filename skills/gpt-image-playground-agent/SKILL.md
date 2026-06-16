@@ -31,8 +31,10 @@ Agent API 只作为自动化客户端接口，不作为首战场景或用户验�
 ## 路由规则
 
 - 先读取 `GET /api/agent/capabilities` 的 `routing_rules`，按机器可读规则选择端点。
-- 默认 WebP edit 使用页面端 `POST /api/images` form-data SSE 路径，因为 Agent edit 不接收输出格式字段。需要 Responses image_generation edit 时也必须使用页面 SSE，不要用 `--agent`。显式 `--agent` 才使用 `/api/agent/images/edit` Agent multipart 最终 JSON，输出格式固定为 Agent 契约；如果页面流式不可用或失败，先诊断结构化错误，再显式决定是否用 Agent edit 对照。
-- 复杂 UI 批量出图优先使用页面端 `POST /api/images` SSE；需要并发时显式设置 `--concurrency N` 或页面“并发批量”开关，并记录切换原因、失败清单和续跑锚点。
+- 默认 WebP edit 使用页面端 `POST /api/images` form-data SSE 路径，因为 Agent edit 不接收输出格式字段。需要 Responses image_generation edit 时也必须使用页面 SSE，不要用 `--agent`。显式 `--agent` 才使用 `/api/agent/images/edit` Agent multipart 最终 JSON，输出格式固定为 Agent 契约；如果页面流式不可用或失败，先诊断结构化错误，再用新的 `Idempotency-Key` 显式决定是否用 Agent edit 对照。Agent edit 只是对照路径，不保证与页面 SSE 的输出格式和像素尺寸完全一致；尺寸敏感任务必须用 `--dimension-check` 或下载后校验。
+- 复杂 UI 批量出图优先使用页面端 `POST /api/images` SSE 和 `scripts/batch-images.mjs`；不要手动并行启动多个单张脚本，因为这会绕过 manifest、`--resume`、`capacity_feedback` 和尺寸门禁。需要并发时显式设置 `--concurrency N` 或页面“并发批量”开关，并记录切换原因、失败清单和续跑锚点。
+- 真实批量并发前先看 `GET /api/runtime-capabilities` 的 `channelQueue.capacityPerCredential` 和 `streamingBatch.recommendedConcurrency`。如果服务端建议并发为 `1`，或返回 `channel_capacity_queue_aborted` / `retry_after_seconds`，同一渠道任务保持 `--concurrency 1`，不要用多个 shell 进程绕过限流。
+- 复杂 UI、长 prompt、高质量图生图遇到 5 分钟级超时、连接中断或上游 503 时，不要把失败归因到提示词质量；先读 `summary` 和诊断，再用新 key 显式尝试压缩 prompt 或改为 `quality=medium` 的对照请求，并记录这是稳定性取舍。
 - 长图恢复或需要续跑锚点的生产请求优先使用页面端 `POST /api/images` SSE，保留局部进度和缺最终图诊断。
 - 普通小图单次文生图使用 `/api/agent/images/generate`；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE，流式失败后先诊断，再显式选择 Agent JSON 或 job 路径，不自动回退。
 - 单张文生图使用 `--responses-model`/`--gpt-model`、`--thinking`、`--prompt-optimization` 或 `--force-web` 时走页面端 `/api/images` SSE，因为这些是页面高级字段，不属于 Agent JSON schema。`--responses-model` 必须同时设置 `--image-backend responses-image-generation` 或兼容别名 `responses`；显式 `--agent`、`--job`、`stream_mode=non_stream` 或 `streaming_strategy=off` 会被脚本前置拒绝。
@@ -69,6 +71,7 @@ Authorization: Bearer <token>
 ## 调用约束
 
 - 不要把 API Key、token 或访问码写入源码、文档示例、日志或测试快照。
+- 排查环境配置时不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。Codex 会话日志会持久保存命令输出；优先运行仓库脚本 `npm run env:summary`，或在命令中先把 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 值替换为 `<redacted>`。
 - Skill 必须保持自包含和可迁移：脚本、示例和说明不得写入本机绝对路径或仓库绝对路径；运行脚本时以当前已安装 Skill 目录为根解析 `scripts/`，不要依赖某台机器上的 checkout 位置。
 - Skill 必须兼容 Windows、Linux 和 macOS：脚本只用 Node.js 20+、跨平台 `node:` 标准库和 `package.json` 声明依赖；文档示例用 `node "<skill-root>/scripts/..."`，不依赖 bash、sh、chmod、可执行位、POSIX inline env 或反斜杠续行。
 - 不要把 `localhost:4783` 当作唯一部署位置；它只是无明确地址时的探测默认值。
@@ -175,7 +178,7 @@ node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.json
 node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check --max-attempts 2 --concurrency 3
 ```
 
-`--manifest` 使用 JSONL append-only 记录每条任务的 `index`、`id`、`idempotency_key`、`attempt`、`status`、响应或错误以及机器可读 `summary`；`--resume` 会读取已成功记录并跳过同一 `id` 或 `idempotency_key`。`--dimension-check` 会读取响应里的 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸是否等于任务 `size`。`--max-attempts` 会为第二次及以后尝试追加新的 attempt 级 idempotency key，避免复用终态失败 key；`--concurrency` 大于 `1` 时会并发执行任务并按输入顺序输出结果。`--max-consecutive-failures` 会在连续失败达到阈值后跳过后续任务并输出 `failure_summary` 与 `resume_fix_list`，且只能与顺序执行的 `--concurrency 1` 同用。任务级 `sse_log_path` 会把页面 SSE 原始事件按 JSONL 追加保存；即使 fetch 或 SSE 收集阶段失败，也会记录 `request_started`、`request_failed`、`elapsed_ms`、`client_request_id` 和 `endpoint`，便于区分上游未给终图和解析/断流问题。
+`--manifest` 使用 JSONL append-only 记录每条任务的 `index`、`id`、`idempotency_key`、`attempt`、`status`、响应或错误以及机器可读 `summary`；`--resume` 会读取已成功记录并跳过同一 `id` 或 `idempotency_key`。`--dimension-check` 会读取响应里的 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸是否等于任务 `size`。`--max-attempts` 会为第二次及以后尝试追加新的 attempt 级 idempotency key，避免复用终态失败 key；`--concurrency` 大于 `1` 时会先读取运行态并发建议，并发执行任务并按输入顺序输出结果。服务端 `recommendedConcurrency` 或 `channelQueue.capacityPerCredential` 小于请求值时，脚本会把有效并发降到建议值并在输出中写入 `capacity_feedback`；不要再另开多个单张脚本绕过这个限制。`--max-consecutive-failures` 会在连续失败达到阈值后跳过后续任务并输出 `failure_summary` 与 `resume_fix_list`，且只能与顺序执行的 `--concurrency 1` 同用。任务级 `sse_log_path` 会把页面 SSE 原始事件按 JSONL 追加保存；即使 fetch 或 SSE 收集阶段失败，也会记录 `request_started`、`request_failed`、`elapsed_ms`、`client_request_id` 和 `endpoint`，便于区分上游未给终图和解析/断流问题。
 
 批量 JSONL 字段按模式区分：`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`streaming_strategy`、`partial_images`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。edit 任务设置 `image_backend=responses-image-generation` 时会走页面 SSE；不要把它改成 Agent edit。`responsesModel` 必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`。JSONL 字段名必须使用 `streaming_strategy`；`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段，会被脚本在真实请求前拒绝。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段。
 

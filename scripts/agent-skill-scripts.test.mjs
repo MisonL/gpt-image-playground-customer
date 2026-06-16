@@ -388,6 +388,8 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stderr);
                 assert.equal(body.error.code, 'page_sse_failed');
                 assert.match(body.error.message, /stream failed/);
+                assert.match(body.next_step, /新的 Idempotency-Key/);
+                assert.match(body.next_step, /重新校验输出尺寸和格式/);
                 assert.equal(body.routing.fallback_endpoint, '/api/agent/images/generate');
                 assert.equal(body.routing.fallback_mode, 'manual_after_diagnosis');
                 assert.deepEqual(
@@ -2541,6 +2543,34 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /Responses image_generation 后端仅在页面 SSE `\/api\/images` 中支持编辑功能/);
         assert.doesNotMatch(apiReference, /Responses image_generation 后端当前只支持 generate/);
         assert.match(apiReference, /选择 `responses-image-generation` 或兼容别名 `responses` 时必须优先使用该字段/);
+    });
+
+    it('documents batch capacity and dimension guardrails for real Agent runs', () => {
+        const readmeText = readFileSync(join(repoRoot, 'README.md'), 'utf8');
+        const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+        const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
+
+        assert.match(readmeText, /不要手动并行启动多个单张脚本/);
+        assert.match(readmeText, /streamingBatch\.recommendedConcurrency/);
+        assert.match(readmeText, /channelQueue\.capacityPerCredential/);
+        assert.match(readmeText, /Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致/);
+        assert.match(readmeText, /不要直接输出 `\.env\.local`、`\.env\*\.local`、secret 文件或原始 `docker inspect \.Config\.Env`/);
+        assert.match(readmeText, /npm run env:summary/);
+
+        assert.match(skillText, /不要手动并行启动多个单张脚本/);
+        assert.match(skillText, /capacity_feedback/);
+        assert.match(skillText, /channelQueue\.capacityPerCredential/);
+        assert.match(skillText, /Agent edit 只是对照路径，不保证与页面 SSE 的输出格式和像素尺寸完全一致/);
+        assert.match(skillText, /复杂 UI、长 prompt、高质量图生图遇到 5 分钟级超时/);
+        assert.match(skillText, /Codex 会话日志会持久保存命令输出/);
+        assert.match(skillText, /npm run env:summary/);
+
+        assert.match(apiReference, /不要手动并行启动多个单张脚本来绕过 `capacity_feedback`/);
+        assert.match(apiReference, /streamingBatch\.recommendedConcurrency/);
+        assert.match(apiReference, /channelQueue\.capacityPerCredential/);
+        assert.match(apiReference, /尺寸敏感任务必须使用批量 `--dimension-check` 或下载后校验/);
+        assert.match(apiReference, /channel_capacity_queue_aborted/);
+        assert.match(apiReference, /npm run env:summary/);
     });
 
     it('keeps WebUI page APIs out of the Agent OpenAPI contract', () => {

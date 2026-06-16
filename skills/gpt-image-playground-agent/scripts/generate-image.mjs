@@ -1044,7 +1044,8 @@ function buildBillablePageSseFailure(error, diagnostics, timing) {
             ...(diagnostics ? { diagnostics } : {})
         },
         routing: buildPageSseRouting('manual_after_diagnosis'),
-        next_step: '先诊断页面流式失败原因，再决定是否用 --agent 重新执行同一业务请求；不要自动重试同一个请求。'
+        next_step:
+            '先用 diagnose-request 诊断页面流式失败原因，再用新的 Idempotency-Key 显式选择备用路径；若改用 Agent JSON 对照，必须重新校验输出尺寸和格式。'
     };
     return attachSummary(output, buildFailureSummary({
         errorBody: output,
