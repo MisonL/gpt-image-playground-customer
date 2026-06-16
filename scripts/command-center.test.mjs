@@ -23,6 +23,7 @@ describe('Command center scripts', () => {
         assert.deepEqual(buildAdminCommands(), {
             doctor: 'npm run doctor',
             status: 'npm run status',
+            env_summary: 'npm run env:summary',
             verify: 'npm run verify',
             deploy_local: 'npm run deploy:local',
             deploy_space: 'npm run deploy:space',
