@@ -148,7 +148,8 @@ export function buildPageSseFailureOutput({ error, fallbackEndpoint, fallbackMod
       ...(diagnostics ? { diagnostics } : {})
     },
     routing: buildPageSseRouting(fallbackEndpoint, fallbackMode),
-    next_step: '先诊断页面流式失败原因，再决定是否显式选择备用路径；不要自动重试同一个请求。'
+    next_step:
+      '先用 diagnose-request 诊断页面流式失败原因，再用新的 Idempotency-Key 显式选择备用路径；若改用 Agent JSON/edit 对照，必须重新校验输出尺寸和格式。'
   };
 }
 

@@ -33,6 +33,12 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 上游探针默认只检查 DNS、TLS 和 `/models`，必须显式添加 `--allow-billable` 才会调用上游 `/images/generations`。
 脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 或 `--contract-check` 做只读契约检查，不触发真实生图或编辑。
 Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API_TOKEN` 时只接受 Bearer token；只有未配置 `AGENT_API_TOKEN` 且配置了 `APP_PASSWORD` 时，Agent 端点才接受访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。页面端 `/api/images` SSE 另看 `agent_streaming.page_sse.auth`；当其声明 `required=true` 时，form-data 必须包含 `passwordHash`。
+排查环境配置时不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。Codex 会话日志会持久保存命令输出；优先运行仓库脚本 `npm run env:summary`，或在命令中先把 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 值替换为 `<redacted>`。
+
+```text
+npm run env:summary
+npm run env:summary -- --file .env.local --container gpt-image-playground-customer
+```
 当服务返回相对 `content_url`、`metadata_url` 或页面 SSE `path` 时，辅助脚本会额外输出 `absolute_content_url`、`absolute_metadata_url` 或 `absolute_path`。
 同一个 `Idempotency-Key` 如果已经进入终态 `failed`，再次调用 generate/edit 或 job result/status 只会回放该失败，且 `retryable=false`。需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
 页面端 `/api/images` SSE 会把同一个业务 key 复用到 `clientRequestId`，因此脚本使用的 `Idempotency-Key` 不能超过 capabilities 中 `agent_streaming.page_sse.client_request_id.max_length` 声明的字符数；超长时会直接报错，不会静默截断。
@@ -97,7 +103,7 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 
 图片路径可以用位置参数 `<image-path> <prompt>`，也可以用 `--image <path> <prompt>`；两者不能同时设置。
 默认 WebP edit 走页面端 `/api/images` form-data SSE，因为 Agent edit 不接收输出格式字段。显式 `--format`、`--output-compression`、`--image-backend responses-image-generation`、页面高级字段或 `--page-sse` 也会走页面 SSE；失败后脚本输出结构化失败和备用端点建议，不会在同一次请求里静默二次调用。
-显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。Responses image_generation edit 必须走页面 SSE，可显式设置 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`。如果运行时已显式配置 `IMAGE_GENERATION_BACKEND=responses-image-generation` 或兼容别名 `responses`，且 `IMAGE_STREAMING_STRATEGY=responses-sse`，也可依赖服务端默认值；Docker compose 本身不设置这两个默认值，未配置 `.env.local` 时仍是 `images-api` 和 `auto`。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`。
+显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。Agent edit 只是页面 SSE 失败后的显式对照路径，不保证与页面 SSE 的输出格式和像素尺寸完全一致；尺寸敏感任务必须使用批量 `--dimension-check` 或下载后校验。Responses image_generation edit 必须走页面 SSE，可显式设置 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`。如果运行时已显式配置 `IMAGE_GENERATION_BACKEND=responses-image-generation` 或兼容别名 `responses`，且 `IMAGE_STREAMING_STRATEGY=responses-sse`，也可依赖服务端默认值；Docker compose 本身不设置这两个默认值，未配置 `.env.local` 时仍是 `images-api` 和 `auto`。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`，并使用新的 `Idempotency-Key`。
 
 批量脚本参数：
 
@@ -107,7 +113,7 @@ Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API
 - `--ordered-prefix`：未显式提供 `idempotency_key` 时构造稳定有序 key 的前缀，默认 `batch`。
 - `--dimension-check`：读取响应 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`。
 - `--max-attempts`：失败任务最大尝试次数。第二次及后续尝试会追加新的 attempt 级 `Idempotency-Key`，避免复用终态失败 key。
-- `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会并发执行任务并按输入顺序输出结果；适合已确认渠道容量的批量生产。
+- `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会先读取 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 和 `channelQueue.capacityPerCredential`，把有效并发限制到服务端建议值后按输入顺序输出结果；适合已确认渠道容量的批量生产。
 - `--max-consecutive-failures`：顺序执行下的连续失败熔断阈值，默认 `0` 表示不熔断。只能与 `--concurrency 1` 同用。
 - `--timeout-ms`：未显式指定时，真实请求会采用 `420000ms` 与 `capabilities.image_transport.upstream_timeout_ms` 中较大的值。
 - `--dry-run`
@@ -137,7 +143,7 @@ dry-run 预期退出码为 `2`，错误包含 `responsesModel 必须同时设置
 node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check --max-attempts 2 --concurrency 3
 ```
 
-连续失败熔断需要严格顺序语义，不能与并发窗口大于 `1` 的批量执行同时使用。
+连续失败熔断需要严格顺序语义，不能与并发窗口大于 `1` 的批量执行同时使用。不要手动并行启动多个单张脚本来绕过 `capacity_feedback`；如果服务端建议并发为 `1`，同一渠道批量任务应保持串行。复杂 UI、长 prompt、高质量图生图遇到上游 503、5 分钟级超时或 `channel_capacity_queue_aborted` 时，先诊断 summary，再用新 key 显式尝试压缩 prompt 或 `quality=medium` 对照请求。
 
 上游探针脚本参数：
 
