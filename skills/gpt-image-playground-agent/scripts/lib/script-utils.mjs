@@ -2,6 +2,7 @@ const MAX_RETRY_AFTER_SECONDS = 60;
 const DIGITS_PATTERN = /^\d+$/;
 const IMAGE_SIZE_PATTERN = /^(\d+)x(\d+)$/;
 const LEGACY_IMAGE_SIZES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536']);
+export const DEFAULT_PLAYGROUND_BASE_URL = 'http://localhost:4783';
 
 export function readOptionValue(argv, index, name) {
   const value = argv[index];
@@ -108,6 +109,28 @@ export function normalizeBaseUrl(value) {
     throw new Error('base URL 不能包含凭据、查询参数或片段。');
   }
   return normalized;
+}
+
+export function resolvePlaygroundBaseUrl(explicitBaseUrl, env = process.env) {
+  if (explicitBaseUrl) {
+    return {
+      baseUrl: normalizeBaseUrl(explicitBaseUrl),
+      source: 'user_provided',
+      interactive_confirmation_required: false
+    };
+  }
+  if (env.GPT_IMAGE_PLAYGROUND_URL) {
+    return {
+      baseUrl: normalizeBaseUrl(env.GPT_IMAGE_PLAYGROUND_URL),
+      source: 'GPT_IMAGE_PLAYGROUND_URL',
+      interactive_confirmation_required: true
+    };
+  }
+  return {
+    baseUrl: DEFAULT_PLAYGROUND_BASE_URL,
+    source: 'default_local_probe',
+    interactive_confirmation_required: true
+  };
 }
 
 export function normalizeOutputFormat(value) {

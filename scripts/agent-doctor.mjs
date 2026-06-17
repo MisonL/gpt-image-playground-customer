@@ -2,15 +2,22 @@
 
 import { fileURLToPath } from 'node:url';
 
-import { isMainModule, parseJsonPayload, pickFailureOutput, printJson, runCommand } from './command-center-utils.mjs';
+import { isMainModule, parseJsonPayload, pickFailureOutput, printJson, redactBaseUrl, runCommand } from './command-center-utils.mjs';
+import { resolvePlaygroundBaseUrl } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
 
 const GENERATE_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url));
 const EDIT_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/edit-image.mjs', import.meta.url));
 const AGENT_DOCTOR_TIMEOUT_MS = 75_000;
-const DEFAULT_BASE_URL = 'http://localhost:4783';
 
 export function buildAgentDoctorArgs() {
     return [GENERATE_SCRIPT, '--contract-check', '--timeout-ms', '60000', 'contract check'];
+}
+
+export function buildAgentDoctorContractArgs(baseUrl) {
+    const args = [GENERATE_SCRIPT, '--contract-check', '--timeout-ms', '60000'];
+    if (baseUrl) args.push('--base-url', baseUrl);
+    args.push('contract check');
+    return args;
 }
 
 function parseArgs(argv) {
@@ -18,6 +25,7 @@ function parseArgs(argv) {
         help: false,
         allowBillable: false,
         timeoutMs: 60_000,
+        baseUrl: undefined,
         editImage: undefined
     };
     for (let index = 0; index < argv.length; index += 1) {
@@ -25,23 +33,30 @@ function parseArgs(argv) {
         if (arg === '--help' || arg === '-h') parsed.help = true;
         else if (arg === '--allow-billable') parsed.allowBillable = true;
         else if (arg === '--timeout-ms') parsed.timeoutMs = readPositiveInteger(readOptionValue(argv, (index += 1), arg), '--timeout-ms');
+        else if (arg === '--base-url') parsed.baseUrl = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--edit-image') parsed.editImage = readOptionValue(argv, (index += 1), arg);
-        else throw new Error(`Unknown option: ${arg}`);
+        else throw new Error(`未知参数：${arg}`);
     }
     return parsed;
 }
 
 function printHelp() {
-    console.log(`Usage:
+    console.log(`用法：
   npm run agent:doctor
-  npm run agent:doctor -- --allow-billable --edit-image /path/to/reference.png
+  npm run agent:doctor -- --base-url https://your-space.hf.space --allow-billable --edit-image /path/to/reference.png
 
-Environment:
-  GPT_IMAGE_PLAYGROUND_URL       Service base URL, defaults to http://localhost:4783.
-  GPT_IMAGE_AGENT_TOKEN          Bearer token when capabilities require bearer auth.
-  GPT_IMAGE_APP_PASSWORD_HASH    Password hash when capabilities require page password auth.
+环境变量：
+  GPT_IMAGE_PLAYGROUND_URL       服务基础地址，默认 http://localhost:4783。
+  GPT_IMAGE_AGENT_TOKEN          capabilities 需要 bearer 鉴权时使用。
+  GPT_IMAGE_APP_PASSWORD_HASH    capabilities 需要页面密码鉴权时使用。
 
-By default agent:doctor is read-only and non-billable. Billable generate/edit smoke checks require --allow-billable.`);
+选项：
+  --base-url      显式服务地址，优先于 GPT_IMAGE_PLAYGROUND_URL 和本地探测。
+  --timeout-ms    HTTP 探测和 smoke 超时，默认 60000。
+  --edit-image    真实 edit smoke 使用的参考图。
+  --allow-billable 显式允许真实 1K/2K smoke 请求。
+
+agent:doctor 默认只读、非计费。真实 generate/edit smoke 必须显式添加 --allow-billable。`);
 }
 
 async function main() {
@@ -51,11 +66,12 @@ async function main() {
         return;
     }
 
-    const baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || DEFAULT_BASE_URL);
-    const contract = runContractCheck();
+    const baseUrlInfo = resolvePlaygroundBaseUrl(options.baseUrl, process.env);
+    const baseUrl = baseUrlInfo.baseUrl;
+    const contract = runContractCheck(baseUrl);
     const capabilities = await readJsonLayer('capabilities', `${baseUrl}/api/agent/capabilities`, options.timeoutMs);
     const runtime = await readJsonLayer('runtime', `${baseUrl}/api/runtime-capabilities`, options.timeoutMs);
-    const smoke = options.allowBillable ? runBillableSmoke(options) : buildSkippedSmoke(options);
+    const smoke = options.allowBillable ? runBillableSmoke(options, baseUrl) : buildSkippedSmoke(options);
     const layers = buildLayers({ capabilities, runtime, contract, smoke });
 
     printJson({
@@ -63,14 +79,17 @@ async function main() {
         command: 'agent:doctor',
         billable: options.allowBillable,
         base_url: redactBaseUrl(baseUrl),
+        service_base_url: redactBaseUrl(baseUrl),
+        service_base_url_source: baseUrlInfo.source,
+        interactive_confirmation_required: baseUrlInfo.interactive_confirmation_required,
         layers,
         summary: buildSummary({ capabilities, runtime, contract, smoke })
     });
     if (layers.some((layer) => !layer.ok && !layer.skipped)) process.exit(1);
 }
 
-function runContractCheck() {
-    const result = runCommand(process.execPath, buildAgentDoctorArgs(), {
+function runContractCheck(baseUrl) {
+    const result = runCommand(process.execPath, buildAgentDoctorContractArgs(baseUrl), {
         env: { ...process.env, GPT_IMAGE_AGENT_CONTRACT_CHECK: '1' },
         timeoutMs: AGENT_DOCTOR_TIMEOUT_MS
     });
@@ -120,10 +139,12 @@ function buildSkippedSmoke(options) {
     };
 }
 
-function runBillableSmoke(options) {
+function runBillableSmoke(options, baseUrl) {
     const checks = [
         runSmokeCommand('generate_1k', [
             GENERATE_SCRIPT,
+            '--base-url',
+            baseUrl,
             '--allow-billable',
             '--agent',
             '--timeout-ms',
@@ -141,6 +162,8 @@ function runBillableSmoke(options) {
         checks.push(
             runSmokeCommand('edit_1k', [
                 EDIT_SCRIPT,
+                '--base-url',
+                baseUrl,
                 '--allow-billable',
                 '--agent',
                 '--timeout-ms',
@@ -158,6 +181,8 @@ function runBillableSmoke(options) {
         checks.push(
             runSmokeCommand('page_sse_edit_2k', [
                 EDIT_SCRIPT,
+                '--base-url',
+                baseUrl,
                 '--allow-billable',
                 '--page-sse',
                 '--timeout-ms',
@@ -296,14 +321,14 @@ function authHeaders() {
 
 function readOptionValue(argv, index, name) {
     const value = argv[index];
-    if (!value || value.startsWith('--')) throw new Error(`${name} requires a value.`);
+    if (!value || value.startsWith('--')) throw new Error(`${name} 需要参数值。`);
     return value;
 }
 
 function readPositiveInteger(value, name) {
-    if (!/^\d+$/.test(String(value))) throw new Error(`${name} must be a positive integer.`);
+    if (!/^\d+$/.test(String(value))) throw new Error(`${name} 必须是正整数。`);
     const parsed = Number(value);
-    if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer.`);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} 必须是正整数。`);
     return parsed;
 }
 
@@ -317,11 +342,6 @@ function normalizeBaseUrl(value) {
         throw new Error('base URL must not include credentials, query parameters, or fragments.');
     }
     return normalized;
-}
-
-function redactBaseUrl(value) {
-    const parsed = new URL(value);
-    return `${parsed.protocol}//${parsed.host}`;
 }
 
 function safePathname(url) {

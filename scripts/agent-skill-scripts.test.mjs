@@ -155,6 +155,46 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stdout.trim(), '');
     });
 
+    it('lets explicit base-url override the environment service URL in dry-run output', () => {
+        const generateResult = runSkillScript(
+            'generate-image.mjs',
+            ['--base-url', 'https://space.example.test/', '--size', '1024x1024', 'prompt'],
+            { GPT_IMAGE_PLAYGROUND_URL: 'http://localhost:4783' }
+        );
+        assert.equal(generateResult.status, 0);
+        const generateBody = JSON.parse(generateResult.stdout);
+        assert.equal(generateBody.verification_scope.service_base_url, 'https://space.example.test');
+        assert.equal(generateBody.verification_scope.service_base_url_source, 'user_provided');
+        assert.equal(generateBody.verification_scope.interactive_confirmation_required, false);
+
+        const editResult = runSkillScript(
+            'edit-image.mjs',
+            ['--base-url', 'https://space.example.test/', '--image', '/tmp/source.png', 'prompt'],
+            { GPT_IMAGE_PLAYGROUND_URL: 'http://localhost:4783' }
+        );
+        assert.equal(editResult.status, 0);
+        const editBody = JSON.parse(editResult.stdout);
+        assert.equal(editBody.verification_scope.service_base_url, 'https://space.example.test');
+        assert.equal(editBody.verification_scope.service_base_url_source, 'user_provided');
+
+        const tempRoot = mkdtempSync(join(tmpdir(), 'batch-base-url-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            writeFileSync(inputPath, JSON.stringify({ id: 'first', prompt: 'prompt' }));
+            const batchResult = runSkillScript(
+                'batch-images.mjs',
+                ['--base-url', 'https://space.example.test/', '--input', inputPath],
+                { GPT_IMAGE_PLAYGROUND_URL: 'http://localhost:4783' }
+            );
+            assert.equal(batchResult.status, 0);
+            const batchBody = JSON.parse(batchResult.stdout);
+            assert.equal(batchBody.verification_scope.service_base_url, 'https://space.example.test');
+            assert.equal(batchBody.verification_scope.service_base_url_source, 'user_provided');
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('rejects upstream probe base URLs with embedded credentials before network checks', () => {
         const result = runSkillScript('probe-upstream-image.mjs', [
             '--base-url',
@@ -240,6 +280,10 @@ describe('Agent skill script argument validation', () => {
         const body = JSON.parse(result.stdout);
         assert.equal(body.dry_run, true);
         assert.equal(body.billable, false);
+        assert.equal(body.verification_scope.mode, 'local_planning_only');
+        assert.equal(body.verification_scope.remote_capabilities_verified, false);
+        assert.equal(body.verification_scope.runtime_capacity_verified, false);
+        assert.equal(body.verification_scope.auth_verified, false);
         assert.equal(body.request.output_format, 'webp');
         assert.equal(body.request.output_compression, 100);
         assert.equal(result.stderr.trim(), '');
@@ -310,6 +354,10 @@ describe('Agent skill script argument validation', () => {
         assert.equal(body.request.stream_mode, 'auto');
         assert.equal(body.request.streaming_strategy, 'force-sse');
         assert.equal(body.request.partial_images, 2);
+        assert.equal(body.verification_scope.mode, 'local_planning_only');
+        assert.equal(body.verification_scope.remote_capabilities_verified, false);
+        assert.equal(body.verification_scope.runtime_capacity_verified, false);
+        assert.equal(body.verification_scope.auth_verified, false);
         assert.equal(result.stderr.trim(), '');
     });
 
@@ -2500,6 +2548,29 @@ describe('Agent skill script argument validation', () => {
         assert.deepEqual(matches, []);
     });
 
+    it('keeps skill frontmatter valid without requiring Python YAML tooling', () => {
+        const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+        const match = skillText.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        assert.ok(match, 'SKILL.md must start with YAML frontmatter');
+
+        const frontmatter = Object.fromEntries(
+            match[1]
+                .split(/\r?\n/)
+                .filter(Boolean)
+                .map((line) => {
+                    const separator = line.indexOf(':');
+                    assert.ok(separator > 0, `invalid frontmatter line: ${line}`);
+                    return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+                })
+        );
+
+        assert.deepEqual(Object.keys(frontmatter).sort(), ['description', 'name']);
+        assert.match(frontmatter.name, /^[a-z0-9-]+$/);
+        assert.ok(frontmatter.description.length > 0);
+        assert.ok(frontmatter.description.length <= 1024);
+        assert.doesNotMatch(frontmatter.description, /[<>]/);
+    });
+
     it('tells agents to use bundled scripts instead of ad hoc API callers', () => {
         const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
         const openAiYaml = readFileSync(join(skillRoot, 'agents/openai.yaml'), 'utf8');
@@ -2550,12 +2621,26 @@ describe('Agent skill script argument validation', () => {
         const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
         const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
 
+        assert.match(readmeText, /npm run first-run/);
+        assert.match(readmeText, /npm run first-run -- --json/);
+        assert.match(readmeText, /\.env\.agent\.local\.example/);
+        assert.match(readmeText, /--base-url http:\/\/localhost:4783/);
+        assert.match(skillText, /npm run first-run/);
+        assert.match(skillText, /-- --json/);
+        assert.match(skillText, /--base-url <url>/);
+        assert.match(skillText, /\.env\.agent\.local\.example/);
+        assert.match(apiReference, /npm run first-run/);
+        assert.match(apiReference, /npm run first-run -- --json/);
+        assert.match(apiReference, /--base-url <url>/);
+        assert.match(apiReference, /\.env\.agent\.local\.example/);
         assert.match(readmeText, /不要手动并行启动多个单张脚本/);
         assert.match(readmeText, /streamingBatch\.recommendedConcurrency/);
         assert.match(readmeText, /channelQueue\.capacityPerCredential/);
         assert.match(readmeText, /Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致/);
         assert.match(readmeText, /不要直接输出 `\.env\.local`、`\.env\*\.local`、secret 文件或原始 `docker inspect \.Config\.Env`/);
         assert.match(readmeText, /npm run env:summary/);
+        assert.match(readmeText, /verification_scope\.mode=local_planning_only/);
+        assert.match(readmeText, /Hugging Face Space Secrets 只能写入和列出名称/);
 
         assert.match(skillText, /不要手动并行启动多个单张脚本/);
         assert.match(skillText, /capacity_feedback/);
@@ -2564,6 +2649,9 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /复杂 UI、长 prompt、高质量图生图遇到 5 分钟级超时/);
         assert.match(skillText, /Codex 会话日志会持久保存命令输出/);
         assert.match(skillText, /npm run env:summary/);
+        assert.match(skillText, /verification_scope\.mode=local_planning_only/);
+        assert.match(skillText, /manifest_written=false/);
+        assert.match(skillText, /Hugging Face Space Secrets 只能写入和列出名称/);
 
         assert.match(apiReference, /不要手动并行启动多个单张脚本来绕过 `capacity_feedback`/);
         assert.match(apiReference, /streamingBatch\.recommendedConcurrency/);
@@ -2571,6 +2659,9 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /尺寸敏感任务必须使用批量 `--dimension-check` 或下载后校验/);
         assert.match(apiReference, /channel_capacity_queue_aborted/);
         assert.match(apiReference, /npm run env:summary/);
+        assert.match(apiReference, /verification_scope\.mode=local_planning_only/);
+        assert.match(apiReference, /manifest_written=false/);
+        assert.match(apiReference, /Hugging Face Space Secrets 只能写入和列出名称/);
     });
 
     it('keeps WebUI page APIs out of the Agent OpenAPI contract', () => {
@@ -2647,6 +2738,24 @@ describe('Agent skill script argument validation', () => {
             assert.match(result.stderr, /用法：generate-image\.mjs/);
             assert.equal(result.stdout.trim(), '');
             assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ERR_MODULE_NOT_FOUND|src\/lib/);
+
+            const convertHelp = spawnSync(
+                process.execPath,
+                [join(copiedSkillRoot, 'scripts/convert-image-format.mjs'), '--help'],
+                {
+                    cwd: tmpdir(),
+                    encoding: 'utf8',
+                    env: {
+                        ...process.env,
+                        NODE_PATH: ''
+                    }
+                }
+            );
+
+            assert.equal(convertHelp.status, 0);
+            assert.match(convertHelp.stderr, /用法：convert-image-format\.mjs/);
+            assert.equal(convertHelp.stdout.trim(), '');
+            assert.doesNotMatch(`${convertHelp.stdout}\n${convertHelp.stderr}`, /ERR_MODULE_NOT_FOUND|sharp/);
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
@@ -2683,6 +2792,11 @@ describe('Agent skill script argument validation', () => {
             const body = JSON.parse(result.stdout);
             assert.equal(body.dry_run, true);
             assert.equal(body.billable, false);
+            assert.equal(body.verification_scope.mode, 'local_planning_only');
+            assert.equal(body.verification_scope.remote_capabilities_verified, false);
+            assert.equal(body.verification_scope.runtime_capacity_verified, false);
+            assert.equal(body.manifest_written, false);
+            assert.equal(body.manifest_write_reason, 'dry_run');
             assert.equal(body.total, 2);
             assert.equal(body.concurrency, 1);
             assert.equal(body.tasks[0].endpoint, '/api/agent/images/generate');
@@ -5018,6 +5132,40 @@ describe('Agent skill script argument validation', () => {
                 );
                 assert.equal(requests[1].authorization, 'Bearer diag-token');
                 assert.equal(requests[2].authorization, 'Bearer diag-token');
+            }
+        );
+    });
+
+    it('lets diagnose-request explicit base-url override the environment service URL', async () => {
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ endpoints: {} }));
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/requests/req_base_url') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ found: false }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-request.mjs',
+                    ['--base-url', baseUrl, '--agent-request-id', 'req_base_url'],
+                    { GPT_IMAGE_PLAYGROUND_URL: 'http://127.0.0.1:9' }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.service_base_url, baseUrl);
+                assert.equal(body.service_base_url_source, 'user_provided');
+                assert.equal(body.interactive_confirmation_required, false);
+                assert.equal(body.agent_found, false);
             }
         );
     });

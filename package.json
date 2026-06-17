@@ -12,6 +12,7 @@
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "test:postgres": "node scripts/test-postgres-live.mjs",
     "version:check": "node scripts/check-version-metadata.mjs",
+    "first-run": "node scripts/first-run.mjs",
     "doctor": "node scripts/doctor.mjs",
     "status": "node scripts/status.mjs",
     "env:summary": "node scripts/env-summary.mjs",

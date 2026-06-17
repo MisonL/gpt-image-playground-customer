@@ -6,8 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
-import { buildAgentDoctorArgs } from './agent-doctor.mjs';
+import { buildAgentDoctorArgs, buildAgentDoctorContractArgs } from './agent-doctor.mjs';
 import { fetchJsonWithTimeout, parseJsonPayload, pickFailureOutput, runCommand } from './command-center-utils.mjs';
+import { buildFirstRunReport, formatFirstRunText } from './first-run.mjs';
 import {
     buildAdminCommands,
     buildImageUpstreamRealSmokeStatus,
@@ -21,6 +22,7 @@ import { buildVerifyPlan } from './verify.mjs';
 describe('Command center scripts', () => {
     it('exposes a small stable administrator command set', () => {
         assert.deepEqual(buildAdminCommands(), {
+            first_run: 'npm run first-run',
             doctor: 'npm run doctor',
             status: 'npm run status',
             env_summary: 'npm run env:summary',
@@ -339,10 +341,188 @@ describe('Command center scripts', () => {
         assert.deepEqual(args.slice(1), ['--contract-check', '--timeout-ms', '60000', 'contract check']);
     });
 
-    it('reports layered agent:doctor diagnostics without billable smoke by default', async () => {
+    it('routes agent:doctor contract check through an explicit base URL', () => {
+        const args = buildAgentDoctorContractArgs('https://space.example.test/');
+        assert.match(args[0], /generate-image\.mjs$/);
+        assert.deepEqual(args.slice(1), [
+            '--contract-check',
+            '--timeout-ms',
+            '60000',
+            '--base-url',
+            'https://space.example.test/',
+            'contract check'
+        ]);
+    });
+
+    it('reports first-run readiness without exposing secrets', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'first-run-'));
+        await writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
+        await writeFile(path.join(tempDir, 'package-lock.json'), '{}');
+        await writeFile(path.join(tempDir, '.env.agent.local'), 'GPT_IMAGE_AGENT_TOKEN=file-secret\n');
         await withServer(
             (request, response) => {
                 if (request.url === '/api/agent/capabilities') {
+                    assert.equal(request.headers.authorization, 'Bearer shell-secret');
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            auth: { schemes: ['bearer'] },
+                            defaults: { state_backend: 'memory' },
+                            supported: { image_backend_requirements: {} }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/runtime-capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ streaming: { defaultMode: 'auto' } }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                try {
+                    const report = await buildFirstRunReport(
+                        {
+                            cwd: tempDir,
+                            baseUrl,
+                            envFiles: ['.env.agent.local'],
+                            timeoutMs: 1000
+                        },
+                        { GPT_IMAGE_AGENT_TOKEN: 'shell-secret' }
+                    );
+
+                    assert.equal(report.command, 'first-run');
+                    assert.equal(report.billable, false);
+                    assert.equal(report.service_base_url, baseUrl);
+                    assert.equal(report.service_base_url_source, 'user_provided');
+                    assert.equal(report.interactive_confirmation_required, false);
+                    assert.deepEqual(report.agent_auth_process, {
+                        has_token: true,
+                        has_password_hash: false,
+                        has_any_auth: true
+                    });
+                    assert.deepEqual(report.private_agent_env, {
+                        exists: true,
+                        has_token: true,
+                        has_password_hash: false
+                    });
+                    assert.equal(report.service.ok, true);
+                    assert.equal(report.checks.find((check) => check.name === 'agent_auth_available_to_process').ok, true);
+                    assert.equal(
+                        report.checks.find((check) => check.name === 'agent_auth_available_to_process')
+                            .auth_in_private_env_file,
+                        true
+                    );
+                    assert.doesNotMatch(JSON.stringify(report), /shell-secret|file-secret/);
+                    assert.match(JSON.stringify(report.next_actions), /agent:doctor/);
+                } finally {
+                    await rm(tempDir, { recursive: true, force: true });
+                }
+            }
+        );
+    });
+
+    it('formats first-run as human-readable text by default', async () => {
+        const report = await buildFirstRunReport({ cwd: process.cwd(), baseUrl: 'not a url', envFiles: [] }, {});
+        const text = formatFirstRunText(report);
+
+        assert.match(text, /^首次配置检查：需要处理/m);
+        assert.match(text, /服务地址：无效/);
+        assert.match(text, /当前进程鉴权：未加载/);
+        assert.match(text, /私有 Agent env：不存在/);
+        assert.match(text, /下一步：/);
+        assert.doesNotMatch(text, /^\{/);
+    });
+
+    it('preserves path-prefixed service URLs in first-run reports', async () => {
+        // This test only checks local URL normalization in the report; .test is reserved and should not resolve.
+        const report = await buildFirstRunReport(
+            {
+                cwd: process.cwd(),
+                baseUrl: 'https://space.example.test/proxy/',
+                envFiles: [],
+                timeoutMs: 5
+            },
+            {}
+        );
+
+        assert.equal(report.service_base_url, 'https://space.example.test/proxy');
+    });
+
+    it('prints localized first-run help and option errors', async () => {
+        const help = await runNodeCommandAsync(['scripts/first-run.mjs', '--help'], {
+            env: process.env,
+            timeoutMs: 5_000
+        });
+        assert.equal(help.ok, true);
+        assert.match(help.stdout, /用法：/);
+        assert.match(help.stdout, /输出机器可读 JSON/);
+        assert.doesNotMatch(help.stdout, /Usage:/);
+
+        const invalid = await runNodeCommandAsync(['scripts/first-run.mjs', '--missing-option'], {
+            env: process.env,
+            timeoutMs: 5_000
+        });
+        assert.equal(invalid.ok, false);
+        assert.match(invalid.stdout, /"ok": false/);
+        assert.match(invalid.stdout, /未知参数：--missing-option/);
+    });
+
+    it('keeps first-run local discovery explicit when no URL is provided', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'first-run-default-'));
+        try {
+            await writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
+
+            const report = await buildFirstRunReport({ cwd: tempDir, envFiles: [], timeoutMs: 20 }, {});
+
+            assert.equal(report.service_base_url_source, 'default_local_probe');
+            assert.equal(report.interactive_confirmation_required, true);
+            assert.equal(report.ok, false);
+            assert.match(JSON.stringify(report.next_actions), /确认探测到的服务地址/);
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
+    it('points first-run at auth setup when the service rejects capabilities with 401', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'first-run-auth-'));
+        await writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
+        await withServer(
+            (_request, response) => {
+                response.writeHead(401, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'unauthorized' }));
+            },
+            async (baseUrl) => {
+                try {
+                    const report = await buildFirstRunReport(
+                        {
+                            cwd: tempDir,
+                            baseUrl: `${baseUrl}/`,
+                            envFiles: [],
+                            timeoutMs: 1000
+                        },
+                        {}
+                    );
+
+                    assert.equal(report.service_base_url, baseUrl);
+                    assert.equal(report.checks.find((check) => check.name === 'agent_auth_available_to_process').skipped, false);
+                    assert.equal(report.checks.find((check) => check.name === 'service_reachable').status, 401);
+                    assert.equal('runtime' in report.service, false);
+                    assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_AGENT_TOKEN/);
+                    assert.doesNotMatch(JSON.stringify(report.next_actions), /Start the service/);
+                } finally {
+                    await rm(tempDir, { recursive: true, force: true });
+                }
+            }
+        );
+    });
+
+    it('reports layered agent:doctor diagnostics without billable smoke by default', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/proxy/api/agent/capabilities') {
                     response.writeHead(200, { 'content-type': 'application/json' });
                     response.end(
                         JSON.stringify({
@@ -351,6 +531,110 @@ describe('Command center scripts', () => {
                             agent_streaming: {
                                 page_sse: { supported: true }
                             },
+                            agent_jobs: { supported: true },
+                            routing_rules: {
+                                high_resolution_edit: {
+                                    conditions: { operation: 'edit', max_edge: { operator: 'gt', value: 2048 } }
+                                }
+                            },
+                            supported: {
+                                image_backend_requirements: {
+                                    'responses-image-generation': {
+                                        supported: true,
+                                        enabled: true,
+                                        missing_env: []
+                                    }
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/proxy/api/runtime-capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            streaming: {
+                                defaultMode: 'auto',
+                                unavailableMarkScope: 'channel+backend+strategy+operation'
+                            },
+                            streamingBatch: { enabled: true },
+                            responsesImageBackend: { enabled: true, mode: 'experimental' }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/proxy/api/agent/images/generate') {
+                    if (request.headers['idempotency-key']) {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ images: [{ id: 'doctor-generate', filename: 'doctor.png' }] }));
+                        return;
+                    }
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/proxy/api/agent/jobs/images/generate') {
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const prefixedBaseUrl = `${baseUrl}/proxy`;
+                const result = await runNodeCommandAsync(['scripts/agent-doctor.mjs'], {
+                    env: { ...process.env, GPT_IMAGE_PLAYGROUND_URL: `${prefixedBaseUrl}/` },
+                    timeoutMs: 15_000
+                });
+
+                assert.equal(result.ok, true);
+                const body = parseJsonPayload(result.stdout, 'agent doctor');
+                assert.equal(body.ok, true);
+                assert.equal(body.billable, false);
+                assert.equal(body.summary.capabilities, 'ok');
+                assert.equal(body.summary.runtime, 'ok');
+                assert.equal(body.summary.state_backend, 'memory');
+                assert.equal(body.summary.responses_gpt2image_ready, true);
+                assert.equal(body.summary.billable_smoke, 'skipped');
+                assert.equal(body.layers.find((layer) => layer.name === 'billable_smoke').skipped, true);
+                assert.equal(body.layers.find((layer) => layer.name === 'capabilities').executable_routing_rules, true);
+                assert.equal(body.service_base_url, prefixedBaseUrl);
+                assert.equal(body.service_base_url_source, 'GPT_IMAGE_PLAYGROUND_URL');
+                assert.equal(body.interactive_confirmation_required, true);
+            }
+        );
+    });
+
+    it('uses an explicit base URL for agent:doctor billable smoke checks', async () => {
+        const hits = [];
+        await withServer(
+            (request, response) => {
+                hits.push(request.url);
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            defaults: { state_backend: 'memory' },
+                            storage: { image_storage_mode: 'indexeddb', postgres_configured: false },
+                            agent_streaming: { page_sse: { supported: true } },
                             agent_jobs: { supported: true },
                             routing_rules: {
                                 high_resolution_edit: {
@@ -385,16 +669,21 @@ describe('Command center scripts', () => {
                     return;
                 }
                 if (request.url === '/api/agent/images/generate') {
-                    response.writeHead(400, { 'content-type': 'application/json' });
-                    response.end(
-                        JSON.stringify({
-                            error: {
-                                code: 'idempotency_key_required',
-                                message: 'missing key',
-                                retryable: false
-                            }
-                        })
-                    );
+                    if (request.headers['idempotency-key']) {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ images: [{ id: 'doctor-generate', filename: 'doctor.png' }] }));
+                    } else {
+                        response.writeHead(400, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                error: {
+                                    code: 'idempotency_key_required',
+                                    message: 'missing key',
+                                    retryable: false
+                                }
+                            })
+                        );
+                    }
                     return;
                 }
                 if (request.url === '/api/agent/jobs/images/generate') {
@@ -414,24 +703,37 @@ describe('Command center scripts', () => {
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
-                const result = await runNodeCommandAsync(['scripts/agent-doctor.mjs'], {
-                    env: { ...process.env, GPT_IMAGE_PLAYGROUND_URL: baseUrl },
-                    timeoutMs: 15_000
-                });
+                const result = await runNodeCommandAsync(
+                    ['scripts/agent-doctor.mjs', '--base-url', baseUrl, '--allow-billable'],
+                    { timeoutMs: 15_000 }
+                );
 
                 assert.equal(result.ok, true);
                 const body = parseJsonPayload(result.stdout, 'agent doctor');
-                assert.equal(body.ok, true);
-                assert.equal(body.billable, false);
-                assert.equal(body.summary.capabilities, 'ok');
-                assert.equal(body.summary.runtime, 'ok');
-                assert.equal(body.summary.state_backend, 'memory');
-                assert.equal(body.summary.responses_gpt2image_ready, true);
-                assert.equal(body.summary.billable_smoke, 'skipped');
-                assert.equal(body.layers.find((layer) => layer.name === 'billable_smoke').skipped, true);
-                assert.equal(body.layers.find((layer) => layer.name === 'capabilities').executable_routing_rules, true);
+                assert.equal(body.service_base_url_source, 'user_provided');
+                assert.equal(body.interactive_confirmation_required, false);
+                assert.ok(hits.includes('/api/agent/images/generate'));
             }
         );
+    });
+
+    it('prints localized agent:doctor help and option errors', async () => {
+        const help = await runNodeCommandAsync(['scripts/agent-doctor.mjs', '--help'], {
+            env: process.env,
+            timeoutMs: 5_000
+        });
+        assert.equal(help.ok, true);
+        assert.match(help.stdout, /用法：/);
+        assert.match(help.stdout, /真实 generate\/edit smoke/);
+        assert.doesNotMatch(help.stdout, /Usage:/);
+
+        const invalid = await runNodeCommandAsync(['scripts/agent-doctor.mjs', '--bad-option'], {
+            env: process.env,
+            timeoutMs: 5_000
+        });
+        assert.equal(invalid.ok, false);
+        assert.match(invalid.stdout, /"ok": false/);
+        assert.match(invalid.stdout, /未知参数：--bad-option/);
     });
 
     it('preserves raw child output for command consumers', () => {

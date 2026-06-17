@@ -5,7 +5,6 @@ import path from 'node:path';
 import {
   errorMessage,
   assertValidImageSizeForModel,
-  normalizeBaseUrl,
   normalizeOutputFormat,
   parseRetryAfterValue,
   readCapabilitiesImageTransportTimeoutMs,
@@ -13,6 +12,7 @@ import {
   readMaxImageEdge,
   readOptionValue,
   readPartialImages,
+  resolvePlaygroundBaseUrl,
   sleep,
   validateAgentEditRequestAgainstCapabilities
 } from './lib/script-utils.mjs';
@@ -95,8 +95,10 @@ if ((!imagePath || !prompt) && !contractCheck) {
 }
 
 let baseUrl;
+let baseUrlInfo;
 try {
-  baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
+  baseUrlInfo = resolvePlaygroundBaseUrl(options.baseUrl, process.env);
+  baseUrl = baseUrlInfo.baseUrl;
 } catch (error) {
   console.error(errorMessage(error));
   process.exit(2);
@@ -110,6 +112,7 @@ if (options.dryRun || (!contractCheck && !options.allowBillable)) {
         ok: true,
         billable: false,
         dry_run: true,
+        verification_scope: buildDryRunVerificationScope(),
         endpoint: `${baseUrl}${routingGuidance.recommended_endpoint}`,
         routing_guidance: routingGuidance,
         idempotency_key: idempotencyKey,
@@ -179,6 +182,7 @@ function parseArgs(argv) {
     forceWeb: undefined,
     sseLogPath: undefined,
     timeoutMs: undefined,
+    baseUrl: undefined,
     idempotencyKey: undefined,
     imagePath: undefined,
     imagePathSource: undefined,
@@ -215,6 +219,7 @@ function parseArgs(argv) {
     else if (arg === '--force-web') parsed.forceWeb = true;
     else if (arg === '--sse-log') parsed.sseLogPath = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--base-url') parsed.baseUrl = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--image') {
       if (parsed.imagePathSource === 'option') throw new Error('--image 只能设置一次。');
@@ -241,6 +246,20 @@ function authHeaders() {
 function absoluteUrl(value) {
   if (typeof value !== 'string' || !value) return undefined;
   return new URL(value, `${baseUrl}/`).toString();
+}
+
+function buildDryRunVerificationScope() {
+  return {
+    mode: 'local_planning_only',
+    service_base_url: baseUrl,
+    service_base_url_source: baseUrlInfo.source,
+    interactive_confirmation_required: baseUrlInfo.interactive_confirmation_required,
+    remote_capabilities_verified: false,
+    runtime_capacity_verified: false,
+    auth_verified: false,
+    billable_request_sent: false,
+    note: 'Dry-run validates local request construction and routing guidance only; run --contract-check or --allow-billable to verify the remote service.'
+  };
 }
 
 function buildEditRoutingGuidance(parsed) {
@@ -448,7 +467,7 @@ async function fetchWithTimeout(url, init) {
 function printUsage() {
   console.error('用法：edit-image.mjs [options] <image-path> <prompt> 或 edit-image.mjs --image <path> [options] <prompt>');
   console.error('默认只输出 dry-run；添加 --allow-billable 才会真实编辑图片。');
-  console.error('常用参数：--image --model --size --quality --response-mode --format --output-compression --moderation --image-backend --responses-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --idempotency-key --page-sse --agent --dry-run --allow-billable');
+  console.error('常用参数：--image --model --size --quality --response-mode --format --output-compression --moderation --image-backend --responses-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --base-url --idempotency-key --page-sse --agent --dry-run --allow-billable');
   console.error('契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 edit-image.mjs 或 edit-image.mjs --contract-check');
 }
 

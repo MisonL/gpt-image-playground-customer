@@ -2,7 +2,6 @@
 import { errorMessage, normalizeOutputFormat, readConfiguredPositiveInteger, readOptionValue } from './lib/script-utils.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import sharp from 'sharp';
 
 const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
 const DEFAULT_OUTPUT_FORMAT = 'webp';
@@ -100,6 +99,7 @@ async function buildConversionPlan(parsed) {
 
 async function convertImage(plan) {
   await fs.mkdir(path.dirname(plan.output.path), { recursive: true });
+  const sharp = await loadSharp();
   let pipeline = sharp(plan.input.path, { animated: false });
   if (plan.output.format === 'jpeg') {
     pipeline = pipeline.flatten({ background: '#ffffff' }).jpeg({ quality: plan.output.quality });
@@ -120,6 +120,18 @@ async function convertImage(plan) {
     },
     size_delta_bytes: outputStat.size - plan.input.size_bytes
   };
+}
+
+async function loadSharp() {
+  try {
+    const module = await import('sharp');
+    return module.default;
+  } catch (error) {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND') {
+      throw new Error('缺少 sharp 依赖，无法执行图片格式转换；请在包含本 skill 的项目中安装依赖后重试。');
+    }
+    throw error;
+  }
 }
 
 async function readInputFileStat(inputPath) {
