@@ -1,8 +1,39 @@
+import { dirname, join, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+
 const MAX_RETRY_AFTER_SECONDS = 60;
 const DIGITS_PATTERN = /^\d+$/;
 const IMAGE_SIZE_PATTERN = /^(\d+)x(\d+)$/;
 const LEGACY_IMAGE_SIZES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536']);
 export const DEFAULT_PLAYGROUND_BASE_URL = 'http://localhost:4783';
+const DEFAULT_PRIVATE_AGENT_ENV_FILE = '.env.agent.local';
+const PRIVATE_AGENT_ENV_PREFIX = 'GPT_IMAGE_';
+const DISABLE_PRIVATE_AGENT_ENV_VALUES = new Set(['0', 'false', 'no']);
+
+export function loadPrivateAgentEnvFile(options = {}) {
+  const env = options.env || process.env;
+  if (isPrivateAgentEnvLoadingDisabled(env)) {
+    return { loaded: false, skipped: true, reason: 'disabled_by_env' };
+  }
+  const cwd = options.cwd || process.cwd();
+  const filePath = options.filePath || findPrivateAgentEnvFile(cwd);
+  if (!existsSync(filePath)) {
+    return { loaded: false, skipped: true, reason: 'file_not_found', path: filePath };
+  }
+  const entries = parsePrivateAgentEnvContent(readFileSync(filePath, 'utf8'));
+  const appliedNames = [];
+  for (const { name, value } of entries) {
+    if (!name.startsWith(PRIVATE_AGENT_ENV_PREFIX)) continue;
+    if (env[name] !== undefined) continue;
+    env[name] = value;
+    appliedNames.push(name);
+  }
+  return {
+    loaded: true,
+    path: filePath,
+    applied_names: appliedNames
+  };
+}
 
 export function readOptionValue(argv, index, name) {
   const value = argv[index];
@@ -192,6 +223,75 @@ export function resolveSameOriginUrl(baseUrl, value, label) {
 
 export function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isPrivateAgentEnvLoadingDisabled(env) {
+  return DISABLE_PRIVATE_AGENT_ENV_VALUES.has(String(env.GPT_IMAGE_AGENT_LOAD_ENV_FILE || '').trim().toLowerCase());
+}
+
+function findPrivateAgentEnvFile(cwd) {
+  const start = resolve(cwd);
+  let current = start;
+  while (true) {
+    const candidate = join(current, DEFAULT_PRIVATE_AGENT_ENV_FILE);
+    if (existsSync(candidate)) return candidate;
+    if (isPrivateAgentEnvSearchBoundary(current) || dirname(current) === current) {
+      return join(start, DEFAULT_PRIVATE_AGENT_ENV_FILE);
+    }
+    current = dirname(current);
+  }
+}
+
+function isPrivateAgentEnvSearchBoundary(directory) {
+  return existsSync(join(directory, '.git')) || isPlaygroundProjectRoot(directory) || isStandaloneSkillRoot(directory);
+}
+
+function isPlaygroundProjectRoot(directory) {
+  return existsSync(join(directory, 'package.json')) && existsSync(join(directory, 'skills/gpt-image-playground-agent/SKILL.md'));
+}
+
+function isStandaloneSkillRoot(directory) {
+  return (
+    existsSync(join(directory, 'SKILL.md')) &&
+    existsSync(join(directory, 'scripts')) &&
+    !isPlaygroundProjectRoot(dirname(dirname(directory)))
+  );
+}
+
+function parsePrivateAgentEnvContent(content) {
+  const entries = [];
+  for (const line of content.split(/\r?\n/)) {
+    const parsed = parsePrivateAgentEnvLine(line);
+    if (parsed) entries.push(parsed);
+  }
+  return entries;
+}
+
+function parsePrivateAgentEnvLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('#')) return undefined;
+  const match = trimmed.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+  if (!match) return undefined;
+  return { name: match[1], value: parsePrivateAgentEnvValue(match[2].trim()) };
+}
+
+function parsePrivateAgentEnvValue(value) {
+  if (value.length < 2) return value;
+  if (value.startsWith('"') || value.startsWith("'")) return parseQuotedPrivateAgentEnvValue(value);
+  return stripPrivateAgentEnvComment(value).trim();
+}
+
+function parseQuotedPrivateAgentEnvValue(value) {
+  const quote = value[0];
+  const closeIndex = value.indexOf(quote, 1);
+  if (closeIndex < 0) return value.slice(1);
+  return value.slice(1, closeIndex);
+}
+
+function stripPrivateAgentEnvComment(value) {
+  const index = value.search(/\s#/);
+  if (index < 0) return value;
+  return value.slice(0, index);
 }
 
 function assertPositiveIntegerDimensions(width, height, label) {

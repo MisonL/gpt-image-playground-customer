@@ -2,9 +2,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { AGENT_ENDPOINTS } from './lib/agent-api-paths.mjs';
-import { errorMessage, readOptionValue, resolvePlaygroundBaseUrl } from './lib/script-utils.mjs';
+import { errorMessage, loadPrivateAgentEnvFile, readOptionValue, resolvePlaygroundBaseUrl } from './lib/script-utils.mjs';
 
 const MAX_CLIENT_REQUEST_IDS = 50;
+loadPrivateAgentEnvFile();
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 

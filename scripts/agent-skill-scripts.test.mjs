@@ -6,7 +6,7 @@ import {
 import { AGENT_ENDPOINTS } from '../src/lib/agent-api-paths.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -124,6 +124,144 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.status, 2);
         assert.match(result.stderr, /GPT_IMAGE_AGENT_MAX_ATTEMPTS 必须是正整数/);
         assert.equal(result.stdout.trim(), '');
+    });
+
+    it('loads private agent env files for CLI scripts without overriding shell env', () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'agent-env-load-'));
+        try {
+            mkdirSync(join(tempRoot, '.git'));
+            writeFileSync(
+                join(tempRoot, '.env.agent.local'),
+                [
+                    'GPT_IMAGE_PLAYGROUND_URL=https://file-space.example.test',
+                    'GPT_IMAGE_AGENT_MAX_ATTEMPTS=2',
+                    'GPT_IMAGE_AGENT_TOKEN=file-token',
+                    'GPT_IMAGE_APP_PASSWORD_HASH=file-hash',
+                    'GPT_IMAGE_UPSTREAM_BASE_URL=https://upstream.example.test/v1',
+                    'GPT_IMAGE_UPSTREAM_API_KEY=upstream-secret'
+                ].join('\n')
+            );
+
+            const loaded = runSkillScript('generate-image.mjs', ['prompt'], {}, { cwd: tempRoot, loadPrivateAgentEnv: true });
+            assert.equal(loaded.status, 0);
+            const loadedBody = JSON.parse(loaded.stdout);
+            assert.equal(loadedBody.verification_scope.service_base_url, 'https://file-space.example.test');
+            assert.equal(loadedBody.verification_scope.service_base_url_source, 'GPT_IMAGE_PLAYGROUND_URL');
+            assert.equal(loadedBody.verification_scope.interactive_confirmation_required, true);
+            assert.doesNotMatch(loaded.stdout, /file-token|file-hash|upstream-secret/);
+            assert.equal(loaded.stderr.trim(), '');
+
+            const fromNestedCwd = runSkillScript(
+                'generate-image.mjs',
+                ['prompt'],
+                {},
+                { cwd: join(tempRoot, 'nested', 'scripts'), loadPrivateAgentEnv: true, createCwd: true }
+            );
+            assert.equal(fromNestedCwd.status, 0);
+            const nestedBody = JSON.parse(fromNestedCwd.stdout);
+            assert.equal(nestedBody.verification_scope.service_base_url, 'https://file-space.example.test');
+
+            const parentRoot = mkdtempSync(join(tmpdir(), 'agent-env-parent-'));
+            try {
+                writeFileSync(
+                    join(parentRoot, '.env.agent.local'),
+                    'GPT_IMAGE_PLAYGROUND_URL=https://parent-space.example.test'
+                );
+                const childRoot = join(parentRoot, 'child-repo');
+                mkdirSync(join(childRoot, '.git'), { recursive: true });
+                const bounded = runSkillScript(
+                    'generate-image.mjs',
+                    ['prompt'],
+                    {},
+                    { cwd: join(childRoot, 'nested'), loadPrivateAgentEnv: true, createCwd: true }
+                );
+                assert.equal(bounded.status, 0);
+                const boundedBody = JSON.parse(bounded.stdout);
+                assert.equal(boundedBody.verification_scope.service_base_url, 'http://localhost:4783');
+
+                const projectCopyRoot = join(parentRoot, 'project-copy');
+                mkdirSync(join(projectCopyRoot, 'skills/gpt-image-playground-agent'), { recursive: true });
+                mkdirSync(join(projectCopyRoot, 'nested'), { recursive: true });
+                writeFileSync(join(projectCopyRoot, 'package.json'), JSON.stringify({ name: 'gpt-image-playground' }));
+                writeFileSync(join(projectCopyRoot, 'skills/gpt-image-playground-agent/SKILL.md'), '# skill\n');
+                const projectBounded = runSkillScript(
+                    'generate-image.mjs',
+                    ['prompt'],
+                    {},
+                    { cwd: join(projectCopyRoot, 'nested'), loadPrivateAgentEnv: true }
+                );
+                assert.equal(projectBounded.status, 0);
+                const projectBoundedBody = JSON.parse(projectBounded.stdout);
+                assert.equal(projectBoundedBody.verification_scope.service_base_url, 'http://localhost:4783');
+
+                writeFileSync(
+                    join(projectCopyRoot, '.env.agent.local'),
+                    'GPT_IMAGE_PLAYGROUND_URL=https://project-copy.example.test'
+                );
+                const projectLoaded = runSkillScript(
+                    'generate-image.mjs',
+                    ['prompt'],
+                    {},
+                    { cwd: join(projectCopyRoot, 'nested'), loadPrivateAgentEnv: true }
+                );
+                assert.equal(projectLoaded.status, 0);
+                const projectLoadedBody = JSON.parse(projectLoaded.stdout);
+                assert.equal(projectLoadedBody.verification_scope.service_base_url, 'https://project-copy.example.test');
+
+                const projectSkillScriptsLoaded = runSkillScript(
+                    'generate-image.mjs',
+                    ['prompt'],
+                    {},
+                    {
+                        cwd: join(projectCopyRoot, 'skills/gpt-image-playground-agent/scripts'),
+                        loadPrivateAgentEnv: true,
+                        createCwd: true
+                    }
+                );
+                assert.equal(projectSkillScriptsLoaded.status, 0);
+                const projectSkillScriptsLoadedBody = JSON.parse(projectSkillScriptsLoaded.stdout);
+                assert.equal(
+                    projectSkillScriptsLoadedBody.verification_scope.service_base_url,
+                    'https://project-copy.example.test'
+                );
+            } finally {
+                rmSync(parentRoot, { recursive: true, force: true });
+            }
+
+            const shellWins = runSkillScript(
+                'generate-image.mjs',
+                ['prompt'],
+                { GPT_IMAGE_PLAYGROUND_URL: 'https://shell-space.example.test' },
+                { cwd: tempRoot, loadPrivateAgentEnv: true }
+            );
+            assert.equal(shellWins.status, 0);
+            const shellBody = JSON.parse(shellWins.stdout);
+            assert.equal(shellBody.verification_scope.service_base_url, 'https://shell-space.example.test');
+
+            const disabled = runSkillScript(
+                'generate-image.mjs',
+                ['prompt'],
+                { GPT_IMAGE_AGENT_LOAD_ENV_FILE: '0' },
+                { cwd: tempRoot }
+            );
+            assert.equal(disabled.status, 0);
+            const disabledBody = JSON.parse(disabled.stdout);
+            assert.equal(disabledBody.verification_scope.service_base_url, 'http://localhost:4783');
+
+            const probe = runSkillScript(
+                'probe-upstream-image.mjs',
+                ['--timeout-ms', '1'],
+                {},
+                { cwd: tempRoot, loadPrivateAgentEnv: true }
+            );
+            assert.notEqual(probe.status, 2);
+            const probeBody = JSON.parse(probe.stdout);
+            assert.equal(probeBody.base_url, 'https://upstream.example.test/v1');
+            assert.equal(probeBody.api_key_configured, true);
+            assert.doesNotMatch(probe.stdout, /upstream-secret/);
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
     });
 
     it('inherits longer image transport timeout from capabilities by default', () => {
@@ -918,6 +1056,28 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stderr);
                 assert.equal(body.error.code, 'page_sse_auth_required');
                 assert.match(body.error.message, /GPT_IMAGE_APP_PASSWORD_HASH/);
+                assert.match(body.error.message, /\.env\.agent\.local/);
+                assert.match(body.error.message, /GPT_IMAGE_AGENT_TOKEN/);
+                assert.equal(body.summary.ok, false);
+                assert.equal(body.summary.billable, false);
+                assert.equal(body.summary.request_id, null);
+                assert.equal(body.summary.idempotency_key.startsWith('agent-generate-'), true);
+                assert.deepEqual(body.summary.artifact_ids, []);
+                assert.deepEqual(body.summary.content_urls, []);
+                assert.deepEqual(body.summary.absolute_content_urls, []);
+                assert.equal(body.summary.route_mode, 'page_sse');
+                assert.equal(body.summary.image_backend, null);
+                assert.equal(body.summary.stream_mode, null);
+                assert.equal(body.summary.streaming_strategy, null);
+                assert.equal(body.summary.selected_channel_id, null);
+                assert.equal(body.summary.upstream_host, null);
+                assert.equal(body.summary.transport_error_kind, null);
+                assert.equal(body.summary.retry_after_ms, null);
+                assert.equal(body.summary.retry_after_seconds, null);
+                assert.equal(body.summary.cooldown_until, null);
+                assert.equal(body.summary.cooldown_target, null);
+                assert.equal(body.summary.elapsed_source, 'client_script');
+                assert.equal(typeof body.summary.elapsed_breakdown.client_script_ms, 'number');
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
                     ['GET /api/agent/capabilities']
@@ -1457,7 +1617,8 @@ describe('Agent skill script argument validation', () => {
                                     content_url: '/api/agent/artifacts/artifact-off/content',
                                     metadata_url: '/api/agent/artifacts/artifact-off'
                                 }
-                            ]
+                            ],
+                            timing: { server_elapsed_ms: 4321 }
                         })
                     );
                     return;
@@ -1496,7 +1657,13 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.summary.idempotency_key.startsWith('agent-generate-'), true);
                 assert.equal(body.summary.transport, 'agent_json');
                 assert.equal(body.summary.endpoint, '/api/agent/images/generate');
+                assert.equal(body.summary.route_mode, 'agent');
+                assert.deepEqual(body.summary.content_urls, ['/api/agent/artifacts/artifact-off/content']);
+                assert.deepEqual(body.summary.absolute_content_urls, [`${baseUrl}/api/agent/artifacts/artifact-off/content`]);
                 assert.equal(typeof body.summary.elapsed_ms, 'number');
+                assert.equal(body.summary.elapsed_source, 'client_script');
+                assert.equal(body.summary.server_elapsed_ms, 4321);
+                assert.equal(body.summary.elapsed_breakdown.upstream_or_server_ms, 4321);
                 assert.equal(body.summary.next_action, 'done');
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
@@ -1620,11 +1787,22 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stdout);
                 assert.equal(body.images[0].filename, 'small-page.png');
                 assert.equal(body.images[0].absolute_path, `${baseUrl}/api/image/small-page.png`);
-                assert.deepEqual(body.routing, { transport: 'page_sse', endpoint: '/api/images' });
+                assert.deepEqual(body.routing, {
+                    transport: 'page_sse',
+                    endpoint: '/api/images',
+                    route_mode: 'page_sse',
+                    fallback_endpoint: '/api/agent/images/generate',
+                    fallback_mode: 'manual_after_diagnosis',
+                    stream_mode: null,
+                    streaming_strategy: null
+                });
                 assert.equal(body.summary.ok, true);
                 assert.equal(body.summary.billable, true);
                 assert.equal(body.summary.transport, 'page_sse');
                 assert.equal(body.summary.endpoint, '/api/images');
+                assert.equal(body.summary.route_mode, 'page_sse');
+                assert.deepEqual(body.summary.content_urls, ['/api/image/small-page.png']);
+                assert.deepEqual(body.summary.absolute_content_urls, [`${baseUrl}/api/image/small-page.png`]);
                 assert.equal(typeof body.summary.elapsed_ms, 'number');
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
@@ -2721,6 +2899,26 @@ describe('Agent skill script argument validation', () => {
         const copiedSkillRoot = join(tempRoot, 'gpt-image-playground-agent');
         try {
             cpSync(skillRoot, copiedSkillRoot, { recursive: true });
+            writeFileSync(
+                join(tempRoot, '.env.agent.local'),
+                'GPT_IMAGE_PLAYGROUND_URL=https://parent-space.example.test'
+            );
+            const standaloneRun = spawnSync(
+                process.execPath,
+                [join(copiedSkillRoot, 'scripts/generate-image.mjs'), 'prompt'],
+                {
+                    cwd: join(copiedSkillRoot, 'scripts'),
+                    encoding: 'utf8',
+                    env: {
+                        ...buildIsolatedSkillScriptEnv({ loadPrivateAgentEnv: true }),
+                        GPT_IMAGE_AGENT_LOAD_ENV_FILE: '1'
+                    }
+                }
+            );
+            assert.equal(standaloneRun.status, 0);
+            const standaloneBody = JSON.parse(standaloneRun.stdout);
+            assert.equal(standaloneBody.verification_scope.service_base_url, 'http://localhost:4783');
+
             const result = spawnSync(
                 process.execPath,
                 [join(copiedSkillRoot, 'scripts/generate-image.mjs'), '--help'],
@@ -5443,12 +5641,32 @@ describe('Agent skill script argument validation', () => {
     });
 });
 
-function runSkillScript(filename, args, env = {}) {
+function runSkillScript(filename, args, env = {}, options = {}) {
+    const baseEnv = buildIsolatedSkillScriptEnv({ loadPrivateAgentEnv: options.loadPrivateAgentEnv });
+    if (options.createCwd) mkdirSync(options.cwd, { recursive: true });
     return spawnSync(process.execPath, [join(skillScriptsRoot, filename), ...args], {
-        cwd: repoRoot,
+        cwd: options.cwd || repoRoot,
         encoding: 'utf8',
-        env: { ...process.env, ...env }
+        env: { ...baseEnv, ...env }
     });
+}
+
+function buildIsolatedSkillScriptEnv(options = {}) {
+    const keepNames = [
+        'HOME',
+        'PATH',
+        'SystemRoot',
+        'TEMP',
+        'TMP',
+        'TMPDIR',
+        'USERPROFILE'
+    ];
+    const isolated = {};
+    for (const name of keepNames) {
+        if (process.env[name] !== undefined) isolated[name] = process.env[name];
+    }
+    if (!options.loadPrivateAgentEnv) isolated.GPT_IMAGE_AGENT_LOAD_ENV_FILE = '0';
+    return isolated;
 }
 
 function listTextFiles(root) {

@@ -10,6 +10,7 @@ import {
     readMaxImageEdge,
     readOptionValue,
     readPartialImages,
+    loadPrivateAgentEnvFile,
     resolvePlaygroundBaseUrl,
     resolveSameOriginUrl,
     sleep,
@@ -63,6 +64,7 @@ const GENERATE_PRESETS = {
         '2'
     ]
 };
+loadPrivateAgentEnvFile();
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1' || process.argv.includes('--contract-check');
@@ -187,8 +189,9 @@ try {
             console.log(
                 JSON.stringify(
                     buildSuccessOutput(formatPageSseOutput(result), {
-                        transport: 'page_sse',
-                        endpoint: PAGE_SSE_ENDPOINT
+                        ...buildPageSseSummaryRouting(),
+                        fallback_endpoint: AGENT_ENDPOINTS.generate,
+                        fallback_mode: 'manual_after_diagnosis'
                     }, completeScriptTiming(scriptTiming)),
                     null,
                     2
@@ -696,7 +699,7 @@ function assertPageSseReady(capabilitiesValue) {
     if (pageSse?.auth?.required === true && !passwordHash) {
         throw createScriptError(
             'page_sse_auth_required',
-            '页面 SSE 路径需要表单字段 passwordHash；请设置 GPT_IMAGE_APP_PASSWORD_HASH 后重试。'
+            '页面 SSE 路径需要表单字段 passwordHash；请在本机私有 .env.agent.local 中设置 GPT_IMAGE_APP_PASSWORD_HASH，或导出该环境变量后重试。只有 GPT_IMAGE_AGENT_TOKEN 不能用于页面 SSE 表单鉴权。'
         );
     }
 }
@@ -1000,10 +1003,20 @@ function buildPageSseFailureOutput(error, timing = completeScriptTiming(scriptTi
 
 function buildPageSseRouting(fallbackMode) {
     return {
-        transport: 'page_sse',
-        endpoint: PAGE_SSE_ENDPOINT,
+        ...buildPageSseSummaryRouting(),
         fallback_endpoint: AGENT_ENDPOINTS.generate,
         fallback_mode: fallbackMode
+    };
+}
+
+function buildPageSseSummaryRouting() {
+    return {
+        transport: 'page_sse',
+        endpoint: PAGE_SSE_ENDPOINT,
+        route_mode: 'page_sse',
+        image_backend: normalizeImageBackendForPage(requestBody?.image_backend),
+        stream_mode: requestBody?.stream_mode || null,
+        streaming_strategy: requestBody?.streaming_strategy || null
     };
 }
 
