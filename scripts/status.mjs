@@ -35,6 +35,7 @@ export function buildAdminCommands() {
         verify: 'npm run verify',
         deploy_local: 'npm run deploy:local',
         deploy_space: 'npm run deploy:space',
+        docker_cleanup_fixtures: 'npm run docker:cleanup-fixtures',
         agent_doctor: 'npm run agent:doctor',
         hf_space_doctor: 'npm run doctor:hf-space',
         hf_space_smoke: 'npm run smoke:hf-space'
