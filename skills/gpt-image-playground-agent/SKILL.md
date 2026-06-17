@@ -20,7 +20,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - 不要临时编写 Node/Python/shell 脚本、curl 命令或手写 fetch/FormData 来重复实现这些脚本已经覆盖的 API 调用。
 - 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下 ad hoc 调用脚本。
 - 先用 dry-run 或 `--contract-check` 检查请求、路由和鉴权；只有用户明确允许真实计费时才加 `--allow-billable`。
-- 真实调用成功或失败后，优先读取脚本输出的 `summary`。它是面向 Agent 的机器摘要，包含 `billable`、请求 ID、幂等键、产物 URL、耗时、路由、渠道、上游 host、脱敏请求头、重试和下一步动作；不要再先手查 SQLite、Docker logs 或上游后台。
+- 真实调用成功或失败后，优先读取脚本输出的 `summary`。它是面向 Agent 的机器摘要，包含 `billable`、请求 ID、幂等键、产物 URL、耗时、耗时拆分、路由、渠道、上游 host、脱敏请求头、重试和下一步动作；不要再先手查 SQLite、Docker logs 或上游后台。
 
 ## 产品边界
 
@@ -46,7 +46,7 @@ Agent API 只作为自动化客户端接口，不作为首战场景或用户验�
 2. 定位服务基础地址。用户明确提供 URL 时直接使用该 URL；否则先检查 `GPT_IMAGE_PLAYGROUND_URL`，再探测默认本地地址 `http://localhost:4783`。
 3. 交互式任务中，如果只发现环境变量或本地默认地址，先把发现到的地址、服务可达性和鉴权需求告诉用户，并确认是否使用它；不要把自动发现到的本地服务直接当成用户意图。如果用户随后提供其他服务地址，以用户提供的地址为准。
 4. 非交互式任务无法向用户确认时，按“用户提供 URL > `GPT_IMAGE_PLAYGROUND_URL` > 默认本地探测地址”的顺序执行，并在输出里标明服务地址来源和是否只是自动发现。
-5. 位于仓库根目录且用户是首次配置、换机器、服务地址不确定或 token 不确定时，先运行 `npm run first-run`。该命令只读、非计费、不写 env 文件，默认输出中文摘要；`-- --json` 输出机器可读 JSON。它会报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程是否拿到 Agent 鉴权，以及 `.env.agent.local` 是否存在私有鉴权配置；如果 token 只在私有 env 文件中，先加载到 shell，再运行 skill 脚本。
+5. 位于仓库根目录且用户是首次配置、换机器、服务地址不确定或 token 不确定时，先运行 `npm run first-run`。该命令只读、非计费、不写 env 文件，默认输出中文摘要；`-- --json` 输出机器可读 JSON。它会报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程是否拿到 Agent 鉴权、页面 SSE 鉴权是否可用，以及 `.env.agent.local` 是否存在私有鉴权配置。Agent CLI 默认从当前仓库根目录自动读取 `.env.agent.local`，shell 环境变量优先；如需禁用自动读取，设置 `GPT_IMAGE_AGENT_LOAD_ENV_FILE=0`。
 6. 让脚本请求 `GET /api/agent/capabilities`。如果所选地址不可达、404、不是 JSON 或不是 Agent capabilities 响应，交互式任务中向用户询问实际部署地址、端口、域名和是否需要鉴权；非交互式任务中显式失败并输出下一步动作。
 7. 读取 capabilities 中的认证方式、模型、模型级限制、`image_transport`、`routing_rules`、Agent 流式边界、页面 SSE 鉴权、后端 runtime enablement、状态后端和端点路径；不要硬编码假设部署方式。
 8. 为每个业务操作生成稳定的 `Idempotency-Key`。网络中断、运行中轮询或非终态重试复用原 key；同一 key 已进入 `failed` 终态后不再用于触发新执行，必须先诊断原因，再创建新的业务操作和新的 key。
@@ -69,7 +69,7 @@ Authorization: Bearer <token>
 
 此时 Agent 端点只接受 Bearer token，不会回退到访问码哈希。如果未配置 `AGENT_API_TOKEN` 但配置了页面访问码 `APP_PASSWORD`，Agent 端点发送 `X-App-Password-Hash`。下载或删除产物时必须复用 capabilities 声明的同一 Agent 鉴权方式。
 
-页面端 `/api/images` SSE 是独立页面契约，读取 `agent_streaming.page_sse.auth`。当该字段声明 `required=true` 时，必须在 form-data 中发送 `passwordHash`；脚本侧对应环境变量是 `GPT_IMAGE_APP_PASSWORD_HASH`。即使 `auth.schemes` 只返回 `bearer`，混合配置下 page SSE 仍可能需要这个表单访问码哈希。页面 SSE 还会把同一业务 key 写入 form-data `clientRequestId`，长度不得超过 `agent_streaming.page_sse.client_request_id.max_length`。
+页面端 `/api/images` SSE 是独立页面契约，读取 `agent_streaming.page_sse.auth`。当该字段声明 `required=true` 时，必须在 form-data 中发送 `passwordHash`；脚本侧对应环境变量是 `GPT_IMAGE_APP_PASSWORD_HASH`。即使 `auth.schemes` 只返回 `bearer`，混合配置下 page SSE 仍可能需要这个表单访问码哈希；`GPT_IMAGE_AGENT_TOKEN` 不能替代页面 SSE 表单鉴权。页面 SSE 还会把同一业务 key 写入 form-data `clientRequestId`，长度不得超过 `agent_streaming.page_sse.client_request_id.max_length`。
 
 ## 调用约束
 
@@ -132,8 +132,10 @@ Authorization: Bearer <token>
 | `service_base_url` / `verification_scope.service_base_url` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。 |
 | `service_base_url_source` / `verification_scope.service_base_url_source` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。 |
 | `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。 |
-| `agent_auth_process.has_token` | `first-run --json` | 当前 shell 是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
-| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；存在不代表当前 shell 已加载。 |
+| `agent_auth_process.has_token` | `first-run --json` | 当前进程是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
+| `page_sse_auth_available_to_process` | `first-run --json` | 目标服务要求页面 SSE `passwordHash` 时，当前进程是否已加载 `GPT_IMAGE_APP_PASSWORD_HASH`。 |
+| `summary.page_sse_auth_ready` | `agent:doctor` | 页面 SSE 鉴权是否已满足；为 `false` 时不要运行 `--page-sse` 真实计费请求。 |
+| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |
 | `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
 | `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
 
@@ -227,14 +229,14 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 
 - `GPT_IMAGE_PLAYGROUND_URL`：服务基础地址，可指向本机、局域网、云服务器或域名；脚本未设置时默认尝试 `http://localhost:4783`。脚本参数 `--base-url` 优先级高于该环境变量。
 - `GPT_IMAGE_AGENT_TOKEN`：Bearer token。
-- `GPT_IMAGE_APP_PASSWORD_HASH`：使用 `APP_PASSWORD` 访问码部署时，Agent 端点发送为 `X-App-Password-Hash`，页面 SSE 发送为 form-data `passwordHash`。
+- `GPT_IMAGE_APP_PASSWORD_HASH`：使用 `APP_PASSWORD` 访问码部署时，Agent 端点发送为 `X-App-Password-Hash`，页面 SSE 发送为 form-data `passwordHash`。公网 Space 同时配置 `AGENT_API_TOKEN` 和 `APP_PASSWORD` 时，Agent JSON 需要 `GPT_IMAGE_AGENT_TOKEN`，页面 SSE 仍需要这个哈希。
 - `GPT_IMAGE_AGENT_IDEMPOTENCY_KEY`：跨脚本进程恢复同一操作时复用的幂等键；也供 `diagnose-request.mjs` 按 Agent 幂等键查询 state。脚本不会自动重试已终态失败的 key。
 - `GPT_IMAGE_AGENT_CLIENT_REQUEST_ID`：供 `diagnose-request.mjs` 读取的页面请求 ID；页面 SSE 路径通常等于脚本使用的 `Idempotency-Key`，多个 ID 可重复传 `--client-request-id`。
 - `GPT_IMAGE_AGENT_REQUEST_ID`：供 `diagnose-request.mjs` 读取 Agent state 请求诊断的 Agent `request_id`。
 - `GPT_IMAGE_AGENT_MAX_ATTEMPTS`：最大尝试次数，默认 `3`。
 - `GPT_IMAGE_AGENT_CONTRACT_CHECK=1`：只检查 capabilities 和错误契约，不触发真实生图或编辑。
 
-Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 仍必须通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。
+Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 仍必须通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`，shell 环境变量优先。不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。
 
 上游请求头由服务端统一生成。默认 `User-Agent` 是 `gpt-image-playground/<package-version>`；可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖全局 UA，也可用 `OPENAI_CHANNEL_N_USER_AGENT` 和 `OPENAI_CHANNEL_N_UPSTREAM_HEADERS_JSON` 覆盖单渠道安全 header。`Authorization`、`Accept`、`Content-Type`、`Content-Length` 和 `Host` 等协议头不可由 extra headers 覆盖；capabilities、status 和 diagnostics 只暴露 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`，不暴露 secret 值。
 

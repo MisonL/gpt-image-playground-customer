@@ -35,7 +35,7 @@ npm run first-run -- --json --base-url https://your-space.hf.space
 1. 运行 `npm install`。
 2. 启动服务：本地开发用 `npm run dev`，Docker 用 `docker compose up -d --build --remove-orphans`。
 3. 运行 `npm run first-run` 看中文摘要；如果要检查 Space 或内网服务，使用 `npm run first-run -- --base-url <url>`。
-4. 如果 Agent API 需要鉴权，复制 `.env.agent.local.example` 为 `.env.agent.local`，填入本机私有 token 后加载到 shell，再运行 `npm run first-run` 或 skill 脚本。
+4. 如果 Agent API 需要鉴权，复制 `.env.agent.local.example` 为 `.env.agent.local` 并填入本机私有 token。Agent CLI 会从当前仓库根目录自动读取该文件；shell 环境变量仍然优先。
 
 推荐 Docker：
 
@@ -194,11 +194,13 @@ AI Agent 集成时优先调用 skill 内置脚本，而不是临时手写 fetch�
 
 交互式任务中，Agent 应先定位服务地址：用户明确提供 URL 时直接使用该 URL；否则先检查 `GPT_IMAGE_PLAYGROUND_URL`，再探测默认本地地址 `http://localhost:4783`。如果只发现环境变量或本地服务，先向用户确认是否使用；用户提供其他地址时，以用户提供的地址为准。非交互式任务无法确认时，按同一顺序自动选择，并在输出里说明地址来源。
 
-新环境或不确定服务地址时先运行 `npm run first-run`。它会只读报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程是否拿到 Agent 鉴权，以及 `.env.agent.local` 是否存在私有鉴权配置；如果 token 只在私有 env 文件中，先把它加载到 shell，再运行 skill 脚本。
+新环境或不确定服务地址时先运行 `npm run first-run`。它会只读报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程是否拿到 Agent 鉴权，以及 `.env.agent.local` 是否存在私有鉴权配置。Agent CLI 会从当前仓库根目录自动读取 `.env.agent.local`，shell 环境变量仍然优先；如需禁用自动读取，设置 `GPT_IMAGE_AGENT_LOAD_ENV_FILE=0`。
 
 dry-run 只做本地请求构造和静态路由规划，不读取远端 capabilities，也不验证远端鉴权、渠道容量或 manifest 写入。脚本输出里的 `verification_scope.mode=local_planning_only` 表示还没有证明远端服务可执行；需要远端合同检查时使用 `--contract-check`，真实执行必须显式添加 `--allow-billable`。
 
-subagent 或自动化任务要固定服务地址时，优先给脚本传 `--base-url`，不要只依赖默认 localhost。`generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 和 `npm run agent:doctor -- --base-url <url>` 都支持显式服务地址。首次配置 Agent 鉴权时复制 `.env.agent.local.example` 为 `.env.agent.local`，填入本机私有 token 后加载到 shell；不要把 `.env.agent.local` 提交或粘到任务日志。
+subagent 或自动化任务要固定服务地址时，优先给脚本传 `--base-url`，不要只依赖默认 localhost。`generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 和 `npm run agent:doctor -- --base-url <url>` 都支持显式服务地址。首次配置 Agent 鉴权时复制 `.env.agent.local.example` 为 `.env.agent.local` 并填入本机私有 token；不要把 `.env.agent.local` 提交或粘到任务日志。
+
+公网部署常见有两层鉴权：`GPT_IMAGE_AGENT_TOKEN` 只用于 `/api/agent/*` Bearer 鉴权；页面 SSE `/api/images` 仍可能要求 `GPT_IMAGE_APP_PASSWORD_HASH` 作为 `passwordHash` 表单字段。使用 `--page-sse`、Responses backend edit、大图默认页面 SSE 或批量页面 SSE 前，先用 `npm run first-run -- --base-url <url> --json` 或 `npm run agent:doctor -- --base-url <url>` 检查 `page_sse_auth_available_to_process` / `page_sse_auth_ready`。
 
 1. 只读检查当前服务能力，不触发计费：
 
@@ -306,8 +308,10 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 | `service_base_url` / `verification_scope.service_base_url` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。 |
 | `service_base_url_source` / `verification_scope.service_base_url_source` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。 |
 | `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。 |
-| `agent_auth_process.has_token` | `first-run --json` | 当前 shell 是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
-| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；存在不代表当前 shell 已加载。 |
+| `agent_auth_process.has_token` | `first-run --json` | 当前进程是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
+| `page_sse_auth_available_to_process` | `first-run --json` | 目标服务要求页面 SSE `passwordHash` 时，当前进程是否已加载 `GPT_IMAGE_APP_PASSWORD_HASH`。 |
+| `summary.page_sse_auth_ready` | `agent:doctor` | 页面 SSE 鉴权是否已满足；为 `false` 时不要运行 `--page-sse` 真实计费请求。 |
+| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |
 | `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
 | `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
 
@@ -320,7 +324,7 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 | `GPT_IMAGE_APP_PASSWORD_HASH` | 使用页面访问码部署时的访问码哈希；页面 SSE 会作为 `passwordHash` 表单字段发送。 |
 | `GPT_IMAGE_AGENT_IDEMPOTENCY_KEY` | 跨脚本进程复用同一业务操作的幂等键。 |
 
-Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端 Space 配置了 `AGENT_API_TOKEN` 后，本机 Agent 仍需要通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；不要把 token 写进 README、任务 JSONL、manifest 或命令日志。仓库提供 `.env.agent.local.example` 作为私有本机配置模板。
+Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端 Space 配置了 `AGENT_API_TOKEN` 后，本机 Agent 仍需要通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；如果 Space 同时配置了 `APP_PASSWORD`，页面 SSE 还需要 `GPT_IMAGE_APP_PASSWORD_HASH`。Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`，shell 环境变量优先。不要把 token、访问码或哈希写进 README、任务 JSONL、manifest 或命令日志。仓库提供 `.env.agent.local.example` 作为私有本机配置模板。
 
 接口边界：
 
