@@ -10,6 +10,7 @@ import {
   readMaxImageEdge,
   readOptionValue,
   readPartialImages,
+  loadPrivateAgentEnvFile,
   resolvePlaygroundBaseUrl,
   resolveSameOriginUrl,
   validateAgentEditRequestAgainstCapabilities,
@@ -101,6 +102,7 @@ const TASK_FIELDS = new Set([
   ...EDIT_ONLY_FIELDS
 ]);
 
+loadPrivateAgentEnvFile();
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 

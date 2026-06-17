@@ -12,6 +12,7 @@ import {
   readMaxImageEdge,
   readOptionValue,
   readPartialImages,
+  loadPrivateAgentEnvFile,
   resolvePlaygroundBaseUrl,
   sleep,
   validateAgentEditRequestAgainstCapabilities
@@ -49,6 +50,7 @@ const THINKING_VALUES = new Set(['minimal', 'none', 'low', 'medium', 'high', 'xh
 const DEFAULT_PAGE_OUTPUT_FORMAT = 'webp';
 const DEFAULT_PAGE_OUTPUT_COMPRESSION = 100;
 
+loadPrivateAgentEnvFile();
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1' || process.argv.includes('--contract-check');

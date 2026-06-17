@@ -21,7 +21,7 @@ export function assertPageSseReady({ capabilities, passwordHash, idempotencyKey 
   if (pageSse?.auth?.required === true && !passwordHash) {
     throw createPageSseScriptError(
       'page_sse_auth_required',
-      '页面 SSE 路径需要表单字段 passwordHash；请设置 GPT_IMAGE_APP_PASSWORD_HASH 后重试。'
+      '页面 SSE 路径需要表单字段 passwordHash；请在本机私有 .env.agent.local 中设置 GPT_IMAGE_APP_PASSWORD_HASH，或导出该环境变量后重试。只有 GPT_IMAGE_AGENT_TOKEN 不能用于页面 SSE 表单鉴权。'
     );
   }
   const maxLength = readPageSseClientRequestIdMaxLength(capabilities);

@@ -4,6 +4,7 @@ import tls from 'node:tls';
 import {
   errorMessage,
   assertValidImageSizeForModel,
+  loadPrivateAgentEnvFile,
   normalizeBaseUrl,
   normalizeOutputFormat,
   readConfiguredPositiveInteger,
@@ -16,6 +17,7 @@ const DEFAULT_USER_AGENT = 'gpt-image-playground/probe';
 const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
 const DEFAULT_OUTPUT_FORMAT = 'webp';
 const DEFAULT_OUTPUT_COMPRESSION = 100;
+loadPrivateAgentEnvFile();
 const scriptTiming = startScriptTiming();
 let options;
 try {
