@@ -2,7 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { AGENT_ENDPOINTS } from './lib/agent-api-paths.mjs';
-import { errorMessage, normalizeBaseUrl, readOptionValue } from './lib/script-utils.mjs';
+import { errorMessage, readOptionValue, resolvePlaygroundBaseUrl } from './lib/script-utils.mjs';
 
 const MAX_CLIENT_REQUEST_IDS = 50;
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
@@ -24,8 +24,10 @@ if (options.help) {
 let baseUrl;
 let clientRequestIds;
 let agentLookups;
+let baseUrlInfo;
 try {
-  baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
+  baseUrlInfo = resolvePlaygroundBaseUrl(options.baseUrl, process.env);
+  baseUrl = baseUrlInfo.baseUrl;
   clientRequestIds = readClientRequestIds(options);
   agentLookups = readAgentLookups(options);
   if (!clientRequestIds.length && !agentLookups.length) {
@@ -46,6 +48,9 @@ try {
   const body = {
     ok: true,
     billable: false,
+    service_base_url: baseUrl,
+    service_base_url_source: baseUrlInfo.source,
+    interactive_confirmation_required: baseUrlInfo.interactive_confirmation_required,
     page_request_count: requests.length,
     agent_request_count: agentRequests.length,
     request_count: requests.length,
@@ -84,6 +89,7 @@ function parseArgs(argv) {
     filenames: [],
     manifests: [],
     output: '',
+    baseUrl: undefined,
     help: false
   };
   const envClientRequestId = process.env.GPT_IMAGE_AGENT_CLIENT_REQUEST_ID?.trim();
@@ -95,7 +101,9 @@ function parseArgs(argv) {
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--client-request-id' || arg === '--request-id') {
+    if (arg === '--base-url') {
+      parsed.baseUrl = readOptionValue(argv, (index += 1), arg);
+    } else if (arg === '--client-request-id' || arg === '--request-id') {
       parsed.clientRequestIds.push(readOptionValue(argv, (index += 1), arg));
     } else if (arg === '--agent-request-id') {
       parsed.agentRequestIds.push(readOptionValue(argv, (index += 1), arg));
@@ -487,6 +495,6 @@ function writeOutputFile(filepath, text) {
 }
 
 function printUsage() {
-  console.error('用法：diagnose-request.mjs [--client-request-id <id>] [--agent-request-id <id>] [--idempotency-key <key>] [--manifest <jsonl>] [--filename <name>] [--output <json>]');
+  console.error('用法：diagnose-request.mjs [--base-url <url>] [--client-request-id <id>] [--agent-request-id <id>] [--idempotency-key <key>] [--manifest <jsonl>] [--filename <name>] [--output <json>]');
   console.error('只读查询页面反馈/日志诊断或 Agent state 请求诊断，不触发生图计费。');
 }

@@ -80,6 +80,12 @@ export function parseJsonPayload(output, label = 'command') {
     throw new Error(`${label} returned invalid JSON: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }
 
+export function redactBaseUrl(value) {
+    const parsed = new URL(value);
+    const path = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.protocol}//${parsed.host}${path}`;
+}
+
 export async function fetchJsonWithTimeout(url, options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_FETCH_TIMEOUT_MS;
     const pathname = safeUrlPathname(url);

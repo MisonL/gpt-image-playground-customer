@@ -3,7 +3,6 @@ import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './lib/agent-api-paths.
 import {
     errorMessage,
     assertValidImageSizeForModel,
-    normalizeBaseUrl,
     normalizeOutputFormat,
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
@@ -11,6 +10,7 @@ import {
     readMaxImageEdge,
     readOptionValue,
     readPartialImages,
+    resolvePlaygroundBaseUrl,
     resolveSameOriginUrl,
     sleep,
     validateAgentGenerateRequestAgainstCapabilities
@@ -120,8 +120,10 @@ if (!isNonBillableDryRun(options, contractCheck) && !prompt && !contractCheck) {
 }
 
 let baseUrl;
+let baseUrlInfo;
 try {
-    baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
+    baseUrlInfo = resolvePlaygroundBaseUrl(options.baseUrl, process.env);
+    baseUrl = baseUrlInfo.baseUrl;
 } catch (error) {
     console.error(errorMessage(error));
     process.exit(2);
@@ -134,6 +136,7 @@ if (isNonBillableDryRun(options, contractCheck)) {
                 ok: true,
                 billable: false,
                 dry_run: true,
+                verification_scope: buildDryRunVerificationScope(),
                 endpoint: dryRunEndpoint(requestBody, options.routeMode),
                 route_mode: options.routeMode,
                 routing_guidance: buildGenerateRoutingGuidance(requestBody, options.routeMode),
@@ -228,6 +231,7 @@ function parseArgs(argv) {
         partialImages: undefined,
         sseLogPath: undefined,
         timeoutMs: undefined,
+        baseUrl: undefined,
         promptFile: undefined,
         idempotencyKey: undefined,
         routeMode: 'auto',
@@ -263,6 +267,7 @@ function parseArgs(argv) {
         else if (arg === '--partial-images') parsed.partialImages = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--sse-log') parsed.sseLogPath = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--base-url') parsed.baseUrl = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--prompt-file') parsed.promptFile = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
@@ -470,6 +475,20 @@ function enrichImageUrls(result) {
             ...(image.content_url ? { absolute_content_url: absoluteUrl(image.content_url) } : {}),
             ...(image.metadata_url ? { absolute_metadata_url: absoluteUrl(image.metadata_url) } : {})
         }))
+    };
+}
+
+function buildDryRunVerificationScope() {
+    return {
+        mode: 'local_planning_only',
+        service_base_url: baseUrl,
+        service_base_url_source: baseUrlInfo.source,
+        interactive_confirmation_required: baseUrlInfo.interactive_confirmation_required,
+        remote_capabilities_verified: false,
+        runtime_capacity_verified: false,
+        auth_verified: false,
+        billable_request_sent: false,
+        note: 'Dry-run validates local request construction and routing guidance only; run --contract-check or --allow-billable to verify the remote service.'
     };
 }
 
@@ -1368,7 +1387,7 @@ function printUsage() {
     console.error('用法：generate-image.mjs [options] <prompt>');
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
     console.error(
-        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --prompt-file --idempotency-key --page-sse --agent --job --no-job(兼容别名)'
+        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --page-sse --agent --job --no-job(兼容别名)'
     );
     console.error(
         '契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check'

@@ -28,6 +28,7 @@ const STATUS_ENV_FILES = [
 
 export function buildAdminCommands() {
     return {
+        first_run: 'npm run first-run',
         doctor: 'npm run doctor',
         status: 'npm run status',
         env_summary: 'npm run env:summary',

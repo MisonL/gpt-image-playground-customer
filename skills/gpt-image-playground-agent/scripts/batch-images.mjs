@@ -3,7 +3,6 @@ import { AGENT_ENDPOINTS } from './lib/agent-api-paths.mjs';
 import {
   errorMessage,
   assertValidImageSizeForModel,
-  normalizeBaseUrl,
   normalizeOutputFormat,
   parseImageSizeValue,
   readCapabilitiesImageTransportTimeoutMs,
@@ -11,6 +10,7 @@ import {
   readMaxImageEdge,
   readOptionValue,
   readPartialImages,
+  resolvePlaygroundBaseUrl,
   resolveSameOriginUrl,
   validateAgentEditRequestAgainstCapabilities,
   validateAgentGenerateRequestAgainstCapabilities
@@ -118,6 +118,7 @@ if (options.help) {
 }
 
 let baseUrl;
+let baseUrlInfo;
 let tasks;
 let timeoutMs;
 let capabilities;
@@ -126,7 +127,8 @@ let runtimeCapabilities;
 let runtimeCapabilitiesPromise;
 try {
   if (!options.input) throw new Error('--input 需要 JSONL 文件路径。');
-  baseUrl = normalizeBaseUrl(process.env.GPT_IMAGE_PLAYGROUND_URL || 'http://localhost:4783');
+  baseUrlInfo = resolvePlaygroundBaseUrl(options.baseUrl, process.env);
+  baseUrl = baseUrlInfo.baseUrl;
   timeoutMs = readConfiguredPositiveInteger(options.timeoutMs, '--timeout-ms', 420000);
   options.maxAttempts = readConfiguredPositiveInteger(
     options.maxAttempts ?? DEFAULT_BATCH_MAX_ATTEMPTS,
@@ -167,8 +169,11 @@ if (!options.allowBillable || options.dryRun) {
         ok: true,
         billable: false,
         dry_run: true,
+        verification_scope: buildDryRunVerificationScope(),
         input: options.input,
         manifest: manifestPath,
+        manifest_written: false,
+        manifest_write_reason: 'dry_run',
         total: planned.length,
         max_attempts: options.maxAttempts,
         max_consecutive_failures: options.maxConsecutiveFailures,
@@ -235,6 +240,7 @@ function parseArgs(argv) {
     maxAttempts: undefined,
     maxConsecutiveFailures: undefined,
     concurrency: undefined,
+    baseUrl: undefined,
     allowBillable: false,
     dryRun: false,
     resume: false,
@@ -252,6 +258,7 @@ function parseArgs(argv) {
     else if (arg === '--manifest') parsed.manifest = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--ordered-prefix') parsed.orderedPrefix = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--base-url') parsed.baseUrl = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--max-attempts') parsed.maxAttempts = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--max-consecutive-failures') {
       parsed.maxConsecutiveFailures = readOptionValue(argv, (index += 1), arg);
@@ -262,6 +269,20 @@ function parseArgs(argv) {
     else throw new Error(`未知位置参数：${arg}`);
   }
   return parsed;
+}
+
+function buildDryRunVerificationScope() {
+  return {
+    mode: 'local_planning_only',
+    service_base_url: baseUrl,
+    service_base_url_source: baseUrlInfo.source,
+    interactive_confirmation_required: baseUrlInfo.interactive_confirmation_required,
+    remote_capabilities_verified: false,
+    runtime_capacity_verified: false,
+    auth_verified: false,
+    billable_request_sent: false,
+    note: 'Dry-run validates JSONL parsing, idempotency keys, request previews and static routing only; run with --allow-billable to verify remote capabilities, capacity and auth.'
+  };
 }
 
 function readJsonlTasks(filePath) {
@@ -1402,5 +1423,5 @@ function mimeTypeForPath(filePath) {
 function printUsage() {
   console.error('用法：batch-images.mjs --input tasks.jsonl [options]');
   console.error('默认只输出 dry-run；添加 --allow-billable 才会按 routing rules 逐行真实请求 Agent API 或页面 SSE。');
-  console.error('常用参数：--manifest --resume --ordered-prefix --dimension-check --max-attempts --max-consecutive-failures --concurrency --timeout-ms --dry-run --allow-billable');
+  console.error('常用参数：--manifest --resume --ordered-prefix --dimension-check --max-attempts --max-consecutive-failures --concurrency --timeout-ms --base-url --dry-run --allow-billable');
 }
