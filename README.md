@@ -359,6 +359,18 @@ docker compose up -d --build --remove-orphans
 npm run deploy:local
 ```
 
+本仓库的 Compose 服务只挂载 `generated-images/`。不要用 `docker run -v "$PWD:/workspace"` 启动本地图片上游 fixture；这会把 `.git/`、`node_modules/` 和 `.next/` 暴露给 Docker Desktop 文件共享层，可能触发文件事件风暴。本地 fixture gate 使用进程内服务：
+
+```bash
+npm run smoke:image-upstream-local
+```
+
+如本机遗留了整仓挂载的 fixture 容器，可执行：
+
+```bash
+npm run docker:cleanup-fixtures
+```
+
 常见部署模式：
 
 | 模式 | 命令或配置 | 适用场景 |
@@ -388,6 +400,7 @@ Hugging Face Space 免费层部署见 [docs/deployment/huggingface-space-free.md
 | `npm run lint:scripts` | 检查仓库脚本和 skill 脚本语法。 |
 | `npm run version:check` | 检查版本、README badge 和 CHANGELOG 口径。 |
 | `npm run verify` | 运行提交前基线。 |
+| `npm run docker:cleanup-fixtures` | 清理遗留的整仓挂载 Docker fixture 容器。 |
 | `npm run first-run` | 首次配置就绪检查，默认中文摘要；加 `-- --json` 输出机器可读 JSON。 |
 | `npm run status` | 只读查看 git、Node、部署目标和 Agent 摘要。 |
 | `npm run doctor` | 运行本机和部署诊断。 |
