@@ -19,6 +19,7 @@
     "verify": "node scripts/verify.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
     "deploy:space": "npm run deploy:hf-space",
+    "docker:cleanup-fixtures": "node scripts/cleanup-docker-fixtures.mjs",
     "agent:doctor": "node scripts/agent-doctor.mjs",
     "deploy:hf-space": "node scripts/deploy-hf-space.mjs",
     "doctor:hf-space": "node scripts/doctor-hf-space.mjs",

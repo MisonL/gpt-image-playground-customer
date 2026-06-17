@@ -8,6 +8,13 @@ import { describe, it } from 'node:test';
 
 import { buildAgentDoctorArgs, buildAgentDoctorContractArgs } from './agent-doctor.mjs';
 import { fetchJsonWithTimeout, parseJsonPayload, pickFailureOutput, runCommand } from './command-center-utils.mjs';
+import {
+    buildAbsentReport,
+    buildSkippedReport,
+    hasLegacyFixtureRepoMount,
+    parseDockerInspectContainer,
+    summarizeDockerMounts
+} from './cleanup-docker-fixtures.mjs';
 import { buildFirstRunReport, formatFirstRunText } from './first-run.mjs';
 import {
     buildAdminCommands,
@@ -29,6 +36,7 @@ describe('Command center scripts', () => {
             verify: 'npm run verify',
             deploy_local: 'npm run deploy:local',
             deploy_space: 'npm run deploy:space',
+            docker_cleanup_fixtures: 'npm run docker:cleanup-fixtures',
             agent_doctor: 'npm run agent:doctor',
             hf_space_doctor: 'npm run doctor:hf-space',
             hf_space_smoke: 'npm run smoke:hf-space'
@@ -322,6 +330,77 @@ describe('Command center scripts', () => {
             PATH: '/bin',
             COMPOSE_PROGRESS: 'plain'
         });
+    });
+
+    it('detects only the legacy fixture whole-repository Docker mount', () => {
+        const repoRoot = '/Volumes/Work/code/gpt-image-playground-customer';
+        assert.equal(
+            hasLegacyFixtureRepoMount(
+                [
+                    {
+                        Type: 'bind',
+                        Source: repoRoot,
+                        Destination: '/workspace',
+                        Mode: 'ro',
+                        RW: false
+                    }
+                ],
+                repoRoot
+            ),
+            true
+        );
+        assert.equal(
+            hasLegacyFixtureRepoMount(
+                [
+                    {
+                        Type: 'bind',
+                        Source: `${repoRoot}/generated-images`,
+                        Destination: '/app/generated-images',
+                        Mode: '',
+                        RW: true
+                    }
+                ],
+                repoRoot
+            ),
+            false
+        );
+    });
+
+    it('parses and summarizes Docker fixture cleanup inspection data', () => {
+        const container = parseDockerInspectContainer(
+            JSON.stringify([
+                {
+                    Mounts: [
+                        {
+                            Type: 'bind',
+                            Source: '/repo',
+                            Destination: '/workspace',
+                            Mode: 'ro',
+                            RW: false
+                        }
+                    ]
+                }
+            ])
+        );
+
+        assert.deepEqual(summarizeDockerMounts(container.Mounts), [
+            {
+                type: 'bind',
+                source: '/repo',
+                destination: '/workspace',
+                mode: 'ro',
+                writable: false
+            }
+        ]);
+        assert.deepEqual(buildAbsentReport('gipc-local-image-fixture'), {
+            ok: true,
+            command: 'docker:cleanup-fixtures',
+            container: 'gipc-local-image-fixture',
+            present: false,
+            unsafe_repo_mount: false,
+            removed: false
+        });
+        assert.equal(buildSkippedReport('custom', container.Mounts).removed, false);
     });
 
     it('fails local memory deploy probes when the overlay did not take effect', () => {
