@@ -447,6 +447,15 @@ describe('Command center scripts', () => {
                         JSON.stringify({
                             auth: { schemes: ['bearer'] },
                             defaults: { state_backend: 'memory' },
+                            agent_streaming: {
+                                page_sse: {
+                                    supported: true,
+                                    auth: {
+                                        required: true,
+                                        form_field: 'passwordHash'
+                                    }
+                                }
+                            },
                             supported: { image_backend_requirements: {} }
                         })
                     );
@@ -489,6 +498,15 @@ describe('Command center scripts', () => {
                     });
                     assert.equal(report.service.ok, true);
                     assert.equal(report.checks.find((check) => check.name === 'agent_auth_available_to_process').ok, true);
+                    assert.equal(report.checks.find((check) => check.name === 'page_sse_auth_available_to_process').ok, false);
+                    assert.equal(report.checks.find((check) => check.name === 'page_sse_auth_available_to_process').skipped, false);
+                    assert.equal(
+                        report.checks.find((check) => check.name === 'page_sse_auth_available_to_process')
+                            .auth_in_private_env_file,
+                        false
+                    );
+                    assert.equal(report.service.capabilities.page_sse_auth_required, true);
+                    assert.equal(report.service.capabilities.page_sse_auth_form_field, 'passwordHash');
                     assert.equal(
                         report.checks.find((check) => check.name === 'agent_auth_available_to_process')
                             .auth_in_private_env_file,
@@ -496,6 +514,8 @@ describe('Command center scripts', () => {
                     );
                     assert.doesNotMatch(JSON.stringify(report), /shell-secret|file-secret/);
                     assert.match(JSON.stringify(report.next_actions), /agent:doctor/);
+                    assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_APP_PASSWORD_HASH/);
+                    assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_AGENT_TOKEN/);
                 } finally {
                     await rm(tempDir, { recursive: true, force: true });
                 }
@@ -504,7 +524,10 @@ describe('Command center scripts', () => {
     });
 
     it('formats first-run as human-readable text by default', async () => {
-        const report = await buildFirstRunReport({ cwd: process.cwd(), baseUrl: 'not a url', envFiles: [] }, {});
+        const report = await buildFirstRunReport(
+            { cwd: process.cwd(), baseUrl: 'not a url', envFiles: [] },
+            { GPT_IMAGE_AGENT_LOAD_ENV_FILE: '0' }
+        );
         const text = formatFirstRunText(report);
 
         assert.match(text, /^首次配置检查：需要处理/m);
@@ -608,7 +631,10 @@ describe('Command center scripts', () => {
                             defaults: { state_backend: 'memory' },
                             storage: { image_storage_mode: 'indexeddb', postgres_configured: false },
                             agent_streaming: {
-                                page_sse: { supported: true }
+                                page_sse: {
+                                    supported: true,
+                                    auth: { required: true, form_field: 'passwordHash' }
+                                }
                             },
                             agent_jobs: { supported: true },
                             routing_rules: {
@@ -691,10 +717,17 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.capabilities, 'ok');
                 assert.equal(body.summary.runtime, 'ok');
                 assert.equal(body.summary.state_backend, 'memory');
+                assert.equal(body.summary.page_sse_auth_ready, false);
                 assert.equal(body.summary.responses_gpt2image_ready, true);
                 assert.equal(body.summary.billable_smoke, 'skipped');
                 assert.equal(body.layers.find((layer) => layer.name === 'billable_smoke').skipped, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').executable_routing_rules, true);
+                assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_required, true);
+                assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_ready, false);
+                assert.match(
+                    body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_next_action,
+                    /GPT_IMAGE_APP_PASSWORD_HASH/
+                );
                 assert.equal(body.service_base_url, prefixedBaseUrl);
                 assert.equal(body.service_base_url_source, 'GPT_IMAGE_PLAYGROUND_URL');
                 assert.equal(body.interactive_confirmation_required, true);
@@ -942,7 +975,7 @@ function runNodeCommandAsync(args, options = {}) {
     return new Promise((resolve) => {
         const child = spawn(process.execPath, args, {
             cwd: process.cwd(),
-            env: options.env,
+            env: { GPT_IMAGE_AGENT_LOAD_ENV_FILE: '0', ...options.env },
             stdio: ['ignore', 'pipe', 'pipe']
         });
         let stdout = '';
