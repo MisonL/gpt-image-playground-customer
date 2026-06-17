@@ -5,7 +5,10 @@ import { join } from 'node:path';
 
 import { isMainModule, printJson, redactBaseUrl } from './command-center-utils.mjs';
 import { summarizeEnvFile } from './env-summary.mjs';
-import { resolvePlaygroundBaseUrl } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import {
+    loadPrivateAgentEnvFile,
+    resolvePlaygroundBaseUrl
+} from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_ENV_FILES = ['.env.local', '.env.agent.local'];
@@ -45,6 +48,7 @@ first-run 只读、非计费，不写 env 文件或 secret。`);
 export async function buildFirstRunReport(options = {}, env = process.env) {
     const cwd = options.cwd || process.cwd();
     const envFiles = options.envFiles || DEFAULT_ENV_FILES;
+    loadPrivateAgentEnvFile({ cwd, env });
     const base = resolveFirstRunBaseUrl(options.baseUrl, env);
     const envSummary = envFiles.map((filePath) => summarizeEnvFile(join(cwd, filePath)));
     const validationError = readBaseUrlValidationError(base);
@@ -160,6 +164,14 @@ function buildChecks({ cwd, env, envSummary, service, base, validationError }) {
             auth_in_private_env_file: fileToken
         },
         {
+            name: 'page_sse_auth_available_to_process',
+            ok: Boolean(env.GPT_IMAGE_APP_PASSWORD_HASH),
+            skipped: !requiresPageSsePasswordHash(service),
+            auth_in_private_env_file: envSummary.some((source) =>
+                sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH')
+            )
+        },
+        {
             name: 'service_base_url_valid',
             ok: !validationError,
             source: base.source,
@@ -229,6 +241,11 @@ function buildNextActions({ checks, base, service, env, envSummary, validationEr
             '在仓库外导出 GPT_IMAGE_AGENT_TOKEN 或 GPT_IMAGE_APP_PASSWORD_HASH，再运行受保护的 Agent 脚本。'
         );
     }
+    if (requiresPageSsePasswordHash(service) && !env.GPT_IMAGE_APP_PASSWORD_HASH) {
+        actions.push(
+            '如果要使用页面 SSE、Responses backend edit 或 --page-sse，请在本机私有 .env.agent.local 中设置 GPT_IMAGE_APP_PASSWORD_HASH；Agent 脚本会自动读取该文件，GPT_IMAGE_AGENT_TOKEN 只覆盖 Agent JSON 鉴权。'
+        );
+    }
     if (!service.ok && !requiresAgentAuth(service)) {
         actions.push('先用 npm run dev 或 docker compose up -d --build --remove-orphans 启动服务，再重新运行 npm run first-run。');
     }
@@ -236,7 +253,7 @@ function buildNextActions({ checks, base, service, env, envSummary, validationEr
         actions.push('在交互式 Agent 任务里，先和用户确认探测到的服务地址，再发真实请求。');
     }
     if (!hasCurrentAuth && hasFileAuth) {
-        actions.push('先把私有 Agent env 文件加载到 shell，再运行 Agent 脚本。');
+        actions.push('Agent 脚本会自动读取 .env.agent.local；如果仍提示缺少鉴权，请确认文件位于当前仓库根目录且变量名正确。');
     }
     if (service.ok && hasCurrentAuth) {
         actions.push('运行 npm run agent:doctor 做完整的非计费 Agent 合同检查。');
@@ -248,6 +265,10 @@ function requiresAgentAuth(service) {
     if (service.capabilities?.status === 401 || service.capabilities?.status === 403) return true;
     const schemes = service.capabilities?.body?.auth?.schemes;
     return Array.isArray(schemes) && schemes.length > 0;
+}
+
+function requiresPageSsePasswordHash(service) {
+    return service.capabilities?.body?.agent_streaming?.page_sse?.auth?.required === true;
 }
 
 function sourceHasSetVariable(source, name) {
@@ -299,6 +320,8 @@ function summarizeCapabilitiesBody(body) {
     return {
         auth_required: body?.auth?.required === true,
         auth_schemes: Array.isArray(body?.auth?.schemes) ? body.auth.schemes : [],
+        page_sse_auth_required: body?.agent_streaming?.page_sse?.auth?.required === true,
+        page_sse_auth_form_field: body?.agent_streaming?.page_sse?.auth?.form_field,
         state_backend: body?.defaults?.state_backend,
         image_storage_mode: body?.storage?.image_storage_mode,
         agent_jobs_supported: body?.agent_jobs?.supported === true,
@@ -386,6 +409,9 @@ export function formatFirstRunText(report) {
     const capability = report.service?.capabilities || {};
     if (capability.ok) {
         lines.push(`- 鉴权：${capability.auth_required ? capability.auth_schemes.join(',') || '需要' : '不需要'}`);
+        lines.push(
+            `- 页面 SSE 鉴权：${capability.page_sse_auth_required ? `需要 ${capability.page_sse_auth_form_field || 'passwordHash'}` : '不需要'}`
+        );
         lines.push(`- 状态后端：${capability.state_backend || '未知'}，图片存储：${capability.image_storage_mode || '未知'}`);
     }
     const runtime = report.service?.runtime || {};
@@ -451,6 +477,7 @@ function formatCheckLabel(name) {
         dependencies_installed: '依赖是否已安装',
         env_files: '环境文件',
         agent_auth_available_to_process: 'Agent 鉴权可用',
+        page_sse_auth_available_to_process: '页面 SSE 鉴权可用',
         service_base_url_valid: '服务地址合法',
         service_reachable: '服务可达',
         agent_capabilities_contract: 'Agent capabilities 合同',

@@ -3,7 +3,10 @@
 import { fileURLToPath } from 'node:url';
 
 import { isMainModule, parseJsonPayload, pickFailureOutput, printJson, redactBaseUrl, runCommand } from './command-center-utils.mjs';
-import { resolvePlaygroundBaseUrl } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import {
+    loadPrivateAgentEnvFile,
+    resolvePlaygroundBaseUrl
+} from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
 
 const GENERATE_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url));
 const EDIT_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/edit-image.mjs', import.meta.url));
@@ -60,6 +63,7 @@ agent:doctor 默认只读、非计费。真实 generate/edit smoke 必须显式�
 }
 
 async function main() {
+    loadPrivateAgentEnvFile();
     const options = parseArgs(process.argv.slice(2));
     if (options.help) {
         printHelp();
@@ -262,6 +266,15 @@ function buildLayers({ capabilities, runtime, contract, smoke }) {
 function summarizeCapabilities(body) {
     return {
         page_sse: body?.agent_streaming?.page_sse?.supported === true,
+        page_sse_auth_required: body?.agent_streaming?.page_sse?.auth?.required === true,
+        page_sse_auth_ready:
+            body?.agent_streaming?.page_sse?.auth?.required === true
+                ? Boolean(process.env.GPT_IMAGE_APP_PASSWORD_HASH)
+                : true,
+        page_sse_auth_next_action:
+            body?.agent_streaming?.page_sse?.auth?.required === true && !process.env.GPT_IMAGE_APP_PASSWORD_HASH
+                ? 'Set GPT_IMAGE_APP_PASSWORD_HASH in private local env before using --page-sse.'
+                : undefined,
         agent_jobs: body?.agent_jobs?.supported === true,
         routing_rules: Boolean(body?.routing_rules),
         executable_routing_rules: Boolean(body?.routing_rules?.high_resolution_edit?.conditions)
@@ -304,6 +317,10 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
         contract_check: contract.ok ? 'ok' : 'failed',
         runtime: runtime.ok ? 'ok' : 'failed',
         state_backend: capabilities.ok ? capabilities.body?.defaults?.state_backend : 'unknown',
+        page_sse_auth_ready:
+            capabilities.ok && capabilities.body?.agent_streaming?.page_sse?.auth?.required === true
+                ? Boolean(process.env.GPT_IMAGE_APP_PASSWORD_HASH)
+                : capabilities.ok,
         responses_gpt2image_ready:
             capabilities.ok && runtime.ok
                 ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true &&
