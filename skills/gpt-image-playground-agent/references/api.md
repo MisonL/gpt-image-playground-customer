@@ -32,11 +32,11 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 生成、编辑和批量脚本默认只做 dry-run，不触发真实生图或编辑。dry-run 输出的 `verification_scope.mode=local_planning_only` 表示只完成本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。必须显式添加 `--allow-billable` 才会按 capabilities 路由规则调用 `/api/agent/images/generate`、`/api/agent/images/edit`、`/api/agent/jobs/images/generate` 或页面端 `/api/images` SSE。
 上游探针默认只检查 DNS、TLS 和 `/models`，必须显式添加 `--allow-billable` 才会调用上游 `/images/generations`。
 脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 或 `--contract-check` 做只读契约检查，不触发真实生图或编辑。
-位于仓库根目录且是首次配置、换机器、服务地址不确定或 token 不确定时，先运行 `npm run first-run`。它只读、非计费、不写 env 文件，默认输出中文摘要，并报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程鉴权和下一步动作。
+位于仓库根目录且是首次配置、换机器、服务地址不确定或 token 不确定时，先运行 `npm run first-run`。它只读、非计费、不写 env 文件，默认输出中文摘要，并报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程鉴权、页面 SSE 鉴权和下一步动作。
 自动化消费时使用 `npm run first-run -- --json`。
-Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API_TOKEN` 时只接受 Bearer token；只有未配置 `AGENT_API_TOKEN` 且配置了 `APP_PASSWORD` 时，Agent 端点才接受访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。页面端 `/api/images` SSE 另看 `agent_streaming.page_sse.auth`；当其声明 `required=true` 时，form-data 必须包含 `passwordHash`。
+Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API_TOKEN` 时只接受 Bearer token；只有未配置 `AGENT_API_TOKEN` 且配置了 `APP_PASSWORD` 时，Agent 端点才接受访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。页面端 `/api/images` SSE 另看 `agent_streaming.page_sse.auth`；当其声明 `required=true` 时，form-data 必须包含 `passwordHash`。`GPT_IMAGE_AGENT_TOKEN` 不能替代页面 SSE 表单鉴权。
 subagent 或自动化任务如果用户指定 Space、云服务或内网服务，调用 `generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 或 `npm run agent:doctor -- --base-url <url>` 时显式传服务地址；不要依赖默认 localhost。
-Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 仍必须通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。
+Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 仍必须通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`，shell 环境变量优先。不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。
 排查环境配置时不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。Codex 会话日志会持久保存命令输出；优先运行仓库脚本 `npm run env:summary`，或在命令中先把 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 值替换为 `<redacted>`。
 
 ```text
@@ -47,7 +47,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 同一个 `Idempotency-Key` 如果已经进入终态 `failed`，再次调用 generate/edit 或 job result/status 只会回放该失败，且 `retryable=false`。需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
 页面端 `/api/images` SSE 会把同一个业务 key 复用到 `clientRequestId`，因此脚本使用的 `Idempotency-Key` 不能超过 capabilities 中 `agent_streaming.page_sse.client_request_id.max_length` 声明的字符数；超长时会直接报错，不会静默截断。
 脚本会在 dry-run 和真实请求前前置校验 `--size` 或 JSONL `size`。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI-compatible 上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量和上游探针默认请求 `output_format=webp`、`output_compression=100`。
-真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。失败摘要包含 `transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable` 和 `next_action`。回答耗时问题时优先读取 `summary.elapsed_ms`；服务端返回 timing 时同时读取 `summary.server_elapsed_ms`。
+真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。失败摘要也稳定包含空数组或 `null` 形式的产物、路由和渠道字段，便于 subagent 按同一模板汇报。失败摘要还包含 `transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable` 和 `next_action`。回答耗时问题时优先读取 `summary.elapsed_ms`；需要区分脚本等待和上游耗时时读取 `summary.elapsed_breakdown`。
 
 生成脚本参数：
 
@@ -546,8 +546,10 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 | `service_base_url` / `verification_scope.service_base_url` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。 |
 | `service_base_url_source` / `verification_scope.service_base_url_source` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。 |
 | `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。 |
-| `agent_auth_process.has_token` | `first-run --json` | 当前 shell 是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
-| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；存在不代表当前 shell 已加载。 |
+| `agent_auth_process.has_token` | `first-run --json` | 当前进程是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
+| `page_sse_auth_available_to_process` | `first-run --json` | 目标服务要求页面 SSE `passwordHash` 时，当前进程是否已加载 `GPT_IMAGE_APP_PASSWORD_HASH`。 |
+| `summary.page_sse_auth_ready` | `agent:doctor` | 页面 SSE 鉴权是否已满足；为 `false` 时不要运行 `--page-sse` 真实计费请求。 |
+| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |
 | `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
 | `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
 
