@@ -43,18 +43,21 @@ Agent API 只作为自动化客户端接口，不作为首战场景或用户验�
 ## 执行流程
 
 1. 先按任务类型选择内置脚本，不要从零写 API 调用代码。
-2. 定位服务基础地址。优先使用用户明确提供的 URL；其次使用 `GPT_IMAGE_PLAYGROUND_URL`；都没有时尝试默认地址 `http://localhost:4783`。
-3. 让脚本请求 `GET /api/agent/capabilities`。如果默认地址不可达、404、不是 JSON 或不是 Agent capabilities 响应，向用户询问实际部署地址、端口、域名和是否需要鉴权。
-4. 读取 capabilities 中的认证方式、模型、模型级限制、`image_transport`、`routing_rules`、Agent 流式边界、页面 SSE 鉴权、后端 runtime enablement、状态后端和端点路径；不要硬编码假设部署方式。
-5. 为每个业务操作生成稳定的 `Idempotency-Key`。网络中断、运行中轮询或非终态重试复用原 key；同一 key 已进入 `failed` 终态后不再用于触发新执行，必须先诊断原因，再创建新的业务操作和新的 key。
-6. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点对外始终返回最终 `AgentImageResponse` JSON；如 capabilities 声明 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制内部上游 SSE 消费。不要把 `responsesModel`、`thinking`、`promptOptimization` 或 `force_web` 发送到 Agent JSON；这些字段需要页面端 `/api/images` form-data 路径。
-7. 图片编辑若走 Agent edit，使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段必须使用从 `image_0` 开始的连续字段，最大数量以 capabilities 的 `limits.upload_images.max` 为准；跳号、超过当前 profile 上限、`image_01` 或 `image_foo` 会被显式拒绝。该 Agent 端点同样是非流式端点；上游 SSE 字段按 `agent_streaming.upstream_sse.request_fields_by_mode.edit` 发送，不要给 Agent edit 传 `image_backend`。需要 `image_backend=responses-image-generation` 或页面表单字段 `image_streaming_strategy=responses-sse` 的 edit，一律走页面端 `/api/images` form-data SSE；脚本参数仍写作 `--streaming-strategy responses-sse`。
-8. 默认使用 `response_mode: "path"`，只在用户明确需要图片内联数据时使用 `base64` 或 `both`。
-9. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；仅在 `routing_rules` 命中高分辨率 edit、大图单次文生图、复杂 UI 批量、长图恢复、显式页面参数或明确诊断后切换。
-10. 读取 `agent_jobs`。job 路径只在显式选择时使用；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE。
-11. 处理失败时读取结构化 `error.code`、`error.retryable`、`error.diagnostics` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。
-12. 返回结果时优先给出 `summary`、`content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。回答“4K 非流式花了多久”时优先读 `summary.elapsed_ms`，服务端返回 timing 时也读 `summary.server_elapsed_ms`。
-13. 需要查询页面请求后的人工反馈或日志摘要时，使用页面 SSE 的 `clientRequestId` 或脚本复用的 `Idempotency-Key` 调用 `scripts/diagnose-request.mjs --client-request-id ...`；不要直接调用 `/api/logs`。需要查询 Agent state 请求状态时，使用 `scripts/diagnose-request.mjs --agent-request-id ...` 或 `--idempotency-key ...`。
+2. 定位服务基础地址。用户明确提供 URL 时直接使用该 URL；否则先检查 `GPT_IMAGE_PLAYGROUND_URL`，再探测默认本地地址 `http://localhost:4783`。
+3. 交互式任务中，如果只发现环境变量或本地默认地址，先把发现到的地址、服务可达性和鉴权需求告诉用户，并确认是否使用它；不要把自动发现到的本地服务直接当成用户意图。如果用户随后提供其他服务地址，以用户提供的地址为准。
+4. 非交互式任务无法向用户确认时，按“用户提供 URL > `GPT_IMAGE_PLAYGROUND_URL` > 默认本地探测地址”的顺序执行，并在输出里标明服务地址来源和是否只是自动发现。
+5. 位于仓库根目录且用户是首次配置、换机器、服务地址不确定或 token 不确定时，先运行 `npm run first-run`。该命令只读、非计费、不写 env 文件，默认输出中文摘要；`-- --json` 输出机器可读 JSON。它会报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程是否拿到 Agent 鉴权，以及 `.env.agent.local` 是否存在私有鉴权配置；如果 token 只在私有 env 文件中，先加载到 shell，再运行 skill 脚本。
+6. 让脚本请求 `GET /api/agent/capabilities`。如果所选地址不可达、404、不是 JSON 或不是 Agent capabilities 响应，交互式任务中向用户询问实际部署地址、端口、域名和是否需要鉴权；非交互式任务中显式失败并输出下一步动作。
+7. 读取 capabilities 中的认证方式、模型、模型级限制、`image_transport`、`routing_rules`、Agent 流式边界、页面 SSE 鉴权、后端 runtime enablement、状态后端和端点路径；不要硬编码假设部署方式。
+8. 为每个业务操作生成稳定的 `Idempotency-Key`。网络中断、运行中轮询或非终态重试复用原 key；同一 key 已进入 `failed` 终态后不再用于触发新执行，必须先诊断原因，再创建新的业务操作和新的 key。
+9. 文生图使用 `POST /api/agent/images/generate`，请求体为 JSON。该 Agent 端点对外始终返回最终 `AgentImageResponse` JSON；如 capabilities 声明 `agent_streaming.upstream_sse.supported=true`，可通过 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images` 控制内部上游 SSE 消费。不要把 `responsesModel`、`thinking`、`promptOptimization` 或 `force_web` 发送到 Agent JSON；这些字段需要页面端 `/api/images` form-data 路径。
+10. 图片编辑若走 Agent edit，使用 `POST /api/agent/images/edit`，请求体为 `multipart/form-data`，源图字段必须使用从 `image_0` 开始的连续字段，最大数量以 capabilities 的 `limits.upload_images.max` 为准；跳号、超过当前 profile 上限、`image_01` 或 `image_foo` 会被显式拒绝。该 Agent 端点同样是非流式端点；上游 SSE 字段按 `agent_streaming.upstream_sse.request_fields_by_mode.edit` 发送，不要给 Agent edit 传 `image_backend`。需要 `image_backend=responses-image-generation` 或页面表单字段 `image_streaming_strategy=responses-sse` 的 edit，一律走页面端 `/api/images` form-data SSE；脚本参数仍写作 `--streaming-strategy responses-sse`。
+11. 默认使用 `response_mode: "path"`，只在用户明确需要图片内联数据时使用 `base64` 或 `both`。
+12. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；仅在 `routing_rules` 命中高分辨率 edit、大图单次文生图、复杂 UI 批量、长图恢复、显式页面参数或明确诊断后切换。
+13. 读取 `agent_jobs`。job 路径只在显式选择时使用；`max_edge>2048` 的单次文生图默认优先走页面端 `/api/images` SSE。
+14. 处理失败时读取结构化 `error.code`、`error.retryable`、`error.diagnostics` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。
+15. 返回结果时优先给出 `summary`、`content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。回答“4K 非流式花了多久”时优先读 `summary.elapsed_ms`，服务端返回 timing 时也读 `summary.server_elapsed_ms`。
+16. 需要查询页面请求后的人工反馈或日志摘要时，使用页面 SSE 的 `clientRequestId` 或脚本复用的 `Idempotency-Key` 调用 `scripts/diagnose-request.mjs --client-request-id ...`；不要直接调用 `/api/logs`。需要查询 Agent state 请求状态时，使用 `scripts/diagnose-request.mjs --agent-request-id ...` 或 `--idempotency-key ...`。
 
 ## 鉴权
 
@@ -74,7 +77,8 @@ Authorization: Bearer <token>
 - 排查环境配置时不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。Codex 会话日志会持久保存命令输出；优先运行仓库脚本 `npm run env:summary`，或在命令中先把 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 值替换为 `<redacted>`。
 - Skill 必须保持自包含和可迁移：脚本、示例和说明不得写入本机绝对路径或仓库绝对路径；运行脚本时以当前已安装 Skill 目录为根解析 `scripts/`，不要依赖某台机器上的 checkout 位置。
 - Skill 必须兼容 Windows、Linux 和 macOS：脚本只用 Node.js 20+、跨平台 `node:` 标准库和 `package.json` 声明依赖；文档示例用 `node "<skill-root>/scripts/..."`，不依赖 bash、sh、chmod、可执行位、POSIX inline env 或反斜杠续行。
-- 不要把 `localhost:4783` 当作唯一部署位置；它只是无明确地址时的探测默认值。
+- 不要把 `localhost:4783` 当作唯一部署位置；它只是无明确地址时的探测默认值。交互式任务中，探测到本地服务后先请用户确认是否使用；用户提供其他地址时，以用户地址为准。
+- subagent 或自动化任务如果用户指定 Space、云服务或内网服务，调用 `generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 或 `npm run agent:doctor -- --base-url <url>` 时显式传服务地址；不要依赖默认 localhost。
 - 不要在模型上下文中展开大体积 base64，除非用户明确要求。
 - 不要把 `error.message` 当成唯一判断依据；稳定分支以 `error.code` 和 HTTP 状态为准。
 - 不要在没有 `Idempotency-Key` 的情况下调用生成或编辑接口。
@@ -105,46 +109,59 @@ Authorization: Bearer <token>
 - `scripts/edit-image.mjs`：multipart 编辑调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实编辑。
 - `scripts/batch-images.mjs`：JSONL 批量 generate/edit 调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实执行，支持 append-only manifest、`--resume`、`--ordered-prefix`、`--dimension-check`、`--max-attempts`、`--concurrency` 和顺序执行下的 `--max-consecutive-failures`。`--concurrency` 默认 `1`，大于 `1` 时并发执行并按输入顺序输出结果。
 - `scripts/convert-image-format.mjs`：本地 PNG/JPEG/WebP 互转。默认输出 WebP，质量 `100`；JPEG 会把透明背景铺成白色，PNG/WebP 保留透明。
-- `scripts/diagnose-request.mjs`：按一个或多个页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断；支持读取批量 manifest，不触发生图计费。
+- `scripts/diagnose-request.mjs`：按一个或多个页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断；支持读取批量 manifest 和 `--base-url`，不触发生图计费。
 - `scripts/probe-upstream-image.mjs`：直接探测上游图片接口连通性。默认只检查 DNS、TLS 和 `/models`，必须添加 `--allow-billable` 才会真实调用 `/images/generations`。
 
-生成和编辑脚本的 dry-run 输出会包含 `routing_guidance`，用于在真实计费前检查当前请求应走 Agent JSON、页面 SSE，或在页面流式失败后先诊断再手动选定后续路径。真实执行输出会包含 `summary`；成功摘要含 `ok=true`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`cached`、`elapsed_ms`、`server_elapsed_ms`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`selected_channel_id`、`upstream_host` 和脱敏 `request_headers`。失败摘要含 `transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable` 和 `next_action`。
+生成、编辑和批量脚本的 dry-run 输出会包含 `verification_scope.mode=local_planning_only`，表示只验证了本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。生成和编辑 dry-run 还会包含 `routing_guidance`，用于在真实计费前检查当前请求应走 Agent JSON、页面 SSE，或在页面流式失败后先诊断再手动选定后续路径。真实执行输出会包含 `summary`；成功摘要含 `ok=true`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`cached`、`elapsed_ms`、`server_elapsed_ms`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`selected_channel_id`、`upstream_host` 和脱敏 `request_headers`。失败摘要含 `transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable` 和 `next_action`。
 所有生成、编辑、批量和探针脚本在 dry-run 或真实请求前都会校验尺寸参数。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI-compatible 上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量页面 SSE 和上游探针默认请求 `output_format=webp`、`output_compression=100`；普通 Agent edit 不发送输出格式字段，输出格式固定为 Agent 契约。
 
 如果当前上下文位于仓库根目录，管理员侧优先使用顶层命令：
 
+- `npm run first-run`：首次配置就绪检查，只读、非计费、不写 env 文件；默认输出中文摘要，加 `-- --json` 输出机器可读 JSON；用于确认 Node、依赖、服务地址、Agent capabilities、当前进程鉴权和下一步动作。
 - `npm run status`：只读查看 git、Space 目标、Agent API、Skill 入口和独立真实图片上游 smoke 配置摘要；会自动读取 `.env.real-smoke.local`，不输出 URL 或 API Key。
 - `npm run doctor`：统一诊断本机与 HF Space 配置，不写 Secret。
 - `npm run verify`：运行提交前基线；需要真实 PostgreSQL gate 时加 `-- --postgres`。
 - `npm run deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。
 - `npm run deploy:space`：部署干净 git HEAD 到固定 Space，并做只读公网验证。
-- `npm run agent:doctor`：执行非计费分层诊断，覆盖 capabilities、Agent contract、runtime backend、state backend 和 Responses/GPT2Image readiness；真实 1K/2K smoke 必须显式加 `-- --allow-billable`。
+- `npm run agent:doctor`：执行非计费分层诊断，覆盖 capabilities、Agent contract、runtime backend、state backend 和 Responses/GPT2Image readiness；支持 `-- --base-url <url>`；真实 1K/2K smoke 必须显式加 `-- --allow-billable`。
+
+首次配置和诊断输出字段速查：
+
+| 字段 | 出现位置 | 判断口径 |
+| --- | --- | --- |
+| `service_base_url` / `verification_scope.service_base_url` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。 |
+| `service_base_url_source` / `verification_scope.service_base_url_source` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。 |
+| `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。 |
+| `agent_auth_process.has_token` | `first-run --json` | 当前 shell 是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
+| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；存在不代表当前 shell 已加载。 |
+| `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
+| `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
 
 生成脚本常用参数：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --size 2048x2048 --quality high --response-mode path --idempotency-key stable-operation-key "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --size 2048x2048 --quality high --response-mode path --idempotency-key stable-operation-key "a product photo of a ceramic mug"
 ```
 
 常用 preset 可先 dry-run 展开真实参数，不触发计费：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --preset 1k-smoke-agent "a product photo of a ceramic mug"
-node "<skill-root>/scripts/generate-image.mjs" --preset 4k-agent-nonstream "a cinematic landscape"
-node "<skill-root>/scripts/generate-image.mjs" --preset 4k-page-sse "a cinematic landscape"
-node "<skill-root>/scripts/generate-image.mjs" --preset 4k-upstream-sse-newapi "a cinematic landscape"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 1k-smoke-agent "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 4k-agent-nonstream "a cinematic landscape"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 4k-page-sse "a cinematic landscape"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 4k-upstream-sse-newapi "a cinematic landscape"
 ```
 
 启用 Agent 内部上游 SSE 时，必须显式传策略字段；脚本仍只输出最终 JSON：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --allow-billable --image-backend images-api --stream-mode auto --streaming-strategy newapi-keepalive-sse --partial-images 2 --size 3840x2160 --quality high "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --image-backend images-api --stream-mode auto --streaming-strategy newapi-keepalive-sse --partial-images 2 --size 3840x2160 --quality high "a product photo of a ceramic mug"
 ```
 
 真实生图必须显式开启：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --allow-billable --timeout-ms 420000 --size 2048x2048 "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --timeout-ms 420000 --size 2048x2048 "a product photo of a ceramic mug"
 ```
 
 本地格式转换不触发生图计费：
@@ -168,17 +185,17 @@ generate 或页面 SSE 请求包含 `image_backend` 时，`partial_images` 必�
 默认 dry-run 只解析 JSONL、生成稳定幂等键并输出计划，不请求服务：
 
 ```text
-node "<skill-root>/scripts/batch-images.mjs" --input tasks.jsonl --ordered-prefix product-set
+node "<skill-root>/scripts/batch-images.mjs" --base-url https://your-space.hf.space --input tasks.jsonl --ordered-prefix product-set
 ```
 
 真实批量执行必须显式允许计费。需要并发时添加 `--concurrency N`；需要严格连续失败熔断时保持 `--concurrency 1`：
 
 ```text
-node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check --max-attempts 2 --max-consecutive-failures 3
-node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check --max-attempts 2 --concurrency 3
+node "<skill-root>/scripts/batch-images.mjs" --base-url https://your-space.hf.space --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check --max-attempts 2 --max-consecutive-failures 3
+node "<skill-root>/scripts/batch-images.mjs" --base-url https://your-space.hf.space --allow-billable --input tasks.jsonl --manifest runs/product-set.manifest.jsonl --resume --dimension-check --max-attempts 2 --concurrency 3
 ```
 
-`--manifest` 使用 JSONL append-only 记录每条任务的 `index`、`id`、`idempotency_key`、`attempt`、`status`、响应或错误以及机器可读 `summary`；`--resume` 会读取已成功记录并跳过同一 `id` 或 `idempotency_key`。`--dimension-check` 会读取响应里的 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸是否等于任务 `size`。`--max-attempts` 会为第二次及以后尝试追加新的 attempt 级 idempotency key，避免复用终态失败 key；`--concurrency` 大于 `1` 时会先读取运行态并发建议，并发执行任务并按输入顺序输出结果。服务端 `recommendedConcurrency` 或 `channelQueue.capacityPerCredential` 小于请求值时，脚本会把有效并发降到建议值并在输出中写入 `capacity_feedback`；不要再另开多个单张脚本绕过这个限制。`--max-consecutive-failures` 会在连续失败达到阈值后跳过后续任务并输出 `failure_summary` 与 `resume_fix_list`，且只能与顺序执行的 `--concurrency 1` 同用。任务级 `sse_log_path` 会把页面 SSE 原始事件按 JSONL 追加保存；即使 fetch 或 SSE 收集阶段失败，也会记录 `request_started`、`request_failed`、`elapsed_ms`、`client_request_id` 和 `endpoint`，便于区分上游未给终图和解析/断流问题。
+`--manifest` 使用 JSONL append-only 记录每条任务的 `index`、`id`、`idempotency_key`、`attempt`、`status`、响应或错误以及机器可读 `summary`；`--resume` 会读取已成功记录并跳过同一 `id` 或 `idempotency_key`。dry-run 不写 manifest，输出会声明 `manifest_written=false` 和 `manifest_write_reason=dry_run`。`--dimension-check` 会读取响应里的 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸是否等于任务 `size`。`--max-attempts` 会为第二次及以后尝试追加新的 attempt 级 idempotency key，避免复用终态失败 key；`--concurrency` 大于 `1` 时会先读取运行态并发建议，并发执行任务并按输入顺序输出结果。服务端 `recommendedConcurrency` 或 `channelQueue.capacityPerCredential` 小于请求值时，脚本会把有效并发降到建议值并在输出中写入 `capacity_feedback`；不要再另开多个单张脚本绕过这个限制。`--max-consecutive-failures` 会在连续失败达到阈值后跳过后续任务并输出 `failure_summary` 与 `resume_fix_list`，且只能与顺序执行的 `--concurrency 1` 同用。任务级 `sse_log_path` 会把页面 SSE 原始事件按 JSONL 追加保存；即使 fetch 或 SSE 收集阶段失败，也会记录 `request_started`、`request_failed`、`elapsed_ms`、`client_request_id` 和 `endpoint`，便于区分上游未给终图和解析/断流问题。
 
 批量 JSONL 字段按模式区分：`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`streaming_strategy`、`partial_images`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。edit 任务设置 `image_backend=responses-image-generation` 时会走页面 SSE；不要把它改成 Agent edit。`responsesModel` 必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`。JSONL 字段名必须使用 `streaming_strategy`；`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段，会被脚本在真实请求前拒绝。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段。
 
@@ -193,11 +210,11 @@ node "<skill-root>/scripts/probe-upstream-image.mjs" --base-url https://api.open
 页面请求反馈和日志诊断：
 
 ```text
-node "<skill-root>/scripts/diagnose-request.mjs" --client-request-id stable-operation-key --filename output.png
-node "<skill-root>/scripts/diagnose-request.mjs" --manifest runs/product-set.manifest.jsonl --filename output.png
-node "<skill-root>/scripts/diagnose-request.mjs" --manifest runs/product-set.manifest.jsonl --output runs/diagnosis.json
-node "<skill-root>/scripts/diagnose-request.mjs" --agent-request-id req_abc
-node "<skill-root>/scripts/diagnose-request.mjs" --idempotency-key stable-operation-key
+node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.hf.space --client-request-id stable-operation-key --filename output.png
+node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.hf.space --manifest runs/product-set.manifest.jsonl --filename output.png
+node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.hf.space --manifest runs/product-set.manifest.jsonl --output runs/diagnosis.json
+node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.hf.space --agent-request-id req_abc
+node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.hf.space --idempotency-key stable-operation-key
 ```
 
 调用前按当前系统和 shell 设置 `OPENAI_API_KEY` 或 `GPT_IMAGE_UPSTREAM_API_KEY`，不要把 key 写进命令历史或文档。
@@ -208,7 +225,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --idempotency-key stable-operat
 
 脚本读取以下环境变量：
 
-- `GPT_IMAGE_PLAYGROUND_URL`：服务基础地址，可指向本机、局域网、云服务器或域名；脚本未设置时默认尝试 `http://localhost:4783`。
+- `GPT_IMAGE_PLAYGROUND_URL`：服务基础地址，可指向本机、局域网、云服务器或域名；脚本未设置时默认尝试 `http://localhost:4783`。脚本参数 `--base-url` 优先级高于该环境变量。
 - `GPT_IMAGE_AGENT_TOKEN`：Bearer token。
 - `GPT_IMAGE_APP_PASSWORD_HASH`：使用 `APP_PASSWORD` 访问码部署时，Agent 端点发送为 `X-App-Password-Hash`，页面 SSE 发送为 form-data `passwordHash`。
 - `GPT_IMAGE_AGENT_IDEMPOTENCY_KEY`：跨脚本进程恢复同一操作时复用的幂等键；也供 `diagnose-request.mjs` 按 Agent 幂等键查询 state。脚本不会自动重试已终态失败的 key。
@@ -216,6 +233,8 @@ node "<skill-root>/scripts/diagnose-request.mjs" --idempotency-key stable-operat
 - `GPT_IMAGE_AGENT_REQUEST_ID`：供 `diagnose-request.mjs` 读取 Agent state 请求诊断的 Agent `request_id`。
 - `GPT_IMAGE_AGENT_MAX_ATTEMPTS`：最大尝试次数，默认 `3`。
 - `GPT_IMAGE_AGENT_CONTRACT_CHECK=1`：只检查 capabilities 和错误契约，不触发真实生图或编辑。
+
+Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 仍必须通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。
 
 上游请求头由服务端统一生成。默认 `User-Agent` 是 `gpt-image-playground/<package-version>`；可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖全局 UA，也可用 `OPENAI_CHANNEL_N_USER_AGENT` 和 `OPENAI_CHANNEL_N_UPSTREAM_HEADERS_JSON` 覆盖单渠道安全 header。`Authorization`、`Accept`、`Content-Type`、`Content-Length` 和 `Host` 等协议头不可由 extra headers 覆盖；capabilities、status 和 diagnostics 只暴露 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`，不暴露 secret 值。
 
