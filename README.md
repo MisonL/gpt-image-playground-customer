@@ -17,6 +17,26 @@ app_port: 4783
 
 ## 快速开始
 
+第一次配置或换机器后，先跑只读就绪检查。它不会写配置、不会输出密钥、不会触发真实生图：
+
+```bash
+npm run first-run
+```
+
+该命令默认输出中文摘要；给 Agent 或脚本消费时加 `--json`。它会检查 Node、依赖、`.env.local` / `.env.agent.local` 摘要、默认本地服务 `http://localhost:4783`、Agent capabilities 和下一步动作。检查公网或 Space 服务时显式传地址：
+
+```bash
+npm run first-run -- --base-url https://your-space.hf.space
+npm run first-run -- --json --base-url https://your-space.hf.space
+```
+
+首次配置最短路径：
+
+1. 运行 `npm install`。
+2. 启动服务：本地开发用 `npm run dev`，Docker 用 `docker compose up -d --build --remove-orphans`。
+3. 运行 `npm run first-run` 看中文摘要；如果要检查 Space 或内网服务，使用 `npm run first-run -- --base-url <url>`。
+4. 如果 Agent API 需要鉴权，复制 `.env.agent.local.example` 为 `.env.agent.local`，填入本机私有 token 后加载到 shell，再运行 `npm run first-run` 或 skill 脚本。
+
 推荐 Docker：
 
 ```bash
@@ -172,12 +192,20 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 
 AI Agent 集成时优先调用 skill 内置脚本，而不是临时手写 fetch、curl 或表单提交逻辑。脚本会先读取 capabilities，自动处理鉴权、幂等键、路由选择、超时、产物 URL 和结构化失败摘要。
 
+交互式任务中，Agent 应先定位服务地址：用户明确提供 URL 时直接使用该 URL；否则先检查 `GPT_IMAGE_PLAYGROUND_URL`，再探测默认本地地址 `http://localhost:4783`。如果只发现环境变量或本地服务，先向用户确认是否使用；用户提供其他地址时，以用户提供的地址为准。非交互式任务无法确认时，按同一顺序自动选择，并在输出里说明地址来源。
+
+新环境或不确定服务地址时先运行 `npm run first-run`。它会只读报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程是否拿到 Agent 鉴权，以及 `.env.agent.local` 是否存在私有鉴权配置；如果 token 只在私有 env 文件中，先把它加载到 shell，再运行 skill 脚本。
+
+dry-run 只做本地请求构造和静态路由规划，不读取远端 capabilities，也不验证远端鉴权、渠道容量或 manifest 写入。脚本输出里的 `verification_scope.mode=local_planning_only` 表示还没有证明远端服务可执行；需要远端合同检查时使用 `--contract-check`，真实执行必须显式添加 `--allow-billable`。
+
+subagent 或自动化任务要固定服务地址时，优先给脚本传 `--base-url`，不要只依赖默认 localhost。`generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 和 `npm run agent:doctor -- --base-url <url>` 都支持显式服务地址。首次配置 Agent 鉴权时复制 `.env.agent.local.example` 为 `.env.agent.local`，填入本机私有 token 后加载到 shell；不要把 `.env.agent.local` 提交或粘到任务日志。
+
 1. 只读检查当前服务能力，不触发计费：
 
 ```bash
-GPT_IMAGE_PLAYGROUND_URL=http://localhost:4783 \
 node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   --contract-check \
+  --base-url http://localhost:4783 \
   "capability check"
 ```
 
@@ -185,6 +213,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
+  --base-url http://localhost:4783 \
   --size 1024x1024 \
   --quality high \
   --response-mode path \
@@ -196,6 +225,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
+  --base-url http://localhost:4783 \
   --allow-billable \
   --timeout-ms 420000 \
   --size 1024x1024 \
@@ -209,6 +239,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/edit-image.mjs \
+  --base-url http://localhost:4783 \
   --image ./source.png \
   --format webp \
   --output-compression 100 \
@@ -226,6 +257,7 @@ node skills/gpt-image-playground-agent/scripts/edit-image.mjs \
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/batch-images.mjs \
+  --base-url http://localhost:4783 \
   --input tasks.jsonl \
   --manifest runs/product-set.manifest.jsonl \
   --resume \
@@ -247,6 +279,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
+  --base-url http://localhost:4783 \
   --idempotency-key agent-demo-generate-001
 ```
 
@@ -254,17 +287,40 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
+  --base-url http://localhost:4783 \
   --client-request-id agent-demo-edit-001
 ```
+
+远程 Space、云服务或内网服务必须显式固定目标地址，避免误查本机默认服务：
+
+```bash
+node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
+  --base-url https://your-space.hf.space \
+  --idempotency-key agent-demo-generate-001
+```
+
+首次配置和诊断输出字段速查：
+
+| 字段 | 出现位置 | 判断口径 |
+| --- | --- | --- |
+| `service_base_url` / `verification_scope.service_base_url` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。 |
+| `service_base_url_source` / `verification_scope.service_base_url_source` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。 |
+| `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。 |
+| `agent_auth_process.has_token` | `first-run --json` | 当前 shell 是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
+| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；存在不代表当前 shell 已加载。 |
+| `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
+| `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
 
 常用环境变量：
 
 | 变量 | 用途 |
 | --- | --- |
-| `GPT_IMAGE_PLAYGROUND_URL` | 指向本机、内网或公网部署地址；默认尝试 `http://localhost:4783`。 |
+| `GPT_IMAGE_PLAYGROUND_URL` | 指向本机、内网或公网部署地址；未设置时脚本默认尝试 `http://localhost:4783`。交互式任务中，自动发现到本地服务后应先向用户确认。 |
 | `GPT_IMAGE_AGENT_TOKEN` | Agent Bearer token，对应服务端 `AGENT_API_TOKEN`。 |
 | `GPT_IMAGE_APP_PASSWORD_HASH` | 使用页面访问码部署时的访问码哈希；页面 SSE 会作为 `passwordHash` 表单字段发送。 |
 | `GPT_IMAGE_AGENT_IDEMPOTENCY_KEY` | 跨脚本进程复用同一业务操作的幂等键。 |
+
+Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端 Space 配置了 `AGENT_API_TOKEN` 后，本机 Agent 仍需要通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；不要把 token 写进 README、任务 JSONL、manifest 或命令日志。仓库提供 `.env.agent.local.example` 作为私有本机配置模板。
 
 接口边界：
 
@@ -332,9 +388,10 @@ Hugging Face Space 免费层部署见 [docs/deployment/huggingface-space-free.md
 | `npm run lint:scripts` | 检查仓库脚本和 skill 脚本语法。 |
 | `npm run version:check` | 检查版本、README badge 和 CHANGELOG 口径。 |
 | `npm run verify` | 运行提交前基线。 |
+| `npm run first-run` | 首次配置就绪检查，默认中文摘要；加 `-- --json` 输出机器可读 JSON。 |
 | `npm run status` | 只读查看 git、Node、部署目标和 Agent 摘要。 |
 | `npm run doctor` | 运行本机和部署诊断。 |
-| `npm run agent:doctor` | 非计费 Agent 分层诊断。 |
+| `npm run agent:doctor` | 非计费 Agent 分层诊断；支持 `-- --base-url <url>`。 |
 | `npm run deploy:space` | 上传干净 git HEAD 到固定 HF Space。 |
 
 真实上游 smoke 默认不会触发计费；需要真实生图时必须显式传入 `--allow-billable`。

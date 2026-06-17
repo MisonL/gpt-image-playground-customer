@@ -26,13 +26,17 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - `scripts/edit-image.mjs`：multipart 编辑调用。
 - `scripts/batch-images.mjs`：JSONL 批量 generate/edit 调用。
 - `scripts/convert-image-format.mjs`：本地 PNG/JPEG/WebP 互转。
-- `scripts/diagnose-request.mjs`：按页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断。
+- `scripts/diagnose-request.mjs`：按页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断，支持 `--base-url` 固定目标服务。
 - `scripts/probe-upstream-image.mjs`：上游图片接口连通性探针。
 
-生成、编辑和批量脚本默认只做 dry-run，不触发真实生图或编辑。必须显式添加 `--allow-billable` 才会按 capabilities 路由规则调用 `/api/agent/images/generate`、`/api/agent/images/edit`、`/api/agent/jobs/images/generate` 或页面端 `/api/images` SSE。
+生成、编辑和批量脚本默认只做 dry-run，不触发真实生图或编辑。dry-run 输出的 `verification_scope.mode=local_planning_only` 表示只完成本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。必须显式添加 `--allow-billable` 才会按 capabilities 路由规则调用 `/api/agent/images/generate`、`/api/agent/images/edit`、`/api/agent/jobs/images/generate` 或页面端 `/api/images` SSE。
 上游探针默认只检查 DNS、TLS 和 `/models`，必须显式添加 `--allow-billable` 才会调用上游 `/images/generations`。
 脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 或 `--contract-check` 做只读契约检查，不触发真实生图或编辑。
+位于仓库根目录且是首次配置、换机器、服务地址不确定或 token 不确定时，先运行 `npm run first-run`。它只读、非计费、不写 env 文件，默认输出中文摘要，并报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程鉴权和下一步动作。
+自动化消费时使用 `npm run first-run -- --json`。
 Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API_TOKEN` 时只接受 Bearer token；只有未配置 `AGENT_API_TOKEN` 且配置了 `APP_PASSWORD` 时，Agent 端点才接受访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。页面端 `/api/images` SSE 另看 `agent_streaming.page_sse.auth`；当其声明 `required=true` 时，form-data 必须包含 `passwordHash`。
+subagent 或自动化任务如果用户指定 Space、云服务或内网服务，调用 `generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 或 `npm run agent:doctor -- --base-url <url>` 时显式传服务地址；不要依赖默认 localhost。
+Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 仍必须通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。
 排查环境配置时不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。Codex 会话日志会持久保存命令输出；优先运行仓库脚本 `npm run env:summary`，或在命令中先把 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 值替换为 `<redacted>`。
 
 ```text
@@ -118,6 +122,8 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--timeout-ms`：未显式指定时，真实请求会采用 `420000ms` 与 `capabilities.image_transport.upstream_timeout_ms` 中较大的值。
 - `--dry-run`
 - `--allow-billable`
+
+批量 dry-run 不写 manifest，输出会声明 `manifest_written=false` 和 `manifest_write_reason=dry_run`。只有真实执行时 manifest 才作为 append-only 续跑记录写入。
 
 批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`streaming_strategy`、`partial_images`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。edit 任务设置 `image_backend=responses-image-generation` 时会走页面 SSE；不要把它改成 Agent edit。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。JSONL 字段名必须使用 `streaming_strategy`；`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段，会被脚本在真实请求前拒绝。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
@@ -523,7 +529,27 @@ node "<skill-root>/scripts/diagnose-request.mjs" --agent-request-id req_abc
 node "<skill-root>/scripts/diagnose-request.mjs" --idempotency-key stable-operation-key
 ```
 
+固定服务地址时加 `--base-url`：
+
+```text
+node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.hf.space --idempotency-key stable-operation-key
+```
+
+远程 Space、云服务或内网服务必须显式传 `--base-url`，不要让诊断脚本误查默认本地服务。
+
 脚本输出会包含 `diagnostics_retention`。当某个请求的 `matched_log_count=0` 时，该请求会额外包含 `diagnostics_note`，说明无匹配日志的保留窗口边界。
+
+首次配置和诊断输出字段速查：
+
+| 字段 | 出现位置 | 判断口径 |
+| --- | --- | --- |
+| `service_base_url` / `verification_scope.service_base_url` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。 |
+| `service_base_url_source` / `verification_scope.service_base_url_source` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。 |
+| `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。 |
+| `agent_auth_process.has_token` | `first-run --json` | 当前 shell 是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
+| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；存在不代表当前 shell 已加载。 |
+| `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
+| `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
 
 单条 Agent state 诊断响应示例：
 
