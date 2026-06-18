@@ -3,7 +3,8 @@ import {
     readCapabilitiesImageTransportTimeoutMs,
     resolveSameOriginUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
-import { AGENT_ENDPOINTS } from '../src/lib/agent-api-paths.mjs';
+import { enrichFailureWithAgentDiagnostics } from '../skills/gpt-image-playground-agent/scripts/lib/agent-diagnostics-summary.mjs';
+import { AGENT_ENDPOINTS } from '../skills/gpt-image-playground-agent/scripts/lib/agent-api-paths.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -83,6 +84,89 @@ describe('Agent skill script argument validation', () => {
         assert.equal(probeResult.status, 2);
         assert.match(probeResult.stderr, /--size 必须是 auto 或 WIDTHxHEIGHT/);
         assert.equal(probeResult.stdout.trim(), '');
+    });
+
+    it('caps Agent diagnostics enrichment timeout independently of image request timeouts', async () => {
+        const startedAt = Date.now();
+        const result = await enrichFailureWithAgentDiagnostics({
+            baseUrl: 'http://example.test/playground',
+            authHeaders: () => ({}),
+            idempotencyKey: 'slow-diagnostics-key',
+            failureOutput: { ok: false, error: { code: 'network_error' } },
+            summary: {
+                ok: false,
+                retryable: true,
+                next_action: 'retry_after_wait'
+            },
+            timeoutMs: 420000,
+            diagnosticsTimeoutMs: 25,
+            fetchFn: (_url, init) =>
+                new Promise((_resolve, reject) => {
+                    init.signal.addEventListener('abort', () => {
+                        const error = new Error('aborted');
+                        error.name = 'AbortError';
+                        reject(error);
+                    });
+                })
+        });
+
+        assert.equal(result.summary.agent_diagnostics_checked, true);
+        assert.equal(result.summary.agent_diagnostics_found, false);
+        assert.equal(result.summary.agent_diagnostics_unavailable_reason, 'diagnostics_timeout');
+        assert.equal(result.failureOutput.agent_failure_diagnostics.unavailable_reason, 'diagnostics_timeout');
+        assert.equal(result.summary.retryable, true);
+        assert.equal(result.summary.next_action, 'retry_after_wait');
+        assert.ok(Date.now() - startedAt < 1000);
+    });
+
+    it('reports non-json Agent diagnostics responses distinctly', async () => {
+        const result = await enrichFailureWithAgentDiagnostics({
+            baseUrl: 'http://example.test/playground',
+            authHeaders: () => ({}),
+            idempotencyKey: 'html-diagnostics-key',
+            failureOutput: { ok: false, error: { code: 'network_error' } },
+            summary: { ok: false },
+            timeoutMs: 420000,
+            fetchFn: async () => ({
+                ok: false,
+                status: 502,
+                headers: new Headers({ 'content-type': 'text/html' }),
+                text: async () => '<html>bad gateway</html>'
+            })
+        });
+
+        assert.equal(result.summary.agent_diagnostics_checked, true);
+        assert.equal(result.summary.agent_diagnostics_found, false);
+        assert.equal(result.summary.agent_diagnostics_unavailable_reason, 'non_json_response');
+        assert.equal(result.summary.agent_diagnostics_http_status, 502);
+        assert.equal(result.failureOutput.agent_failure_diagnostics.unavailable_reason, 'non_json_response');
+        assert.equal(result.failureOutput.agent_failure_diagnostics.http_status, 502);
+    });
+
+    it('treats found Agent diagnostics without payload as invalid', async () => {
+        const result = await enrichFailureWithAgentDiagnostics({
+            baseUrl: 'http://example.test/playground',
+            authHeaders: () => ({}),
+            idempotencyKey: 'missing-diagnostics-key',
+            failureOutput: { ok: false, error: { code: 'network_error' } },
+            summary: { ok: false },
+            timeoutMs: 420000,
+            fetchFn: async () => ({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                text: async () => JSON.stringify({ found: true })
+            })
+        });
+
+        assert.equal(result.summary.agent_diagnostics_checked, true);
+        assert.equal(result.summary.agent_diagnostics_found, false);
+        assert.equal(result.summary.agent_diagnostics_unavailable_reason, 'invalid_response');
+        assert.equal(result.summary.agent_diagnostics_http_status, 200);
+        assert.equal(result.failureOutput.agent_failure_diagnostics.found, false);
+        assert.equal(result.failureOutput.agent_failure_diagnostics.unavailable_reason, 'invalid_response');
+        assert.equal(result.failureOutput.agent_failure_diagnostics.http_status, 200);
+        assert.equal(result.failureOutput.agent_failure_diagnostics.request_id, undefined);
     });
 
     it('converts local images to webp by default', () => {
@@ -1138,6 +1222,243 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
+    it('enriches failed Agent generate summaries with Agent state diagnostics', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ ok: true }));
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'fetch failed', retryable: false } }));
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/requests?idempotency_key=diag-generate-key') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            found: true,
+                            diagnostics: {
+                                request: {
+                                    request_id: 'req_generate_diag',
+                                    idempotency_key: 'diag-generate-key',
+                                    status: 'failed'
+                                },
+                                error: {
+                                    code: 'unexpected_error',
+                                    retryable: false,
+                                    diagnostics: {
+                                        selected_channel_id: 'channel-a',
+                                        upstream_host: 'upstream.example.test',
+                                        transport_error_kind: 'aborted'
+                                    }
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--idempotency-key', 'diag-generate-key', '--size', '1024x1024', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                const body = JSON.parse(result.stderr);
+                assert.equal(body.summary.request_id, 'req_generate_diag');
+                assert.equal(body.summary.selected_channel_id, 'channel-a');
+                assert.equal(body.summary.upstream_host, 'upstream.example.test');
+                assert.equal(body.summary.transport_error_kind, 'aborted');
+                assert.equal(body.summary.agent_diagnostics_checked, true);
+                assert.equal(body.summary.agent_diagnostics_found, true);
+                assert.equal(body.agent_failure_diagnostics.request_id, 'req_generate_diag');
+                assert.equal(body.agent_failure_diagnostics.status, 'failed');
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/images/generate',
+                        'GET /api/agent/diagnostics/requests?idempotency_key=diag-generate-key'
+                    ]
+                );
+            }
+        );
+    });
+
+    it('preserves path prefixes when fetching Agent state diagnostics', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/playground/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ ok: true }));
+                    return;
+                }
+                if (request.url === '/playground/api/agent/images/generate') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: { code: 'unexpected_error', message: 'fetch failed', retryable: false }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/playground/api/agent/diagnostics/requests?idempotency_key=path-diag-key') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            found: true,
+                            diagnostics: {
+                                request: {
+                                    request_id: 'req_path_diag',
+                                    idempotency_key: 'path-diag-key',
+                                    status: 'failed'
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--idempotency-key', 'path-diag-key', '--size', '1024x1024', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: `${baseUrl}/playground` }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                const body = JSON.parse(result.stderr);
+                assert.equal(body.summary.request_id, 'req_path_diag');
+                assert.equal(body.summary.agent_diagnostics_checked, true);
+                assert.equal(body.summary.agent_diagnostics_found, true);
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /playground/api/agent/capabilities',
+                        'POST /playground/api/agent/images/generate',
+                        'GET /playground/api/agent/diagnostics/requests?idempotency_key=path-diag-key'
+                    ]
+                );
+            }
+        );
+    });
+
+    it('replaces stale retry guidance when Agent diagnostics report a terminal failure', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ ok: true }));
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    response.writeHead(503, { 'content-type': 'application/json', 'retry-after': '1' });
+                    response.end(
+                        JSON.stringify({
+                            error: { code: 'network_error', message: 'temporary failure', retryable: true }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/requests?idempotency_key=terminal-diag-key') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            found: true,
+                            diagnostics: {
+                                request: {
+                                    request_id: 'req_terminal_diag',
+                                    idempotency_key: 'terminal-diag-key',
+                                    status: 'failed'
+                                },
+                                error: {
+                                    code: 'upstream_failed',
+                                    retryable: false
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--idempotency-key', 'terminal-diag-key', '--size', '1024x1024', 'prompt'],
+                    {
+                        GPT_IMAGE_AGENT_MAX_ATTEMPTS: '1',
+                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                    }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                const body = JSON.parse(result.stderr);
+                assert.equal(body.summary.request_id, 'req_terminal_diag');
+                assert.equal(body.summary.retryable, false);
+                assert.equal(body.summary.next_action, 'diagnose_then_new_idempotency_key');
+                assert.equal(body.agent_failure_diagnostics.retryable, false);
+            }
+        );
+    });
+
+    it('does not report diagnostics lookup failures as upstream transport errors', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ ok: true }));
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'fetch failed', retryable: false } }));
+                    return;
+                }
+                if (request.url === '/api/agent/diagnostics/requests?idempotency_key=diag-unavailable-key') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'diagnostics unavailable' }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--idempotency-key', 'diag-unavailable-key', '--size', '1024x1024', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                const body = JSON.parse(result.stderr);
+                assert.equal(body.summary.transport_error_kind, null);
+                assert.equal(body.summary.agent_diagnostics_checked, true);
+                assert.equal(body.summary.agent_diagnostics_found, false);
+                assert.equal(body.summary.agent_diagnostics_unavailable_reason, 'status_500');
+                assert.equal(body.agent_failure_diagnostics.unavailable_reason, 'status_500');
+            }
+        );
+    });
+
     it('uses page SSE client request id max length declared by capabilities', async () => {
         const requests = [];
         await withServer(
@@ -1615,7 +1936,9 @@ describe('Agent skill script argument validation', () => {
                                 {
                                     filename: 'agent-off.png',
                                     content_url: '/api/agent/artifacts/artifact-off/content',
-                                    metadata_url: '/api/agent/artifacts/artifact-off'
+                                    metadata_url: '/api/agent/artifacts/artifact-off',
+                                    width: 1254,
+                                    height: 1254
                                 }
                             ],
                             timing: { server_elapsed_ms: 4321 }
@@ -1660,6 +1983,8 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.summary.route_mode, 'agent');
                 assert.deepEqual(body.summary.content_urls, ['/api/agent/artifacts/artifact-off/content']);
                 assert.deepEqual(body.summary.absolute_content_urls, [`${baseUrl}/api/agent/artifacts/artifact-off/content`]);
+                assert.deepEqual(body.summary.actual_dimensions, { width: 1254, height: 1254 });
+                assert.deepEqual(body.summary.image_dimensions, [{ width: 1254, height: 1254 }]);
                 assert.equal(typeof body.summary.elapsed_ms, 'number');
                 assert.equal(body.summary.elapsed_source, 'client_script');
                 assert.equal(body.summary.server_elapsed_ms, 4321);
@@ -2352,6 +2677,102 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('enriches failed Agent edit summaries with Agent state diagnostics', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-diagnostics-'));
+        try {
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+            const requests = [];
+
+            await withServer(
+                async (request, response) => {
+                    requests.push({ method: request.method, url: request.url });
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: {
+                                    page_sse: { supported: true, endpoint: '/api/images' }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/edit') {
+                        await readRequestText(request);
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'edit failed', retryable: false } }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/diagnostics/requests?idempotency_key=diag-edit-key') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                found: true,
+                                diagnostics: {
+                                    request: {
+                                        request_id: 'req_edit_diag',
+                                        idempotency_key: 'diag-edit-key',
+                                        status: 'failed'
+                                    },
+                                    error: {
+                                        code: 'unexpected_error',
+                                        retryable: false,
+                                        diagnostics: {
+                                            selected_channel_id: 'channel-edit',
+                                            upstream_host: 'edit-upstream.example.test',
+                                            transport_error_kind: 'socket_closed'
+                                        }
+                                    }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'edit-image.mjs',
+                        [
+                            '--allow-billable',
+                            '--agent',
+                            '--idempotency-key',
+                            'diag-edit-key',
+                            '--size',
+                            '3072x2048',
+                            imagePath,
+                            'prompt'
+                        ],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stdout.trim(), '');
+                    const body = JSON.parse(result.stderr);
+                    assert.equal(body.summary.request_id, 'req_edit_diag');
+                    assert.equal(body.summary.selected_channel_id, 'channel-edit');
+                    assert.equal(body.summary.upstream_host, 'edit-upstream.example.test');
+                    assert.equal(body.summary.transport_error_kind, 'socket_closed');
+                    assert.equal(body.summary.agent_diagnostics_checked, true);
+                    assert.equal(body.summary.agent_diagnostics_found, true);
+                    assert.equal(body.agent_failure_diagnostics.request_id, 'req_edit_diag');
+                    assert.deepEqual(
+                        requests.map((item) => `${item.method} ${item.url}`),
+                        [
+                            'GET /api/agent/capabilities',
+                            'POST /api/agent/images/edit',
+                            'GET /api/agent/diagnostics/requests?idempotency_key=diag-edit-key'
+                        ]
+                    );
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('rejects default WebP edit dry-runs when streaming is explicitly disabled', () => {
         const result = runSkillScript('edit-image.mjs', [
             '--size',
@@ -2997,6 +3418,10 @@ describe('Agent skill script argument validation', () => {
             assert.equal(body.manifest_write_reason, 'dry_run');
             assert.equal(body.total, 2);
             assert.equal(body.concurrency, 1);
+            assert.equal(body.guardrails.ordered_prefix, 'demo');
+            assert.equal(body.guardrails.repeat_ordered_prefix_on_real_run, true);
+            assert.equal(body.guardrails.dimension_check_recommended, true);
+            assert.match(body.guardrails.dimension_check_reason, /--dimension-check/);
             assert.equal(body.tasks[0].endpoint, '/api/agent/images/generate');
             assert.equal(body.tasks[0].idempotency_key, 'demo-0001-first-item');
             assert.equal(body.tasks[0].request.model, 'gpt-image-2');
@@ -3012,6 +3437,77 @@ describe('Agent skill script argument validation', () => {
             assert.equal('image_path' in body.tasks[1].request, false);
             assert.equal('image_paths' in body.tasks[1].request, false);
             assert.equal('mask_path' in body.tasks[1].request, false);
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('records enriched Agent diagnostics for failed batch tasks and manifests', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-diagnostics-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const manifestPath = join(tempRoot, 'manifest.jsonl');
+            writeFileSync(inputPath, JSON.stringify({ id: 'diag-task', prompt: 'prompt', idempotency_key: 'batch-diag-key' }));
+
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ ok: true }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/generate') {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'fetch failed', retryable: false } }));
+                        return;
+                    }
+                    if (request.url === '/api/agent/diagnostics/requests?idempotency_key=batch-diag-key') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                found: true,
+                                diagnostics: {
+                                    request: {
+                                        request_id: 'req_batch_diag',
+                                        idempotency_key: 'batch-diag-key',
+                                        status: 'failed'
+                                    },
+                                    error: {
+                                        code: 'unexpected_error',
+                                        retryable: false,
+                                        diagnostics: {
+                                            selected_channel_id: 'channel-b',
+                                            upstream_host: 'batch-upstream.example.test'
+                                        }
+                                    }
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath, '--manifest', manifestPath, '--max-attempts', '1'],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.results[0].summary.request_id, 'req_batch_diag');
+                    assert.equal(body.results[0].summary.selected_channel_id, 'channel-b');
+                    assert.equal(body.results[0].summary.upstream_host, 'batch-upstream.example.test');
+                    assert.equal(body.results[0].summary.agent_diagnostics_checked, true);
+                    assert.equal(body.results[0].agent_failure_diagnostics.request_id, 'req_batch_diag');
+                    const manifestLines = readFileSync(manifestPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+                    assert.equal(manifestLines[0].summary.request_id, 'req_batch_diag');
+                    assert.equal(manifestLines[0].agent_failure_diagnostics.request_id, 'req_batch_diag');
+                }
+            );
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
@@ -4473,6 +4969,8 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(result.stderr.trim(), '');
                     const body = JSON.parse(result.stdout);
                     assert.equal(body.results[0].status, 'succeeded');
+                    assert.deepEqual(body.results[0].summary.actual_dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.results[0].summary.image_dimensions, [{ width: 1024, height: 1024 }]);
                 }
             );
         } finally {
@@ -4912,7 +5410,14 @@ describe('Agent skill script argument validation', () => {
                     }
                     if (request.url === '/api/agent/images/generate') {
                         response.writeHead(200, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ images: [{ id: 'dim-image', filename: 'dim.png', b64_json: fakePngBase64(512, 512) }] }));
+                        response.end(
+                            JSON.stringify({
+                                images: [
+                                    { id: 'dim-image-bad', filename: 'dim-bad.png', b64_json: fakePngBase64(512, 512) },
+                                    { id: 'dim-image-ok', filename: 'dim-ok.png', b64_json: fakePngBase64(1024, 1024) }
+                                ]
+                            })
+                        );
                         return;
                     }
                     response.writeHead(404, { 'content-type': 'application/json' });
@@ -4929,7 +5434,29 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(result.stderr.trim(), '');
                     const body = JSON.parse(result.stdout);
                     assert.equal(body.ok, false);
-                    assert.match(body.results[0].error, /尺寸校验失败/);
+                    assert.equal(body.results[0].error.code, 'dimension_check_failed');
+                    assert.match(body.results[0].error.message, /尺寸校验失败/);
+                    assert.deepEqual(body.results[0].error.expected_dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.results[0].error.actual_dimensions, { width: 512, height: 512 });
+                    assert.equal(body.results[0].validation_failure_kind, 'generated_artifact_failed_dimension_check');
+                    assert.equal(body.results[0].response.images[0].b64_json, undefined);
+                    assert.equal(body.results[0].response.images[0].b64_json_length, fakePngBase64(512, 512).length);
+                    assert.deepEqual(body.results[0].response.images[0].dimensions, { width: 512, height: 512 });
+                    assert.equal(body.results[0].response.images[1].b64_json, undefined);
+                    assert.equal(body.results[0].response.images[1].b64_json_length, fakePngBase64(1024, 1024).length);
+                    assert.deepEqual(body.results[0].response.images[1].dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.results[0].summary.artifact_ids, ['dim-image-bad', 'dim-image-ok']);
+                    assert.deepEqual(body.results[0].summary.image_dimensions, [
+                        { width: 512, height: 512 },
+                        { width: 1024, height: 1024 }
+                    ]);
+                    assert.deepEqual(body.results[0].summary.expected_dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.results[0].summary.actual_dimensions, { width: 512, height: 512 });
+                    assert.equal(body.results[0].summary.dimension_check_failed, true);
+                    assert.equal(body.failure_summary.validation_failure_count, 1);
+                    assert.equal(body.failure_summary.request_failure_count, 0);
+                    assert.equal(body.failure_summary.tasks[0].failure_kind, 'generated_artifact_failed_dimension_check');
+                    assert.deepEqual(body.failure_summary.tasks[0].artifact_ids, ['dim-image-bad', 'dim-image-ok']);
                 }
             );
         } finally {
@@ -5685,9 +6212,10 @@ function listTextFiles(root) {
 
 function runSkillScriptAsync(filename, args, env = {}, options = {}) {
     return new Promise((resolve) => {
+        const baseEnv = buildIsolatedSkillScriptEnv({ loadPrivateAgentEnv: options.loadPrivateAgentEnv });
         const child = spawn(process.execPath, [join(skillScriptsRoot, filename), ...args], {
             cwd: repoRoot,
-            env: { ...process.env, ...env },
+            env: { ...baseEnv, ...env },
             stdio: ['ignore', 'pipe', 'pipe']
         });
         let stdout = '';

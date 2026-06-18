@@ -17,6 +17,7 @@ export function buildSuccessSummary({ result, routing, timing, idempotencyKey, b
   const serverTiming = readObject(result?.timing);
   const execution = readObject(result?.execution);
   const images = Array.isArray(result?.images) ? result.images : [];
+  const imageDimensions = readResponseImageDimensions(images);
   const timingSummary = buildTimingSummary({ clientTiming: timing, serverTiming });
   return stableSummary({
     ok: true,
@@ -26,6 +27,8 @@ export function buildSuccessSummary({ result, routing, timing, idempotencyKey, b
     artifact_ids: images.map((image) => image?.id).filter((value) => typeof value === 'string' && value),
     content_urls: readImageUrls(images, ['content_url', 'path']),
     absolute_content_urls: readImageUrls(images, ['absolute_content_url', 'absolute_path']),
+    image_dimensions: imageDimensions,
+    actual_dimensions: imageDimensions.length === 1 ? imageDimensions[0] : null,
     cached: typeof result?.cached === 'boolean' ? result.cached : undefined,
     started_at: timingSummary.started_at,
     completed_at: timingSummary.completed_at,
@@ -51,15 +54,22 @@ export function buildFailureSummary({ errorBody, routing, timing, idempotencyKey
   const error = readObject(errorBody?.error) || readObject(errorBody);
   const errorMessage = readString(error?.message) || readString(errorBody?.error);
   const diagnostics = readObject(error?.diagnostics);
+  const response = readObject(errorBody?.response);
+  const images = Array.isArray(response?.images) ? response.images : [];
+  const imageDimensions = readResponseImageDimensions(images);
   const timingSummary = buildTimingSummary({ clientTiming: timing, diagnostics });
   return stableSummary({
     ok: false,
     billable,
     request_id: readString(error?.request_id) || null,
     idempotency_key: idempotencyKey,
-    artifact_ids: [],
-    content_urls: [],
-    absolute_content_urls: [],
+    artifact_ids: images.map((image) => image?.id).filter((value) => typeof value === 'string' && value),
+    content_urls: readImageUrls(images, ['content_url', 'path']),
+    absolute_content_urls: readImageUrls(images, ['absolute_content_url', 'absolute_path']),
+    image_dimensions: imageDimensions,
+    expected_dimensions: readDimensionObject(error?.expected_dimensions),
+    actual_dimensions: readDimensionObject(error?.actual_dimensions),
+    dimension_check_failed: error?.code === 'dimension_check_failed' ? true : undefined,
     started_at: timingSummary.started_at,
     completed_at: timingSummary.completed_at,
     elapsed_ms: timingSummary.elapsed_ms,
@@ -104,6 +114,10 @@ function stableSummary(value) {
     artifact_ids: Array.isArray(value.artifact_ids) ? value.artifact_ids : [],
     content_urls: Array.isArray(value.content_urls) ? value.content_urls : [],
     absolute_content_urls: Array.isArray(value.absolute_content_urls) ? value.absolute_content_urls : [],
+    image_dimensions: Array.isArray(value.image_dimensions) ? value.image_dimensions : [],
+    expected_dimensions: value.expected_dimensions ?? null,
+    actual_dimensions: value.actual_dimensions ?? null,
+    dimension_check_failed: value.dimension_check_failed ?? false,
     route_mode: value.route_mode ?? null,
     image_backend: value.image_backend ?? null,
     stream_mode: value.stream_mode ?? null,
@@ -114,7 +128,11 @@ function stableSummary(value) {
     retry_after_ms: value.retry_after_ms ?? null,
     retry_after_seconds: value.retry_after_seconds ?? null,
     cooldown_until: value.cooldown_until ?? null,
-    cooldown_target: value.cooldown_target ?? null
+    cooldown_target: value.cooldown_target ?? null,
+    agent_diagnostics_checked: value.agent_diagnostics_checked ?? false,
+    agent_diagnostics_found: value.agent_diagnostics_found ?? false,
+    agent_diagnostics_unavailable_reason: value.agent_diagnostics_unavailable_reason ?? null,
+    agent_diagnostics_http_status: value.agent_diagnostics_http_status ?? null
   };
 }
 
@@ -152,6 +170,32 @@ function readImageUrls(images, fields) {
       return undefined;
     })
     .filter((value) => typeof value === 'string' && value);
+}
+
+function readResponseImageDimensions(images) {
+  return images
+    .map((image) => readDimensionObject(image?.dimensions) || readDimensionObject(image?.metadata?.dimensions) || readImageTopLevelDimensions(image))
+    .filter((value) => value !== undefined);
+}
+
+function readImageTopLevelDimensions(image) {
+  if (!readObject(image)) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(image, 'width')) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(image, 'height')) return undefined;
+  return readDimensionObject(image);
+}
+
+function readDimensionObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const width = readPositiveInteger(value.width);
+  const height = readPositiveInteger(value.height);
+  if (width === undefined || height === undefined) return undefined;
+  return { width, height };
+}
+
+function readPositiveInteger(value) {
+  if (!Number.isInteger(value) || value <= 0) return undefined;
+  return value;
 }
 
 function buildTimingSummary({ clientTiming, serverTiming, diagnostics }) {

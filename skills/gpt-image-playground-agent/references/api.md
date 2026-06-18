@@ -47,7 +47,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 同一个 `Idempotency-Key` 如果已经进入终态 `failed`，再次调用 generate/edit 或 job result/status 只会回放该失败，且 `retryable=false`。需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
 页面端 `/api/images` SSE 会把同一个业务 key 复用到 `clientRequestId`，因此脚本使用的 `Idempotency-Key` 不能超过 capabilities 中 `agent_streaming.page_sse.client_request_id.max_length` 声明的字符数；超长时会直接报错，不会静默截断。
 脚本会在 dry-run 和真实请求前前置校验 `--size` 或 JSONL `size`。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI-compatible 上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量和上游探针默认请求 `output_format=webp`、`output_compression=100`。
-真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。失败摘要也稳定包含空数组或 `null` 形式的产物、路由和渠道字段，便于 subagent 按同一模板汇报。失败摘要还包含 `transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable` 和 `next_action`。回答耗时问题时优先读取 `summary.elapsed_ms`；需要区分脚本等待和上游耗时时读取 `summary.elapsed_breakdown`。
+真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。失败摘要也稳定包含空数组或 `null` 形式的产物、路由、渠道和尺寸字段，便于 subagent 按同一模板汇报；尺寸门禁失败属于“上游已生成但本地验收失败”，失败摘要会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls` 和 `image_dimensions`。失败摘要还包含 `transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`。Agent JSON 失败时脚本会按幂等键只读查询 Agent state；若命中，会把 `request_id`、`selected_channel_id`、`upstream_host`、`transport_error_kind` 合并进首次失败摘要，并输出 `agent_failure_diagnostics`。回答耗时问题时优先读取 `summary.elapsed_ms`；需要区分脚本等待和上游耗时时读取 `summary.elapsed_breakdown`。
 
 生成脚本参数：
 
@@ -59,7 +59,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--output-compression`：默认 `100`，仅适用于 `jpeg` 或 `webp`。
 - `--response-mode`：默认 `path`。
 - `--image-backend`：可选，显式选择 `images-api`、`images`、`responses` 或 `responses-image-generation`。
-- `--responses-model` / `--gpt-model`：页面 SSE 专属字段，设置 Responses 顶层模型；必须同时设置 `--image-backend responses-image-generation` 或兼容别名 `responses`。
+- `--responses-model` / `--gpt-model`：页面 SSE 专属字段，覆盖本次请求的 Responses 顶层模型；未传时使用服务端 `OPENAI_RESPONSES_API_MODEL`。必须同时设置 `--image-backend responses-image-generation` 或兼容别名 `responses`。该字段只影响本项目的 `responses-image-generation` 路径，不改变兼容上游自身 Images API 桥接层内部选择的模型。
 - `--thinking`：页面 SSE 专属字段，可选值为 `minimal`、`none`、`low`、`medium`、`high` 或 `xhigh`。
 - `--prompt-optimization`：页面 SSE 专属字段，必须是 `true` 或 `false`。
 - `--force-web`：页面 SSE 专属字段，会发送为 form-data `force_web=true`。
@@ -115,7 +115,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--manifest`：append-only JSONL manifest 路径，默认 `<input>.manifest.jsonl`。
 - `--resume`：读取 manifest 中已 `succeeded` 的 `id` 或 `idempotency_key` 并跳过。
 - `--ordered-prefix`：未显式提供 `idempotency_key` 时构造稳定有序 key 的前缀，默认 `batch`。
-- `--dimension-check`：读取响应 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`。
+- `--dimension-check`：读取响应 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`；通过时 summary 写入实际尺寸，失败时写入 `error.code=dimension_check_failed`、`validation_failure_kind=generated_artifact_failed_dimension_check`、产物 URL、`expected_dimensions` 和 `actual_dimensions`。
 - `--max-attempts`：失败任务最大尝试次数。第二次及后续尝试会追加新的 attempt 级 `Idempotency-Key`，避免复用终态失败 key。
 - `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会先读取 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 和 `channelQueue.capacityPerCredential`，把有效并发限制到服务端建议值后按输入顺序输出结果；适合已确认渠道容量的批量生产。
 - `--max-consecutive-failures`：顺序执行下的连续失败熔断阈值，默认 `0` 表示不熔断。只能与 `--concurrency 1` 同用。
@@ -123,7 +123,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--dry-run`
 - `--allow-billable`
 
-批量 dry-run 不写 manifest，输出会声明 `manifest_written=false` 和 `manifest_write_reason=dry_run`。只有真实执行时 manifest 才作为 append-only 续跑记录写入。
+批量 dry-run 不写 manifest，输出会声明 `manifest_written=false`、`manifest_write_reason=dry_run` 和 `guardrails`。`guardrails.ordered_prefix` 是本次 dry-run 用于自动生成幂等键的前缀，真实执行应复用同一个 `--ordered-prefix`；`guardrails.dimension_check_recommended=true` 表示输入包含固定尺寸但未启用 `--dimension-check`。只有真实执行时 manifest 才作为 append-only 续跑记录写入；Agent JSON 失败时 manifest 会同时保存增强后的 `summary` 和 `agent_failure_diagnostics`。尺寸门禁失败同样写入结构化 summary 和可审查产物 URL，避免只能从中文错误文本解析期望和实际尺寸。批量总摘要会输出 `failure_summary.validation_failure_count` 和 `failure_summary.request_failure_count`，用于区分“上游已生成但本地验收失败”和“请求未成功完成”。
 
 批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`streaming_strategy`、`partial_images`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。edit 任务设置 `image_backend=responses-image-generation` 时会走页面 SSE；不要把它改成 Agent edit。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。JSONL 字段名必须使用 `streaming_strategy`；`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段，会被脚本在真实请求前拒绝。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
