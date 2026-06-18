@@ -21,6 +21,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下 ad hoc 调用脚本。
 - 先用 dry-run 或 `--contract-check` 检查请求、路由和鉴权；只有用户明确允许真实计费时才加 `--allow-billable`。
 - 真实调用成功或失败后，优先读取脚本输出的 `summary`。它是面向 Agent 的机器摘要，包含 `billable`、请求 ID、幂等键、产物 URL、耗时、耗时拆分、路由、渠道、上游 host、脱敏请求头、重试和下一步动作；Agent JSON 失败时脚本会按幂等键做一次只读 Agent state 诊断补采样，补充 `agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status`、`request_id`、渠道和上游 host。不要再先手查 SQLite、Docker logs 或上游后台。
+- 新增 probe、diagnostics、路由健康或请求旅程能力时，先在服务端定义机器 API 契约，并通过 `GET /api/agent/capabilities`、`GET /api/agent/openapi.json` 或明确的 `/api/agent/diagnostics/*` 端点声明；Skill 脚本只做薄封装，不能复制页面 API、运行态 API 和 Agent API 的边界判断。
 
 ## 产品边界
 

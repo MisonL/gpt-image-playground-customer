@@ -3315,6 +3315,24 @@ describe('Agent skill script argument validation', () => {
         assert.match(openApiSource, /高分辨率 edit 默认优先使用页面端 \/api\/images form-data SSE/);
     });
 
+    it('requires new probe and diagnostics work to keep API contracts ahead of Skill wrappers', () => {
+        const readmeText = readFileSync(join(repoRoot, 'README.md'), 'utf8');
+        const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+        const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
+
+        assert.match(readmeText, /新增 probe、diagnostics 或路由可观测能力时，先落 API \/ capabilities \/ OpenAPI 契约/);
+        assert.match(readmeText, /Skill 脚本做薄封装/);
+        assert.match(skillText, /新增 probe、diagnostics、路由健康或请求旅程能力时/);
+        assert.match(skillText, /GET \/api\/agent\/capabilities/);
+        assert.match(skillText, /GET \/api\/agent\/openapi\.json/);
+        assert.match(skillText, /\/api\/agent\/diagnostics\/\*/);
+        assert.match(skillText, /Skill 脚本只做薄封装/);
+        assert.match(skillText, /不能复制页面 API、运行态 API 和 Agent API 的边界判断/);
+        assert.match(apiReference, /新增 probe、diagnostics 或健康摘要时/);
+        assert.match(apiReference, /capabilities、OpenAPI 或明确的 Agent 只读端点/);
+        assert.match(apiReference, /不要让脚本自己拼 page API、runtime API 和 Agent API 的边界逻辑/);
+    });
+
     it('runs from a copied standalone skill directory outside the repository', () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-playground-agent-'));
         const copiedSkillRoot = join(tempRoot, 'gpt-image-playground-agent');
