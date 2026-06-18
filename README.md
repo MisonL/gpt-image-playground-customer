@@ -17,27 +17,20 @@ app_port: 4783
 
 ## 快速开始
 
-第一次配置或换机器后，先跑只读就绪检查。它不会写配置、不会输出密钥、不会触发真实生图：
+第一次配置或换机器后，先跑只读就绪检查。它不会写配置、输出密钥或触发真实生图：
 
 ```bash
 npm run first-run
 ```
 
-该命令默认输出中文摘要；给 Agent 或脚本消费时加 `--json`。它会检查 Node、依赖、`.env.local` / `.env.agent.local` 摘要、默认本地服务 `http://localhost:4783`、Agent capabilities 和下一步动作。检查公网或 Space 服务时显式传地址：
+检查公网或 Space 服务时显式传地址；给脚本消费时加 `--json`：
 
 ```bash
 npm run first-run -- --base-url https://your-space.hf.space
 npm run first-run -- --json --base-url https://your-space.hf.space
 ```
 
-首次配置最短路径：
-
-1. 运行 `npm install`。
-2. 启动服务：本地开发用 `npm run dev`，Docker 用 `docker compose up -d --build --remove-orphans`。
-3. 运行 `npm run first-run` 看中文摘要；如果要检查 Space 或内网服务，使用 `npm run first-run -- --base-url <url>`。
-4. 如果 Agent API 需要鉴权，复制 `.env.agent.local.example` 为 `.env.agent.local` 并填入本机私有 token。Agent CLI 会从当前仓库根目录自动读取该文件；shell 环境变量仍然优先。
-
-推荐 Docker：
+本地服务推荐用 Docker：
 
 ```bash
 docker compose up -d --build --remove-orphans
@@ -56,7 +49,7 @@ OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_API_BASE_URL=https://api.openai.com/v1
 ```
 
-本地开发：
+开发模式：
 
 ```bash
 npm install
@@ -106,6 +99,7 @@ start-windows.bat
 | 图片存储 | `NEXT_PUBLIC_IMAGE_STORAGE_MODE` | `fs` 或 `indexeddb`。Docker 默认使用 `fs`。 |
 | Agent 状态 | `AGENT_STATE_BACKEND` | `memory`、`sqlite` 或 `postgres`。Docker 默认使用 `sqlite`。 |
 | 默认后端 | `IMAGE_GENERATION_BACKEND` | 默认 `images-api`；可设为 `responses-image-generation`。 |
+| Responses 顶层模型 | `OPENAI_RESPONSES_API_MODEL` | 仅在 `responses-image-generation` 后端生效；作为 `/responses` 的顶层 `model`，例如 `gpt-5.4`。 |
 | 流式策略 | `IMAGE_STREAMING_STRATEGY` | 默认 `auto`；可设为 `off`、`openai-sse`、`responses-sse` 等。 |
 | 并发容量 | `OPENAI_MAX_STREAMS_PER_CREDENTIAL` | 单个渠道凭证允许同时执行的图片请求数，默认 `1`。 |
 | 渠道队列 | `OPENAI_CHANNEL_QUEUE_ENABLED`、`OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS`、`OPENAI_CHANNEL_QUEUE_MAX_SIZE` | 控制超出凭证容量时等待还是立即失败。 |
@@ -142,18 +136,18 @@ OPENAI_CHANNEL_3_UPSTREAM_PROFILE=matsca
 
 - 自定义 API URL 必须同时填写自定义 API Key，避免服务端密钥被发送到未知地址。
 - Docker compose 本身不把默认图片后端改成 Responses；未在 `.env.local` 显式配置时仍是 `images-api` 和 `auto`。
-- Responses image backend 需要 `ENABLE_RESPONSES_IMAGE_BACKEND=true` 和 `OPENAI_RESPONSES_API_MODEL`。
+- Responses image backend 需要 `ENABLE_RESPONSES_IMAGE_BACKEND=true` 和 `OPENAI_RESPONSES_API_MODEL`。页面请求也可以用 `responsesModel`、`responses_model`、`gptModel` 或 `gpt_model` 覆盖单次 `/responses` 顶层模型；这些字段只影响本项目的 `responses-image-generation` 路径，不会改变兼容上游自身 `/v1/images/generations` 桥接层内部选择的模型。
 - Matsca、extra headers、provider manifest、真实上游 smoke 等高级配置以 [.env.example](./.env.example) 为准。
 
 ## Agent API
 
-Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先读取 capabilities，再按返回的认证方式、路由规则、状态后端和端点能力选择路径。
+Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先读取 capabilities，再按返回的认证、路由和端点能力选择路径。
 
 常用入口：
 
 | 接口 | 用途 |
 | --- | --- |
-| `GET /api/agent/capabilities` | 查询模型、限制、认证方式、状态后端和路由规则。 |
+| `GET /api/agent/capabilities` | 查询模型、限制、认证方式和路由规则。 |
 | `GET /api/agent/openapi.json` | 获取 OpenAPI 描述。 |
 | `POST /api/agent/images/generate` | JSON 文生图。 |
 | `POST /api/agent/images/edit` | multipart 图片编辑，支持源图和 mask。 |
@@ -162,7 +156,7 @@ Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先
 | `GET /api/agent/jobs/{id}/result` | 读取成功 job 的标准图片响应。 |
 | `GET /api/agent/artifacts/{id}/content` | 下载产物图片。 |
 | `POST /api/agent/diagnostics/page-requests` | 批量读取页面请求的脱敏日志诊断摘要。 |
-| `GET /api/agent/diagnostics/requests` | 按 Agent request id 或幂等键查询 Agent state 请求诊断。 |
+| `GET /api/agent/diagnostics/requests` | 按 request id 或幂等键查询诊断。 |
 
 生成示例：
 
@@ -179,7 +173,7 @@ curl -s http://localhost:4783/api/agent/images/generate \
 - [skills/gpt-image-playground-agent/SKILL.md](./skills/gpt-image-playground-agent/SKILL.md)
 - [Agent API 参考](./skills/gpt-image-playground-agent/references/api.md)
 
-脚本默认 dry-run，不触发真实计费请求；真实生成必须显式添加 `--allow-billable`。
+脚本默认 dry-run，不触发真实计费请求；真实生成必须显式添加 `--allow-billable`：
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
@@ -190,17 +184,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 
 ### AI Agent 典型使用方式
 
-AI Agent 集成时优先调用 skill 内置脚本，而不是临时手写 fetch、curl 或表单提交逻辑。脚本会先读取 capabilities，自动处理鉴权、幂等键、路由选择、超时、产物 URL 和结构化失败摘要。
-
-交互式任务中，Agent 应先定位服务地址：用户明确提供 URL 时直接使用该 URL；否则先检查 `GPT_IMAGE_PLAYGROUND_URL`，再探测默认本地地址 `http://localhost:4783`。如果只发现环境变量或本地服务，先向用户确认是否使用；用户提供其他地址时，以用户提供的地址为准。非交互式任务无法确认时，按同一顺序自动选择，并在输出里说明地址来源。
-
-新环境或不确定服务地址时先运行 `npm run first-run`。它会只读报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程是否拿到 Agent 鉴权，以及 `.env.agent.local` 是否存在私有鉴权配置。Agent CLI 会从当前仓库根目录自动读取 `.env.agent.local`，shell 环境变量仍然优先；如需禁用自动读取，设置 `GPT_IMAGE_AGENT_LOAD_ENV_FILE=0`。
-
-dry-run 只做本地请求构造和静态路由规划，不读取远端 capabilities，也不验证远端鉴权、渠道容量或 manifest 写入。脚本输出里的 `verification_scope.mode=local_planning_only` 表示还没有证明远端服务可执行；需要远端合同检查时使用 `--contract-check`，真实执行必须显式添加 `--allow-billable`。
-
-subagent 或自动化任务要固定服务地址时，优先给脚本传 `--base-url`，不要只依赖默认 localhost。`generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 和 `npm run agent:doctor -- --base-url <url>` 都支持显式服务地址。首次配置 Agent 鉴权时复制 `.env.agent.local.example` 为 `.env.agent.local` 并填入本机私有 token；不要把 `.env.agent.local` 提交或粘到任务日志。
-
-公网部署常见有两层鉴权：`GPT_IMAGE_AGENT_TOKEN` 只用于 `/api/agent/*` Bearer 鉴权；页面 SSE `/api/images` 仍可能要求 `GPT_IMAGE_APP_PASSWORD_HASH` 作为 `passwordHash` 表单字段。使用 `--page-sse`、Responses backend edit、大图默认页面 SSE 或批量页面 SSE 前，先用 `npm run first-run -- --base-url <url> --json` 或 `npm run agent:doctor -- --base-url <url>` 检查 `page_sse_auth_available_to_process` / `page_sse_auth_ready`。
+AI Agent 集成时优先调用 skill 脚本，不要临时手写 fetch、curl 或表单提交逻辑。脚本会处理 capabilities、鉴权、幂等键、路由、超时、产物 URL 和结构化失败摘要。
 
 1. 只读检查当前服务能力，不触发计费：
 
@@ -211,7 +195,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   "capability check"
 ```
 
-2. 先 dry-run 单张文生图，确认请求字段和路由：
+2. dry-run 单张文生图，确认请求字段和路由：
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
@@ -223,7 +207,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   "a clean product photo of a ceramic mug"
 ```
 
-3. 用户明确允许后，再执行真实计费请求：
+3. 用户明确允许后执行真实请求：
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
@@ -237,7 +221,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
   "a clean product photo of a ceramic mug"
 ```
 
-4. 图生图默认 WebP 输出，走页面 SSE 路径：
+4. 图生图：
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/edit-image.mjs \
@@ -266,17 +250,6 @@ node skills/gpt-image-playground-agent/scripts/batch-images.mjs \
   --ordered-prefix product-set
 ```
 
-真实批量执行时再添加 `--allow-billable`。多张真实任务优先使用 `batch-images.mjs`、`--manifest`、`--resume` 和 `--dimension-check`；不要手动并行启动多个单张脚本，否则会绕过续跑记录、容量反馈和尺寸门禁。需要并发时添加 `--concurrency N`，并确认 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 或 `channelQueue.capacityPerCredential` 允许；建议并发为 `1` 时保持串行。
-
-页面 SSE 返回 503 或断流时，先用诊断脚本读取结构化摘要，再用新的幂等键显式选择备用路径。`edit-image.mjs --agent --stream-mode non_stream --streaming-strategy off` 只适合作为对照诊断；Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致，尺寸敏感任务必须重新校验或用 `--dimension-check`。
-
-排查环境配置时不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。Codex 会话日志会持久保存命令输出；优先运行 `npm run env:summary`，或在命令中先把 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 值替换为 `<redacted>`。
-
-```bash
-npm run env:summary
-npm run env:summary -- --file .env.local --container gpt-image-playground-customer
-```
-
 6. 失败或结果需要追踪时，用诊断脚本读摘要：
 
 ```bash
@@ -285,7 +258,7 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
   --idempotency-key agent-demo-generate-001
 ```
 
-页面 SSE 请求通常用同一个业务 key 作为 `clientRequestId`，也可以这样查：
+页面 SSE 请求通常用同一个业务 key 作为 `clientRequestId`：
 
 ```bash
 node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
@@ -293,61 +266,20 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
   --client-request-id agent-demo-edit-001
 ```
 
-远程 Space、云服务或内网服务必须显式固定目标地址，避免误查本机默认服务：
+关键规则：
 
-```bash
-node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
-  --base-url https://your-space.hf.space \
-  --idempotency-key agent-demo-generate-001
-```
-
-首次配置和诊断输出字段速查：
-
-| 字段 | 出现位置 | 判断口径 |
-| --- | --- | --- |
-| `service_base_url` / `verification_scope.service_base_url` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。 |
-| `service_base_url_source` / `verification_scope.service_base_url_source` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。 |
-| `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。 |
-| `agent_auth_process.has_token` | `first-run --json` | 当前进程是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
-| `page_sse_auth_available_to_process` | `first-run --json` | 目标服务要求页面 SSE `passwordHash` 时，当前进程是否已加载 `GPT_IMAGE_APP_PASSWORD_HASH`。 |
-| `summary.page_sse_auth_ready` | `agent:doctor` | 页面 SSE 鉴权是否已满足；为 `false` 时不要运行 `--page-sse` 真实计费请求。 |
-| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |
-| `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
-| `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
-
-常用环境变量：
-
-| 变量 | 用途 |
-| --- | --- |
-| `GPT_IMAGE_PLAYGROUND_URL` | 指向本机、内网或公网部署地址；未设置时脚本默认尝试 `http://localhost:4783`。交互式任务中，自动发现到本地服务后应先向用户确认。 |
-| `GPT_IMAGE_AGENT_TOKEN` | Agent Bearer token，对应服务端 `AGENT_API_TOKEN`。 |
-| `GPT_IMAGE_APP_PASSWORD_HASH` | 使用页面访问码部署时的访问码哈希；页面 SSE 会作为 `passwordHash` 表单字段发送。 |
-| `GPT_IMAGE_AGENT_IDEMPOTENCY_KEY` | 跨脚本进程复用同一业务操作的幂等键。 |
-
-Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端 Space 配置了 `AGENT_API_TOKEN` 后，本机 Agent 仍需要通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；如果 Space 同时配置了 `APP_PASSWORD`，页面 SSE 还需要 `GPT_IMAGE_APP_PASSWORD_HASH`。Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`，shell 环境变量优先。不要把 token、访问码或哈希写进 README、任务 JSONL、manifest 或命令日志。仓库提供 `.env.agent.local.example` 作为私有本机配置模板。
-
-接口边界：
-
-- `/api/agent/*` 是自动化机器契约，返回最终 JSON，不向客户端返回 SSE。
-- `POST /api/images` 是 WebUI form-data 路径，支持页面 SSE、页面访问码表单鉴权和高级图片字段。
-- `GET /api/runtime-capabilities` 是页面运行态能力 API，不进入 Agent OpenAPI。
-- 页面反馈、分享、日志和文件删除 API 使用页面鉴权或页面文件名契约，不复用 Agent Bearer token。
+- 交互式任务中，如果只发现本地服务或 `GPT_IMAGE_PLAYGROUND_URL`，先向用户确认；用户给了 URL 时以用户 URL 为准。
+- 远程 Space、云服务或内网服务必须显式传 `--base-url`，避免误用本机默认服务。
+- Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`；shell 环境变量优先。首次配置可复制 `.env.agent.local.example`。不要提交 token、访问码或哈希。
+- `GPT_IMAGE_AGENT_TOKEN` 只用于 `/api/agent/*`；页面 SSE `/api/images` 可能还需要 `GPT_IMAGE_APP_PASSWORD_HASH`。
+- dry-run 只验证本地请求构造；`verification_scope.mode=local_planning_only` 不是远端已可执行。远端合同检查用 `--contract-check`，真实执行必须加 `--allow-billable`。
+- 多张真实任务优先用 `batch-images.mjs`、`--manifest`、`--resume` 和 `--dimension-check`；不要手动并行启动多个单张脚本。需要并发时先看 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 和 `channelQueue.capacityPerCredential`。
 - 选择 `responses-image-generation` 或兼容别名 `responses` 时，`partial_images` 必须优先按 `partial_images_by_backend["responses-image-generation"]` 校验，不能套用 Matsca Images API 的范围。
-- 灵感相册和历史复用是浏览器工作台体验，不作为机器 API 契约承诺。
-
-边界矩阵：
-
-| 能力或端点 | 归属契约 | 进入 Agent OpenAPI | 自动化口径 |
-| --- | --- | --- | --- |
-| `POST /api/agent/images/generate`、`POST /api/agent/images/edit`、Agent jobs、Agent artifacts | Agent API | 是 | 通过 skill 脚本和 Agent 鉴权调用。 |
-| `POST /api/images` | 页面 form-data SSE API | 否 | 默认 WebP edit、页面高级字段、大图或复杂批量需要时由 skill 显式选择。 |
-| `GET /api/runtime-capabilities` | 页面运行态能力 API | 否 | 只读查看流式默认值、图片上游传输、渠道健康和队列状态。 |
-| `PUT/DELETE /api/feedback` | 页面结果反馈 API | 否 | 页面写入和清理反馈；Agent 只读查询用 `/api/agent/page-requests/feedback` 或 `/api/agent/page-requests/{id}/feedback`。 |
-| `POST /api/agent/page-requests/feedback`、`GET /api/agent/page-requests/{id}/feedback` | Agent 结果反馈只读 API | 是 | Agent 按页面 `clientRequestId` 查询反馈。 |
-| `POST /api/agent/diagnostics/page-requests`、`GET /api/agent/diagnostics/page-requests/{id}` | Agent 页面请求诊断 API | 是 | Agent 按页面 `clientRequestId` 查询脱敏日志摘要，不直接读 `/api/logs`。 |
-| `GET /api/logs` | 页面日志 SSE API | 否 | 页面使用访问码哈希读取；不接受 Agent token。 |
-| `POST /api/shares`、`GET /api/shares/{token}`、`POST /api/shares/{token}/content` | 页面分享 API | 否 | 使用页面 cookie、访问码和分享 token。 |
-| `POST /api/image-delete` | 页面图片文件删除 API | 否 | 按页面文件名删除 `generated-images/` 文件，不删除 Agent artifact 状态。 |
+- 页面 SSE 返回 503 或断流时，先用诊断脚本读取结构化摘要，再用新的幂等键显式选择备用路径。Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致，尺寸敏感任务必须重新校验或用 `--dimension-check`。
+- 排查环境配置时优先运行 `npm run env:summary`，不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。
+- Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。
+- 边界矩阵精简版：
+- `/api/agent/*` 返回最终 JSON；`POST /api/images`、`GET /api/runtime-capabilities`、`/api/feedback`、`/api/shares`、`/api/logs` 和 `POST /api/image-delete` 属于页面或运行态 API，不进入 Agent OpenAPI。Agent 只读反馈和诊断入口是 `/api/agent/page-requests/feedback`、`/api/agent/page-requests/{id}/feedback`、`/api/agent/diagnostics/page-requests` 和 `/api/agent/diagnostics/page-requests/{id}`。灵感相册和历史复用是浏览器工作台体验，不作为机器 API 契约承诺。
 
 ## Docker 与部署
 
