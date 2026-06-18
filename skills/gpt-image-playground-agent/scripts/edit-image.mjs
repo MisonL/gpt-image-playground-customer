@@ -33,6 +33,7 @@ import {
   normalizeImageBackendForPage,
   postPageSse
 } from './lib/page-sse-client.mjs';
+import { enrichFailureWithAgentDiagnostics } from './lib/agent-diagnostics-summary.mjs';
 
 const STREAM_MODES = new Set(['auto', 'stream', 'non_stream']);
 const STREAMING_STRATEGIES = new Set([
@@ -668,6 +669,25 @@ if (routingGuidance.transport === 'page_sse') {
   }
 }
 
+async function buildAgentFailureOutput(output, routing) {
+  const summary = buildFailureSummary({
+    errorBody: output,
+    routing,
+    timing: completeScriptTiming(scriptTiming),
+    idempotencyKey,
+    billable: output?.billable !== false
+  });
+  const enriched = await enrichFailureWithAgentDiagnostics({
+    baseUrl,
+    authHeaders,
+    idempotencyKey,
+    failureOutput: attachSummary(output, summary),
+    summary,
+    timeoutMs
+  });
+  return attachSummary(enriched.failureOutput, enriched.summary);
+}
+
 for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
   let response;
   let result;
@@ -720,16 +740,7 @@ for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 const failureOutput = { ...lastResult, retry_after: lastRetryAfter };
 console.error(
   JSON.stringify(
-    attachSummary(
-      failureOutput,
-      buildFailureSummary({
-        errorBody: failureOutput,
-        routing: { transport: 'agent_json', endpoint: '/api/agent/images/edit' },
-        timing: completeScriptTiming(scriptTiming),
-        idempotencyKey,
-        billable: failureOutput?.billable !== false
-      })
-    ),
+    await buildAgentFailureOutput(failureOutput, { transport: 'agent_json', endpoint: '/api/agent/images/edit' }),
     null,
     2
   )

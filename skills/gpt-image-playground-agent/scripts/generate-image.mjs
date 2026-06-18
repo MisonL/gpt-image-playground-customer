@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
+import { enrichFailureWithAgentDiagnostics } from './lib/agent-diagnostics-summary.mjs';
 import {
     errorMessage,
     assertValidImageSizeForModel,
@@ -615,7 +616,10 @@ async function runGenerateRequest(options = {}) {
 
     console.error(
         JSON.stringify(
-            buildFailureOutput({ ...lastResult, retry_after: lastRetryAfter }, { transport: 'agent_json', endpoint: AGENT_ENDPOINTS.generate }),
+            await buildAgentFailureOutput(
+                { ...lastResult, retry_after: lastRetryAfter },
+                { transport: 'agent_json', endpoint: AGENT_ENDPOINTS.generate }
+            ),
             null,
             2
         )
@@ -1100,6 +1104,19 @@ function buildFailureOutput(output, routing) {
             billable: output?.billable !== false
         })
     );
+}
+
+async function buildAgentFailureOutput(output, routing) {
+    const failure = buildFailureOutput(output, routing);
+    const enriched = await enrichFailureWithAgentDiagnostics({
+        baseUrl,
+        authHeaders,
+        idempotencyKey,
+        failureOutput: failure,
+        summary: failure.summary,
+        timeoutMs
+    });
+    return attachSummary(enriched.failureOutput, enriched.summary);
 }
 
 function buildPageSseFailureStatus(error) {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { AGENT_ENDPOINTS } from './lib/agent-api-paths.mjs';
+import { enrichFailureWithAgentDiagnostics } from './lib/agent-diagnostics-summary.mjs';
 import {
   errorMessage,
   assertValidImageSizeForModel,
@@ -25,6 +26,7 @@ import {
   postPageSse
 } from './lib/page-sse-client.mjs';
 import {
+  attachSummary,
   buildFailureSummary as buildScriptFailureSummary,
   buildSuccessSummary,
   completeScriptTiming,
@@ -57,6 +59,7 @@ const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const DEFAULT_BATCH_MAX_ATTEMPTS = 1;
 const DEFAULT_MAX_CONSECUTIVE_FAILURES = 0;
 const DEFAULT_BATCH_CONCURRENCY = 1;
+const FAILURE_KIND_DIMENSION_CHECK = 'generated_artifact_failed_dimension_check';
 const GENERATE_ONLY_FIELDS = [
   'background'
 ];
@@ -79,6 +82,21 @@ const PAGE_ADVANCED_FIELDS = [
 const EDIT_ONLY_FIELDS = ['image_path', 'image_paths', 'mask_path'];
 const BOOLEAN_ROUTING_FIELDS = ['page_sse', 'complex_ui', 'long_image', 'resume_or_recover'];
 const THINKING_VALUES = new Set(['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
+
+class DimensionCheckError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = 'DimensionCheckError';
+    this.code = 'dimension_check_failed';
+    this.retryable = false;
+    this.billable = true;
+    this.nextStep = '确认当前渠道是否支持请求尺寸，或调整任务接受实际返回尺寸；重新执行必须使用新的 Idempotency-Key。';
+    this.expectedDimensions = details.expected;
+    this.actualDimensions = details.actual;
+    this.response = sanitizeResponse(details.response);
+  }
+}
+
 const TASK_FIELDS = new Set([
   'id',
   'mode',
@@ -180,6 +198,7 @@ if (!options.allowBillable || options.dryRun) {
         max_attempts: options.maxAttempts,
         max_consecutive_failures: options.maxConsecutiveFailures,
         concurrency: options.concurrency,
+        guardrails: buildDryRunGuardrails(planned, options),
         tasks: planned.map((task) => {
           const routing = buildTaskRouting(task);
           return {
@@ -672,13 +691,13 @@ async function runTask(task) {
   const routing = buildTaskRouting(task);
   const taskTiming = startScriptTiming();
   try {
-    const response =
+    let response =
       routing.transport === 'page_sse'
         ? await postPageSseTask(task, routing)
         : task.mode === 'edit'
           ? await postEditTask(task)
           : await postGenerateTask(task);
-    if (options.dimensionCheck) await assertDimensions(task, response);
+    if (options.dimensionCheck) response = await assertDimensions(task, response);
     const summary = buildSuccessSummary({
       result: response,
       routing,
@@ -698,8 +717,27 @@ async function runTask(task) {
       billable: failure.billable !== false,
       nextAction: failure.next_step
     });
-    const output = { ok: false, status: 'failed', id: task.id, idempotency_key: task.idempotencyKey, ...failure, summary };
-    appendManifest(manifestPath, { ...baseManifestEntry(task), status: 'failed', ...failure, summary });
+    const failureOutput = { ok: false, status: 'failed', id: task.id, idempotency_key: task.idempotencyKey, ...failure, summary };
+    const enriched = shouldEnrichAgentFailure(failure)
+      ? await enrichFailureWithAgentDiagnostics({
+          baseUrl,
+          authHeaders,
+          idempotencyKey: task.idempotencyKey,
+          failureOutput,
+          summary,
+          timeoutMs
+        })
+      : { failureOutput, summary };
+    const output = attachSummary(enriched.failureOutput, enriched.summary);
+    appendManifest(manifestPath, {
+      ...baseManifestEntry(task),
+      status: 'failed',
+      ...failure,
+      ...(enriched.failureOutput.agent_failure_diagnostics
+        ? { agent_failure_diagnostics: enriched.failureOutput.agent_failure_diagnostics }
+        : {}),
+      summary: enriched.summary
+    });
     return output;
   }
 }
@@ -816,12 +854,32 @@ function buildTaskFailureOutput(error, routing) {
       next_step: error.pageSseFailure.next_step
     };
   }
+  if (error?.code === 'dimension_check_failed') {
+    return {
+      billable: error.billable !== false,
+      error: {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+        expected_dimensions: error.expectedDimensions,
+        actual_dimensions: error.actualDimensions
+      },
+      validation_failure_kind: FAILURE_KIND_DIMENSION_CHECK,
+      response: error.response,
+      routing,
+      ...(typeof error?.nextStep === 'string' ? { next_step: error.nextStep } : {})
+    };
+  }
   return {
     ...(error?.billable === false ? { billable: false } : {}),
     error: errorMessage(error),
     routing,
     ...(typeof error?.nextStep === 'string' ? { next_step: error.nextStep } : {})
   };
+}
+
+function shouldEnrichAgentFailure(failure) {
+  return failure.billable !== false && failure.routing?.transport === 'agent_json';
 }
 
 function buildCircuitBreakerSkippedTask(task, consecutiveFailures) {
@@ -831,6 +889,22 @@ function buildCircuitBreakerSkippedTask(task, consecutiveFailures) {
     skipped_reason: 'max_consecutive_failures',
     consecutive_failures: consecutiveFailures,
     next_step: '先处理 failure_summary 中的失败任务，再用 --resume 续跑剩余任务。'
+  };
+}
+
+function buildDryRunGuardrails(plannedTasks, parsedOptions) {
+  const hasExplicitFixedSize = plannedTasks.some((task) => {
+    const size = task.raw?.size;
+    return typeof size === 'string' && size !== 'auto';
+  });
+  return {
+    ordered_prefix: parsedOptions.orderedPrefix,
+    repeat_ordered_prefix_on_real_run: true,
+    dimension_check_recommended: hasExplicitFixedSize && !parsedOptions.dimensionCheck,
+    dimension_check_reason:
+      hasExplicitFixedSize && !parsedOptions.dimensionCheck
+        ? '输入包含固定尺寸；真实上游可能返回非请求尺寸，尺寸敏感任务应添加 --dimension-check。'
+        : null
   };
 }
 
@@ -844,10 +918,19 @@ function buildFailedTaskSummary(result, task) {
     route: result.routing?.transport,
     endpoint: result.routing?.endpoint,
     billable: result.billable !== false,
+    failure_kind: readFailureKind(result),
     code: error.code,
     message: error.message,
+    artifact_ids: Array.isArray(result.summary?.artifact_ids) ? result.summary.artifact_ids : [],
+    content_urls: Array.isArray(result.summary?.content_urls) ? result.summary.content_urls : [],
+    absolute_content_urls: Array.isArray(result.summary?.absolute_content_urls) ? result.summary.absolute_content_urls : [],
     next_step: result.next_step || buildFailureNextStep(error)
   };
+}
+
+function readFailureKind(result) {
+  if (typeof result?.validation_failure_kind === 'string') return result.validation_failure_kind;
+  return 'request_failed';
 }
 
 function normalizeFailureError(error) {
@@ -871,6 +954,8 @@ function buildFailureSummary(failedTasks) {
     count: failedTasks.length,
     billable_count: failedTasks.filter((task) => task.billable).length,
     non_billable_count: failedTasks.filter((task) => !task.billable).length,
+    validation_failure_count: failedTasks.filter((task) => task.failure_kind === FAILURE_KIND_DIMENSION_CHECK).length,
+    request_failure_count: failedTasks.filter((task) => task.failure_kind !== FAILURE_KIND_DIMENSION_CHECK).length,
     tasks: failedTasks
   };
 }
@@ -1293,15 +1378,25 @@ function enrichImageUrls(result) {
 
 async function assertDimensions(task, response) {
   const expected = parseExpectedSize(task.raw.size || (task.mode === 'generate' ? '1024x1024' : undefined));
-  if (!expected) throw new Error(`${task.id} --dimension-check 需要 size 为 WIDTHxHEIGHT。`);
-  if (!Array.isArray(response.images)) return;
+  if (!expected) throw new DimensionCheckError(`${task.id} --dimension-check 需要 size 为 WIDTHxHEIGHT。`);
+  if (!Array.isArray(response.images)) return response;
+  const images = [];
+  let mismatch;
   for (const image of response.images) {
     const bytes = await readImageBytes(image);
     const actual = readImageDimensions(bytes);
+    images.push({ ...image, dimensions: actual });
     if (actual.width !== expected.width || actual.height !== expected.height) {
-      throw new Error(`${task.id} 尺寸校验失败：期望 ${expected.width}x${expected.height}，实际 ${actual.width}x${actual.height}。`);
+      mismatch ??= actual;
     }
   }
+  if (mismatch) {
+    throw new DimensionCheckError(
+      `${task.id} 尺寸校验失败：期望 ${expected.width}x${expected.height}，实际 ${mismatch.width}x${mismatch.height}。`,
+      { expected, actual: mismatch, response: { ...response, images } }
+    );
+  }
+  return { ...response, images };
 }
 
 async function readImageBytes(image) {
