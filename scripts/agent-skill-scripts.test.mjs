@@ -3199,10 +3199,14 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /脚本参数仍写作 `--streaming-strategy responses-sse`/);
         assert.match(skillText, /batch JSONL 字段是 `streaming_strategy`/);
         assert.match(skillText, /`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段/);
+        assert.match(skillText, /`capabilities` 里声明的 `page_sse_supported=true`/);
+        assert.match(skillText, /`selected_channel_id`、`upstream_host` 为空/);
         assert.match(skillText, /支持位置参数 `<image-path> <prompt>`，也支持 `--image <path> <prompt>` 别名/);
         assert.match(skillText, /`--image-backend responses-image-generation` 只用于页面 SSE edit/);
         assert.match(skillText, /不要把 Matsca `limits\.partial_images=0\.\.4` 误套到 `responses-image-generation`/);
         assert.match(apiReference, /limits\.partial_images_by_backend\[image_backend\]/);
+        assert.match(apiReference, /只代表“声明支持”，不代表当前渠道每次实测都能成功/);
+        assert.match(apiReference, /如果 `selected_channel_id`、`upstream_host` 为空/);
         assert.match(apiReference, /Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`/);
         assert.match(apiReference, /强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API\/profile 范围校验/);
         assert.match(apiReference, /图片路径可以用位置参数 `<image-path> <prompt>`，也可以用 `--image <path> <prompt>`/);
@@ -3240,6 +3244,7 @@ describe('Agent skill script argument validation', () => {
         assert.match(readmeText, /npm run env:summary/);
         assert.match(readmeText, /verification_scope\.mode=local_planning_only/);
         assert.match(readmeText, /Hugging Face Space Secrets 只能写入和列出名称/);
+        assert.match(readmeText, /`page_sse_supported=true` 只是声明支持，不代表实测一定成功/);
 
         assert.match(skillText, /不要手动并行启动多个单张脚本/);
         assert.match(skillText, /capacity_feedback/);
@@ -3261,6 +3266,8 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /verification_scope\.mode=local_planning_only/);
         assert.match(apiReference, /manifest_written=false/);
         assert.match(apiReference, /Hugging Face Space Secrets 只能写入和列出名称/);
+        assert.match(apiReference, /这个失败表示上游已生成但本地验收未通过/);
+        assert.match(apiReference, /`validation_failure_count>0` 而 `request_failure_count=0`/);
     });
 
     it('keeps WebUI page APIs out of the Agent OpenAPI contract', () => {

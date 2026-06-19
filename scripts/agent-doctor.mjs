@@ -266,6 +266,7 @@ function buildLayers({ capabilities, runtime, contract, smoke }) {
 function summarizeCapabilities(body) {
     return {
         page_sse: body?.agent_streaming?.page_sse?.supported === true,
+        page_sse_declared_supported: body?.agent_streaming?.page_sse?.supported === true,
         page_sse_auth_required: body?.agent_streaming?.page_sse?.auth?.required === true,
         page_sse_auth_ready:
             body?.agent_streaming?.page_sse?.auth?.required === true
@@ -301,6 +302,7 @@ function summarizeStateBackend(body) {
 function summarizeResponsesReadiness(capabilities, runtime) {
     const requirements = capabilities?.supported?.image_backend_requirements?.['responses-image-generation'];
     return {
+        declared_supported: requirements?.supported === true,
         backend_supported: requirements?.supported === true,
         backend_enabled: requirements?.enabled === true,
         runtime_enabled: runtime?.responsesImageBackend?.enabled === true,
@@ -317,17 +319,30 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
         contract_check: contract.ok ? 'ok' : 'failed',
         runtime: runtime.ok ? 'ok' : 'failed',
         state_backend: capabilities.ok ? capabilities.body?.defaults?.state_backend : 'unknown',
+        page_sse_declared_supported: capabilities.ok
+            ? capabilities.body?.agent_streaming?.page_sse?.supported === true
+            : false,
         page_sse_auth_ready:
             capabilities.ok && capabilities.body?.agent_streaming?.page_sse?.auth?.required === true
                 ? Boolean(process.env.GPT_IMAGE_APP_PASSWORD_HASH)
                 : capabilities.ok,
+        page_sse_real_smoke: summarizeSmokeCheck(smoke, 'page_sse_edit_2k'),
         responses_gpt2image_ready:
             capabilities.ok && runtime.ok
                 ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true &&
                   runtime.body?.responsesImageBackend?.enabled === true
                 : false,
+        responses_image_backend_declared_supported: capabilities.ok
+            ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.supported === true
+            : false,
         billable_smoke: smoke.skipped ? 'skipped' : smoke.ok ? 'ok' : 'failed'
     };
+}
+
+function summarizeSmokeCheck(smoke, name) {
+    const check = smoke.checks?.find((item) => item.name === name);
+    if (!check || check.skipped) return 'skipped';
+    return check.ok ? 'passed' : 'failed';
 }
 
 function authHeaders() {
