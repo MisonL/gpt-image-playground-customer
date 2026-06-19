@@ -507,6 +507,9 @@ describe('Command center scripts', () => {
                     );
                     assert.equal(report.service.capabilities.page_sse_auth_required, true);
                     assert.equal(report.service.capabilities.page_sse_auth_form_field, 'passwordHash');
+                    assert.equal(report.service.capabilities.page_sse_declared_supported, true);
+                    assert.equal(report.service.capabilities.page_sse_real_smoke, 'not_run_by_first_run');
+                    assert.equal(report.service.capabilities.responses_image_backend_real_smoke, 'not_run_by_first_run');
                     assert.equal(
                         report.checks.find((check) => check.name === 'agent_auth_available_to_process')
                             .auth_in_private_env_file,
@@ -535,6 +538,7 @@ describe('Command center scripts', () => {
         assert.match(text, /当前进程鉴权：未加载/);
         assert.match(text, /私有 Agent env：不存在/);
         assert.match(text, /下一步：/);
+        assert.doesNotMatch(text, /实测=passed/);
         assert.doesNotMatch(text, /^\{/);
     });
 
@@ -718,12 +722,17 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.runtime, 'ok');
                 assert.equal(body.summary.state_backend, 'memory');
                 assert.equal(body.summary.page_sse_auth_ready, false);
+                assert.equal(body.summary.page_sse_declared_supported, true);
+                assert.equal(body.summary.page_sse_real_smoke, 'skipped');
                 assert.equal(body.summary.responses_gpt2image_ready, true);
+                assert.equal(body.summary.responses_image_backend_declared_supported, true);
                 assert.equal(body.summary.billable_smoke, 'skipped');
                 assert.equal(body.layers.find((layer) => layer.name === 'billable_smoke').skipped, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').executable_routing_rules, true);
+                assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_declared_supported, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_required, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_ready, false);
+                assert.equal(body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').declared_supported, true);
                 assert.match(
                     body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_next_action,
                     /GPT_IMAGE_APP_PASSWORD_HASH/
@@ -824,6 +833,7 @@ describe('Command center scripts', () => {
                 const body = parseJsonPayload(result.stdout, 'agent doctor');
                 assert.equal(body.service_base_url_source, 'user_provided');
                 assert.equal(body.interactive_confirmation_required, false);
+                assert.equal(body.summary.page_sse_real_smoke, 'skipped');
                 assert.ok(hits.includes('/api/agent/images/generate'));
             }
         );

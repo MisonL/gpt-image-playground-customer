@@ -317,6 +317,7 @@ function summarizeService(service) {
 }
 
 function summarizeCapabilitiesBody(body) {
+    const responsesRequirement = body?.supported?.image_backend_requirements?.['responses-image-generation'];
     return {
         auth_required: body?.auth?.required === true,
         auth_schemes: Array.isArray(body?.auth?.schemes) ? body.auth.schemes : [],
@@ -326,8 +327,12 @@ function summarizeCapabilitiesBody(body) {
         image_storage_mode: body?.storage?.image_storage_mode,
         agent_jobs_supported: body?.agent_jobs?.supported === true,
         page_sse_supported: body?.agent_streaming?.page_sse?.supported === true,
-        responses_image_backend_enabled:
-            body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true
+        page_sse_declared_supported: body?.agent_streaming?.page_sse?.supported === true,
+        page_sse_real_smoke: 'not_run_by_first_run',
+        upstream_sse_declared_supported: body?.agent_streaming?.upstream_sse?.supported === true,
+        responses_image_backend_declared_supported: responsesRequirement?.supported === true,
+        responses_image_backend_enabled: responsesRequirement?.enabled === true,
+        responses_image_backend_real_smoke: 'not_run_by_first_run'
     };
 }
 
@@ -411,6 +416,12 @@ export function formatFirstRunText(report) {
         lines.push(`- 鉴权：${capability.auth_required ? capability.auth_schemes.join(',') || '需要' : '不需要'}`);
         lines.push(
             `- 页面 SSE 鉴权：${capability.page_sse_auth_required ? `需要 ${capability.page_sse_auth_form_field || 'passwordHash'}` : '不需要'}`
+        );
+        lines.push(
+            `- 页面 SSE：声明${capability.page_sse_declared_supported ? '支持' : '未支持'}，实测=${capability.page_sse_real_smoke || '未知'}`
+        );
+        lines.push(
+            `- Responses 后端：声明${capability.responses_image_backend_declared_supported ? '支持' : '未支持'}，启用=${capability.responses_image_backend_enabled ? '是' : '否'}，实测=${capability.responses_image_backend_real_smoke || '未知'}`
         );
         lines.push(`- 状态后端：${capability.state_backend || '未知'}，图片存储：${capability.image_storage_mode || '未知'}`);
     }

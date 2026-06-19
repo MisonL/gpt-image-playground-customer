@@ -277,7 +277,7 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 - dry-run 只验证本地请求构造；`verification_scope.mode=local_planning_only` 不是远端已可执行。远端合同检查用 `--contract-check`，真实执行必须加 `--allow-billable`。
 - 多张真实任务优先用 `batch-images.mjs`、`--manifest`、`--resume` 和 `--dimension-check`；不要手动并行启动多个单张脚本。需要并发时先看 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 和 `channelQueue.capacityPerCredential`。
 - 选择 `responses-image-generation` 或兼容别名 `responses` 时，`partial_images` 必须优先按 `partial_images_by_backend["responses-image-generation"]` 校验，不能套用 Matsca Images API 的范围。
-- 页面 SSE 返回 503 或断流时，先用诊断脚本读取结构化摘要，再用新的幂等键显式选择备用路径。Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致，尺寸敏感任务必须重新校验或用 `--dimension-check`。
+- 页面 SSE 返回 503 或断流时，先用诊断脚本读取结构化摘要，再用新的幂等键显式选择备用路径。`page_sse_supported=true` 只是声明支持，不代表实测一定成功。Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致，尺寸敏感任务必须重新校验或用 `--dimension-check`。
 - 排查环境配置时优先运行 `npm run env:summary`，不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。
 - Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。
 - 边界矩阵精简版：

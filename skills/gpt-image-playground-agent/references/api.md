@@ -115,7 +115,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--manifest`：append-only JSONL manifest 路径，默认 `<input>.manifest.jsonl`。
 - `--resume`：读取 manifest 中已 `succeeded` 的 `id` 或 `idempotency_key` 并跳过。
 - `--ordered-prefix`：未显式提供 `idempotency_key` 时构造稳定有序 key 的前缀，默认 `batch`。
-- `--dimension-check`：读取响应 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`；通过时 summary 写入实际尺寸，失败时写入 `error.code=dimension_check_failed`、`validation_failure_kind=generated_artifact_failed_dimension_check`、产物 URL、`expected_dimensions` 和 `actual_dimensions`。
+- `--dimension-check`：读取响应 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`；通过时 summary 写入实际尺寸，失败时写入 `error.code=dimension_check_failed`、`validation_failure_kind=generated_artifact_failed_dimension_check`、产物 URL、`expected_dimensions` 和 `actual_dimensions`。这个失败表示上游已生成但本地验收未通过，不等于上游请求失败。
 - `--max-attempts`：失败任务最大尝试次数。第二次及后续尝试会追加新的 attempt 级 `Idempotency-Key`，避免复用终态失败 key。
 - `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会先读取 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 和 `channelQueue.capacityPerCredential`，把有效并发限制到服务端建议值后按输入顺序输出结果；适合已确认渠道容量的批量生产。
 - `--max-consecutive-failures`：顺序执行下的连续失败熔断阈值，默认 `0` 表示不熔断。只能与 `--concurrency 1` 同用。
@@ -123,7 +123,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--dry-run`
 - `--allow-billable`
 
-批量 dry-run 不写 manifest，输出会声明 `manifest_written=false`、`manifest_write_reason=dry_run` 和 `guardrails`。`guardrails.ordered_prefix` 是本次 dry-run 用于自动生成幂等键的前缀，真实执行应复用同一个 `--ordered-prefix`；`guardrails.dimension_check_recommended=true` 表示输入包含固定尺寸但未启用 `--dimension-check`。只有真实执行时 manifest 才作为 append-only 续跑记录写入；Agent JSON 失败时 manifest 会同时保存增强后的 `summary` 和 `agent_failure_diagnostics`。尺寸门禁失败同样写入结构化 summary 和可审查产物 URL，避免只能从中文错误文本解析期望和实际尺寸。批量总摘要会输出 `failure_summary.validation_failure_count` 和 `failure_summary.request_failure_count`，用于区分“上游已生成但本地验收失败”和“请求未成功完成”。
+批量 dry-run 不写 manifest，输出会声明 `manifest_written=false`、`manifest_write_reason=dry_run` 和 `guardrails`。`guardrails.ordered_prefix` 是本次 dry-run 用于自动生成幂等键的前缀，真实执行应复用同一个 `--ordered-prefix`；`guardrails.dimension_check_recommended=true` 表示输入包含固定尺寸但未启用 `--dimension-check`。只有真实执行时 manifest 才作为 append-only 续跑记录写入；Agent JSON 失败时 manifest 会同时保存增强后的 `summary` 和 `agent_failure_diagnostics`。尺寸门禁失败同样写入结构化 summary 和可审查产物 URL，避免只能从中文错误文本解析期望和实际尺寸。批量总摘要会输出 `failure_summary.validation_failure_count` 和 `failure_summary.request_failure_count`，用于区分“上游已生成但本地验收失败”和“请求未成功完成”。当 `validation_failure_count>0` 而 `request_failure_count=0` 时，要按验收失败处理，不能当成上游不可用。
 
 批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`streaming_strategy`、`partial_images`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。edit 任务设置 `image_backend=responses-image-generation` 时会走页面 SSE；不要把它改成 Agent edit。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。JSONL 字段名必须使用 `streaming_strategy`；`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段，会被脚本在真实请求前拒绝。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
@@ -191,7 +191,7 @@ GET /api/agent/capabilities
 - `agent_streaming.generate.mode`：当前为 `non_streaming_only`。
 - `agent_streaming.edit.mode`：当前为 `non_streaming_only`。
 - `agent_streaming.upstream_sse`：Agent generate/edit 内部消费上游 SSE 的能力，客户端响应仍是最终 `AgentImageResponse` JSON。
-- `agent_streaming.upstream_sse.supported`：布尔值；当服务端支持 Agent 内部上游 SSE 消费时为 `true`，否则为 `false`。客户端只在为 `true` 时发送上游流式控制字段。
+- `agent_streaming.upstream_sse.supported`：布尔值；当服务端支持 Agent 内部上游 SSE 消费时为 `true`，否则为 `false`。客户端只在为 `true` 时发送上游流式控制字段。这个字段只代表“声明支持”，不代表当前渠道每次实测都能成功。
 - `agent_streaming.upstream_sse.request_fields`：兼容旧客户端的字段合集，当前为 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images`。
 - `agent_streaming.upstream_sse.request_fields_by_mode.generate`：generate 可发送的上游 SSE 控制字段，当前为 `image_backend`、`stream_mode`、`streaming_strategy`、`partial_images`。
 - `agent_streaming.upstream_sse.request_fields_by_mode.edit`：edit 可发送的上游 SSE 控制字段，当前为 `stream_mode`、`streaming_strategy`、`partial_images`。
@@ -200,16 +200,17 @@ GET /api/agent/capabilities
 - `agent_streaming.upstream_sse.streaming_strategies`：支持 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。
 - `agent_streaming.upstream_sse.stream_modes`：支持 `auto`、`stream`、`non_stream`。
 - `agent_streaming.upstream_sse.activation_strategies`：会真正向上游发送 `stream=true` 的策略，当前包含 `auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse`、`force-sse`。
-- `agent_streaming.page_sse`：页面端 `/api/images` 的 form-data SSE 能力，不代表 Agent generate/edit 支持流式。
+- `agent_streaming.page_sse`：页面端 `/api/images` 的 form-data SSE 能力，不代表 Agent generate/edit 支持流式。即使该字段为 `supported=true`，页面 SSE 仍可能在当前渠道返回 `503`、断流或没有选中渠道；这时应先诊断，再显式切换到 Agent JSON 或 job，不自动回退。
 - `agent_streaming.page_sse.auth`：页面 SSE 的独立表单鉴权。`APP_PASSWORD` 已配置时为 `required=true`、`schemes=["form-password-hash"]`、`form_field="passwordHash"`。
 - `agent_streaming.page_sse.client_request_id`：页面 SSE 的请求 ID 契约。脚本会把 `Idempotency-Key` 写入 form-data `clientRequestId`，最大长度以 `max_length` 为准，当前为 `128`。
+- 页面 SSE 或 Responses 路径失败时，如果 `selected_channel_id`、`upstream_host` 为空，通常表示请求没有真正落到可执行渠道；先诊断结构化错误，再用新的 `Idempotency-Key` 显式改路由。
 - `upstream_request_headers.default`：默认上游请求头摘要，包含 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`。
 - `upstream_request_headers.channels`：每个服务端渠道的脱敏请求头摘要。该字段不包含 API key、Authorization 值、Matsca app secret 值或任意 header value。
 - `routing_rules.high_resolution_edit`：`edit` 且最大边大于 `2048` 时默认优先使用页面端 `/api/images` SSE，页面流式有问题时显式回退。
 - `routing_rules.complex_ui_batch`：复杂 UI 批量出图推荐使用页面端 `/api/images` SSE。
 - `routing_rules.long_image_recovery`：长图恢复或续跑锚点场景推荐使用页面端 `/api/images` SSE。
 - `routing_rules.agent_generate_small_smoke`：普通小图单次文生图默认使用 `/api/agent/images/generate`。
-- `routing_rules.page_sse_large_generate`：`max_edge>2048` 的单次文生图推荐优先使用 `/api/images` SSE，失败后先诊断，再显式选择 `/api/agent/images/generate` 或 job 路径。
+- `routing_rules.page_sse_large_generate`：`max_edge>2048` 的单次文生图推荐优先使用 `/api/images` SSE，失败后先诊断，再显式选择 `/api/agent/images/generate` 或 job 路径；不要把页面 SSE 的失败解释成自动回退到 Agent JSON 成功。
 - `routing_rules.retry_recovery`：终态失败不会用同一 `Idempotency-Key` 重新执行，必须诊断后创建新的业务操作和新的 key。
 - 批量 JSONL 路由控制字段：`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`；脚本会在 dry-run 阶段拒绝字符串布尔值和未知 transport。
 - `GET /api/runtime-capabilities` 不属于 Agent capabilities。它是页面工作台读取的运行态能力摘要，用于展示流式默认值、图片上游传输配置、渠道健康、渠道队列、并发建议、Responses 后端 enablement 和缺失环境变量，不进入 Agent OpenAPI。
@@ -675,7 +676,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 }
 ```
 
-`diagnostics` 只包含脱敏诊断字段和白名单响应头，不包含 API key、token、完整上游响应体或图片 base64。SDK/网络层只有 `Connection error.` 时，`transport_error` 会是 `true`，但不会伪造 `upstream_status`。
+`diagnostics` 只包含脱敏诊断字段和白名单响应头，不包含 API key、token、完整上游响应体或图片 base64。SDK/网络层只有 `Connection error.` 时，`transport_error` 会是 `true`，但不会伪造 `upstream_status`。如果页面 SSE 请求返回 `page_sse_failed`、`503`、断流，且 `summary.selected_channel_id` 与 `summary.upstream_host` 为空，按页面流式路径未跑通处理；先用 `diagnose-request.mjs` 读取结构化摘要，再用新的 `Idempotency-Key` 显式选择 Agent JSON 或 job，不自动回退。
 
 常见错误码：
 
