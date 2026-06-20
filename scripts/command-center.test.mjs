@@ -290,7 +290,7 @@ describe('Command center scripts', () => {
                 },
                 {
                     id: 'matsca-images-sse',
-                    endpoint: '::1:3090',
+                    endpoint: '[::1]:3090',
                     ok: false,
                     reason: 'timeout'
                 }
