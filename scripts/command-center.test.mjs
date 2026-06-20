@@ -18,6 +18,7 @@ import {
 import { buildFirstRunReport, formatFirstRunText } from './first-run.mjs';
 import {
     buildAdminCommands,
+    buildImageUpstreamLocalEndpointStatus,
     buildImageUpstreamRealSmokeStatus,
     parseGitStatusEntries,
     readStatusEnvFromFiles,
@@ -219,6 +220,83 @@ describe('Command center scripts', () => {
         ]);
         assert.equal(status.missing_env_any['original-images-json'], undefined);
         assert.doesNotMatch(JSON.stringify(status), /user:pass|original\.example|token=secret|original-secret/);
+    });
+
+    it('checks local real smoke endpoints without exposing URL paths or credentials', async () => {
+        const status = await buildImageUpstreamLocalEndpointStatus(
+            {
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'http://127.0.0.1:3010/v1?ignored=no',
+                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'original-secret',
+                IMAGE_REAL_SMOKE_GAOREN_BASE_URL: 'http://localhost:3001/v1',
+                IMAGE_REAL_SMOKE_GAOREN_API_KEY: 'gaoren-secret',
+                IMAGE_REAL_SMOKE_SUB2API_BASE_URL: 'https://sub2api.example/v1',
+                IMAGE_REAL_SMOKE_SUB2API_API_KEY: 'sub2api-secret'
+            },
+            {
+                probe: async (endpoint) => ({
+                    ok: endpoint.port === 3001,
+                    reason: endpoint.port === 3001 ? undefined : 'connection_refused'
+                })
+            }
+        );
+
+        assert.deepEqual(status, {
+            checked_count: 1,
+            unavailable_count: 0,
+            unavailable_cases: [],
+            results: [
+                {
+                    id: 'gaoren-images-sse',
+                    endpoint: 'localhost:3001',
+                    ok: true
+                }
+            ]
+        });
+        assert.doesNotMatch(JSON.stringify(status), /secret|\/v1|sub2api\.example|ignored=no/);
+    });
+
+    it('reports unavailable local real smoke endpoints by case id', async () => {
+        const status = await buildImageUpstreamLocalEndpointStatus(
+            {
+                IMAGE_REAL_SMOKE_SUB2API_BASE_URL: 'http://127.0.0.1:3021/v1',
+                IMAGE_REAL_SMOKE_SUB2API_API_KEY: 'sub2api-secret',
+                IMAGE_REAL_SMOKE_MATSCA_BASE_URL: 'http://[::1]:3090/v1',
+                IMAGE_REAL_SMOKE_MATSCA_API_KEY: 'matsca-secret'
+            },
+            {
+                probe: async (endpoint) => ({
+                    ok: false,
+                    reason: endpoint.port === 3021 ? 'connection_refused' : 'timeout'
+                })
+            }
+        );
+
+        assert.deepEqual(status, {
+            checked_count: 3,
+            unavailable_count: 3,
+            unavailable_cases: ['sub2api-images-sse', 'sub2api-responses-json', 'matsca-images-sse'],
+            results: [
+                {
+                    id: 'sub2api-images-sse',
+                    endpoint: '127.0.0.1:3021',
+                    ok: false,
+                    reason: 'connection_refused'
+                },
+                {
+                    id: 'sub2api-responses-json',
+                    endpoint: '127.0.0.1:3021',
+                    ok: false,
+                    reason: 'connection_refused'
+                },
+                {
+                    id: 'matsca-images-sse',
+                    endpoint: '::1:3090',
+                    ok: false,
+                    reason: 'timeout'
+                }
+            ]
+        });
+        assert.doesNotMatch(JSON.stringify(status), /secret|\/v1/);
     });
 
     it('loads independent image upstream smoke readiness from env files without overriding shell env', async () => {
@@ -962,12 +1040,13 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.real_smoke_checks.agent_generate_1k, 'passed');
                 assert.equal(body.summary.real_smoke_checks.responses_page_sse_generate_1k, 'failed');
                 assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
-                assert.match(
-                    body.layers
-                        .find((layer) => layer.name === 'billable_smoke')
-                        .checks.find((check) => check.name === 'responses_page_sse_generate_1k').output,
-                    /503 Service temporarily unavailable/
-                );
+                const pageSseOutput = body.layers
+                    .find((layer) => layer.name === 'billable_smoke')
+                    .checks.find((check) => check.name === 'responses_page_sse_generate_1k').output;
+                const pageSseFailure = parseJsonPayload(pageSseOutput, 'responses page SSE doctor smoke');
+                assert.equal(pageSseFailure.summary.selected_channel_id, null);
+                assert.equal(pageSseFailure.summary.upstream_host, null);
+                assert.match(pageSseOutput, /503 Service temporarily unavailable/);
             }
         );
     });
