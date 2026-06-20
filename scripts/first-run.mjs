@@ -329,10 +329,14 @@ function summarizeCapabilitiesBody(body) {
         page_sse_supported: body?.agent_streaming?.page_sse?.supported === true,
         page_sse_declared_supported: body?.agent_streaming?.page_sse?.supported === true,
         page_sse_real_smoke: 'not_run_by_first_run',
+        page_sse_real_smoke_status: buildNotRunSmokeStatus('first-run is non-billable and does not call /api/images'),
         upstream_sse_declared_supported: body?.agent_streaming?.upstream_sse?.supported === true,
         responses_image_backend_declared_supported: responsesRequirement?.supported === true,
         responses_image_backend_enabled: responsesRequirement?.enabled === true,
-        responses_image_backend_real_smoke: 'not_run_by_first_run'
+        responses_image_backend_real_smoke: 'not_run_by_first_run',
+        responses_image_backend_real_smoke_status: buildNotRunSmokeStatus(
+            'first-run is non-billable and does not call Responses image generation'
+        )
     };
 }
 
@@ -463,6 +467,14 @@ function formatSmokeState(value) {
         failed: '失败'
     };
     return states[value] || value || '未知';
+}
+
+function buildNotRunSmokeStatus(reason) {
+    return {
+        state: 'not_run',
+        billable: false,
+        reason
+    };
 }
 
 function formatAuthState(auth) {

@@ -351,6 +351,8 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
                 ? Boolean(process.env.GPT_IMAGE_APP_PASSWORD_HASH)
                 : capabilities.ok,
         page_sse_real_smoke: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
+        responses_page_sse_generate_smoke: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
+        real_smoke_checks: summarizeSmokeChecks(smoke),
         responses_gpt2image_ready:
             capabilities.ok && runtime.ok
                 ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true &&
@@ -367,6 +369,15 @@ function summarizeSmokeCheck(smoke, name) {
     const check = smoke.checks?.find((item) => item.name === name);
     if (!check || check.skipped) return 'skipped';
     return check.ok ? 'passed' : 'failed';
+}
+
+function summarizeSmokeChecks(smoke) {
+    return {
+        agent_generate_1k: summarizeSmokeCheck(smoke, 'generate_1k'),
+        responses_page_sse_generate_1k: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
+        agent_edit_1k: summarizeSmokeCheck(smoke, 'edit_1k'),
+        page_sse_edit_2k: summarizeSmokeCheck(smoke, 'page_sse_edit_2k')
+    };
 }
 
 function authHeaders() {
