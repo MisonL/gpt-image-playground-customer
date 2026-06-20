@@ -418,10 +418,10 @@ export function formatFirstRunText(report) {
             `- 页面 SSE 鉴权：${capability.page_sse_auth_required ? `需要 ${capability.page_sse_auth_form_field || 'passwordHash'}` : '不需要'}`
         );
         lines.push(
-            `- 页面 SSE：声明${capability.page_sse_declared_supported ? '支持' : '未支持'}，实测=${capability.page_sse_real_smoke || '未知'}`
+            `- 页面 SSE：声明${capability.page_sse_declared_supported ? '支持' : '未支持'}，实测=${formatSmokeState(capability.page_sse_real_smoke)}`
         );
         lines.push(
-            `- Responses 后端：声明${capability.responses_image_backend_declared_supported ? '支持' : '未支持'}，启用=${capability.responses_image_backend_enabled ? '是' : '否'}，实测=${capability.responses_image_backend_real_smoke || '未知'}`
+            `- Responses 后端：声明${capability.responses_image_backend_declared_supported ? '支持' : '未支持'}，启用=${capability.responses_image_backend_enabled ? '是' : '否'}，实测=${formatSmokeState(capability.responses_image_backend_real_smoke)}`
         );
         lines.push(`- 状态后端：${capability.state_backend || '未知'}，图片存储：${capability.image_storage_mode || '未知'}`);
     }
@@ -453,6 +453,16 @@ function formatEndpoint(endpoint) {
     if (!endpoint) return '已跳过';
     if (endpoint.ok) return `通过 ${endpoint.status || ''}`.trim();
     return `失败${endpoint.status ? ` ${endpoint.status}` : ''}${endpoint.error ? ` ${endpoint.error}` : ''}`;
+}
+
+function formatSmokeState(value) {
+    const states = {
+        not_run_by_first_run: '未执行真实 smoke',
+        skipped: '已跳过',
+        passed: '通过',
+        failed: '失败'
+    };
+    return states[value] || value || '未知';
 }
 
 function formatAuthState(auth) {
