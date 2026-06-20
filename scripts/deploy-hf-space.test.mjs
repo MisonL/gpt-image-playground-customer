@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
     GIT_ARCHIVE_MAX_BUFFER_BYTES,
+    buildDeployMarker,
     buildUploadArgs,
     extractUploadCommitSha,
     findRemoteDeletePaths,
@@ -122,6 +123,32 @@ describe('HF Space deploy script', () => {
     it('finds stale remote files deterministically', () => {
         assert.deepEqual(
             findRemoteDeletePaths(new Set(['README.md', 'src/app.ts']), ['old.md', 'src/app.ts', 'README.md']),
+            ['old.md']
+        );
+    });
+
+    it('builds a non-secret deploy marker for service-side deployment verification', () => {
+        const marker = buildDeployMarker('3333333333333333333333333333333333333333', new Date('2026-06-20T10:00:00.000Z'));
+
+        assert.deepEqual(marker, {
+            schema_version: 1,
+            local_sha: '3333333333333333333333333333333333333333',
+            created_at: '2026-06-20T10:00:00.000Z'
+        });
+        assert.doesNotMatch(JSON.stringify(marker), /key|token|secret|password/i);
+    });
+
+    it('rejects short deploy marker commit shas before upload', () => {
+        assert.throws(() => buildDeployMarker('3333333'), /full git commit SHA/);
+    });
+
+    it('keeps the generated deploy marker from being deleted on upload', () => {
+        assert.deepEqual(
+            findRemoteDeletePaths(new Set(['README.md', 'public/hf-space-deploy-marker.json']), [
+                'README.md',
+                'public/hf-space-deploy-marker.json',
+                'old.md'
+            ]),
             ['old.md']
         );
     });
