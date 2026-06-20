@@ -14,7 +14,8 @@ const STATUS_POLL_INTERVAL_MS = 10_000;
 const PUBLIC_ENDPOINT_TIMEOUT_MS = 10_000;
 const HF_CLI_TIMEOUT_MS = 120_000;
 const DEPLOY_MARKER_REPO_PATH = 'public/hf-space-deploy-marker.json';
-const DEPLOY_MARKER_PUBLIC_PATH = '/hf-space-deploy-marker.json';
+const DEPLOY_MARKER_API_ROUTE_PATH = 'src/app/api/deploy-marker/route.ts';
+const DEPLOY_MARKER_SERVICE_PATH = '/api/deploy-marker';
 export const GIT_ARCHIVE_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
 function parseArgs(argv) {
@@ -149,15 +150,37 @@ export function buildDeployMarker(localSha, createdAt = new Date()) {
     };
 }
 
+export function buildDeployMarkerRouteSource(marker) {
+    const markerJson = JSON.stringify(marker);
+    return `import { NextResponse } from 'next/server';
+
+const deployMarker = ${markerJson} as const;
+
+export const dynamic = 'force-dynamic';
+
+export function GET() {
+    return NextResponse.json(deployMarker, {
+        headers: {
+            'Cache-Control': 'no-store'
+        }
+    });
+}
+`;
+}
+
 function writeDeployMarker(sourceDir, marker) {
     const markerPath = join(sourceDir, DEPLOY_MARKER_REPO_PATH);
+    const routePath = join(sourceDir, DEPLOY_MARKER_API_ROUTE_PATH);
     mkdirSync(join(sourceDir, 'public'), { recursive: true });
+    mkdirSync(join(sourceDir, 'src', 'app', 'api', 'deploy-marker'), { recursive: true });
     writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+    writeFileSync(routePath, buildDeployMarkerRouteSource(marker), 'utf8');
 }
 
 function readLocalGitFilesWithDeployMarker() {
     const files = readLocalGitFiles();
     files.add(DEPLOY_MARKER_REPO_PATH);
+    files.add(DEPLOY_MARKER_API_ROUTE_PATH);
     return files;
 }
 
@@ -202,7 +225,7 @@ async function fetchJson(path) {
 }
 
 async function verifyDeployMarker(localSha) {
-    const marker = await fetchJson(`${DEPLOY_MARKER_PUBLIC_PATH}?t=${Date.now()}`);
+    const marker = await fetchJson(`${DEPLOY_MARKER_SERVICE_PATH}?t=${Date.now()}`);
     if (marker?.schema_version !== 1) throw new Error('deploy marker schema_version was not 1.');
     if (marker.local_sha !== localSha) {
         throw new Error(`deploy marker local_sha mismatch: expected ${localSha}, received ${marker.local_sha || 'missing'}.`);
