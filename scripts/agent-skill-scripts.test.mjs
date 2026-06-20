@@ -3232,10 +3232,18 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /-- --json/);
         assert.match(skillText, /--base-url <url>/);
         assert.match(skillText, /\.env\.agent\.local\.example/);
+        assert.match(skillText, /page_sse_real_smoke_status/);
+        assert.match(skillText, /responses_image_backend_real_smoke_status/);
+        assert.match(skillText, /summary\.responses_page_sse_generate_smoke/);
+        assert.match(skillText, /summary\.real_smoke_checks/);
         assert.match(apiReference, /npm run first-run/);
         assert.match(apiReference, /npm run first-run -- --json/);
         assert.match(apiReference, /--base-url <url>/);
         assert.match(apiReference, /\.env\.agent\.local\.example/);
+        assert.match(apiReference, /page_sse_real_smoke_status/);
+        assert.match(apiReference, /responses_image_backend_real_smoke_status/);
+        assert.match(apiReference, /summary\.responses_page_sse_generate_smoke/);
+        assert.match(apiReference, /summary\.real_smoke_checks/);
         assert.match(readmeText, /不要手动并行启动多个单张脚本/);
         assert.match(readmeText, /streamingBatch\.recommendedConcurrency/);
         assert.match(readmeText, /channelQueue\.capacityPerCredential/);

@@ -552,6 +552,10 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 | `agent_auth_process.has_token` | `first-run --json` | 当前进程是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
 | `page_sse_auth_available_to_process` | `first-run --json` | 目标服务要求页面 SSE `passwordHash` 时，当前进程是否已加载 `GPT_IMAGE_APP_PASSWORD_HASH`。 |
 | `summary.page_sse_auth_ready` | `agent:doctor` | 页面 SSE 鉴权是否已满足；为 `false` 时不要运行 `--page-sse` 真实计费请求。 |
+| `page_sse_real_smoke_status` | `first-run --json` | 结构化说明 `first-run` 未执行真实 `/api/images` smoke；`state=not_run` 且 `billable=false` 表示它只是只读就绪检查。 |
+| `responses_image_backend_real_smoke_status` | `first-run --json` | 结构化说明 `first-run` 未执行真实 Responses image_generation smoke；不要把声明支持当作实测通过。 |
+| `summary.responses_page_sse_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + page SSE + `responses-sse` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
+| `summary.real_smoke_checks` | `agent:doctor` | 各真实 smoke 的状态汇总，包含 `agent_generate_1k`、`responses_page_sse_generate_1k`、`agent_edit_1k` 和 `page_sse_edit_2k`。 |
 | `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |
 | `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
 | `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
