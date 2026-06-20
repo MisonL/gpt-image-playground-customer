@@ -11,6 +11,7 @@ import {
 const GENERATE_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url));
 const EDIT_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/edit-image.mjs', import.meta.url));
 const AGENT_DOCTOR_TIMEOUT_MS = 75_000;
+const PAGE_SSE_GENERATE_SMOKE_NAME = 'responses_page_sse_generate_1k';
 
 export function buildAgentDoctorArgs() {
     return [GENERATE_SCRIPT, '--contract-check', '--timeout-ms', '60000', 'contract check'];
@@ -129,6 +130,7 @@ function buildSkippedSmoke(options) {
         reason: 'requires --allow-billable',
         checks: [
             { name: 'generate_1k', skipped: true, reason: 'requires --allow-billable' },
+            { name: PAGE_SSE_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
             {
                 name: 'edit_1k',
                 skipped: true,
@@ -160,6 +162,28 @@ function runBillableSmoke(options, baseUrl) {
             '--idempotency-key',
             `agent-doctor-generate-${Date.now()}`,
             'agent doctor 1k generate smoke'
+        ]),
+        runSmokeCommand(PAGE_SSE_GENERATE_SMOKE_NAME, [
+            GENERATE_SCRIPT,
+            '--base-url',
+            baseUrl,
+            '--allow-billable',
+            '--page-sse',
+            '--timeout-ms',
+            String(options.timeoutMs),
+            '--size',
+            '1024x1024',
+            '--quality',
+            'low',
+            '--image-backend',
+            'responses-image-generation',
+            '--stream-mode',
+            'stream',
+            '--streaming-strategy',
+            'responses-sse',
+            '--idempotency-key',
+            `agent-doctor-responses-page-sse-generate-${Date.now()}`,
+            'agent doctor responses page SSE generate smoke'
         ])
     ];
     if (options.editImage) {
@@ -326,7 +350,7 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
             capabilities.ok && capabilities.body?.agent_streaming?.page_sse?.auth?.required === true
                 ? Boolean(process.env.GPT_IMAGE_APP_PASSWORD_HASH)
                 : capabilities.ok,
-        page_sse_real_smoke: summarizeSmokeCheck(smoke, 'page_sse_edit_2k'),
+        page_sse_real_smoke: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
         responses_gpt2image_ready:
             capabilities.ok && runtime.ok
                 ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true &&

@@ -510,6 +510,8 @@ describe('Command center scripts', () => {
                     assert.equal(report.service.capabilities.page_sse_declared_supported, true);
                     assert.equal(report.service.capabilities.page_sse_real_smoke, 'not_run_by_first_run');
                     assert.equal(report.service.capabilities.responses_image_backend_real_smoke, 'not_run_by_first_run');
+                    assert.match(formatFirstRunText(report), /页面 SSE：声明支持，实测=未执行真实 smoke/);
+                    assert.match(formatFirstRunText(report), /Responses 后端：声明未支持，启用=否，实测=未执行真实 smoke/);
                     assert.equal(
                         report.checks.find((check) => check.name === 'agent_auth_available_to_process')
                             .auth_in_private_env_file,
@@ -728,6 +730,11 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.responses_image_backend_declared_supported, true);
                 assert.equal(body.summary.billable_smoke, 'skipped');
                 assert.equal(body.layers.find((layer) => layer.name === 'billable_smoke').skipped, true);
+                assert.ok(
+                    body.layers
+                        .find((layer) => layer.name === 'billable_smoke')
+                        .checks.some((check) => check.name === 'responses_page_sse_generate_1k' && check.skipped === true)
+                );
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').executable_routing_rules, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_declared_supported, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_required, true);
@@ -807,6 +814,19 @@ describe('Command center scripts', () => {
                     }
                     return;
                 }
+                if (request.url === '/api/images') {
+                    response.writeHead(200, { 'content-type': 'text/event-stream' });
+                    response.end(
+                        [
+                            'data: {"type":"completed","filename":"doctor-page-sse.png","path":"/api/image/doctor-page-sse.png","output_format":"png"}',
+                            '',
+                            'data: {"type":"done","client_request_id":"doctor-page-sse-request","images":[{"filename":"doctor-page-sse.png"}]}',
+                            '',
+                            ''
+                        ].join('\n')
+                    );
+                    return;
+                }
                 if (request.url === '/api/agent/jobs/images/generate') {
                     response.writeHead(400, { 'content-type': 'application/json' });
                     response.end(
@@ -833,8 +853,9 @@ describe('Command center scripts', () => {
                 const body = parseJsonPayload(result.stdout, 'agent doctor');
                 assert.equal(body.service_base_url_source, 'user_provided');
                 assert.equal(body.interactive_confirmation_required, false);
-                assert.equal(body.summary.page_sse_real_smoke, 'skipped');
+                assert.equal(body.summary.page_sse_real_smoke, 'passed');
                 assert.ok(hits.includes('/api/agent/images/generate'));
+                assert.ok(hits.includes('/api/images'));
             }
         );
     });
