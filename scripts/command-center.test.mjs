@@ -882,6 +882,95 @@ describe('Command center scripts', () => {
         );
     });
 
+    it('reports failed agent:doctor page SSE smoke checks without hiding the failure', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            defaults: { state_backend: 'memory' },
+                            storage: { image_storage_mode: 'indexeddb', postgres_configured: false },
+                            agent_streaming: { page_sse: { supported: true } },
+                            agent_jobs: { supported: true },
+                            routing_rules: {},
+                            supported: {
+                                image_backend_requirements: {
+                                    'responses-image-generation': {
+                                        supported: true,
+                                        enabled: true,
+                                        missing_env: []
+                                    }
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/runtime-capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            streaming: {
+                                defaultMode: 'auto',
+                                unavailableMarkScope: 'channel+backend+strategy+operation'
+                            },
+                            streamingBatch: { enabled: true },
+                            responsesImageBackend: { enabled: true, mode: 'experimental' }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ images: [{ id: 'doctor-generate', filename: 'doctor.png' }] }));
+                    return;
+                }
+                if (request.url === '/api/images') {
+                    response.writeHead(503, { 'content-type': 'text/plain' });
+                    response.end('503 Service temporarily unavailable');
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/images/generate') {
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runNodeCommandAsync(
+                    ['scripts/agent-doctor.mjs', '--base-url', baseUrl, '--allow-billable'],
+                    { timeoutMs: 15_000 }
+                );
+
+                assert.equal(result.ok, false);
+                const body = parseJsonPayload(result.stdout, 'agent doctor');
+                assert.equal(body.ok, false);
+                assert.equal(body.summary.billable_smoke, 'failed');
+                assert.equal(body.summary.page_sse_real_smoke, 'failed');
+                assert.equal(body.summary.responses_page_sse_generate_smoke, 'failed');
+                assert.equal(body.summary.real_smoke_checks.agent_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.responses_page_sse_generate_1k, 'failed');
+                assert.match(
+                    body.layers
+                        .find((layer) => layer.name === 'billable_smoke')
+                        .checks.find((check) => check.name === 'responses_page_sse_generate_1k').output,
+                    /503 Service temporarily unavailable/
+                );
+            }
+        );
+    });
+
     it('prints localized agent:doctor help and option errors', async () => {
         const help = await runNodeCommandAsync(['scripts/agent-doctor.mjs', '--help'], {
             env: process.env,

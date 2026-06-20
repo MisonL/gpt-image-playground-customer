@@ -350,7 +350,7 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
             capabilities.ok && capabilities.body?.agent_streaming?.page_sse?.auth?.required === true
                 ? Boolean(process.env.GPT_IMAGE_APP_PASSWORD_HASH)
                 : capabilities.ok,
-        page_sse_real_smoke: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
+        page_sse_real_smoke: summarizePageSseSmoke(smoke),
         responses_page_sse_generate_smoke: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
         real_smoke_checks: summarizeSmokeChecks(smoke),
         responses_gpt2image_ready:
@@ -369,6 +369,13 @@ function summarizeSmokeCheck(smoke, name) {
     const check = smoke.checks?.find((item) => item.name === name);
     if (!check || check.skipped) return 'skipped';
     return check.ok ? 'passed' : 'failed';
+}
+
+function summarizePageSseSmoke(smoke) {
+    const states = [PAGE_SSE_GENERATE_SMOKE_NAME, 'page_sse_edit_2k'].map((name) => summarizeSmokeCheck(smoke, name));
+    if (states.includes('failed')) return 'failed';
+    if (states.includes('passed')) return 'passed';
+    return 'skipped';
 }
 
 function summarizeSmokeChecks(smoke) {
