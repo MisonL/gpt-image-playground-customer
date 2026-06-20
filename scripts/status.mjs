@@ -213,7 +213,8 @@ function readLocalEndpointTargets(env) {
 }
 
 function formatEndpoint(endpoint) {
-    return `${endpoint.host}:${endpoint.port}`;
+    const host = endpoint.host.includes(':') ? `[${endpoint.host}]` : endpoint.host;
+    return `${host}:${endpoint.port}`;
 }
 
 function readSocketFailureReason(error) {
