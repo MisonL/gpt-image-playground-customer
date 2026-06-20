@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync } from 'node:fs';
+import net from 'node:net';
 
 import { HF_SPACE_ID, HF_SPACE_URL } from './hf-space-doctor-utils.mjs';
 import { isMainModule, parseJsonPayload, printJson, runCommand, runCommandStrict } from './command-center-utils.mjs';
 
 const REMOTE_STATUS_TIMEOUT_MS = 30_000;
+const LOCAL_ENDPOINT_TIMEOUT_MS = 500;
 const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
     { id: 'original-images-json', prefix: 'IMAGE_REAL_SMOKE_ORIGINAL' },
     { id: 'gaoren-images-sse', prefix: 'IMAGE_REAL_SMOKE_GAOREN' },
@@ -127,6 +129,7 @@ function readTargetConfigured(testCase, env) {
     const baseUrlError = baseUrl ? readBaseUrlValidationError(baseUrl.value) : undefined;
     return {
         baseUrl: Boolean(baseUrl),
+        baseUrlValue: baseUrl?.value,
         apiKey: Boolean(apiKey),
         responsesModel: Boolean(responsesModel),
         invalidEnv: baseUrlError ? [{ key: baseUrl.key, reason: baseUrlError }] : []
@@ -175,6 +178,90 @@ export function buildImageUpstreamRealSmokeStatus(env = process.env) {
     };
 }
 
+function normalizeLocalHostname(hostname) {
+    return hostname.toLowerCase().replace(/^\[|\]$/g, '');
+}
+
+function isLocalHostname(hostname) {
+    const normalized = normalizeLocalHostname(hostname);
+    return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function readUrlPort(url) {
+    if (url.port) return Number(url.port);
+    if (url.protocol === 'http:') return 80;
+    if (url.protocol === 'https:') return 443;
+    return undefined;
+}
+
+function readLocalEndpoint(testCase, env) {
+    const target = readTargetConfigured(testCase, env);
+    if (!target.baseUrlValue || target.invalidEnv.length > 0) return undefined;
+    const url = new URL(target.baseUrlValue);
+    if (!isLocalHostname(url.hostname)) return undefined;
+    const port = readUrlPort(url);
+    if (!port) return undefined;
+    return {
+        id: testCase.id,
+        host: normalizeLocalHostname(url.hostname),
+        port
+    };
+}
+
+function readLocalEndpointTargets(env) {
+    return IMAGE_UPSTREAM_REAL_SMOKE_CASES.map((testCase) => readLocalEndpoint(testCase, env)).filter(Boolean);
+}
+
+function formatEndpoint(endpoint) {
+    return `${endpoint.host}:${endpoint.port}`;
+}
+
+function readSocketFailureReason(error) {
+    if (error?.code === 'ECONNREFUSED') return 'connection_refused';
+    if (error?.code === 'ETIMEDOUT') return 'timeout';
+    if (error?.code === 'EHOSTUNREACH') return 'host_unreachable';
+    if (error?.code === 'ENETUNREACH') return 'network_unreachable';
+    return 'connection_failed';
+}
+
+function probeTcpEndpoint(endpoint, options = {}) {
+    const timeoutMs = options.timeoutMs || LOCAL_ENDPOINT_TIMEOUT_MS;
+    return new Promise((resolve) => {
+        const socket = net.createConnection({ host: endpoint.host, port: endpoint.port });
+        let settled = false;
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            socket.destroy();
+            resolve(result);
+        };
+        socket.setTimeout(timeoutMs, () => finish({ ok: false, reason: 'timeout' }));
+        socket.once('connect', () => finish({ ok: true }));
+        socket.once('error', (error) => finish({ ok: false, reason: readSocketFailureReason(error) }));
+    });
+}
+
+export async function buildImageUpstreamLocalEndpointStatus(env = process.env, options = {}) {
+    const probe = options.probe || probeTcpEndpoint;
+    const results = [];
+    for (const endpoint of readLocalEndpointTargets(env)) {
+        const result = await probe(endpoint, options);
+        results.push({
+            id: endpoint.id,
+            endpoint: formatEndpoint(endpoint),
+            ok: result.ok === true,
+            ...(result.ok === true ? {} : { reason: result.reason || 'connection_failed' })
+        });
+    }
+    const unavailable = results.filter((item) => !item.ok);
+    return {
+        checked_count: results.length,
+        unavailable_count: unavailable.length,
+        unavailable_cases: unavailable.map((item) => item.id),
+        results
+    };
+}
+
 function parseArgs(argv) {
     const unknown = argv.find((arg) => !['--help', '-h', '--remote'].includes(arg));
     if (unknown) throw new Error(`Unknown option: ${unknown}`);
@@ -194,11 +281,13 @@ Options:
   --help         Show this help.`);
 }
 
-function buildLocalStatus() {
+async function buildLocalStatus() {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
     const branch = runCommandStrict('git', ['branch', '--show-current']).trim();
     const head = runCommandStrict('git', ['rev-parse', '--short', 'HEAD']).trim();
     const changed = parseGitStatusEntries(runCommandStrict('git', ['status', '--porcelain=v1', '-z']));
+    const statusEnv = readStatusEnvFromFiles(process.env);
+    const imageUpstreamRealSmoke = buildImageUpstreamRealSmokeStatus(statusEnv);
     return {
         product: packageJson.name,
         version: packageJson.version,
@@ -216,7 +305,10 @@ function buildLocalStatus() {
             capabilities: '/api/agent/capabilities',
             skill: 'skills/gpt-image-playground-agent/SKILL.md'
         },
-        image_upstream_real_smoke: buildImageUpstreamRealSmokeStatus(readStatusEnvFromFiles(process.env))
+        image_upstream_real_smoke: {
+            ...imageUpstreamRealSmoke,
+            local_endpoint_checks: await buildImageUpstreamLocalEndpointStatus(statusEnv)
+        }
     };
 }
 
@@ -244,14 +336,14 @@ function readRemoteStatus() {
     );
 }
 
-function main() {
+async function main() {
     const options = parseArgs(process.argv.slice(2));
     if (options.help) {
         printHelp();
         return;
     }
 
-    const status = buildLocalStatus();
+    const status = await buildLocalStatus();
     printJson({
         ok: true,
         ...status,
@@ -259,9 +351,9 @@ function main() {
     });
 }
 
-try {
-    if (isMainModule(import.meta.url, process.argv[1])) main();
-} catch (error) {
-    printJson({ ok: false, error: error instanceof Error ? error.message : String(error) });
-    process.exit(1);
+if (isMainModule(import.meta.url, process.argv[1])) {
+    main().catch((error) => {
+        printJson({ ok: false, error: error instanceof Error ? error.message : String(error) });
+        process.exit(1);
+    });
 }
