@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
     GIT_ARCHIVE_MAX_BUFFER_BYTES,
     buildDeployMarker,
+    buildDeployMarkerRouteSource,
     buildUploadArgs,
     extractUploadCommitSha,
     findRemoteDeletePaths,
@@ -142,11 +143,23 @@ describe('HF Space deploy script', () => {
         assert.throws(() => buildDeployMarker('3333333'), /full git commit SHA/);
     });
 
-    it('keeps the generated deploy marker from being deleted on upload', () => {
+    it('builds a no-store API route for service-side deploy marker verification', () => {
+        const marker = buildDeployMarker('4444444444444444444444444444444444444444', new Date('2026-06-20T11:00:00.000Z'));
+        const source = buildDeployMarkerRouteSource(marker);
+
+        assert.match(source, /NextResponse\.json/);
+        assert.match(source, /Cache-Control/);
+        assert.match(source, /no-store/);
+        assert.match(source, /4444444444444444444444444444444444444444/);
+        assert.doesNotMatch(source, /key|token|secret|password/i);
+    });
+
+    it('keeps the generated deploy markers from being deleted on upload', () => {
         assert.deepEqual(
-            findRemoteDeletePaths(new Set(['README.md', 'public/hf-space-deploy-marker.json']), [
+            findRemoteDeletePaths(new Set(['README.md', 'public/hf-space-deploy-marker.json', 'src/app/api/deploy-marker/route.ts']), [
                 'README.md',
                 'public/hf-space-deploy-marker.json',
+                'src/app/api/deploy-marker/route.ts',
                 'old.md'
             ]),
             ['old.md']
