@@ -510,6 +510,16 @@ describe('Command center scripts', () => {
                     assert.equal(report.service.capabilities.page_sse_declared_supported, true);
                     assert.equal(report.service.capabilities.page_sse_real_smoke, 'not_run_by_first_run');
                     assert.equal(report.service.capabilities.responses_image_backend_real_smoke, 'not_run_by_first_run');
+                    assert.deepEqual(report.service.capabilities.page_sse_real_smoke_status, {
+                        state: 'not_run',
+                        billable: false,
+                        reason: 'first-run is non-billable and does not call /api/images'
+                    });
+                    assert.deepEqual(report.service.capabilities.responses_image_backend_real_smoke_status, {
+                        state: 'not_run',
+                        billable: false,
+                        reason: 'first-run is non-billable and does not call Responses image generation'
+                    });
                     assert.match(formatFirstRunText(report), /页面 SSE：声明支持，实测=未执行真实 smoke/);
                     assert.match(formatFirstRunText(report), /Responses 后端：声明未支持，启用=否，实测=未执行真实 smoke/);
                     assert.equal(
@@ -726,6 +736,13 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.page_sse_auth_ready, false);
                 assert.equal(body.summary.page_sse_declared_supported, true);
                 assert.equal(body.summary.page_sse_real_smoke, 'skipped');
+                assert.equal(body.summary.responses_page_sse_generate_smoke, 'skipped');
+                assert.deepEqual(body.summary.real_smoke_checks, {
+                    agent_generate_1k: 'skipped',
+                    responses_page_sse_generate_1k: 'skipped',
+                    agent_edit_1k: 'skipped',
+                    page_sse_edit_2k: 'skipped'
+                });
                 assert.equal(body.summary.responses_gpt2image_ready, true);
                 assert.equal(body.summary.responses_image_backend_declared_supported, true);
                 assert.equal(body.summary.billable_smoke, 'skipped');
@@ -854,6 +871,11 @@ describe('Command center scripts', () => {
                 assert.equal(body.service_base_url_source, 'user_provided');
                 assert.equal(body.interactive_confirmation_required, false);
                 assert.equal(body.summary.page_sse_real_smoke, 'passed');
+                assert.equal(body.summary.responses_page_sse_generate_smoke, 'passed');
+                assert.equal(body.summary.real_smoke_checks.agent_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.responses_page_sse_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.agent_edit_1k, 'skipped');
+                assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
                 assert.ok(hits.includes('/api/agent/images/generate'));
                 assert.ok(hits.includes('/api/images'));
             }
