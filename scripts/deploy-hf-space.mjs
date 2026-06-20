@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -13,6 +13,8 @@ const STATUS_POLL_ATTEMPTS = 40;
 const STATUS_POLL_INTERVAL_MS = 10_000;
 const PUBLIC_ENDPOINT_TIMEOUT_MS = 10_000;
 const HF_CLI_TIMEOUT_MS = 120_000;
+const DEPLOY_MARKER_REPO_PATH = 'public/hf-space-deploy-marker.json';
+const DEPLOY_MARKER_PUBLIC_PATH = '/hf-space-deploy-marker.json';
 export const GIT_ARCHIVE_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
 function parseArgs(argv) {
@@ -138,8 +140,30 @@ export function findRemoteDeletePaths(localFiles, remoteFiles) {
     return [...remoteFiles].filter((filename) => !localFiles.has(filename)).sort();
 }
 
+export function buildDeployMarker(localSha, createdAt = new Date()) {
+    if (!/^[0-9a-f]{40}$/.test(String(localSha || ''))) throw new Error('localSha must be a full git commit SHA.');
+    return {
+        schema_version: 1,
+        local_sha: localSha,
+        created_at: createdAt.toISOString()
+    };
+}
+
+function writeDeployMarker(sourceDir, marker) {
+    const markerPath = join(sourceDir, DEPLOY_MARKER_REPO_PATH);
+    mkdirSync(join(sourceDir, 'public'), { recursive: true });
+    writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+}
+
+function readLocalGitFilesWithDeployMarker() {
+    const files = readLocalGitFiles();
+    files.add(DEPLOY_MARKER_REPO_PATH);
+    return files;
+}
+
 function uploadSourceTree(sourceDir, localSha) {
-    const deletePaths = findRemoteDeletePaths(readLocalGitFiles(), readRemoteFilePaths());
+    writeDeployMarker(sourceDir, buildDeployMarker(localSha));
+    const deletePaths = findRemoteDeletePaths(readLocalGitFilesWithDeployMarker(), readRemoteFilePaths());
     const output = runText('hf', buildUploadArgs({ sourceDir, localSha, repoSlug: readRepositorySlug(), deletePaths }));
     return extractUploadCommitSha(output);
 }
@@ -149,7 +173,7 @@ function readSpaceInfo() {
     return parseJsonPayload(output, 'hf spaces info');
 }
 
-async function waitForRunning(spaceCommitSha) {
+async function waitForRunning(spaceCommitSha, localSha) {
     let lastStage = 'unknown';
     let lastSha = 'unknown';
     for (let attempt = 1; attempt <= STATUS_POLL_ATTEMPTS; attempt += 1) {
@@ -162,11 +186,31 @@ async function waitForRunning(spaceCommitSha) {
         }
         await delay(STATUS_POLL_INTERVAL_MS);
     }
-    throw new Error(`Space did not reach RUNNING for ${spaceCommitSha}; last stage=${lastStage} sha=${lastSha}`);
+    const marker = await verifyDeployMarker(localSha);
+    return {
+        stage: lastStage,
+        sha: lastSha,
+        management_status: 'runtime_stage_not_running',
+        service_marker_verified: true,
+        warning: `Space did not reach RUNNING for ${spaceCommitSha}; last stage=${lastStage} sha=${lastSha}`,
+        marker
+    };
 }
 
 async function fetchJson(path) {
     return fetchJsonWithTimeout(new URL(path, HF_SPACE_URL), { timeoutMs: PUBLIC_ENDPOINT_TIMEOUT_MS });
+}
+
+async function verifyDeployMarker(localSha) {
+    const marker = await fetchJson(`${DEPLOY_MARKER_PUBLIC_PATH}?t=${Date.now()}`);
+    if (marker?.schema_version !== 1) throw new Error('deploy marker schema_version was not 1.');
+    if (marker.local_sha !== localSha) {
+        throw new Error(`deploy marker local_sha mismatch: expected ${localSha}, received ${marker.local_sha || 'missing'}.`);
+    }
+    if (typeof marker.created_at !== 'string' || !marker.created_at.trim()) {
+        throw new Error('deploy marker created_at was missing.');
+    }
+    return marker;
 }
 
 async function verifyPublicEndpoints() {
@@ -199,7 +243,7 @@ async function deploy() {
     const sourceDir = prepareSourceTree();
     try {
         const spaceCommitSha = uploadSourceTree(sourceDir, localSha);
-        const runtime = await waitForRunning(spaceCommitSha);
+        const runtime = await waitForRunning(spaceCommitSha, localSha);
         const verification = await verifyPublicEndpoints();
         console.log(
             JSON.stringify(

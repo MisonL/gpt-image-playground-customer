@@ -961,6 +961,7 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.responses_page_sse_generate_smoke, 'failed');
                 assert.equal(body.summary.real_smoke_checks.agent_generate_1k, 'passed');
                 assert.equal(body.summary.real_smoke_checks.responses_page_sse_generate_1k, 'failed');
+                assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
                 assert.match(
                     body.layers
                         .find((layer) => layer.name === 'billable_smoke')
