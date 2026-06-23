@@ -156,6 +156,7 @@ function readNonNegativeNumber(value) {
 function readRouteMode(routing) {
   if (typeof routing?.route_mode === 'string' && routing.route_mode) return routing.route_mode;
   if (routing?.transport === 'page_sse') return 'page_sse';
+  if (routing?.transport === 'server_orchestrated') return 'orchestrated';
   if (routing?.transport === 'agent_job_polling') return 'job';
   if (routing?.transport === 'agent_json') return 'agent';
   return undefined;

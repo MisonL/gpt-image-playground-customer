@@ -1,4 +1,5 @@
 import {
+    detectImageFormat,
     discardArtifactFiles,
     discardMovedFile,
     moveArtifactFilesForDeletion,
@@ -14,11 +15,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
 
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+
 describe('readImageDimensions', () => {
     it('reads PNG dimensions without external image libraries', () => {
         const buffer = Buffer.alloc(24);
-        buffer[0] = 0x89;
-        buffer.write('PNG', 1, 'ascii');
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer, 0);
         buffer.write('IHDR', 12, 'ascii');
         buffer.writeUInt32BE(64, 16);
         buffer.writeUInt32BE(32, 20);
@@ -28,6 +30,24 @@ describe('readImageDimensions', () => {
 
     it('returns null dimensions for unknown formats', () => {
         assert.deepEqual(readImageDimensions(Buffer.from('not an image')), { width: null, height: null });
+    });
+});
+
+describe('detectImageFormat', () => {
+    it('uses image bytes instead of requested output format', () => {
+        const buffer = Buffer.from(PNG_BASE64, 'base64');
+
+        assert.deepEqual(detectImageFormat(buffer, 'webp'), {
+            outputFormat: 'png',
+            mimeType: 'image/png'
+        });
+    });
+
+    it('falls back to the requested format for unknown bytes', () => {
+        assert.deepEqual(detectImageFormat(Buffer.from('not an image'), 'webp'), {
+            outputFormat: 'webp',
+            mimeType: 'image/webp'
+        });
     });
 });
 

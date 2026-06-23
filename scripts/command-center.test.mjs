@@ -731,6 +731,11 @@ describe('Command center scripts', () => {
                                 }
                             },
                             agent_jobs: { supported: true },
+                            orchestration: {
+                                supported: true,
+                                endpoint: '/api/agent/image-requests',
+                                transport_selection: 'server_owned'
+                            },
                             routing_rules: {
                                 high_resolution_edit: {
                                     conditions: { operation: 'edit', max_edge: { operator: 'gt', value: 2048 } }
@@ -769,6 +774,19 @@ describe('Command center scripts', () => {
                         response.end(JSON.stringify({ images: [{ id: 'doctor-generate', filename: 'doctor.png' }] }));
                         return;
                     }
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/proxy/api/agent/image-requests') {
                     response.writeHead(400, { 'content-type': 'application/json' });
                     response.end(
                         JSON.stringify({
@@ -859,6 +877,11 @@ describe('Command center scripts', () => {
                             storage: { image_storage_mode: 'indexeddb', postgres_configured: false },
                             agent_streaming: { page_sse: { supported: true } },
                             agent_jobs: { supported: true },
+                            orchestration: {
+                                supported: true,
+                                endpoint: '/api/agent/image-requests',
+                                transport_selection: 'server_owned'
+                            },
                             routing_rules: {
                                 high_resolution_edit: {
                                     conditions: { operation: 'edit', max_edge: { operator: 'gt', value: 2048 } }
@@ -922,6 +945,19 @@ describe('Command center scripts', () => {
                     );
                     return;
                 }
+                if (request.url === '/api/agent/image-requests') {
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
                 if (request.url === '/api/agent/jobs/images/generate') {
                     response.writeHead(400, { 'content-type': 'application/json' });
                     response.end(
@@ -955,6 +991,7 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.real_smoke_checks.agent_edit_1k, 'skipped');
                 assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
                 assert.ok(hits.includes('/api/agent/images/generate'));
+                assert.ok(hits.includes('/api/agent/image-requests'));
                 assert.ok(hits.includes('/api/images'));
             }
         );

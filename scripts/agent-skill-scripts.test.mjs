@@ -18,6 +18,28 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const skillRoot = join(repoRoot, 'skills/gpt-image-playground-agent');
 const skillScriptsRoot = join(repoRoot, 'skills/gpt-image-playground-agent/scripts');
 
+function agentGenerateCapabilities(extra = {}) {
+    return {
+        orchestration: {
+            supported: true,
+            transport_selection: 'server_owned',
+            endpoint: '/api/agent/image-requests'
+        },
+        agent_jobs: { supported: true, mode: 'job_polling' },
+        limits: {
+            generate_images: { min: 1, max: 4 },
+            partial_images: { min: 0, max: 4 },
+            partial_images_by_backend: {
+                'images-api': { min: 0, max: 4 },
+                'responses-image-generation': { min: 1, max: 3 }
+            },
+            upload_images: { max: 8 }
+        },
+        defaults: { partial_images: 2 },
+        ...extra
+    };
+}
+
 describe('Agent skill script argument validation', () => {
     it('rejects invalid generate numeric options before dry-run output', () => {
         const result = runSkillScript('generate-image.mjs', ['--n', 'abc', 'prompt']);
@@ -583,18 +605,247 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
-    it('prints page SSE routing guidance for high-resolution generate dry-runs', () => {
+    it('prints server orchestration guidance for high-resolution generate dry-runs', () => {
         const result = runSkillScript('generate-image.mjs', ['--size', '3072x2048', '--quality', 'high', 'prompt']);
 
         assert.equal(result.status, 0);
         const body = JSON.parse(result.stdout);
-        assert.equal(body.endpoint, 'http://localhost:4783/api/images');
-        assert.equal(body.routing_guidance.recommended_endpoint, '/api/images');
-        assert.equal(body.routing_guidance.transport, 'page_sse');
-        assert.equal(body.routing_guidance.fallback_endpoint, '/api/agent/images/generate');
-        assert.equal(body.routing_guidance.fallback_mode, 'manual_after_diagnosis');
-        assert.equal(body.routing_guidance.reason.includes('max_edge>2048'), true);
+        assert.equal(body.endpoint, 'http://localhost:4783/api/agent/image-requests');
+        assert.equal(body.routing_guidance.recommended_endpoint, '/api/agent/image-requests');
+        assert.equal(body.routing_guidance.transport, 'server_orchestrated');
+        assert.equal(body.routing_guidance.result_mode, 'job_polling');
+        assert.match(body.routing_guidance.reason, /服务端负责选择内部执行路径/);
         assert.equal(result.stderr.trim(), '');
+    });
+
+    it('prints server orchestration guidance for remote HTTPS small generate dry-runs', () => {
+        const result = runSkillScript('generate-image.mjs', ['--base-url', 'https://space.example.test', 'prompt']);
+
+        assert.equal(result.status, 0);
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.endpoint, 'https://space.example.test/api/agent/image-requests');
+        assert.equal(body.routing_guidance.recommended_endpoint, '/api/agent/image-requests');
+        assert.equal(body.routing_guidance.transport, 'server_orchestrated');
+        assert.equal(body.routing_guidance.strength, 'recommended');
+        assert.match(body.routing_guidance.reason, /只提交生成意图/);
+        assert.equal(result.stderr.trim(), '');
+    });
+
+    it('uses the server orchestration endpoint for default billable generate requests', async () => {
+        const requests = [];
+        let imageRequestBody = '';
+        await withServer(
+            async (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests') {
+                    imageRequestBody = await readRequestText(request);
+                    response.writeHead(202, { 'content-type': 'application/json', 'retry-after': '1' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-orchestrated-1',
+                                state: 'running',
+                                result_url: '/api/agent/jobs/job-orchestrated-1/result',
+                                retry_after_seconds: 1
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/job-orchestrated-1/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'job-orchestrated-1',
+                            idempotency_key: 'orchestrated-key',
+                            cached: false,
+                            images: [
+                                {
+                                    id: 'artifact-orchestrated-1',
+                                    filename: 'orchestrated.webp',
+                                    content_url: '/api/agent/artifacts/artifact-orchestrated-1/content',
+                                    width: 1254,
+                                    height: 1254
+                                }
+                            ],
+                            execution: {
+                                transport: 'agent_job_polling',
+                                endpoint: '/api/agent/image-requests',
+                                route_mode: 'job',
+                                image_backend: 'images-api',
+                                stream_mode: 'non_stream',
+                                streaming_strategy: 'off'
+                            },
+                            timing: { server_elapsed_ms: 1234 }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate' || request.url === '/api/images') {
+                    response.writeHead(500, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'unexpected client-selected route' }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--idempotency-key',
+                        'orchestrated-key',
+                        '--size',
+                        '3072x2048',
+                        '--streaming-strategy',
+                        'off',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.deepEqual(body.routing, {
+                    transport: 'server_orchestrated',
+                    endpoint: '/api/agent/image-requests'
+                });
+                assert.equal(body.summary.transport, 'agent_job_polling');
+                assert.equal(body.summary.endpoint, '/api/agent/image-requests');
+                assert.equal(body.summary.route_mode, 'job');
+                assert.deepEqual(body.summary.content_urls, ['/api/agent/artifacts/artifact-orchestrated-1/content']);
+                assert.deepEqual(body.summary.actual_dimensions, { width: 1254, height: 1254 });
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/image-requests',
+                        'GET /api/agent/jobs/job-orchestrated-1/result'
+                    ]
+                );
+                const requestBody = JSON.parse(imageRequestBody);
+                assert.equal(requestBody.size, '3072x2048');
+                assert.equal(requestBody.streaming_strategy, 'off');
+            }
+        );
+    });
+
+    it('checks the server orchestration endpoint during generate contract checks', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (
+                    request.url === '/api/agent/images/generate' ||
+                    request.url === '/api/agent/image-requests' ||
+                    request.url === '/api/agent/jobs/images/generate'
+                ) {
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--contract-check', 'contract check'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.deepEqual(
+                    body.checks.map((check) => check.endpoint),
+                    [
+                        '/api/agent/images/generate',
+                        '/api/agent/image-requests',
+                        '/api/agent/jobs/images/generate'
+                    ]
+                );
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/images/generate',
+                        'POST /api/agent/image-requests',
+                        'POST /api/agent/jobs/images/generate'
+                    ]
+                );
+            }
+        );
+    });
+
+    it('fails generate contract checks when the default orchestration contract is missing', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify(agentGenerateCapabilities({ orchestration: undefined }))
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(500, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'unexpected contract probe' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--contract-check', 'contract check'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                const body = JSON.parse(result.stderr);
+                assert.equal(body.error.code, 'orchestration_required');
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/images/generate'
+                    ]
+                );
+            }
+        );
     });
 
     it('expands generate presets into concrete dry-run request fields', () => {
@@ -616,7 +867,7 @@ describe('Agent skill script argument validation', () => {
         assert.equal(upstreamSseBody.request.partial_images, 2);
     });
 
-    it('does not automatically fall back after a billable page SSE generate failure', async () => {
+    it('does not automatically fall back after an explicit billable page SSE generate failure', async () => {
         const requests = [];
         await withServer(
             (request, response) => {
@@ -649,7 +900,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -698,7 +949,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'invalid-quality', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'invalid-quality', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -744,7 +995,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -786,7 +1037,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -834,7 +1085,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -873,7 +1124,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -922,7 +1173,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -1131,7 +1382,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -1268,7 +1519,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--idempotency-key', 'diag-generate-key', '--size', '1024x1024', 'prompt'],
+                    ['--allow-billable', '--agent', '--idempotency-key', 'diag-generate-key', '--size', '1024x1024', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -1336,7 +1587,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--idempotency-key', 'path-diag-key', '--size', '1024x1024', 'prompt'],
+                    ['--allow-billable', '--agent', '--idempotency-key', 'path-diag-key', '--size', '1024x1024', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: `${baseUrl}/playground` }
                 );
 
@@ -1401,7 +1652,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--idempotency-key', 'terminal-diag-key', '--size', '1024x1024', 'prompt'],
+                    ['--allow-billable', '--agent', '--idempotency-key', 'terminal-diag-key', '--size', '1024x1024', 'prompt'],
                     {
                         GPT_IMAGE_AGENT_MAX_ATTEMPTS: '1',
                         GPT_IMAGE_PLAYGROUND_URL: baseUrl
@@ -1443,7 +1694,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--idempotency-key', 'diag-unavailable-key', '--size', '1024x1024', 'prompt'],
+                    ['--allow-billable', '--agent', '--idempotency-key', 'diag-unavailable-key', '--size', '1024x1024', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -1557,7 +1808,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -1616,6 +1867,7 @@ describe('Agent skill script argument validation', () => {
                     'generate-image.mjs',
                     [
                         '--allow-billable',
+                        '--page-sse',
                         '--size',
                         '3072x2048',
                         '--quality',
@@ -1785,7 +2037,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     {
                         GPT_IMAGE_PLAYGROUND_URL: baseUrl,
                         GPT_IMAGE_APP_PASSWORD_HASH: 'hash-for-page-sse'
@@ -1837,7 +2089,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -1892,7 +2144,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -1909,7 +2161,7 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
-    it('uses Agent JSON for billable large generate requests when streaming strategy is off', async () => {
+    it('passes streaming strategy off through explicit Agent JSON generate requests', async () => {
         const requests = [];
         let agentRequestBody = '';
         await withServer(
@@ -1959,6 +2211,7 @@ describe('Agent skill script argument validation', () => {
                     'generate-image.mjs',
                     [
                         '--allow-billable',
+                        '--agent',
                         '--size',
                         '3072x2048',
                         '--quality',
@@ -3081,8 +3334,9 @@ describe('Agent skill script argument validation', () => {
         ]);
         assert.equal(disabledAutoPageSse.status, 0);
         const disabledAutoPageSseBody = JSON.parse(disabledAutoPageSse.stdout);
-        assert.equal(disabledAutoPageSseBody.endpoint, 'http://localhost:4783/api/agent/images/generate');
-        assert.equal(disabledAutoPageSseBody.routing_guidance.recommended_endpoint, '/api/agent/images/generate');
+        assert.equal(disabledAutoPageSseBody.endpoint, 'http://localhost:4783/api/agent/image-requests');
+        assert.equal(disabledAutoPageSseBody.routing_guidance.recommended_endpoint, '/api/agent/image-requests');
+        assert.equal(disabledAutoPageSseBody.routing_guidance.transport, 'server_orchestrated');
         assert.equal(disabledAutoPageSse.stderr.trim(), '');
 
         const disabledPageSse = runSkillScript('generate-image.mjs', [

@@ -97,6 +97,7 @@ export function startAgentGenerateJob(options: {
     idempotencyKey: string;
     leaseMs: number;
     preparation?: AgentGeneratePreparation;
+    transportEndpoint?: string;
 }): void {
     void runAgentGenerateJob(options).catch((error) => {
         appLogger.error('Agent generate job 后台执行失败。', error);
@@ -116,6 +117,7 @@ async function runAgentGenerateJob(options: {
     idempotencyKey: string;
     leaseMs: number;
     preparation?: AgentGeneratePreparation;
+    transportEndpoint?: string;
 }): Promise<void> {
     let heartbeat: { stop: () => void } | undefined;
     try {
@@ -129,7 +131,7 @@ async function runAgentGenerateJob(options: {
             preparation: options.preparation,
             transport: {
                 transport: 'agent_job_polling',
-                endpoint: AGENT_ENDPOINTS.create_generate_job,
+                endpoint: options.transportEndpoint ?? AGENT_ENDPOINTS.create_generate_job,
                 route_mode: 'job'
             }
         });

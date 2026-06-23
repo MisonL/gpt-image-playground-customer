@@ -102,7 +102,8 @@ export type AgentBackground = (typeof AGENT_BACKGROUNDS)[number];
 export type AgentModeration = (typeof AGENT_MODERATIONS)[number];
 export type AgentJobState = (typeof AGENT_JOB_STATES)[number];
 export type AgentRoutingTransport = 'agent_json' | 'agent_job_polling' | 'page_sse';
-export type AgentRoutingStrength = 'default' | 'recommended';
+export type AgentRoutingStrength = 'default' | 'recommended' | 'explicit';
+export type AgentOrchestrationPolicy = 'server_orchestrated_generate_v1';
 export type ImageBackendRuntimeRequirement = {
     supported: true;
     enabled: boolean;
@@ -314,8 +315,22 @@ export type AgentCapabilities = {
                 source_header: 'Idempotency-Key';
                 max_length: number;
             };
-            agent_usage: 'recommended_for_high_resolution_generate_edit_and_complex_batch';
+            agent_usage: 'explicit_for_generate_recommended_for_high_resolution_edit_and_complex_batch';
         };
+    };
+    orchestration: {
+        supported: true;
+        policy: AgentOrchestrationPolicy;
+        endpoint: string;
+        client_contract: 'intent_only';
+        transport_selection: 'server_owned';
+        result_mode: 'job_polling';
+        hidden_controls: readonly string[];
+        diagnostics: {
+            job_result: string;
+            request_lookup: string;
+        };
+        current_guidance: string;
     };
     routing_rules: {
         high_resolution_edit: AgentRoutingRule;
@@ -977,8 +992,23 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     source_header: 'Idempotency-Key',
                     max_length: PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
                 },
-                agent_usage: 'recommended_for_high_resolution_generate_edit_and_complex_batch'
+                agent_usage: 'explicit_for_generate_recommended_for_high_resolution_edit_and_complex_batch'
             }
+        },
+        orchestration: {
+            supported: true,
+            policy: 'server_orchestrated_generate_v1',
+            endpoint: AGENT_ENDPOINTS.create_image_request,
+            client_contract: 'intent_only',
+            transport_selection: 'server_owned',
+            result_mode: 'job_polling',
+            hidden_controls: ['transport', 'route_mode', 'client_endpoint_selection'],
+            diagnostics: {
+                job_result: AGENT_ENDPOINTS.job_result,
+                request_lookup: AGENT_ENDPOINTS.agent_request_diagnostics_lookup
+            },
+            current_guidance:
+                'Agent 客户端默认只提交生成意图到 /api/agent/image-requests；服务端负责选择内部执行路径、上游策略和轮询结果。显式 /api/images、Agent JSON 或 job endpoint 仅作为诊断/兼容入口。'
         },
         routing_rules: {
             high_resolution_edit: {
@@ -1050,15 +1080,15 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 },
                 endpoint: AGENT_ENDPOINTS.generate,
                 transport: 'agent_json',
-                strength: 'default',
+                strength: 'explicit',
                 action: {
                     endpoint: AGENT_ENDPOINTS.generate,
                     transport: 'agent_json',
-                    strength: 'default',
+                    strength: 'explicit',
                     requires_new_idempotency_key_on_retry: true,
                     no_automatic_fallback: true
                 },
-                reason: 'Agent JSON generate remains the stable contract and smoke path for normal single-image requests.'
+                reason: 'Agent JSON generate remains available for compatibility and explicit diagnostics; ordinary generate clients should use orchestration.endpoint.'
             },
             page_sse_large_generate: {
                 when: ['operation=generate', 'max_edge>2048', 'single_request=true'],
@@ -1069,17 +1099,17 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 },
                 endpoint: '/api/images',
                 transport: 'page_sse',
-                strength: 'recommended',
+                strength: 'explicit',
                 action: {
                     endpoint: '/api/images',
                     transport: 'page_sse',
-                    strength: 'recommended',
+                    strength: 'explicit',
                     fallback_endpoint: AGENT_ENDPOINTS.generate,
                     fallback_mode: 'manual_after_diagnosis',
                     requires_new_idempotency_key_on_retry: true,
                     no_automatic_fallback: true
                 },
-                reason: 'Page form-data SSE keeps large generate requests observable; if the stream fails, diagnose first and choose any Agent JSON retry explicitly.'
+                reason: 'Page form-data SSE is available for explicit page-workbench or diagnostic large generate runs; ordinary generate clients should use orchestration.endpoint.'
             },
             retry_recovery: {
                 reuse_failed_idempotency_key: false,
@@ -1098,7 +1128,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             endpoints: { ...AGENT_JOB_ENDPOINTS },
             states: AGENT_JOB_STATES,
             current_guidance:
-                '对 max_edge>2048 的单次文生图请求优先使用页面端 /api/images SSE；如果页面流式失败，先诊断再显式选择 Agent JSON 或 job 路径，不自动回退。job polling 仅用于显式 job 路径。当前执行模型为同实例后台任务，不是跨实例持久队列。'
+                'Agent 客户端默认使用 orchestration.endpoint；直接创建 job 是兼容和诊断入口。当前执行模型为同实例后台任务，不是跨实例持久队列。'
         },
         supported: {
             models: AGENT_MODELS,
