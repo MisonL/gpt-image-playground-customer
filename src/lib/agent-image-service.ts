@@ -1075,7 +1075,7 @@ async function persistOpenAiImages(options: {
             filepath: persistedImage.filepath,
             contentUrl,
             metadataUrl,
-            outputFormat: options.outputFormat,
+            outputFormat: persistedImage.outputFormat,
             mimeType: persistedImage.mimeType,
             sizeBytes: persistedImage.sizeBytes,
             width: persistedImage.width,

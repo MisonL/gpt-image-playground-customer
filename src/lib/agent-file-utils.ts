@@ -9,10 +9,28 @@ export type ImageDimensions = {
     height: number | null;
 };
 
+export type DetectedImageFormat = {
+    outputFormat: 'png' | 'jpeg' | 'webp';
+    mimeType: string;
+};
+
+type ImageFormatFallback = DetectedImageFormat['outputFormat'] | 'jpg';
+
 export function mimeTypeForOutputFormat(outputFormat: string): string {
     if (outputFormat === 'jpeg' || outputFormat === 'jpg') return 'image/jpeg';
     if (outputFormat === 'webp') return 'image/webp';
     return 'image/png';
+}
+
+export function detectImageFormat(buffer: Buffer, fallbackOutputFormat: ImageFormatFallback): DetectedImageFormat {
+    if (isPng(buffer)) return { outputFormat: 'png', mimeType: 'image/png' };
+    if (isJpeg(buffer)) return { outputFormat: 'jpeg', mimeType: 'image/jpeg' };
+    if (isWebp(buffer)) return { outputFormat: 'webp', mimeType: 'image/webp' };
+    const outputFormat = fallbackOutputFormat === 'jpg' ? 'jpeg' : fallbackOutputFormat;
+    return {
+        outputFormat,
+        mimeType: mimeTypeForOutputFormat(fallbackOutputFormat)
+    };
 }
 
 export async function writeFileAtomic(filepath: string, buffer: Buffer): Promise<void> {
@@ -124,12 +142,7 @@ export function readImageDimensions(buffer: Buffer): ImageDimensions {
 }
 
 function readPngDimensions(buffer: Buffer): ImageDimensions {
-    if (
-        buffer.length >= 24 &&
-        buffer[0] === 0x89 &&
-        buffer.toString('ascii', 1, 4) === 'PNG' &&
-        buffer.toString('ascii', 12, 16) === 'IHDR'
-    ) {
+    if (buffer.length >= 24 && isPng(buffer) && buffer.toString('ascii', 12, 16) === 'IHDR') {
         return {
             width: buffer.readUInt32BE(16),
             height: buffer.readUInt32BE(20)
@@ -139,7 +152,7 @@ function readPngDimensions(buffer: Buffer): ImageDimensions {
 }
 
 function readJpegDimensions(buffer: Buffer): ImageDimensions {
-    if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    if (!isJpeg(buffer)) {
         return { width: null, height: null };
     }
     let offset = 2;
@@ -163,7 +176,7 @@ function readJpegDimensions(buffer: Buffer): ImageDimensions {
 }
 
 function readWebpDimensions(buffer: Buffer): ImageDimensions {
-    if (buffer.length < 30 || buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WEBP') {
+    if (!isWebp(buffer) || buffer.length < 30) {
         return { width: null, height: null };
     }
     const chunk = buffer.toString('ascii', 12, 16);
@@ -190,4 +203,26 @@ function readWebpDimensions(buffer: Buffer): ImageDimensions {
         };
     }
     return { width: null, height: null };
+}
+
+function isPng(buffer: Buffer): boolean {
+    return (
+        buffer.length >= 8 &&
+        buffer[0] === 0x89 &&
+        buffer[1] === 0x50 &&
+        buffer[2] === 0x4e &&
+        buffer[3] === 0x47 &&
+        buffer[4] === 0x0d &&
+        buffer[5] === 0x0a &&
+        buffer[6] === 0x1a &&
+        buffer[7] === 0x0a
+    );
+}
+
+function isJpeg(buffer: Buffer): boolean {
+    return buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8;
+}
+
+function isWebp(buffer: Buffer): boolean {
+    return buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP';
 }

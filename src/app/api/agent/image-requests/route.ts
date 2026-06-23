@@ -4,6 +4,6 @@ import type { NextRequest } from 'next/server';
 
 export async function POST(request: NextRequest) {
     return createAgentGenerateJobResponse(request, {
-        transportEndpoint: AGENT_ENDPOINTS.create_generate_job
+        transportEndpoint: AGENT_ENDPOINTS.create_image_request
     });
 }

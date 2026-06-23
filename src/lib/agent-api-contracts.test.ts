@@ -439,7 +439,7 @@ describe('buildAgentCapabilities', () => {
         });
         assert.equal(
             capabilities.agent_streaming.page_sse.agent_usage,
-            'recommended_for_high_resolution_generate_edit_and_complex_batch'
+            'explicit_for_generate_recommended_for_high_resolution_edit_and_complex_batch'
         );
         assert.deepEqual(capabilities.upstream_request_headers.default, {
             user_agent_effective: 'gpt-image-playground/2.1.0',
@@ -480,16 +480,18 @@ describe('buildAgentCapabilities', () => {
             resume_or_recover: true
         });
         assert.equal(capabilities.routing_rules.agent_generate_small_smoke.endpoint, AGENT_ENDPOINTS.generate);
+        assert.equal(capabilities.routing_rules.agent_generate_small_smoke.strength, 'explicit');
         assert.deepEqual(capabilities.routing_rules.agent_generate_small_smoke.action, {
             endpoint: AGENT_ENDPOINTS.generate,
             transport: 'agent_json',
-            strength: 'default',
+            strength: 'explicit',
             requires_new_idempotency_key_on_retry: true,
             no_automatic_fallback: true
         });
         assert.equal(capabilities.routing_rules.page_sse_large_generate.endpoint, '/api/images');
         assert.equal(capabilities.routing_rules.page_sse_large_generate.transport, 'page_sse');
-        assert.equal(capabilities.routing_rules.page_sse_large_generate.strength, 'recommended');
+        assert.equal(capabilities.routing_rules.page_sse_large_generate.strength, 'explicit');
+        assert.equal(capabilities.routing_rules.page_sse_large_generate.action.strength, 'explicit');
         assert.deepEqual(capabilities.routing_rules.page_sse_large_generate.conditions, {
             operation: 'generate',
             max_edge: { operator: 'gt', value: 2048 },
@@ -497,6 +499,17 @@ describe('buildAgentCapabilities', () => {
         });
         assert.equal(capabilities.routing_rules.retry_recovery.reuse_failed_idempotency_key, false);
         assert.match(capabilities.routing_rules.retry_recovery.new_attempt_guidance, /new Idempotency-Key/);
+        assert.equal(capabilities.orchestration.supported, true);
+        assert.equal(capabilities.orchestration.policy, 'server_orchestrated_generate_v1');
+        assert.equal(capabilities.orchestration.endpoint, AGENT_ENDPOINTS.create_image_request);
+        assert.equal(capabilities.orchestration.client_contract, 'intent_only');
+        assert.equal(capabilities.orchestration.transport_selection, 'server_owned');
+        assert.equal(capabilities.orchestration.result_mode, 'job_polling');
+        assert.deepEqual(capabilities.orchestration.diagnostics, {
+            job_result: AGENT_ENDPOINTS.job_result,
+            request_lookup: AGENT_ENDPOINTS.agent_request_diagnostics_lookup
+        });
+        assert.match(capabilities.orchestration.current_guidance, /只提交生成意图/);
         assert.deepEqual(capabilities.supported.image_backends, ['images-api', 'responses-image-generation']);
         assert.deepEqual(capabilities.supported.enabled_image_backends, ['images-api']);
         assert.deepEqual(capabilities.supported.image_backend_requirements['images-api'], {
@@ -521,6 +534,7 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.deepEqual(capabilities.supported.stream_modes, ['auto', 'stream', 'non_stream']);
         assert.equal(capabilities.endpoints.create_generate_job, AGENT_ENDPOINTS.create_generate_job);
+        assert.equal(capabilities.endpoints.create_image_request, AGENT_ENDPOINTS.create_image_request);
         assert.equal(capabilities.endpoints.page_request_feedback_batch, AGENT_ENDPOINTS.page_request_feedback_batch);
         assert.equal(capabilities.endpoints.page_request_feedback, AGENT_ENDPOINTS.page_request_feedback);
         assert.equal(
@@ -542,8 +556,7 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.equal(capabilities.agent_jobs.endpoints.create_generate_job, AGENT_JOB_ENDPOINTS.create_generate_job);
         assert.deepEqual(capabilities.agent_jobs.states, ['queued', 'running', 'succeeded', 'failed', 'expired']);
-        assert.match(capabilities.agent_jobs.current_guidance, /\/api\/images SSE/);
-        assert.match(capabilities.agent_jobs.current_guidance, /不自动回退/);
+        assert.match(capabilities.agent_jobs.current_guidance, /orchestration\.endpoint/);
         assert.match(capabilities.agent_jobs.current_guidance, /job/);
     });
 
@@ -767,6 +780,7 @@ describe('buildAgentCapabilities', () => {
         assert.equal(document.openapi, '3.1.0');
         assert.deepEqual(document.servers, [{ url: 'https://images.example.test' }]);
         assert.ok(AGENT_ENDPOINTS.openapi in document.paths);
+        assert.ok(AGENT_ENDPOINTS.create_image_request in document.paths);
         assert.ok(AGENT_ENDPOINTS.generate in document.paths);
         assert.ok(AGENT_ENDPOINTS.create_generate_job in document.paths);
         assert.ok(AGENT_ENDPOINTS.job in document.paths);
@@ -800,6 +814,7 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentPageRequestDiagnosticsCapabilities' in document.components.schemas);
         assert.ok('AppLogRetentionMetadata' in document.components.schemas);
         assert.ok('AgentJobCapabilities' in document.components.schemas);
+        assert.ok('AgentOrchestrationCapabilities' in document.components.schemas);
         assert.ok('AgentRoutingRules' in document.components.schemas);
         assert.ok('AgentRoutingRule' in document.components.schemas);
         assert.ok('AgentErrorDiagnostics' in document.components.schemas);
@@ -814,6 +829,8 @@ describe('buildAgentCapabilities', () => {
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['403']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['429']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['422']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.create_image_request].post.responses['202']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.create_image_request].post.responses['409']);
         assert.ok(document.paths[AGENT_ENDPOINTS.create_generate_job].post.responses['202']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['409']);

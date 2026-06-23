@@ -45,6 +45,7 @@ const DEFAULT_OUTPUT_FORMAT = 'webp';
 const DEFAULT_OUTPUT_COMPRESSION = 100;
 const DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
 const PAGE_SSE_ENDPOINT = '/api/images';
+const SERVER_ORCHESTRATED_TRANSPORT = 'server_orchestrated';
 const GENERATE_PRESETS = {
     '1k-smoke-agent': ['--agent', '--size', '1024x1024', '--quality', 'low', '--stream-mode', 'non_stream'],
     '4k-agent-nonstream': ['--agent', '--size', '3840x2160', '--quality', 'high', '--stream-mode', 'non_stream'],
@@ -182,8 +183,22 @@ try {
 }
 
 try {
-    if (shouldUseJobPolling(capabilities, options.routeMode)) {
-        await runGenerateJob();
+    if (shouldUseServerOrchestration(capabilities, requestBody, options.routeMode)) {
+        await runGenerateJob({
+            createEndpoint: AGENT_ENDPOINTS.create_image_request,
+            routing: {
+                transport: SERVER_ORCHESTRATED_TRANSPORT,
+                endpoint: AGENT_ENDPOINTS.create_image_request
+            }
+        });
+    } else if (shouldUseJobPolling(capabilities, options.routeMode)) {
+        await runGenerateJob({
+            createEndpoint: AGENT_ENDPOINTS.create_generate_job,
+            routing: {
+                transport: 'agent_job_polling',
+                endpoint: AGENT_ENDPOINTS.create_generate_job
+            }
+        });
     } else if (shouldUsePageSse(capabilities, requestBody, options.routeMode)) {
         try {
             const result = await runPageSseRequest();
@@ -497,6 +512,9 @@ function buildDryRunVerificationScope() {
 }
 
 function dryRunEndpoint(body, routeMode) {
+    if (routeMode === 'auto' && shouldPreferServerOrchestration(body)) {
+        return `${baseUrl}${AGENT_ENDPOINTS.create_image_request}`;
+    }
     if (routeMode === 'job') return `${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`;
     if (routeMode === 'agent') return `${baseUrl}${AGENT_ENDPOINTS.generate}`;
     if (routeMode === 'page_sse') return `${baseUrl}${PAGE_SSE_ENDPOINT}`;
@@ -506,6 +524,15 @@ function dryRunEndpoint(body, routeMode) {
 }
 
 function buildGenerateRoutingGuidance(body, routeMode) {
+    if (routeMode === 'auto' && shouldPreferServerOrchestration(body)) {
+        return {
+            recommended_endpoint: AGENT_ENDPOINTS.create_image_request,
+            transport: SERVER_ORCHESTRATED_TRANSPORT,
+            strength: 'recommended',
+            result_mode: 'job_polling',
+            reason: 'Agent 客户端只提交生成意图；服务端负责选择内部执行路径和轮询结果。'
+        };
+    }
     if (routeMode === 'job') {
         return {
             recommended_endpoint: AGENT_ENDPOINTS.create_generate_job,
@@ -1147,12 +1174,14 @@ function buildPageSseDiagnostics(state) {
     };
 }
 
-async function runGenerateJob() {
+async function runGenerateJob(options = {}) {
+    const createEndpoint = options.createEndpoint || AGENT_ENDPOINTS.create_generate_job;
+    const routing = options.routing || { transport: 'agent_job_polling', endpoint: createEndpoint };
     let lastResult;
     let lastRetryAfter = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const { response, result } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`, {
+        const { response, result } = await fetchJson(`${baseUrl}${createEndpoint}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1167,10 +1196,7 @@ async function runGenerateJob() {
             const jobResult = await pollJobResult(result?.job);
             console.log(
                 JSON.stringify(
-                    buildSuccessOutput(enrichImageUrls(jobResult), {
-                        transport: 'agent_job_polling',
-                        endpoint: AGENT_ENDPOINTS.create_generate_job
-                    }, completeScriptTiming(scriptTiming)),
+                    buildSuccessOutput(enrichImageUrls(jobResult), routing, completeScriptTiming(scriptTiming)),
                     null,
                     2
                 )
@@ -1189,7 +1215,7 @@ async function runGenerateJob() {
         JSON.stringify(
             buildFailureOutput(
                 { ...lastResult, retry_after: lastRetryAfter },
-                { transport: 'agent_job_polling', endpoint: AGENT_ENDPOINTS.create_generate_job }
+                routing
             ),
             null,
             2
@@ -1240,7 +1266,23 @@ async function pollJobResult(job) {
 
 async function runContractCheck(capabilitiesValue) {
     const checks = [];
-    const { response, result } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.generate}`, {
+    checks.push(await checkContractEndpoint(AGENT_ENDPOINTS.generate));
+
+    if (shouldRequireServerOrchestrationContract()) {
+        checks.push(await checkContractEndpoint(readRequiredOrchestrationEndpoint(capabilitiesValue)));
+    } else if (supportsServerOrchestration(capabilitiesValue)) {
+        checks.push(await checkContractEndpoint(readOrchestrationEndpoint(capabilitiesValue)));
+    }
+
+    if (supportsJobPolling(capabilitiesValue)) {
+        checks.push(await checkContractEndpoint(AGENT_ENDPOINTS.create_generate_job));
+    }
+
+    console.log(JSON.stringify({ ok: true, billable: false, checks }, null, 2));
+}
+
+async function checkContractEndpoint(endpoint) {
+    const { response, result } = await fetchJson(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1249,41 +1291,61 @@ async function runContractCheck(capabilitiesValue) {
         body: JSON.stringify(requestBody),
         timeoutMs
     });
-    if (response.status === 400 && result?.error?.code === 'idempotency_key_required') {
-        checks.push({ endpoint: AGENT_ENDPOINTS.generate, status: response.status, error_code: result.error.code });
-    } else {
-        console.error(JSON.stringify({ ok: false, billable: false, status: response.status, result }, null, 2));
+    if (response.status !== 400 || result?.error?.code !== 'idempotency_key_required') {
+        console.error(JSON.stringify({ ok: false, billable: false, endpoint, status: response.status, result }, null, 2));
         process.exit(1);
     }
+    return { endpoint, status: response.status, error_code: result.error.code };
+}
 
-    if (supportsJobPolling(capabilitiesValue)) {
-        const jobCheck = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...authHeaders()
-            },
-            body: JSON.stringify(requestBody),
-            timeoutMs
-        });
-        if (jobCheck.response.status !== 400 || jobCheck.result?.error?.code !== 'idempotency_key_required') {
-            console.error(
-                JSON.stringify(
-                    { ok: false, billable: false, status: jobCheck.response.status, result: jobCheck.result },
-                    null,
-                    2
-                )
-            );
-            process.exit(1);
-        }
-        checks.push({
-            endpoint: AGENT_ENDPOINTS.create_generate_job,
-            status: jobCheck.response.status,
-            error_code: jobCheck.result.error.code
-        });
+function readOrchestrationEndpoint(capabilitiesValue) {
+    const endpoint = capabilitiesValue?.orchestration?.endpoint;
+    if (typeof endpoint !== 'string' || !endpoint.startsWith('/')) {
+        console.error(
+            JSON.stringify(
+                {
+                    ok: false,
+                    billable: false,
+                    error: {
+                        code: 'invalid_orchestration_endpoint',
+                        message: 'capabilities.orchestration.endpoint 必须是以 / 开头的路径。'
+                    },
+                    orchestration: capabilitiesValue?.orchestration ?? null
+                },
+                null,
+                2
+            )
+        );
+        process.exit(1);
     }
+    return endpoint;
+}
 
-    console.log(JSON.stringify({ ok: true, billable: false, checks }, null, 2));
+function shouldRequireServerOrchestrationContract() {
+    return options.routeMode === 'auto' && shouldPreferServerOrchestration(requestBody);
+}
+
+function readRequiredOrchestrationEndpoint(capabilitiesValue) {
+    if (!supportsServerOrchestration(capabilitiesValue)) {
+        console.error(
+            JSON.stringify(
+                {
+                    ok: false,
+                    billable: false,
+                    error: {
+                        code: 'orchestration_required',
+                        message:
+                            '默认 generate 需要 capabilities.orchestration.supported=true 且 transport_selection=server_owned。'
+                    },
+                    orchestration: capabilitiesValue?.orchestration ?? null
+                },
+                null,
+                2
+            )
+        );
+        process.exit(1);
+    }
+    return readOrchestrationEndpoint(capabilitiesValue);
 }
 
 async function fetchJson(url, init) {
@@ -1349,8 +1411,23 @@ function supportsJobPolling(capabilitiesValue) {
     );
 }
 
+function supportsServerOrchestration(capabilitiesValue) {
+    return Boolean(
+        capabilitiesValue?.orchestration?.supported === true &&
+            capabilitiesValue.orchestration.transport_selection === 'server_owned'
+    );
+}
+
 function supportsPageSse(capabilitiesValue) {
     return Boolean(capabilitiesValue?.agent_streaming?.page_sse?.supported === true);
+}
+
+function shouldUseServerOrchestration(capabilitiesValue, request, routeMode) {
+    if (routeMode !== 'auto' || !shouldPreferServerOrchestration(request)) return false;
+    if (!supportsServerOrchestration(capabilitiesValue)) {
+        throw new Error('服务 capabilities 未声明 orchestration.supported=true，不能调用统一生成入口。');
+    }
+    return true;
 }
 
 function shouldUseJobPolling(capabilitiesValue, routeMode) {
@@ -1378,6 +1455,10 @@ function shouldUsePageSse(capabilitiesValue, request, routeMode) {
 
 function isLargeGenerate(request) {
     return readMaxImageEdge(request.size) > 2048;
+}
+
+function shouldPreferServerOrchestration(request) {
+    return !hasPageOnlyGenerateOptions(request);
 }
 
 function isPageSseAllowed(request) {

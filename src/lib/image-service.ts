@@ -1,4 +1,4 @@
-import { mimeTypeForOutputFormat, readImageDimensions, writeFileAtomic } from './agent-file-utils';
+import { detectImageFormat, readImageDimensions, writeFileAtomic } from './agent-file-utils';
 import {
     createImageResult,
     type StorageMode,
@@ -92,21 +92,22 @@ export async function persistOpenAiImages(options: {
             throw new MissingOpenAiImageDataError(index);
         }
         const buffer = Buffer.from(b64Json, 'base64');
-        const filename = createImageFilename(batchId, index, options.outputFormat);
+        const detectedFormat = detectImageFormat(buffer, options.outputFormat);
+        const filename = createImageFilename(batchId, index, detectedFormat.outputFormat);
         const filepath = path.join(outputDir, filename);
         if (options.storageMode === 'fs') {
             await writeFileAtomic(filepath, buffer);
         }
         const dimensions = readImageDimensions(buffer);
-        const legacyResult = createImageResult(filename, b64Json, options.outputFormat, options.storageMode);
+        const legacyResult = createImageResult(filename, b64Json, detectedFormat.outputFormat, options.storageMode);
         persisted.push({
             filename,
             b64Json,
             ...(options.includeBase64 ? { responseJson: b64Json } : {}),
             ...(legacyResult.path ? { path: legacyResult.path } : {}),
-            outputFormat: options.outputFormat,
+            outputFormat: detectedFormat.outputFormat,
             filepath,
-            mimeType: mimeTypeForOutputFormat(options.outputFormat),
+            mimeType: detectedFormat.mimeType,
             sizeBytes: buffer.byteLength,
             width: dimensions.width,
             height: dimensions.height

@@ -145,6 +145,31 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
+            [AGENT_ENDPOINTS.create_image_request]: {
+                post: {
+                    summary: '提交服务端编排的 Agent 图片生成意图',
+                    security: agentSecurity,
+                    parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }],
+                    requestBody: {
+                        required: true,
+                        ...jsonContent('#/components/schemas/GenerateRequest')
+                    },
+                    responses: {
+                        '200': jsonContent('#/components/schemas/AgentJobStatusResponse'),
+                        '202': {
+                            ...jsonContent('#/components/schemas/AgentJobStatusResponse'),
+                            headers: {
+                                'Retry-After': { schema: { type: 'integer', minimum: 1 } }
+                            }
+                        },
+                        '400': jsonContent('#/components/schemas/AgentError'),
+                        '409': jsonContent('#/components/schemas/AgentError'),
+                        ...commonAgentErrors,
+                        '422': jsonContent('#/components/schemas/AgentError'),
+                        '500': jsonContent('#/components/schemas/AgentError')
+                    }
+                }
+            },
             [AGENT_ENDPOINTS.create_generate_job]: {
                 post: {
                     summary: '创建 Agent 图片生成 job',
@@ -408,6 +433,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'limits',
                         'model_limits',
                         'agent_streaming',
+                        'orchestration',
                         'routing_rules',
                         'agent_jobs',
                         'supported',
@@ -624,6 +650,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         model_limits: { $ref: '#/components/schemas/AgentModelLimits' },
                         agent_streaming: { $ref: '#/components/schemas/AgentStreamingCapabilities' },
+                        orchestration: { $ref: '#/components/schemas/AgentOrchestrationCapabilities' },
                         routing_rules: { $ref: '#/components/schemas/AgentRoutingRules' },
                         agent_jobs: { $ref: '#/components/schemas/AgentJobCapabilities' },
                         supported: {
@@ -1045,7 +1072,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 },
                                 agent_usage: {
                                     type: 'string',
-                                    enum: ['recommended_for_high_resolution_generate_edit_and_complex_batch']
+                                    enum: ['explicit_for_generate_recommended_for_high_resolution_edit_and_complex_batch']
                                 }
                             }
                         }
@@ -1090,7 +1117,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         strength: {
                             type: 'string',
-                            enum: ['default', 'recommended'] satisfies AgentRoutingStrength[]
+                            enum: ['default', 'recommended', 'explicit'] satisfies AgentRoutingStrength[]
                         },
                         action: { $ref: '#/components/schemas/AgentRoutingAction' },
                         reason: { type: 'string' }
@@ -1137,7 +1164,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         strength: {
                             type: 'string',
-                            enum: ['default', 'recommended'] satisfies AgentRoutingStrength[]
+                            enum: ['default', 'recommended', 'explicit'] satisfies AgentRoutingStrength[]
                         },
                         fallback_endpoint: { type: 'string' },
                         fallback_mode: {
@@ -1177,6 +1204,46 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         states: { type: 'array', items: { type: 'string', enum: AGENT_JOB_STATES } },
                         current_guidance: { type: 'string' }
                     }
+                },
+                AgentOrchestrationCapabilities: {
+                    type: 'object',
+                    required: [
+                        'supported',
+                        'policy',
+                        'endpoint',
+                        'client_contract',
+                        'transport_selection',
+                        'result_mode',
+                        'hidden_controls',
+                        'diagnostics',
+                        'current_guidance'
+                    ],
+                    properties: {
+                        supported: { type: 'boolean', const: true },
+                        policy: {
+                            type: 'string',
+                            enum: ['server_orchestrated_generate_v1']
+                        },
+                        endpoint: { type: 'string', const: AGENT_ENDPOINTS.create_image_request },
+                        client_contract: { type: 'string', enum: ['intent_only'] },
+                        transport_selection: { type: 'string', enum: ['server_owned'] },
+                        result_mode: { type: 'string', enum: ['job_polling'] },
+                        hidden_controls: { type: 'array', items: { type: 'string' } },
+                        diagnostics: {
+                            type: 'object',
+                            required: ['job_result', 'request_lookup'],
+                            properties: {
+                                job_result: { type: 'string', const: AGENT_ENDPOINTS.job_result },
+                                request_lookup: {
+                                    type: 'string',
+                                    const: AGENT_ENDPOINTS.agent_request_diagnostics_lookup
+                                }
+                            },
+                            additionalProperties: false
+                        },
+                        current_guidance: { type: 'string' }
+                    },
+                    additionalProperties: false
                 },
                 GenerateRequest: {
                     type: 'object',

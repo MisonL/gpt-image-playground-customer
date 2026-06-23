@@ -1113,6 +1113,40 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('creates a server-orchestrated image request job and records the orchestration endpoint', async () => {
+        const { createImageRequest, getJobResult } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const created = await createImageRequest(
+                agentImageRequest('route-orchestrated-key', { prompt: 'server orchestrated generate' })
+            );
+            assert.equal(created.status, 202);
+            const createdBody = await created.json();
+            assert.equal(createdBody.job.state, 'running');
+            assert.equal(createdBody.job.idempotency_key, 'route-orchestrated-key');
+
+            const result = await waitForJobResult(getJobResult, createdBody.job.id);
+            assert.equal(result.status, 200);
+            const resultBody = await result.json();
+            assert.equal(resultBody.request_id, createdBody.job.id);
+            assert.equal(resultBody.cached, false);
+            assert.equal(resultBody.images.length, 1);
+            assert.equal(resultBody.execution.transport, 'agent_job_polling');
+            assert.equal(resultBody.execution.endpoint, '/api/agent/image-requests');
+            assert.equal(resultBody.execution.route_mode, 'job');
+            assert.equal(upstreamCalls, 1);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('does not consume generate job idempotency keys for local profile validation failures', async () => {
         const { createGenerateJob, getJobResult } = await loadAgentRoutes();
         let upstreamCalls = 0;
@@ -2320,7 +2354,7 @@ describe('Agent route integration', () => {
             { params: Promise.resolve({ id: artifactId }) }
         );
         assert.equal(allowed.status, 200);
-        assert.equal(allowed.headers.get('content-type'), 'image/webp');
+        assert.equal(allowed.headers.get('content-type'), 'image/png');
         assert.ok((await allowed.arrayBuffer()).byteLength > 0);
 
         const metadata = await getArtifact(
@@ -2332,6 +2366,8 @@ describe('Agent route integration', () => {
         assert.equal(metadata.status, 200);
         const metadataBody = await metadata.json();
         assert.equal(metadataBody.artifact.id, artifactId);
+        assert.equal(metadataBody.artifact.output_format, 'png');
+        assert.equal(metadataBody.artifact.mime_type, 'image/png');
         assert.equal('filepath' in metadataBody.artifact, false);
 
         const deleted = await deleteArtifact(
@@ -3012,6 +3048,7 @@ async function loadAgentRoutes() {
     const artifactRoute = await import('./artifacts/[id]/route');
     const artifactContentRoute = await import('./artifacts/[id]/content/route');
     const capabilitiesRoute = await import('./capabilities/route');
+    const imageRequestRoute = await import('./image-requests/route');
     const createGenerateJobRoute = await import('./jobs/images/generate/route');
     const jobRoute = await import('./jobs/[id]/route');
     const jobResultRoute = await import('./jobs/[id]/result/route');
@@ -3026,6 +3063,7 @@ async function loadAgentRoutes() {
         getCapabilities: () => capabilitiesRoute.GET(),
         generateImage: (request: Request) => generateRoute.POST(asNextRequest(request)),
         editImage: (request: Request) => editRoute.POST(asNextRequest(request)),
+        createImageRequest: (request: Request) => imageRequestRoute.POST(asNextRequest(request)),
         createGenerateJob: (request: Request) => createGenerateJobRoute.POST(asNextRequest(request)),
         getJob: (request: Request, context: AgentRouteContext) => jobRoute.GET(asNextRequest(request), context),
         getJobResult: (request: Request, context: AgentRouteContext) =>
@@ -3080,6 +3118,24 @@ function agentJobJsonRequest(
     const requestBody =
         'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
     return new Request('http://localhost/api/agent/jobs/images/generate', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKey,
+            ...headers
+        },
+        body: JSON.stringify(requestBody)
+    });
+}
+
+function agentImageRequest(
+    idempotencyKey: string,
+    body: Record<string, unknown>,
+    headers: Record<string, string> = {}
+) {
+    const requestBody =
+        'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
+    return new Request('http://localhost/api/agent/image-requests', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
