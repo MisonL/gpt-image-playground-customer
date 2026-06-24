@@ -7,6 +7,12 @@ import {
     validateAgentGenerateRequest
 } from './agent-api-contracts';
 import { AGENT_ENDPOINTS } from './agent-api-paths.mjs';
+import {
+    buildAgentChannelRequestModeDecision,
+    createAgentChannelRequestModePlan,
+    selectAgentChannelCredential,
+    type AgentChannelRequestModePlan
+} from './agent-channel-request-mode';
 import { assertArtifactFilepathAllowed, deleteArtifactFileIfAllowed } from './agent-file-utils';
 import {
     artifactRecordToResponseItem,
@@ -20,16 +26,20 @@ import {
     type BeginAgentRequestResult,
     type AgentStateStore
 } from './agent-state-store';
-import { AgentApiError, normalizeAgentError, storedAgentErrorResponse, type AgentErrorBody } from './api-error-response';
-import type { AgentErrorDiagnostics } from './api-error-response';
 import {
-    buildAgentChannelRequestModeDecision,
-    createAgentChannelRequestModePlan,
-    selectAgentChannelCredential,
-    type AgentChannelRequestModePlan
-} from './agent-channel-request-mode';
+    AgentApiError,
+    normalizeAgentError,
+    storedAgentErrorResponse,
+    type AgentErrorBody
+} from './api-error-response';
+import type { AgentErrorDiagnostics } from './api-error-response';
 import { appLogger } from './app-logger';
 import type { ChannelCapacityLease } from './channel-capacity-queue';
+import {
+    isStreamingChannelRequestMode,
+    type ChannelRequestMode,
+    type ChannelRequestModeDecision
+} from './channel-request-mode';
 import {
     type ChannelCredential,
     type ChannelFailureReport,
@@ -38,11 +48,6 @@ import {
     isCredentialFailure,
     resolveEffectiveCredential
 } from './channel-router';
-import {
-    isStreamingChannelRequestMode,
-    type ChannelRequestMode,
-    type ChannelRequestModeDecision
-} from './channel-request-mode';
 import {
     RequestValidationError,
     assertMaskCompatibility,
@@ -64,13 +69,7 @@ import {
     MissingOpenAiImageDataError,
     persistOpenAiImages as persistSharedOpenAiImages
 } from './image-service';
-import {
-    parseImageStreamModeValue,
-    parseImageStreamingStrategyValue,
-    resolveImageStreamEnabled,
-    type ImageStreamMode,
-    type ImageStreamingStrategy
-} from './image-upstream-strategy';
+import { collectOpenAiImagesFromStream } from './image-stream-collector';
 import {
     readImageUpstreamProfile,
     mergeUpstreamHeadersWithFixed,
@@ -79,21 +78,27 @@ import {
     type PartialImagesCount,
     type UpstreamRequestHeaders
 } from './image-upstream-profile';
-import { collectOpenAiImagesFromStream } from './image-stream-collector';
+import {
+    parseImageStreamModeValue,
+    parseImageStreamingStrategyValue,
+    resolveImageStreamEnabled,
+    type ImageStreamMode,
+    type ImageStreamingStrategy
+} from './image-upstream-strategy';
 import { createImagesApiGenerateStream } from './images-api-stream';
+import { buildOpenAIImageRequestOptions, createOpenAIImageClientOptions } from './openai-image-transport';
 import {
     createResponsesImageStream,
     generateImageWithResponsesBackend,
     type ResponsesImageGenerateInput
 } from './responses-image-backend';
-import { buildOpenAIImageRequestOptions, createOpenAIImageClientOptions } from './openai-image-transport';
 import { getServerChannelState } from './server-channel-router';
-import type { StreamingAvailabilityKey } from './streaming-availability';
 import { readBooleanEnv } from './server-runtime';
+import type { StreamingAvailabilityKey } from './streaming-availability';
 import crypto from 'crypto';
 import fs from 'fs/promises';
-import OpenAI from 'openai';
 import { NextResponse } from 'next/server';
+import OpenAI from 'openai';
 
 export type AgentRequestExecutionResult = {
     response: AgentImageResponse;
@@ -309,10 +314,7 @@ export async function prepareAgentEdit(formData: FormData, headers: Headers): Pr
     return { credentialContext, prompt, model, n, size, quality, responseMode, streamRequest, imageFiles, maskFile };
 }
 
-function buildOpenAiRequestOptions(
-    context: CredentialContext,
-    abortSignal?: AbortSignal
-): OpenAI.RequestOptions {
+function buildOpenAiRequestOptions(context: CredentialContext, abortSignal?: AbortSignal): OpenAI.RequestOptions {
     return buildOpenAIImageRequestOptions({
         abortSignal,
         headers: mergeUpstreamHeadersWithFixed(context.upstreamHeaders, {})
@@ -384,17 +386,15 @@ export async function executeAgentGenerate(options: {
     transport?: AgentExecutionTransportContext;
     abortSignal?: AbortSignal;
 }): Promise<AgentRequestExecutionResult> {
-    const credentialContext = options.preparation?.credentialContext ?? prepareAgentGenerate(options.request, options.headers).credentialContext;
+    const credentialContext =
+        options.preparation?.credentialContext ??
+        prepareAgentGenerate(options.request, options.headers).credentialContext;
     const startedAtMs = Date.now();
     const startedAt = isoDate(new Date(startedAtMs));
     let channelLease: ChannelCapacityLease | undefined;
     try {
         channelLease = await acquireAgentChannelCapacity(credentialContext, options.abortSignal);
-        const result = await executeAgentGenerateUpstream(
-            options.request,
-            credentialContext,
-            options.abortSignal
-        );
+        const result = await executeAgentGenerateUpstream(options.request, credentialContext, options.abortSignal);
         channelLease?.release();
         channelLease = undefined;
         return await persistOpenAiImages({
@@ -517,7 +517,10 @@ function validateAgentGenerateAgainstUpstreamProfile(
             422
         );
     }
-    if (request.partial_images < upstreamProfile.partialImages.min || request.partial_images > upstreamProfile.partialImages.max) {
+    if (
+        request.partial_images < upstreamProfile.partialImages.min ||
+        request.partial_images > upstreamProfile.partialImages.max
+    ) {
         throw new RequestValidationError(
             `partial_images 必须在 ${upstreamProfile.partialImages.min} 到 ${upstreamProfile.partialImages.max} 之间。`,
             422
@@ -687,7 +690,7 @@ export async function executeAgentEdit(options: {
     const startedAt = isoDate(new Date(startedAtMs));
     let channelLease: ChannelCapacityLease | undefined;
     try {
-        const preparation = options.preparation ?? await prepareAgentEdit(options.formData, options.headers);
+        const preparation = options.preparation ?? (await prepareAgentEdit(options.formData, options.headers));
         credentialContext = preparation.credentialContext;
         const editParams: OpenAI.Images.ImageEditParamsNonStreaming = {
             model: preparation.model,
@@ -947,7 +950,7 @@ export async function hydrateAgentReplayResponse(
     };
 }
 
-function createOpenAiClient(headers: Headers, requestModePlan?: AgentChannelRequestModePlan): CredentialContext {
+function createOpenAiClient(headers: Headers, requestModePlan: AgentChannelRequestModePlan): CredentialContext {
     const serverChannelRouter = getServerChannelState().router;
     const selection = selectAgentChannelCredential({
         router: serverChannelRouter,
@@ -1026,16 +1029,20 @@ function buildAgentExecutionDiagnostics(
             ? { selected_channel_id: context.selectedCredential.channelId }
             : {}),
         ...(upstreamHost ? { upstream_host: upstreamHost } : {}),
-        ...(failureReport?.cooldownApplied ? {
-            retry_after_ms: failureReport.retryAfterMs,
-            cooldown_until: isoDate(new Date(failureReport.cooldownUntil)),
-            cooldown_target: {
-                channel_id: failureReport.target.channelId,
-                ...(failureReport.target.credentialId ? { credential_id: failureReport.target.credentialId } : {}),
-                ...(failureReport.target.requestMode ? { request_mode: failureReport.target.requestMode } : {})
-            },
-            channel_cooldown_scope: failureReport.scope
-        } : {})
+        ...(failureReport?.cooldownApplied
+            ? {
+                  retry_after_ms: failureReport.retryAfterMs,
+                  cooldown_until: isoDate(new Date(failureReport.cooldownUntil)),
+                  cooldown_target: {
+                      channel_id: failureReport.target.channelId,
+                      ...(failureReport.target.credentialId
+                          ? { credential_id: failureReport.target.credentialId }
+                          : {}),
+                      ...(failureReport.target.requestMode ? { request_mode: failureReport.target.requestMode } : {})
+                  },
+                  channel_cooldown_scope: failureReport.scope
+              }
+            : {})
     };
 }
 

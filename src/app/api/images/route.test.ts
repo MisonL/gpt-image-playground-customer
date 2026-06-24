@@ -156,6 +156,37 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
+    it('fails explicit page stream requests instead of falling back to non-streaming request modes', async () => {
+        const { POST } = await import('./route');
+        const upstreamBodies: string[] = [];
+        const upstream = await startImagesJsonUpstream(async (body, _url, request) => {
+            if (request.method === 'POST') {
+                upstreamBodies.push(body);
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-only';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'stream',
+                    imageStreamingStrategy: 'openai-sse'
+                })
+            );
+
+            assert.equal(response.status, 503);
+            const body = (await response.json()) as { error?: string };
+            assert.match(body.error || '', /images-sse/);
+            assert.equal(upstreamBodies.length, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('keeps the stable SSE contract for SDK-parsed multi-image results without partial events', async () => {
         const { POST } = await import('./route');
         const upstream = await startStreamingImageUpstream(async () => [
@@ -781,13 +812,13 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
     it('rejects the experimental Responses API backend when the feature flag is disabled', async () => {
         const { POST } = await import('./route');
         const response = await POST(
-                imageFormRequest({
-                    apiBaseUrl: 'http://127.0.0.1:1/v1',
-                    apiKey: 'test-key',
-                    stream: false,
-                    streamMode: 'non_stream',
-                    imageBackend: 'responses'
-                })
+            imageFormRequest({
+                apiBaseUrl: 'http://127.0.0.1:1/v1',
+                apiKey: 'test-key',
+                stream: false,
+                streamMode: 'non_stream',
+                imageBackend: 'responses'
+            })
         );
 
         assert.equal(response.status, 400);
@@ -799,13 +830,13 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
         const { POST } = await import('./route');
         const response = await POST(
-                imageFormRequest({
-                    apiBaseUrl: 'http://127.0.0.1:1/v1',
-                    apiKey: 'test-key',
-                    stream: false,
-                    streamMode: 'non_stream',
-                    imageBackend: 'responses'
-                })
+            imageFormRequest({
+                apiBaseUrl: 'http://127.0.0.1:1/v1',
+                apiKey: 'test-key',
+                stream: false,
+                streamMode: 'non_stream',
+                imageBackend: 'responses'
+            })
         );
 
         assert.equal(response.status, 400);
@@ -819,14 +850,14 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         const { POST } = await import('./route');
 
         const multiImage = await POST(
-                imageFormRequest({
-                    apiBaseUrl: 'http://127.0.0.1:1/v1',
-                    apiKey: 'test-key',
-                    stream: false,
-                    streamMode: 'non_stream',
-                    imageBackend: 'responses',
-                    n: '2'
-                })
+            imageFormRequest({
+                apiBaseUrl: 'http://127.0.0.1:1/v1',
+                apiKey: 'test-key',
+                stream: false,
+                streamMode: 'non_stream',
+                imageBackend: 'responses',
+                n: '2'
+            })
         );
         assert.equal(multiImage.status, 400);
         assert.match(String(((await multiImage.json()) as Record<string, unknown>).error), /单张生成/);
@@ -837,15 +868,15 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
         const { POST } = await import('./route');
         const edit = await POST(
-                imageFormRequest({
-                    apiBaseUrl: 'http://127.0.0.1:1/v1',
-                    apiKey: 'test-key',
-                    stream: false,
-                    streamMode: 'non_stream',
-                    imageBackend: 'responses',
-                    n: '2',
-                    mode: 'edit'
-                })
+            imageFormRequest({
+                apiBaseUrl: 'http://127.0.0.1:1/v1',
+                apiKey: 'test-key',
+                stream: false,
+                streamMode: 'non_stream',
+                imageBackend: 'responses',
+                n: '2',
+                mode: 'edit'
+            })
         );
         assert.equal(edit.status, 400);
         assert.match(String(((await edit.json()) as Record<string, unknown>).error), /单张编辑/);
@@ -1331,7 +1362,10 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             };
             assert.equal(upstreamJson.tools?.[0]?.type, 'image_generation');
             assert.equal(upstreamJson.tools?.[0]?.action, 'edit');
-            assert.equal(upstreamJson.input?.[0]?.content?.some((item) => item.type === 'input_image'), true);
+            assert.equal(
+                upstreamJson.input?.[0]?.content?.some((item) => item.type === 'input_image'),
+                true
+            );
         } finally {
             await upstream.close();
         }
