@@ -138,7 +138,7 @@ OPENAI_CHANNEL_3_UPSTREAM_PROFILE=matsca
 注意：
 
 - 自定义 API URL 必须同时填写自定义 API Key，避免服务端密钥被发送到未知地址。
-- `OPENAI_CHANNEL_N_REQUEST_MODES` 是管理员基于真实上游 smoke 设置的服务端白名单；全局默认可用 `OPENAI_UPSTREAM_REQUEST_MODES`。`/api/runtime-capabilities` 的 `channelRouting.requestModeControls`、`channelRouting.requestModeHealth` 和 Agent capabilities 的 `request_mode_controls` 会暴露配置入口、健康覆盖和对应真实 smoke gate。Agent 客户端只提交业务意图，不应自行选择 Images、Responses、SSE 或非流式路径。真实执行后可从 `execution.channel_request_mode`、`execution.channel_request_mode_fallback_applied` 和 `execution.route_decision` 读取服务端实际选路结果；失败冷却若能关联到本次服务端 request mode，会只冷却该渠道或凭证的对应 request mode，并在 `error.diagnostics.cooldown_target.request_mode` 暴露。
+- `OPENAI_CHANNEL_N_REQUEST_MODES` 是管理员基于真实上游 smoke 设置的服务端白名单；全局默认可用 `OPENAI_UPSTREAM_REQUEST_MODES`。`/api/runtime-capabilities` 的 `channelRouting.requestModeControls`、`channelRouting.requestModeHealth` 和 Agent capabilities 的 `request_mode_controls` 会暴露配置入口、健康覆盖和对应真实 smoke gate。Agent 客户端只提交业务意图，不应自行选择 Images、Responses、SSE 或非流式路径。`stream_mode=auto` 可由服务端在 SSE 不可用时显式退到非流式并标记 fallback；`stream_mode=stream` 或显式页面 SSE 诊断必须失败可见，不会静默降级。真实执行后可从 `execution.channel_request_mode`、`execution.channel_request_mode_fallback_applied` 和 `execution.route_decision` 读取服务端实际选路结果；失败冷却若能关联到本次服务端 request mode，会只冷却该渠道或凭证的对应 request mode，并在 `error.diagnostics.cooldown_target.request_mode` 暴露。
 - 渠道恢复探测使用非计费 `GET /models` 只确认 host、鉴权和 models 端点恢复；它不能替代 request mode 的真实 Images/Responses/SSE smoke。管理员应以真实 smoke 结果决定 `OPENAI_CHANNEL_N_REQUEST_MODES`。
 - Docker compose 本身不把默认图片后端改成 Responses；未在 `.env.local` 显式配置时仍是 `images-api` 和 `auto`。
 - Responses image backend 需要 `ENABLE_RESPONSES_IMAGE_BACKEND=true` 和 `OPENAI_RESPONSES_API_MODEL`。页面请求也可以用 `responsesModel`、`responses_model`、`gptModel` 或 `gpt_model` 覆盖单次 `/responses` 顶层模型；这些字段只影响本项目的 `responses-image-generation` 路径，不会改变兼容上游自身 `/v1/images/generations` 桥接层内部选择的模型。
@@ -345,12 +345,12 @@ Hugging Face Space 免费层部署见 [docs/deployment/huggingface-space-free.md
 | `npm run verify` | 运行提交前基线。 |
 | `npm run docker:cleanup-fixtures` | 清理遗留的整仓挂载 Docker fixture 容器。 |
 | `npm run first-run` | 首次配置就绪检查，默认中文摘要；加 `-- --json` 输出机器可读 JSON。 |
-| `npm run status` | 只读查看 git、Node、部署目标和 Agent 摘要。 |
+| `npm run status` | 只读查看 git、Node、部署目标、Agent 摘要和真实 smoke 配置状态；不执行计费图片请求。 |
 | `npm run doctor` | 运行本机和部署诊断。 |
 | `npm run agent:doctor` | 非计费 Agent 分层诊断；支持 `-- --base-url <url>`。 |
 | `npm run deploy:space` | 上传干净 git HEAD 到固定 HF Space。 |
 
-真实上游 smoke 默认不会触发计费；需要真实生图时必须显式传入 `--allow-billable`。
+真实上游 smoke 默认不会触发计费；`npm run status` 只报告 `configuration_complete` 和 `smoke_state=not_run_by_status` 等配置口径。需要真实生图验证时必须显式传入 `--allow-billable`。
 
 ## 常见问题
 

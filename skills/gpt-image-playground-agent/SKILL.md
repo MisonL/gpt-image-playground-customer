@@ -154,6 +154,7 @@ Authorization: Bearer <token>
 | `summary.responses_page_sse_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + page SSE + `responses-sse` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
 | `summary.responses_agent_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + Agent JSON + `responses-non-stream` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
 | `summary.real_smoke_checks` | `agent:doctor` | 各真实 smoke 的状态汇总，包含 `agent_generate_1k`、`responses_page_sse_generate_1k`、`responses_agent_generate_1k`、`agent_edit_1k` 和 `page_sse_edit_2k`。 |
+| `summary.request_modes` | `agent:doctor` | 管理员 request mode 的配置和真实 smoke 摘要；`billable=false` 时只能证明配置可见，不能当作真实上游通过。 |
 | `request_mode_controls` | `capabilities` | 管理员 request mode 白名单控制面；包含 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、真实 smoke gate 和 `agent_client_policy=diagnostics_only`。 |
 | `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |
 | `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |

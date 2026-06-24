@@ -204,6 +204,7 @@ GET /api/agent/capabilities
 - `agent_streaming.page_sse.auth`：页面 SSE 的独立表单鉴权。`APP_PASSWORD` 已配置时为 `required=true`、`schemes=["form-password-hash"]`、`form_field="passwordHash"`。
 - `agent_streaming.page_sse.client_request_id`：页面 SSE 的请求 ID 契约。脚本会把 `Idempotency-Key` 写入 form-data `clientRequestId`，最大长度以 `max_length` 为准，当前为 `128`。
 - 页面 SSE 或 Responses 路径失败时，如果 `selected_channel_id`、`upstream_host` 为空，通常表示请求没有真正落到可执行渠道；先诊断结构化错误，再用新的 `Idempotency-Key` 显式改路由。
+- `supported.request_modes`：服务端支持的上游请求方式枚举，当前为 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`。该字段描述服务端能力全集，不代表每个管理员渠道都已真实 smoke 通过。
 - `upstream_request_headers.default`：默认上游请求头摘要，包含 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`。
 - `upstream_request_headers.channels`：每个服务端渠道的脱敏请求头摘要。该字段不包含 API key、Authorization 值、Matsca app secret 值或任意 header value。
 - `request_mode_controls`：管理员 request mode 白名单控制面，声明 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、真实 smoke gate 和 `agent_client_policy=diagnostics_only`；Agent 客户端只能用于解释执行结果，不应据此自行选择上游请求方式。
@@ -574,6 +575,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 | `summary.responses_page_sse_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + page SSE + `responses-sse` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
 | `summary.responses_agent_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + Agent JSON + `responses-non-stream` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
 | `summary.real_smoke_checks` | `agent:doctor` | 各真实 smoke 的状态汇总，包含 `agent_generate_1k`、`responses_page_sse_generate_1k`、`responses_agent_generate_1k`、`agent_edit_1k` 和 `page_sse_edit_2k`。 |
+| `summary.request_modes` | `agent:doctor` | 管理员 request mode 的配置和真实 smoke 摘要；`billable=false` 时只能证明配置可见，不能当作真实上游通过。 |
 | `request_mode_controls` | `capabilities` | 管理员 request mode 白名单控制面；包含 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、真实 smoke gate 和 `agent_client_policy=diagnostics_only`。 |
 | `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |
 | `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
