@@ -5,24 +5,31 @@ import net from 'node:net';
 
 import { HF_SPACE_ID, HF_SPACE_URL } from './hf-space-doctor-utils.mjs';
 import { isMainModule, parseJsonPayload, printJson, runCommand, runCommandStrict } from './command-center-utils.mjs';
+import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_ADMIN_CONTROL } from '../src/lib/channel-request-mode-values.mjs';
 
 const REMOTE_STATUS_TIMEOUT_MS = 30_000;
 const LOCAL_ENDPOINT_TIMEOUT_MS = 500;
 const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
-    { id: 'original-images-json', prefix: 'IMAGE_REAL_SMOKE_ORIGINAL' },
-    { id: 'gaoren-images-sse', prefix: 'IMAGE_REAL_SMOKE_GAOREN' },
-    { id: 'sub2api-images-sse', prefix: 'IMAGE_REAL_SMOKE_SUB2API' },
+    { id: 'original-images-json', prefix: 'IMAGE_REAL_SMOKE_ORIGINAL', requestMode: 'images-non-stream' },
+    { id: 'gaoren-images-sse', prefix: 'IMAGE_REAL_SMOKE_GAOREN', requestMode: 'images-sse' },
+    { id: 'sub2api-images-sse', prefix: 'IMAGE_REAL_SMOKE_SUB2API', requestMode: 'images-sse' },
     {
         id: 'sub2api-responses-json',
         prefix: 'IMAGE_REAL_SMOKE_SUB2API_RESPONSES',
         fallbackPrefix: 'IMAGE_REAL_SMOKE_SUB2API',
-        requiresResponsesModel: true
+        requiresResponsesModel: true,
+        requestMode: 'responses-non-stream'
     },
-    { id: 'gpt2image-responses-sse', prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE', requiresResponsesModel: true },
-    { id: 'matsca-images-sse', prefix: 'IMAGE_REAL_SMOKE_MATSCA' }
+    {
+        id: 'gpt2image-responses-sse',
+        prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE',
+        requiresResponsesModel: true,
+        requestMode: 'responses-sse'
+    },
+    { id: 'matsca-images-sse', prefix: 'IMAGE_REAL_SMOKE_MATSCA', requestMode: 'images-sse' }
 ];
 const IMAGE_UPSTREAM_FINAL_GATE_COMMAND =
-    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable';
+    CHANNEL_REQUEST_MODE_ADMIN_CONTROL.finalGateCommand;
 const STATUS_ENV_FILES = [
     { path: '.env.local', override: false },
     { path: '.env.real-smoke.local', override: true }
@@ -152,6 +159,7 @@ export function buildImageUpstreamRealSmokeStatus(env = process.env) {
         const missingEnvAny = readMissingEnvAny(testCase, target);
         return {
             id: testCase.id,
+            request_mode: testCase.requestMode,
             configured: missingEnvAny.length === 0 && target.invalidEnv.length === 0,
             ...(missingEnvAny.length > 0 ? { missing_env_any: missingEnvAny } : {}),
             ...(target.invalidEnv.length > 0 ? { invalid_env: target.invalidEnv } : {})
@@ -174,8 +182,35 @@ export function buildImageUpstreamRealSmokeStatus(env = process.env) {
         invalid_count: invalidCases.length,
         invalid_cases: invalidCases.map((item) => item.id),
         invalid_env: Object.fromEntries(invalidCases.map((item) => [item.id, item.invalid_env])),
+        request_modes: summarizeRealSmokeRequestModes(caseSummaries),
         final_gate_command: IMAGE_UPSTREAM_FINAL_GATE_COMMAND
     };
+}
+
+function summarizeRealSmokeRequestModes(caseSummaries) {
+    return Object.fromEntries(
+        CHANNEL_REQUEST_MODES.map((mode) => {
+            const items = caseSummaries.filter((item) => item.request_mode === mode);
+            const configured = items.filter((item) => item.configured);
+            const missing = items.filter((item) => Array.isArray(item.missing_env_any) && item.missing_env_any.length > 0);
+            const invalid = items.filter((item) => Array.isArray(item.invalid_env) && item.invalid_env.length > 0);
+            return [
+                mode,
+                {
+                    required_count: items.length,
+                    required_cases: items.map((item) => item.id),
+                    configuration_complete: missing.length === 0 && invalid.length === 0,
+                    configured_count: configured.length,
+                    configured_cases: configured.map((item) => item.id),
+                    missing_count: missing.length,
+                    missing_cases: missing.map((item) => item.id),
+                    invalid_count: invalid.length,
+                    invalid_cases: invalid.map((item) => item.id),
+                    smoke_state: 'not_run_by_status'
+                }
+            ];
+        })
+    );
 }
 
 function normalizeLocalHostname(hostname) {

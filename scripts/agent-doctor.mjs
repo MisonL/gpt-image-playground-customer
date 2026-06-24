@@ -7,11 +7,13 @@ import {
     loadPrivateAgentEnvFile,
     resolvePlaygroundBaseUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_SMOKE_CASES } from '../src/lib/channel-request-mode-values.mjs';
 
 const GENERATE_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url));
 const EDIT_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/edit-image.mjs', import.meta.url));
 const AGENT_DOCTOR_TIMEOUT_MS = 75_000;
 const PAGE_SSE_GENERATE_SMOKE_NAME = 'responses_page_sse_generate_1k';
+const RESPONSES_AGENT_GENERATE_SMOKE_NAME = 'responses_agent_generate_1k';
 
 export function buildAgentDoctorArgs() {
     return [GENERATE_SCRIPT, '--contract-check', '--timeout-ms', '60000', 'contract check'];
@@ -131,6 +133,7 @@ function buildSkippedSmoke(options) {
         checks: [
             { name: 'generate_1k', skipped: true, reason: 'requires --allow-billable' },
             { name: PAGE_SSE_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
+            { name: RESPONSES_AGENT_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
             {
                 name: 'edit_1k',
                 skipped: true,
@@ -184,6 +187,26 @@ function runBillableSmoke(options, baseUrl) {
             '--idempotency-key',
             `agent-doctor-responses-page-sse-generate-${Date.now()}`,
             'agent doctor responses page SSE generate smoke'
+        ]),
+        runSmokeCommand(RESPONSES_AGENT_GENERATE_SMOKE_NAME, [
+            GENERATE_SCRIPT,
+            '--base-url',
+            baseUrl,
+            '--allow-billable',
+            '--agent',
+            '--timeout-ms',
+            String(options.timeoutMs),
+            '--size',
+            '1024x1024',
+            '--quality',
+            'low',
+            '--image-backend',
+            'responses-image-generation',
+            '--stream-mode',
+            'non_stream',
+            '--idempotency-key',
+            `agent-doctor-responses-agent-generate-${Date.now()}`,
+            'agent doctor responses non-stream generate smoke'
         ])
     ];
     if (options.editImage) {
@@ -302,7 +325,9 @@ function summarizeCapabilities(body) {
                 : undefined,
         agent_jobs: body?.agent_jobs?.supported === true,
         routing_rules: Boolean(body?.routing_rules),
-        executable_routing_rules: Boolean(body?.routing_rules?.high_resolution_edit?.conditions)
+        executable_routing_rules: Boolean(body?.routing_rules?.high_resolution_edit?.conditions),
+        request_modes_supported: readRequestModeList(body?.supported?.request_modes),
+        request_modes_by_channel: readCapabilitiesRequestModesByChannel(body)
     };
 }
 
@@ -311,7 +336,10 @@ function summarizeRuntime(body) {
         default_stream_mode: body?.streaming?.defaultMode,
         streaming_unavailable_scope: body?.streaming?.unavailableMarkScope,
         responses_image_backend: body?.responsesImageBackend?.enabled === true,
-        streaming_batch_enabled: body?.streamingBatch?.enabled === true
+        streaming_batch_enabled: body?.streamingBatch?.enabled === true,
+        configured_request_modes: readRequestModeList(body?.channelRouting?.configuredRequestModes),
+        effective_request_modes: readRequestModeList(body?.channelRouting?.effectiveRequestModes),
+        effective_request_modes_by_channel: readRuntimeRequestModesByChannel(body)
     };
 }
 
@@ -333,7 +361,11 @@ function summarizeResponsesReadiness(capabilities, runtime) {
         missing_env: requirements?.missing_env || [],
         gpt2image_real_smoke_case: 'gpt2image-responses-sse',
         real_smoke_gate:
+            'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable',
+        real_smoke_gates: [
+            'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-responses-json --allow-billable',
             'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable'
+        ]
     };
 }
 
@@ -352,7 +384,13 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
                 : capabilities.ok,
         page_sse_real_smoke: summarizePageSseSmoke(smoke),
         responses_page_sse_generate_smoke: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
+        responses_agent_generate_smoke: summarizeSmokeCheck(smoke, RESPONSES_AGENT_GENERATE_SMOKE_NAME),
         real_smoke_checks: summarizeSmokeChecks(smoke),
+        request_modes: buildRequestModeSummary({
+            capabilities: capabilities.ok ? capabilities.body : undefined,
+            runtime: runtime.ok ? runtime.body : undefined,
+            smoke
+        }),
         responses_gpt2image_ready:
             capabilities.ok && runtime.ok
                 ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true &&
@@ -382,9 +420,68 @@ function summarizeSmokeChecks(smoke) {
     return {
         agent_generate_1k: summarizeSmokeCheck(smoke, 'generate_1k'),
         responses_page_sse_generate_1k: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
+        responses_agent_generate_1k: summarizeSmokeCheck(smoke, RESPONSES_AGENT_GENERATE_SMOKE_NAME),
         agent_edit_1k: summarizeSmokeCheck(smoke, 'edit_1k'),
         page_sse_edit_2k: summarizeSmokeCheck(smoke, 'page_sse_edit_2k')
     };
+}
+
+function buildRequestModeSummary({ capabilities, runtime, smoke }) {
+    const supported = readRequestModeList(capabilities?.supported?.request_modes);
+    const configured = readRequestModeList(runtime?.channelRouting?.configuredRequestModes);
+    const effective = readRequestModeList(runtime?.channelRouting?.effectiveRequestModes);
+    return {
+        supported,
+        configured,
+        effective,
+        admin_whitelist_by_channel: readCapabilitiesRequestModesByChannel(capabilities),
+        effective_by_channel: readRuntimeRequestModesByChannel(runtime),
+        smoke: Object.fromEntries(
+            CHANNEL_REQUEST_MODES.map((mode) => [mode, summarizeRequestModeSmoke(smoke, mode)])
+        )
+    };
+}
+
+function summarizeRequestModeSmoke(smoke, mode) {
+    const checks = CHANNEL_REQUEST_MODE_SMOKE_CASES[mode] || [];
+    if (checks.length === 0) {
+        return {
+            state: 'skipped',
+            checks: [],
+            billable: false
+        };
+    }
+    const states = checks.map((name) => summarizeSmokeCheck(smoke, name));
+    return {
+        state: states.includes('failed') ? 'failed' : states.includes('passed') ? 'passed' : 'skipped',
+        checks,
+        billable: smoke.skipped !== true
+    };
+}
+
+function readCapabilitiesRequestModesByChannel(body) {
+    const channels = Array.isArray(body?.upstream_request_headers?.channels)
+        ? body.upstream_request_headers.channels
+        : [];
+    return channels.map((channel) => ({
+        channel_id: String(channel?.id || ''),
+        request_modes: readRequestModeList(channel?.request_modes)
+    })).filter((channel) => channel.channel_id);
+}
+
+function readRuntimeRequestModesByChannel(body) {
+    const channels = Array.isArray(body?.channelRouting?.effectiveRequestModesByChannel)
+        ? body.channelRouting.effectiveRequestModesByChannel
+        : [];
+    return channels.map((channel) => ({
+        channel_id: String(channel?.channelId || ''),
+        request_modes: readRequestModeList(channel?.requestModes)
+    })).filter((channel) => channel.channel_id);
+}
+
+function readRequestModeList(value) {
+    if (!Array.isArray(value)) return [];
+    return CHANNEL_REQUEST_MODES.filter((mode) => value.includes(mode));
 }
 
 function authHeaders() {

@@ -26,16 +26,19 @@ beforeEach(() => {
     delete process.env.IMAGE_UPSTREAM_MAX_RETRIES;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
+    delete process.env.OPENAI_ROUTING_STRATEGY;
     delete process.env.OPENAI_CHANNEL_1_ID;
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_2_ID;
     delete process.env.OPENAI_CHANNEL_2_API_KEYS;
     delete process.env.OPENAI_CHANNEL_2_BASE_URL;
     delete process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST;
+    delete process.env.OPENAI_CHANNEL_2_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED;
     delete process.env.OPENAI_CHANNEL_QUEUE_ENABLED;
     delete process.env.OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS;
@@ -370,5 +373,125 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.equal(enabled.responsesImageBackend.mode, 'experimental');
         assert.equal(enabled.responsesImageBackend.hasDefaultModel, true);
         assert.deepEqual(enabled.responsesImageBackend.missingEnv, []);
+        });
     });
-});
+
+    it('exposes sanitized channel request modes for routing diagnostics', async () => {
+        process.env.OPENAI_ROUTING_STRATEGY = 'round_robin';
+        process.env.OPENAI_CHANNEL_1_ID = 'images';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://images.example.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-secret';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream,images-sse';
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as {
+            channelRouting: {
+                strategy: string;
+                credentialCount: number;
+                channelCount: number;
+                supportedRequestModes: string[];
+                configuredRequestModes: string[];
+                effectiveRequestModes: string[];
+                requestModeControls: {
+                    globalEnv: string;
+                    channelEnvPattern: string;
+                    mutableAtRuntime: boolean;
+                    smokeGateCommands: Record<string, string[]>;
+                };
+                requestModeHealth: Array<{
+                    mode: string;
+                    configuredCredentialCount: number;
+                    healthyCredentialCount: number;
+                    configuredChannelCount: number;
+                    healthyChannelCount: number;
+                }>;
+                requestModesByChannel: Array<{
+                    channelId: string;
+                    requestModes: string[];
+                }>;
+                effectiveRequestModesByChannel: Array<{
+                    channelId: string;
+                    requestModes: string[];
+                }>;
+            };
+        };
+
+        assert.deepEqual(body.channelRouting, {
+            strategy: 'round_robin',
+            credentialCount: 1,
+            channelCount: 1,
+            supportedRequestModes: [
+                'images-non-stream',
+                'images-sse',
+                'responses-non-stream',
+                'responses-sse'
+            ],
+            configuredRequestModes: ['images-non-stream', 'images-sse'],
+            effectiveRequestModes: ['images-non-stream', 'images-sse'],
+            requestModeControls: {
+                source: 'admin_env_whitelist',
+                globalEnv: 'OPENAI_UPSTREAM_REQUEST_MODES',
+                channelEnvPattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                mutableAtRuntime: false,
+                finalGateCommand:
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable',
+                smokeGateCommands: {
+                    'images-non-stream': [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case original-images-json --allow-billable'
+                    ],
+                    'images-sse': [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-images-sse --allow-billable'
+                    ],
+                    'responses-non-stream': [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-responses-json --allow-billable'
+                    ],
+                    'responses-sse': [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable'
+                    ]
+                }
+            },
+            requestModeHealth: [
+                {
+                    mode: 'images-non-stream',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'images-sse',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'responses-non-stream',
+                    configuredCredentialCount: 0,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 0,
+                    healthyChannelCount: 0
+                },
+                {
+                    mode: 'responses-sse',
+                    configuredCredentialCount: 0,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 0,
+                    healthyChannelCount: 0
+                }
+            ],
+            requestModesByChannel: [
+                {
+                    channelId: 'images',
+                    requestModes: ['images-non-stream', 'images-sse']
+                }
+            ],
+            effectiveRequestModesByChannel: [
+                {
+                    channelId: 'images',
+                    requestModes: ['images-non-stream', 'images-sse']
+                }
+            ]
+        });
+        assert.equal(JSON.stringify(body.channelRouting).includes('sk-secret'), false);
+    });

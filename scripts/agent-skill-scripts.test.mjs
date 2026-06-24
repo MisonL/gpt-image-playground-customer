@@ -631,7 +631,7 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
-    it('uses the server orchestration endpoint for default billable generate requests', async () => {
+    it('keeps default generate on server orchestration when request modes are declared', async () => {
         const requests = [];
         let imageRequestBody = '';
         await withServer(
@@ -639,7 +639,32 @@ describe('Agent skill script argument validation', () => {
                 requests.push({ method: request.method, url: request.url });
                 if (request.url === '/api/agent/capabilities') {
                     response.writeHead(200, { 'content-type': 'application/json' });
-                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    response.end(
+                        JSON.stringify(
+                            agentGenerateCapabilities({
+                                supported: {
+                                    request_modes: [
+                                        'images-non-stream',
+                                        'images-sse',
+                                        'responses-non-stream',
+                                        'responses-sse'
+                                    ]
+                                },
+                                upstream_request_headers: {
+                                    channels: [
+                                        {
+                                            id: 'images',
+                                            request_modes: ['images-non-stream', 'images-sse']
+                                        },
+                                        {
+                                            id: 'responses',
+                                            request_modes: ['responses-sse']
+                                        }
+                                    ]
+                                }
+                            })
+                        )
+                    );
                     return;
                 }
                 if (request.url === '/api/agent/image-requests') {
@@ -679,7 +704,17 @@ describe('Agent skill script argument validation', () => {
                                 route_mode: 'job',
                                 image_backend: 'images-api',
                                 stream_mode: 'non_stream',
-                                streaming_strategy: 'off'
+                                streaming_strategy: 'off',
+                                channel_request_mode: 'images-non-stream',
+                                channel_request_mode_fallback_applied: false,
+                                route_decision: {
+                                    requested_backend: 'images-api',
+                                    preferred_channel_request_mode: 'images-non-stream',
+                                    selected_channel_request_mode: 'images-non-stream',
+                                    fallback_applied: false,
+                                    selected_channel_id: 'channel-orchestrated',
+                                    upstream_host: 'upstream.example.test'
+                                }
                             },
                             timing: { server_elapsed_ms: 1234 }
                         })
@@ -720,6 +755,16 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.summary.transport, 'agent_job_polling');
                 assert.equal(body.summary.endpoint, '/api/agent/image-requests');
                 assert.equal(body.summary.route_mode, 'job');
+                assert.equal(body.summary.channel_request_mode, 'images-non-stream');
+                assert.equal(body.summary.channel_request_mode_fallback_applied, false);
+                assert.deepEqual(body.summary.route_decision, {
+                    requested_backend: 'images-api',
+                    preferred_channel_request_mode: 'images-non-stream',
+                    selected_channel_request_mode: 'images-non-stream',
+                    fallback_applied: false,
+                    selected_channel_id: 'channel-orchestrated',
+                    upstream_host: 'upstream.example.test'
+                });
                 assert.deepEqual(body.summary.content_urls, ['/api/agent/artifacts/artifact-orchestrated-1/content']);
                 assert.deepEqual(body.summary.actual_dimensions, { width: 1254, height: 1254 });
                 assert.deepEqual(
@@ -1503,9 +1548,26 @@ describe('Agent skill script argument validation', () => {
                                     code: 'unexpected_error',
                                     retryable: false,
                                     diagnostics: {
+                                        channel_request_mode: 'images-non-stream',
+                                        channel_request_mode_fallback_applied: true,
+                                        route_decision: {
+                                            requested_backend: 'images-api',
+                                            preferred_channel_request_mode: 'images-sse',
+                                            fallback_channel_request_mode: 'images-non-stream',
+                                            selected_channel_request_mode: 'images-non-stream',
+                                            fallback_applied: true,
+                                            selected_channel_id: 'channel-a',
+                                            upstream_host: 'upstream.example.test'
+                                        },
                                         selected_channel_id: 'channel-a',
                                         upstream_host: 'upstream.example.test',
-                                        transport_error_kind: 'aborted'
+                                        transport_error_kind: 'aborted',
+                                        retry_after_ms: 30000,
+                                        cooldown_until: '2026-06-11T12:00:00.000Z',
+                                        cooldown_target: {
+                                            channel_id: 'channel-a',
+                                            request_mode: 'images-non-stream'
+                                        }
                                     }
                                 }
                             }
@@ -1527,13 +1589,43 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(result.stdout.trim(), '');
                 const body = JSON.parse(result.stderr);
                 assert.equal(body.summary.request_id, 'req_generate_diag');
+                assert.equal(body.summary.channel_request_mode, 'images-non-stream');
+                assert.equal(body.summary.channel_request_mode_fallback_applied, true);
+                assert.deepEqual(body.summary.route_decision, {
+                    requested_backend: 'images-api',
+                    preferred_channel_request_mode: 'images-sse',
+                    fallback_channel_request_mode: 'images-non-stream',
+                    selected_channel_request_mode: 'images-non-stream',
+                    fallback_applied: true,
+                    selected_channel_id: 'channel-a',
+                    upstream_host: 'upstream.example.test'
+                });
                 assert.equal(body.summary.selected_channel_id, 'channel-a');
                 assert.equal(body.summary.upstream_host, 'upstream.example.test');
                 assert.equal(body.summary.transport_error_kind, 'aborted');
+                assert.equal(body.summary.retry_after_ms, 30000);
+                assert.equal(body.summary.cooldown_until, '2026-06-11T12:00:00.000Z');
+                assert.deepEqual(body.summary.cooldown_target, {
+                    channel_id: 'channel-a',
+                    request_mode: 'images-non-stream'
+                });
                 assert.equal(body.summary.agent_diagnostics_checked, true);
                 assert.equal(body.summary.agent_diagnostics_found, true);
                 assert.equal(body.agent_failure_diagnostics.request_id, 'req_generate_diag');
                 assert.equal(body.agent_failure_diagnostics.status, 'failed');
+                assert.deepEqual(body.agent_failure_diagnostics.cooldown_target, {
+                    channel_id: 'channel-a',
+                    request_mode: 'images-non-stream'
+                });
+                assert.deepEqual(body.agent_failure_diagnostics.route_decision, {
+                    requested_backend: 'images-api',
+                    preferred_channel_request_mode: 'images-sse',
+                    fallback_channel_request_mode: 'images-non-stream',
+                    selected_channel_request_mode: 'images-non-stream',
+                    fallback_applied: true,
+                    selected_channel_id: 'channel-a',
+                    upstream_host: 'upstream.example.test'
+                });
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
                     [
@@ -3491,6 +3583,9 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /summary\.page_sse_real_smoke/);
         assert.match(skillText, /兼容聚合状态/);
         assert.match(skillText, /summary\.responses_page_sse_generate_smoke/);
+        assert.match(skillText, /summary\.responses_agent_generate_smoke/);
+        assert.match(skillText, /responses_agent_generate_1k/);
+        assert.match(skillText, /request_mode_controls/);
         assert.match(skillText, /summary\.real_smoke_checks/);
         assert.match(apiReference, /npm run first-run/);
         assert.match(apiReference, /npm run first-run -- --json/);
@@ -3501,6 +3596,9 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /summary\.page_sse_real_smoke/);
         assert.match(apiReference, /兼容聚合状态/);
         assert.match(apiReference, /summary\.responses_page_sse_generate_smoke/);
+        assert.match(apiReference, /summary\.responses_agent_generate_smoke/);
+        assert.match(apiReference, /responses_agent_generate_1k/);
+        assert.match(apiReference, /request_mode_controls/);
         assert.match(apiReference, /summary\.real_smoke_checks/);
         assert.match(readmeText, /不要手动并行启动多个单张脚本/);
         assert.match(readmeText, /streamingBatch\.recommendedConcurrency/);
@@ -6104,7 +6202,10 @@ describe('Agent skill script argument validation', () => {
                                     diagnostics: {
                                         transport_error_kind: 'dns',
                                         cooldown_until: '2026-06-11T12:00:00.000Z',
-                                        cooldown_target: { channel_id: 'channel-a' }
+                                        cooldown_target: {
+                                            channel_id: 'channel-a',
+                                            request_mode: 'images-non-stream'
+                                        }
                                     }
                                 }
                             }
@@ -6138,6 +6239,10 @@ describe('Agent skill script argument validation', () => {
                 );
                 assert.equal(body.agent_requests[1].lookup.type, 'idempotency_key');
                 assert.equal(body.agent_requests[1].diagnostics.error.diagnostics.transport_error_kind, 'dns');
+                assert.equal(
+                    body.agent_requests[1].diagnostics.error.diagnostics.cooldown_target.request_mode,
+                    'images-non-stream'
+                );
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
                     [

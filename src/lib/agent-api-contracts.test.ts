@@ -524,6 +524,35 @@ describe('buildAgentCapabilities', () => {
             required_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL'],
             missing_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL']
         });
+        assert.deepEqual(capabilities.supported.request_modes, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.deepEqual(capabilities.request_mode_controls, {
+            source: 'admin_env_whitelist',
+            global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
+            channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+            mutable_at_runtime: false,
+            agent_client_policy: 'diagnostics_only',
+            final_gate_command:
+                'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable',
+            smoke_gate_commands: {
+                'images-non-stream': [
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case original-images-json --allow-billable'
+                ],
+                'images-sse': [
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-images-sse --allow-billable'
+                ],
+                'responses-non-stream': [
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-responses-json --allow-billable'
+                ],
+                'responses-sse': [
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable'
+                ]
+            }
+        });
         assert.deepEqual(capabilities.supported.streaming_strategies, [
             'off',
             'auto',
@@ -558,6 +587,28 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(capabilities.agent_jobs.states, ['queued', 'running', 'succeeded', 'failed', 'expired']);
         assert.match(capabilities.agent_jobs.current_guidance, /orchestration\.endpoint/);
         assert.match(capabilities.agent_jobs.current_guidance, /job/);
+    });
+
+    it('reports configured server-channel request modes in Agent capabilities', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_CHANNEL_1_ID: 'images',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-json,images-sse'
+        });
+
+        assert.deepEqual(capabilities.upstream_request_headers.channels, [
+            {
+                id: 'images',
+                request_modes: ['images-non-stream', 'images-sse'],
+                request_headers: {
+                    user_agent_effective: 'gpt-image-playground/2.1.0',
+                    has_extra_headers: false,
+                    allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
+                    configured_header_names: []
+                }
+            }
+        ]);
     });
 
     it('reports Matsca server-channel upload and image-count limits in Agent capabilities', () => {
@@ -820,6 +871,25 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentErrorDiagnostics' in document.components.schemas);
         assert.ok('AgentImageResponseTiming' in document.components.schemas);
         assert.ok('AgentImageResponseExecution' in document.components.schemas);
+        assert.ok('ChannelRequestModeDecision' in document.components.schemas);
+        assert.deepEqual(document.components.schemas.AgentImageResponseExecution.properties.channel_request_mode.enum, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.equal(
+            document.components.schemas.AgentImageResponseExecution.properties.channel_request_mode_fallback_applied.type,
+            'boolean'
+        );
+        assert.equal(
+            document.components.schemas.AgentImageResponseExecution.properties.route_decision.$ref,
+            '#/components/schemas/ChannelRequestModeDecision'
+        );
+        assert.equal(
+            document.components.schemas.ChannelRequestModeDecision.properties.requested_backend.enum.includes('images-api'),
+            true
+        );
         assert.ok('UpstreamRequestHeaderSummary' in document.components.schemas);
         assert.ok('AgentRequestDiagnosticsCapabilities' in document.components.schemas);
         assert.ok('AgentRequestDiagnosticsRetention' in document.components.schemas);
@@ -998,6 +1068,20 @@ describe('buildAgentCapabilities', () => {
             'responses-image-generation'
         ]);
         assert.ok(capabilityProperties.supported.properties.image_backend_requirements);
+        assert.deepEqual(capabilityProperties.supported.properties.request_modes.items.enum, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.equal(
+            document.components.schemas.AgentRequestModeControls.properties.agent_client_policy.const,
+            'diagnostics_only'
+        );
+        assert.equal(
+            document.components.schemas.AgentRequestModeControls.properties.channel_env_pattern.type,
+            'string'
+        );
         assert.deepEqual(
             document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.request_fields
                 .const,
@@ -1061,11 +1145,29 @@ describe('buildAgentCapabilities', () => {
         assert.equal(document.components.schemas.AgentRoutingRules.required.includes('long_image_recovery'), true);
         assert.match(document.components.schemas.EditRequest.description, /\/api\/images/);
         assert.ok('upstream_event_type' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.deepEqual(document.components.schemas.AgentErrorDiagnostics.properties.channel_request_mode.enum, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.equal(
+            document.components.schemas.AgentErrorDiagnostics.properties.channel_request_mode_fallback_applied.type,
+            'boolean'
+        );
+        assert.equal(
+            document.components.schemas.AgentErrorDiagnostics.properties.route_decision.$ref,
+            '#/components/schemas/ChannelRequestModeDecision'
+        );
         assert.ok('partial_image_count' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('transport_error_kind' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('retry_after_ms' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('cooldown_until' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('cooldown_target' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.deepEqual(
+            document.components.schemas.AgentErrorDiagnostics.properties.cooldown_target.properties.request_mode.enum,
+            ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse']
+        );
         assert.equal(document.components.schemas.ResultFeedback.properties.note.maxLength, 500);
     });
 

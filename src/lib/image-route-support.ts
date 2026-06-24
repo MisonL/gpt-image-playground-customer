@@ -6,6 +6,7 @@ import {
     isChannelFailure,
     isCredentialFailure
 } from './channel-router';
+import type { ChannelRequestMode } from './channel-request-mode';
 import { RequestValidationError } from './image-request-utils';
 import type { ImageGenerationBackend } from './image-upstream-strategy';
 import { getServerChannelState } from './server-channel-router';
@@ -44,12 +45,19 @@ export function assertResponsesImageBackendAllowed(input: { imageBackend: ImageB
     }
 }
 
-export function reportServerCredentialFailure(credential: ChannelCredential | undefined, error: unknown) {
+export function reportServerCredentialFailure(
+    credential: ChannelCredential | undefined,
+    error: unknown,
+    requestMode?: ChannelRequestMode
+) {
     const serverChannelRouter = getServerChannelState().router;
     if (!credential || !serverChannelRouter) return;
     if (isChannelFailure(error)) {
-        const reason = describeChannelFailure(error, 'channel');
-        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', reason });
+        const reason = {
+            ...describeChannelFailure(error, 'channel'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
         appLogger.warn(
             report.cooldownApplied
                 ? `暂时冷却 API 渠道：${credential.channelId}`
@@ -59,8 +67,11 @@ export function reportServerCredentialFailure(credential: ChannelCredential | un
         return;
     }
     if (isCredentialFailure(error)) {
-        const reason = describeChannelFailure(error, 'credential');
-        const report = serverChannelRouter.reportFailure(credential, { reason });
+        const reason = {
+            ...describeChannelFailure(error, 'credential'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { requestMode, reason });
         appLogger.warn(
             report.cooldownApplied
                 ? `暂时冷却 API 渠道凭证：${credential.channelId}/${credential.id}`

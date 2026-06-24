@@ -42,6 +42,12 @@ export function buildSuccessSummary({ result, routing, timing, idempotencyKey, b
     image_backend: readString(execution?.image_backend) || readString(routing?.image_backend) || null,
     stream_mode: readString(execution?.stream_mode) || readString(routing?.stream_mode) || null,
     streaming_strategy: readString(execution?.streaming_strategy) || readString(routing?.streaming_strategy) || null,
+    channel_request_mode: readString(execution?.channel_request_mode) || null,
+    channel_request_mode_fallback_applied:
+      typeof execution?.channel_request_mode_fallback_applied === 'boolean'
+        ? execution.channel_request_mode_fallback_applied
+        : null,
+    route_decision: readObject(execution?.route_decision) || null,
     selected_channel_id: readString(execution?.selected_channel_id) || null,
     upstream_host: readString(execution?.upstream_host) || null,
     request_headers: readObject(execution?.request_headers),
@@ -82,6 +88,12 @@ export function buildFailureSummary({ errorBody, routing, timing, idempotencyKey
     image_backend: readString(routing?.image_backend) || null,
     stream_mode: readString(routing?.stream_mode) || null,
     streaming_strategy: readString(routing?.streaming_strategy) || null,
+    channel_request_mode: readString(diagnostics?.channel_request_mode) || null,
+    channel_request_mode_fallback_applied:
+      typeof diagnostics?.channel_request_mode_fallback_applied === 'boolean'
+        ? diagnostics.channel_request_mode_fallback_applied
+        : null,
+    route_decision: readObject(diagnostics?.route_decision) || null,
     selected_channel_id: readString(diagnostics?.selected_channel_id) || null,
     upstream_host: readString(diagnostics?.upstream_host) || null,
     transport_error_kind: readString(diagnostics?.transport_error_kind),
@@ -122,6 +134,9 @@ function stableSummary(value) {
     image_backend: value.image_backend ?? null,
     stream_mode: value.stream_mode ?? null,
     streaming_strategy: value.streaming_strategy ?? null,
+    channel_request_mode: value.channel_request_mode ?? null,
+    channel_request_mode_fallback_applied: value.channel_request_mode_fallback_applied ?? null,
+    route_decision: value.route_decision ?? null,
     selected_channel_id: value.selected_channel_id ?? null,
     upstream_host: value.upstream_host ?? null,
     transport_error_kind: value.transport_error_kind ?? null,

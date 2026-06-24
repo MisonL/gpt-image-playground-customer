@@ -1,5 +1,6 @@
 import {
     AgentApiError,
+    type AgentErrorDiagnostics,
     agentErrorResponse,
     createAgentErrorBody,
     normalizeAgentError,
@@ -96,6 +97,12 @@ describe('normalizeAgentError', () => {
     });
 
     it('adds sanitized upstream diagnostics without inventing an HTTP status', () => {
+        const unsafeCooldownTarget = {
+            channel_id: ' channel-a ',
+            credential_id: ' credential-a ',
+            request_mode: 'images-non-stream',
+            api_key: 'secret'
+        } as unknown as NonNullable<AgentErrorDiagnostics['cooldown_target']>;
         const error = normalizeAgentError(
             Object.assign(new Error('Connection error.'), {
                 name: 'APIConnectionError',
@@ -110,9 +117,7 @@ describe('normalizeAgentError', () => {
                 upstream_host: 'api.example.test',
                 retry_after_ms: 15000,
                 cooldown_until: '2026-06-11T00:00:15.000Z',
-                cooldown_target: {
-                    channel_id: 'channel-a'
-                }
+                cooldown_target: unsafeCooldownTarget
             }
         );
         const body = createAgentErrorBody(error, 'request-2');
@@ -124,9 +129,52 @@ describe('normalizeAgentError', () => {
         assert.equal(body.error.diagnostics?.transport_error, true);
         assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
         assert.equal(body.error.diagnostics?.cooldown_until, '2026-06-11T00:00:15.000Z');
-        assert.deepEqual(body.error.diagnostics?.cooldown_target, { channel_id: 'channel-a' });
+        assert.deepEqual(body.error.diagnostics?.cooldown_target, {
+            channel_id: 'channel-a',
+            credential_id: 'credential-a',
+            request_mode: 'images-non-stream'
+        });
         assert.deepEqual(body.error.diagnostics?.response_headers, { 'cf-ray': 'abc-SJC' });
         assert.equal(JSON.stringify(body).includes('secret'), false);
+    });
+
+    it('drops invalid cooldown target diagnostics', () => {
+        const error = normalizeAgentError(new Error('diagnostics'), {
+            retry_after_ms: 15000,
+            cooldown_target: {
+                channel_id: 'channel-a',
+                request_mode: 'invalid-mode'
+            } as unknown as NonNullable<AgentErrorDiagnostics['cooldown_target']>
+        });
+        const body = createAgentErrorBody(error, 'request-invalid-cooldown-target');
+
+        assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
+        assert.deepEqual(body.error.diagnostics?.cooldown_target, { channel_id: 'channel-a' });
+    });
+
+    it('drops cooldown targets without a valid channel id', () => {
+        const error = normalizeAgentError(new Error('diagnostics'), {
+            retry_after_ms: 15000,
+            cooldown_target: {
+                channel_id: ' ',
+                request_mode: 'images-non-stream'
+            } as unknown as NonNullable<AgentErrorDiagnostics['cooldown_target']>
+        });
+        const body = createAgentErrorBody(error, 'request-blank-cooldown-target');
+
+        assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
+        assert.equal(body.error.diagnostics?.cooldown_target, undefined);
+    });
+
+    it('drops cooldown target diagnostics that are not objects', () => {
+        const error = normalizeAgentError(new Error('diagnostics'), {
+            retry_after_ms: 15000,
+            cooldown_target: 'channel-a' as unknown as NonNullable<AgentErrorDiagnostics['cooldown_target']>
+        });
+        const body = createAgentErrorBody(error, 'request-string-cooldown-target');
+
+        assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
+        assert.equal(body.error.diagnostics?.cooldown_target, undefined);
     });
 
     it('filters caller-provided diagnostic response headers through the allowlist', () => {

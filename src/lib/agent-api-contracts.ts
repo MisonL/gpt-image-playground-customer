@@ -3,6 +3,12 @@ import type { AgentErrorDiagnostics } from './api-error-response';
 import { readAppLogRetentionMetadata, type AppLogRetentionMetadata } from './app-log-retention';
 import { getChannelPoolSummary, parseChannelPoolConfig } from './channel-router';
 import {
+    CHANNEL_REQUEST_MODES,
+    CHANNEL_REQUEST_MODE_ADMIN_CONTROL,
+    type ChannelRequestMode,
+    type ChannelRequestModeDecision
+} from './channel-request-mode';
+import {
     MAX_IMAGE_COUNT,
     MAX_PROMPT_LENGTH,
     RequestValidationError,
@@ -174,6 +180,9 @@ export type AgentImageResponseExecution = {
     image_backend: ImageGenerationBackend;
     stream_mode: ImageStreamMode;
     streaming_strategy: ImageStreamingStrategy;
+    channel_request_mode?: ChannelRequestMode;
+    channel_request_mode_fallback_applied?: boolean;
+    route_decision?: ChannelRequestModeDecision;
     selected_channel_id?: string;
     upstream_host?: string;
     request_headers: UpstreamRequestHeaderSummary;
@@ -231,8 +240,18 @@ export type AgentCapabilities = {
         default: UpstreamRequestHeaderSummary;
         channels: Array<{
             id: string;
+            request_modes: readonly ChannelRequestMode[];
             request_headers: UpstreamRequestHeaderSummary;
         }>;
+    };
+    request_mode_controls: {
+        source: 'admin_env_whitelist';
+        global_env: string;
+        channel_env_pattern: string;
+        mutable_at_runtime: false;
+        agent_client_policy: 'diagnostics_only';
+        final_gate_command: string;
+        smoke_gate_commands: Record<ChannelRequestMode, readonly string[]>;
     };
     defaults: {
         model: GptImageModel;
@@ -366,6 +385,7 @@ export type AgentCapabilities = {
         image_backends: readonly ImageGenerationBackend[];
         enabled_image_backends: readonly ImageGenerationBackend[];
         image_backend_requirements: Record<ImageGenerationBackend, ImageBackendRuntimeRequirement>;
+        request_modes: readonly ChannelRequestMode[];
         streaming_strategies: readonly ImageStreamingStrategy[];
         stream_modes: readonly ImageStreamMode[];
     };
@@ -909,6 +929,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         image_transport: summarizeOpenAIImageTransport(env),
         upstream_profile: upstreamLimits.summary,
         upstream_request_headers: buildAgentUpstreamRequestHeadersCapabilities(env),
+        request_mode_controls: buildAgentRequestModeControlsCapabilities(),
         defaults: {
             model: 'gpt-image-2',
             response_mode: 'path',
@@ -1141,6 +1162,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             image_backends: AGENT_IMAGE_BACKENDS,
             enabled_image_backends: enabledImageBackends,
             image_backend_requirements: imageBackendRequirements,
+            request_modes: CHANNEL_REQUEST_MODES,
             streaming_strategies: AGENT_STREAMING_STRATEGIES,
             stream_modes: AGENT_STREAM_MODES
         },
@@ -1158,12 +1180,25 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
     };
 }
 
+function buildAgentRequestModeControlsCapabilities(): AgentCapabilities['request_mode_controls'] {
+    return {
+        source: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.source,
+        global_env: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.globalEnv,
+        channel_env_pattern: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.channelEnvPattern,
+        mutable_at_runtime: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.mutableAtRuntime,
+        agent_client_policy: 'diagnostics_only',
+        final_gate_command: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.finalGateCommand,
+        smoke_gate_commands: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.smokeGateCommands
+    };
+}
+
 function buildAgentUpstreamRequestHeadersCapabilities(env: Record<string, string | undefined>): AgentCapabilities['upstream_request_headers'] {
     const channelSummary = getChannelPoolSummary(parseChannelPoolConfig(env));
     return {
         default: summarizeUpstreamRequestHeaders(undefined, env),
         channels: channelSummary.channels.map((channel) => ({
             id: channel.id,
+            request_modes: channel.requestModes,
             request_headers: channel.requestHeaders
         }))
     };

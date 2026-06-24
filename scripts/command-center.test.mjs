@@ -114,6 +114,19 @@ describe('Command center scripts', () => {
             'gpt2image-responses-sse',
             'matsca-images-sse'
         ]);
+        assert.deepEqual(missing.request_modes['images-non-stream'], {
+            required_count: 1,
+            required_cases: ['original-images-json'],
+            configuration_complete: false,
+            configured_count: 0,
+            configured_cases: [],
+            missing_count: 1,
+            missing_cases: ['original-images-json'],
+            invalid_count: 0,
+            invalid_cases: [],
+            smoke_state: 'not_run_by_status'
+        });
+        assert.deepEqual(missing.request_modes['responses-sse'].required_cases, ['gpt2image-responses-sse']);
         assert.deepEqual(missing.missing_env_any['sub2api-responses-json'][0], [
             'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL',
             'IMAGE_REAL_SMOKE_SUB2API_BASE_URL'
@@ -140,6 +153,9 @@ describe('Command center scripts', () => {
         assert.equal(configured.configuration_complete, true);
         assert.equal(configured.configured_count, 6);
         assert.equal(configured.missing_count, 0);
+        assert.equal(configured.request_modes['images-sse'].configured_count, 3);
+        assert.deepEqual(configured.request_modes['responses-non-stream'].configured_cases, ['sub2api-responses-json']);
+        assert.deepEqual(configured.request_modes['responses-sse'].configured_cases, ['gpt2image-responses-sse']);
         assert.doesNotMatch(JSON.stringify(configured), /secret|example\/v1/);
     });
 
@@ -742,6 +758,12 @@ describe('Command center scripts', () => {
                                 }
                             },
                             supported: {
+                                request_modes: [
+                                    'images-non-stream',
+                                    'images-sse',
+                                    'responses-non-stream',
+                                    'responses-sse'
+                                ],
                                 image_backend_requirements: {
                                     'responses-image-generation': {
                                         supported: true,
@@ -749,6 +771,18 @@ describe('Command center scripts', () => {
                                         missing_env: []
                                     }
                                 }
+                            },
+                            upstream_request_headers: {
+                                channels: [
+                                    {
+                                        id: 'images',
+                                        request_modes: ['images-non-stream', 'images-sse']
+                                    },
+                                    {
+                                        id: 'responses',
+                                        request_modes: ['responses-sse']
+                                    }
+                                ]
                             }
                         })
                     );
@@ -763,7 +797,17 @@ describe('Command center scripts', () => {
                                 unavailableMarkScope: 'channel+backend+strategy+operation'
                             },
                             streamingBatch: { enabled: true },
-                            responsesImageBackend: { enabled: true, mode: 'experimental' }
+                            responsesImageBackend: { enabled: true, mode: 'experimental' },
+                            channelRouting: {
+                                configuredRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
+                                effectiveRequestModes: ['images-non-stream', 'images-sse'],
+                                effectiveRequestModesByChannel: [
+                                    {
+                                        channelId: 'images',
+                                        requestModes: ['images-non-stream', 'images-sse']
+                                    }
+                                ]
+                            }
                         })
                     );
                     return;
@@ -836,9 +880,24 @@ describe('Command center scripts', () => {
                 assert.deepEqual(body.summary.real_smoke_checks, {
                     agent_generate_1k: 'skipped',
                     responses_page_sse_generate_1k: 'skipped',
+                    responses_agent_generate_1k: 'skipped',
                     agent_edit_1k: 'skipped',
                     page_sse_edit_2k: 'skipped'
                 });
+                assert.deepEqual(body.summary.request_modes.supported, [
+                    'images-non-stream',
+                    'images-sse',
+                    'responses-non-stream',
+                    'responses-sse'
+                ]);
+                assert.deepEqual(body.summary.request_modes.configured, ['images-non-stream', 'images-sse', 'responses-sse']);
+                assert.deepEqual(body.summary.request_modes.effective, ['images-non-stream', 'images-sse']);
+                assert.deepEqual(body.summary.request_modes.smoke['responses-non-stream'].checks, [
+                    'responses_agent_generate_1k'
+                ]);
+                assert.equal(body.summary.request_modes.smoke['responses-non-stream'].state, 'skipped');
+                assert.equal(body.summary.request_modes.smoke['responses-sse'].state, 'skipped');
+                assert.equal(body.summary.request_modes.smoke['responses-sse'].billable, false);
                 assert.equal(body.summary.responses_gpt2image_ready, true);
                 assert.equal(body.summary.responses_image_backend_declared_supported, true);
                 assert.equal(body.summary.billable_smoke, 'skipped');
@@ -846,13 +905,34 @@ describe('Command center scripts', () => {
                 assert.ok(
                     body.layers
                         .find((layer) => layer.name === 'billable_smoke')
-                        .checks.some((check) => check.name === 'responses_page_sse_generate_1k' && check.skipped === true)
+                        .checks.some((check) => check.name === 'responses_agent_generate_1k' && check.skipped === true)
                 );
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').executable_routing_rules, true);
+                assert.deepEqual(body.layers.find((layer) => layer.name === 'capabilities').request_modes_supported, [
+                    'images-non-stream',
+                    'images-sse',
+                    'responses-non-stream',
+                    'responses-sse'
+                ]);
+                assert.deepEqual(body.layers.find((layer) => layer.name === 'runtime_backend').effective_request_modes, [
+                    'images-non-stream',
+                    'images-sse'
+                ]);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_declared_supported, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_required, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_ready, false);
                 assert.equal(body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').declared_supported, true);
+                assert.match(
+                    body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').real_smoke_gate,
+                    /gpt2image-responses-sse/
+                );
+                assert.deepEqual(
+                    body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').real_smoke_gates,
+                    [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-responses-json --allow-billable',
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable'
+                    ]
+                );
                 assert.match(
                     body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_next_action,
                     /GPT_IMAGE_APP_PASSWORD_HASH/
@@ -986,8 +1066,13 @@ describe('Command center scripts', () => {
                 assert.equal(body.interactive_confirmation_required, false);
                 assert.equal(body.summary.page_sse_real_smoke, 'passed');
                 assert.equal(body.summary.responses_page_sse_generate_smoke, 'passed');
+                assert.equal(body.summary.responses_agent_generate_smoke, 'passed');
                 assert.equal(body.summary.real_smoke_checks.agent_generate_1k, 'passed');
                 assert.equal(body.summary.real_smoke_checks.responses_page_sse_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.responses_agent_generate_1k, 'passed');
+                assert.equal(body.summary.request_modes.smoke['images-non-stream'].state, 'passed');
+                assert.equal(body.summary.request_modes.smoke['responses-non-stream'].state, 'passed');
+                assert.equal(body.summary.request_modes.smoke['responses-sse'].state, 'passed');
                 assert.equal(body.summary.real_smoke_checks.agent_edit_1k, 'skipped');
                 assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
                 assert.ok(hits.includes('/api/agent/images/generate'));
@@ -1074,8 +1159,13 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.billable_smoke, 'failed');
                 assert.equal(body.summary.page_sse_real_smoke, 'failed');
                 assert.equal(body.summary.responses_page_sse_generate_smoke, 'failed');
+                assert.equal(body.summary.responses_agent_generate_smoke, 'passed');
                 assert.equal(body.summary.real_smoke_checks.agent_generate_1k, 'passed');
                 assert.equal(body.summary.real_smoke_checks.responses_page_sse_generate_1k, 'failed');
+                assert.equal(body.summary.real_smoke_checks.responses_agent_generate_1k, 'passed');
+                assert.equal(body.summary.request_modes.smoke['images-non-stream'].state, 'passed');
+                assert.equal(body.summary.request_modes.smoke['responses-non-stream'].state, 'passed');
+                assert.equal(body.summary.request_modes.smoke['responses-sse'].state, 'failed');
                 assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
                 const pageSseOutput = body.layers
                     .find((layer) => layer.name === 'billable_smoke')

@@ -1,4 +1,5 @@
 import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
+import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_ADMIN_CONTROL } from '@/lib/channel-request-mode';
 import { summarizeImageUpstreamProfile } from '@/lib/image-upstream-profile';
 import { readImageStreamMode, readImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { summarizeOpenAIImageTransport } from '@/lib/openai-image-transport';
@@ -15,6 +16,7 @@ export async function GET() {
         const serverChannelState = getServerChannelState();
         const summary = getChannelPoolSummary(serverChannelState.config);
         const healthSummary = serverChannelState.router?.getHealthSummary();
+        const requestModeHealthSummary = serverChannelState.router?.getRequestModeHealthSummary();
         const maxStreamsPerCredential = readPositiveIntegerEnv(process.env, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1);
         const channelQueueSummary = serverChannelState.channelCapacityQueue.summary();
         const responsesImageBackendEnabled = readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND');
@@ -73,6 +75,28 @@ export async function GET() {
                 pendingProbeCredentialCount: healthSummary?.pendingRecoveryProbeCredentialCount ?? 0,
                 pendingProbeChannelCount: healthSummary?.pendingRecoveryProbeChannelCount ?? 0,
                 probe: serverChannelState.channelRecoveryProber?.summary()
+            },
+            channelRouting: {
+                strategy: summary.strategy,
+                credentialCount: summary.credentialCount,
+                channelCount: summary.channelCount,
+                supportedRequestModes: CHANNEL_REQUEST_MODES,
+                configuredRequestModes:
+                    requestModeHealthSummary?.configuredRequestModes ?? (summary.credentialCount > 0 ? CHANNEL_REQUEST_MODES : []),
+                effectiveRequestModes:
+                    requestModeHealthSummary?.effectiveRequestModes ?? (summary.credentialCount > 0 ? CHANNEL_REQUEST_MODES : []),
+                requestModeControls: CHANNEL_REQUEST_MODE_ADMIN_CONTROL,
+                requestModeHealth: requestModeHealthSummary?.modes ?? [],
+                requestModesByChannel: summary.channels.map((channel) => ({
+                    channelId: channel.id,
+                    requestModes: channel.requestModes
+                })),
+                effectiveRequestModesByChannel:
+                    requestModeHealthSummary?.effectiveRequestModesByChannel ??
+                    summary.channels.map((channel) => ({
+                        channelId: channel.id,
+                        requestModes: channel.requestModes
+                    }))
             },
             upstreamProfile,
             imageTransport: summarizeOpenAIImageTransport(process.env),

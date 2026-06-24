@@ -19,6 +19,7 @@ import {
     readAgentPublicBaseUrl
 } from './agent-api-contracts';
 import { AGENT_ENDPOINTS } from './agent-api-paths.mjs';
+import { CHANNEL_REQUEST_MODES } from './channel-request-mode';
 import { MAX_PROMPT_LENGTH } from './image-request-utils';
 
 type AgentOpenApiSecurityRequirement = { BearerAuth: [] } | { AppPasswordHash: [] };
@@ -429,6 +430,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'image_transport',
                         'upstream_profile',
                         'upstream_request_headers',
+                        'request_mode_controls',
                         'defaults',
                         'limits',
                         'model_limits',
@@ -468,9 +470,13 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     type: 'array',
                                     items: {
                                         type: 'object',
-                                        required: ['id', 'request_headers'],
+                                        required: ['id', 'request_modes', 'request_headers'],
                                         properties: {
                                             id: { type: 'string' },
+                                            request_modes: {
+                                                type: 'array',
+                                                items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
+                                            },
                                             request_headers: { $ref: '#/components/schemas/UpstreamRequestHeaderSummary' }
                                         },
                                         additionalProperties: false
@@ -479,6 +485,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             },
                             additionalProperties: false
                         },
+                        request_mode_controls: { $ref: '#/components/schemas/AgentRequestModeControls' },
                         upstream_profile: {
                             type: 'object',
                             required: [
@@ -666,6 +673,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'image_backends',
                                 'enabled_image_backends',
                                 'image_backend_requirements',
+                                'request_modes',
                                 'streaming_strategies',
                                 'stream_modes'
                             ],
@@ -694,6 +702,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 image_backend_requirements: {
                                     type: 'object',
                                     additionalProperties: { $ref: '#/components/schemas/ImageBackendRequirement' }
+                                },
+                                request_modes: {
+                                    type: 'array',
+                                    items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
                                 },
                                 streaming_strategies: {
                                     type: 'array',
@@ -1404,6 +1416,21 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     },
                     additionalProperties: false
                 },
+                ChannelRequestModeDecision: {
+                    type: 'object',
+                    required: ['requested_backend', 'fallback_applied'],
+                    properties: {
+                        requested_backend: { type: 'string', enum: AGENT_IMAGE_BACKENDS },
+                        preferred_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        fallback_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        selected_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        fallback_applied: { type: 'boolean' },
+                        selected_channel_id: { type: 'string' },
+                        upstream_host: { type: 'string' },
+                        no_channel_reason: { type: 'string' }
+                    },
+                    additionalProperties: false
+                },
                 AgentImageResponseExecution: {
                     type: 'object',
                     required: [
@@ -1414,6 +1441,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'image_backend',
                         'stream_mode',
                         'streaming_strategy',
+                        'channel_request_mode_fallback_applied',
+                        'route_decision',
                         'request_headers'
                     ],
                     properties: {
@@ -1424,6 +1453,9 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         image_backend: { type: 'string', enum: AGENT_IMAGE_BACKENDS },
                         stream_mode: { type: 'string', enum: AGENT_STREAM_MODES },
                         streaming_strategy: { type: 'string', enum: AGENT_STREAMING_STRATEGIES },
+                        channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        channel_request_mode_fallback_applied: { type: 'boolean' },
+                        route_decision: { $ref: '#/components/schemas/ChannelRequestModeDecision' },
                         selected_channel_id: { type: 'string' },
                         upstream_host: { type: 'string' },
                         request_headers: { $ref: '#/components/schemas/UpstreamRequestHeaderSummary' }
@@ -1784,6 +1816,9 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     type: 'object',
                     properties: {
                         elapsed_ms: { type: 'integer', minimum: 0 },
+                        channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        channel_request_mode_fallback_applied: { type: 'boolean' },
+                        route_decision: { $ref: '#/components/schemas/ChannelRequestModeDecision' },
                         selected_channel_id: { type: 'string' },
                         upstream_host: { type: 'string' },
                         upstream_status: { type: 'integer' },
@@ -1812,7 +1847,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             required: ['channel_id'],
                             properties: {
                                 channel_id: { type: 'string' },
-                                credential_id: { type: 'string' }
+                                credential_id: { type: 'string' },
+                                request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES }
                             },
                             additionalProperties: false
                         },
@@ -1842,6 +1878,34 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         configured_header_names: {
                             type: 'array',
                             items: { type: 'string' }
+                        }
+                    },
+                    additionalProperties: false
+                },
+                AgentRequestModeControls: {
+                    type: 'object',
+                    required: [
+                        'source',
+                        'global_env',
+                        'channel_env_pattern',
+                        'mutable_at_runtime',
+                        'agent_client_policy',
+                        'final_gate_command',
+                        'smoke_gate_commands'
+                    ],
+                    properties: {
+                        source: { type: 'string', const: 'admin_env_whitelist' },
+                        global_env: { type: 'string' },
+                        channel_env_pattern: { type: 'string' },
+                        mutable_at_runtime: { type: 'boolean', const: false },
+                        agent_client_policy: { type: 'string', const: 'diagnostics_only' },
+                        final_gate_command: { type: 'string' },
+                        smoke_gate_commands: {
+                            type: 'object',
+                            additionalProperties: {
+                                type: 'array',
+                                items: { type: 'string' }
+                            }
                         }
                     },
                     additionalProperties: false
