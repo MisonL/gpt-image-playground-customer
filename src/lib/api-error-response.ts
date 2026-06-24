@@ -1,6 +1,11 @@
 import { RequestValidationError } from './image-request-utils';
 import { isChannelFailure } from './channel-router';
 import { ChannelCapacityQueueError } from './channel-capacity-queue';
+import {
+    CHANNEL_REQUEST_MODES,
+    type ChannelRequestMode,
+    type ChannelRequestModeDecision
+} from './channel-request-mode';
 import { NextResponse } from 'next/server';
 
 export type AgentErrorCode =
@@ -20,6 +25,9 @@ export type AgentErrorCode =
 
 export type AgentErrorDiagnostics = {
     elapsed_ms?: number;
+    channel_request_mode?: ChannelRequestMode;
+    channel_request_mode_fallback_applied?: boolean;
+    route_decision?: ChannelRequestModeDecision;
     selected_channel_id?: string;
     upstream_host?: string;
     upstream_status?: number;
@@ -33,6 +41,7 @@ export type AgentErrorDiagnostics = {
     cooldown_target?: {
         channel_id: string;
         credential_id?: string;
+        request_mode?: ChannelRequestMode;
     };
     channel_cooldown_scope?: 'credential' | 'channel';
     response_headers?: Record<string, string>;
@@ -159,8 +168,14 @@ function cleanDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): Agent
         diagnostics.retry_after_ms !== undefined
             ? normalizeNonNegativeInteger(diagnostics.retry_after_ms)
             : undefined;
+    const cooldownTarget = cleanCooldownTarget(diagnostics.cooldown_target);
     const cleaned: AgentErrorDiagnostics = {
         ...(diagnostics.elapsed_ms !== undefined ? { elapsed_ms: Math.max(0, Math.round(diagnostics.elapsed_ms)) } : {}),
+        ...(diagnostics.channel_request_mode ? { channel_request_mode: diagnostics.channel_request_mode } : {}),
+        ...(diagnostics.channel_request_mode_fallback_applied !== undefined
+            ? { channel_request_mode_fallback_applied: diagnostics.channel_request_mode_fallback_applied }
+            : {}),
+        ...(diagnostics.route_decision ? { route_decision: diagnostics.route_decision } : {}),
         ...(diagnostics.selected_channel_id ? { selected_channel_id: diagnostics.selected_channel_id } : {}),
         ...(diagnostics.upstream_host ? { upstream_host: diagnostics.upstream_host } : {}),
         ...(diagnostics.upstream_status !== undefined ? { upstream_status: diagnostics.upstream_status } : {}),
@@ -171,11 +186,34 @@ function cleanDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): Agent
         ...(retryAfterSeconds !== undefined ? { retry_after_seconds: retryAfterSeconds } : {}),
         ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
         ...(diagnostics.cooldown_until ? { cooldown_until: diagnostics.cooldown_until } : {}),
-        ...(diagnostics.cooldown_target ? { cooldown_target: diagnostics.cooldown_target } : {}),
+        ...(cooldownTarget ? { cooldown_target: cooldownTarget } : {}),
         ...(diagnostics.channel_cooldown_scope ? { channel_cooldown_scope: diagnostics.channel_cooldown_scope } : {}),
         ...(responseHeaders ? { response_headers: responseHeaders } : {})
     };
     return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+function cleanCooldownTarget(target: unknown): AgentErrorDiagnostics['cooldown_target'] | undefined {
+    if (typeof target !== 'object' || target === null) return undefined;
+    const source = target as Record<string, unknown>;
+    const channelId = normalizeNonEmptyString(source.channel_id);
+    if (!channelId) return undefined;
+    const credentialId = normalizeNonEmptyString(source.credential_id);
+    const requestMode = normalizeDiagnosticRequestMode(source.request_mode);
+    return {
+        channel_id: channelId,
+        ...(credentialId ? { credential_id: credentialId } : {}),
+        ...(requestMode ? { request_mode: requestMode } : {})
+    };
+}
+
+function normalizeDiagnosticRequestMode(value: unknown): ChannelRequestMode | undefined {
+    if (typeof value !== 'string') return undefined;
+    return CHANNEL_REQUEST_MODES.includes(value as ChannelRequestMode) ? (value as ChannelRequestMode) : undefined;
+}
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function readNumberField(error: unknown, field: string): number | undefined {

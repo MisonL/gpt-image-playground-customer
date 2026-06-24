@@ -36,6 +36,7 @@ export type ChannelHealthProbeRecord = {
     scope: 'credential' | 'channel';
     channelId: string;
     credentialId: string;
+    requestMode?: ChannelRecoveryProbeCandidate['requestMode'];
     ok: boolean;
     status?: number;
     code?: string;
@@ -186,7 +187,7 @@ export function createChannelHealthProber(options: ChannelHealthProberOptions): 
 }
 
 function toCandidateKey(candidate: ChannelRecoveryProbeCandidate): string {
-    return `${candidate.scope}:${candidate.credential.id}:${candidate.unhealthyUntil}`;
+    return `${candidate.scope}:${candidate.credential.id}:${candidate.requestMode ?? ''}:${candidate.unhealthyUntil}`;
 }
 
 function toFailureCandidate(
@@ -234,6 +235,7 @@ function toProbeRecord(candidate: ChannelRecoveryProbeCandidate, result: ProbeRe
         scope: candidate.scope,
         channelId: candidate.credential.channelId,
         credentialId: candidate.credential.id,
+        ...(candidate.requestMode ? { requestMode: candidate.requestMode } : {}),
         ok: result.ok,
         ...(result.status === undefined ? {} : { status: result.status }),
         ...(result.code === undefined ? {} : { code: result.code })
@@ -248,6 +250,7 @@ function toFailureReason(
     return {
         at,
         scope: candidate.scope,
+        ...(candidate.requestMode ? { requestMode: candidate.requestMode } : {}),
         ...(result.status === undefined ? {} : { status: result.status }),
         ...(result.code === undefined ? {} : { code: result.code })
     };

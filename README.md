@@ -101,9 +101,10 @@ start-windows.bat
 | 默认后端 | `IMAGE_GENERATION_BACKEND` | 默认 `images-api`；可设为 `responses-image-generation`。 |
 | Responses 顶层模型 | `OPENAI_RESPONSES_API_MODEL` | 仅在 `responses-image-generation` 后端生效；作为 `/responses` 的顶层 `model`，例如 `gpt-5.4`。 |
 | 流式策略 | `IMAGE_STREAMING_STRATEGY` | 默认 `auto`；可设为 `off`、`openai-sse`、`responses-sse` 等。 |
+| 渠道请求方式 | `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES` | 可选。声明全局或单渠道可用方式：`images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`；旧后端名别名仅为兼容输入，建议使用这四个规范值。 |
 | 并发容量 | `OPENAI_MAX_STREAMS_PER_CREDENTIAL` | 单个渠道凭证允许同时执行的图片请求数，默认 `1`。 |
 | 渠道队列 | `OPENAI_CHANNEL_QUEUE_ENABLED`、`OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS`、`OPENAI_CHANNEL_QUEUE_MAX_SIZE` | 控制超出凭证容量时等待还是立即失败。 |
-| 失败冷却 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED`、`OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 控制失败渠道或凭证是否临时移出路由池。 |
+| 失败冷却 | `OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED`、`OPENAI_CHANNEL_FAILURE_COOLDOWN_MS` | 控制失败渠道、凭证或已识别请求方式是否临时移出路由池。 |
 | 上游超时 | `IMAGE_UPSTREAM_TIMEOUT_MS`、`IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS`、`IMAGE_UPSTREAM_MAX_RETRIES` | 默认按长耗时图片请求处理，SDK 自动重试默认关闭。 |
 | 日志窗口 | `APP_LOG_LEVEL`、`APP_LOG_MAX_ENTRIES` | 控制服务端日志等级和 Agent 诊断可回溯窗口。 |
 
@@ -115,10 +116,12 @@ OPENAI_ROUTING_STRATEGY=round_robin
 OPENAI_CHANNEL_1_ID=official
 OPENAI_CHANNEL_1_BASE_URL=https://api.openai.com/v1
 OPENAI_CHANNEL_1_API_KEYS=your-primary-key
+OPENAI_CHANNEL_1_REQUEST_MODES=images-non-stream,images-sse
 
 OPENAI_CHANNEL_2_ID=backup
 OPENAI_CHANNEL_2_BASE_URL=https://your-compatible-api.example.com/v1
 OPENAI_CHANNEL_2_API_KEYS=your-backup-key-a,your-backup-key-b
+OPENAI_CHANNEL_2_REQUEST_MODES=images-non-stream
 
 OPENAI_CHANNEL_3_ID=matsca
 OPENAI_CHANNEL_3_BASE_URL=https://img.matsca.com/v1
@@ -135,6 +138,8 @@ OPENAI_CHANNEL_3_UPSTREAM_PROFILE=matsca
 注意：
 
 - 自定义 API URL 必须同时填写自定义 API Key，避免服务端密钥被发送到未知地址。
+- `OPENAI_CHANNEL_N_REQUEST_MODES` 是管理员基于真实上游 smoke 设置的服务端白名单；全局默认可用 `OPENAI_UPSTREAM_REQUEST_MODES`。`/api/runtime-capabilities` 的 `channelRouting.requestModeControls`、`channelRouting.requestModeHealth` 和 Agent capabilities 的 `request_mode_controls` 会暴露配置入口、健康覆盖和对应真实 smoke gate。Agent 客户端只提交业务意图，不应自行选择 Images、Responses、SSE 或非流式路径。真实执行后可从 `execution.channel_request_mode`、`execution.channel_request_mode_fallback_applied` 和 `execution.route_decision` 读取服务端实际选路结果；失败冷却若能关联到本次服务端 request mode，会只冷却该渠道或凭证的对应 request mode，并在 `error.diagnostics.cooldown_target.request_mode` 暴露。
+- 渠道恢复探测使用非计费 `GET /models` 只确认 host、鉴权和 models 端点恢复；它不能替代 request mode 的真实 Images/Responses/SSE smoke。管理员应以真实 smoke 结果决定 `OPENAI_CHANNEL_N_REQUEST_MODES`。
 - Docker compose 本身不把默认图片后端改成 Responses；未在 `.env.local` 显式配置时仍是 `images-api` 和 `auto`。
 - Responses image backend 需要 `ENABLE_RESPONSES_IMAGE_BACKEND=true` 和 `OPENAI_RESPONSES_API_MODEL`。页面请求也可以用 `responsesModel`、`responses_model`、`gptModel` 或 `gpt_model` 覆盖单次 `/responses` 顶层模型；这些字段只影响本项目的 `responses-image-generation` 路径，不会改变兼容上游自身 `/v1/images/generations` 桥接层内部选择的模型。
 - Matsca、extra headers、provider manifest、真实上游 smoke 等高级配置以 [.env.example](./.env.example) 为准。

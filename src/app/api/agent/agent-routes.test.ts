@@ -37,6 +37,11 @@ beforeEach(async () => {
     process.env.AGENT_STATE_BACKEND = 'sqlite';
     process.env.AGENT_SQLITE_PATH = path.join(tempDir, 'agent.sqlite');
     process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE = 'fs';
+    for (const key of Object.keys(process.env)) {
+        if (/^OPENAI_CHANNEL_\d+_/.test(key)) {
+            delete process.env[key];
+        }
+    }
     delete process.env.APP_PASSWORD;
     delete process.env.AGENT_API_TOKEN;
     delete process.env.OPENAI_API_KEY;
@@ -47,6 +52,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_1_USER_AGENT;
@@ -55,6 +61,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_CHANNEL_2_API_KEYS;
     delete process.env.OPENAI_CHANNEL_2_BASE_URL;
     delete process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_2_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_2_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_2_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_2_USER_AGENT;
@@ -135,6 +142,12 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
+                request_modes: [
+                    'images-non-stream',
+                    'images-sse',
+                    'responses-non-stream',
+                    'responses-sse'
+                ],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -203,6 +216,12 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
+                request_modes: [
+                    'images-non-stream',
+                    'images-sse',
+                    'responses-non-stream',
+                    'responses-sse'
+                ],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -249,6 +268,16 @@ describe('Agent route integration', () => {
             assert.equal(firstBody.execution.image_backend, 'images-api');
             assert.equal(firstBody.execution.stream_mode, 'non_stream');
             assert.equal(firstBody.execution.streaming_strategy, 'auto');
+            assert.equal(firstBody.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(firstBody.execution.channel_request_mode_fallback_applied, false);
+            assert.deepEqual(firstBody.execution.route_decision, {
+                requested_backend: 'images-api',
+                preferred_channel_request_mode: 'images-non-stream',
+                selected_channel_request_mode: 'images-non-stream',
+                fallback_applied: false,
+                selected_channel_id: 'default',
+                upstream_host: new URL(upstream.baseUrl).host
+            });
             assert.equal(firstBody.execution.upstream_host, new URL(upstream.baseUrl).host);
             assert.equal(firstBody.execution.request_headers.user_agent_effective, 'gpt-image-playground/2.1.0');
             assert.equal(firstBody.execution.request_headers.has_extra_headers, false);
@@ -390,6 +419,9 @@ describe('Agent route integration', () => {
             );
 
             assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(body.execution.channel_request_mode_fallback_applied, false);
             const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
             assert.equal(upstreamJson.stream, false);
             assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
@@ -425,6 +457,87 @@ describe('Agent route integration', () => {
             assert.equal(upstreamJson.stream, true);
             assert.equal(upstreamJson.partial_images, 2);
             assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 1);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('uses a non-streaming channel request mode when Agent auto streaming has no SSE channel', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startImageUpstream((body) => {
+            upstreamBody = body;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-only';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-auto-json-channel-key', {
+                    prompt: 'agent auto json channel',
+                    stream_mode: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(body.execution.channel_request_mode_fallback_applied, true);
+            assert.deepEqual(body.execution.route_decision, {
+                requested_backend: 'images-api',
+                preferred_channel_request_mode: 'images-sse',
+                fallback_channel_request_mode: 'images-non-stream',
+                selected_channel_request_mode: 'images-non-stream',
+                fallback_applied: true,
+                selected_channel_id: 'json-only',
+                upstream_host: new URL(upstream.baseUrl).host
+            });
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, false);
+            assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails explicit Agent stream requests instead of falling back to non-streaming request modes', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-only';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-explicit-stream-no-sse-key', {
+                    prompt: 'agent explicit stream no sse',
+                    stream_mode: 'stream',
+                    streaming_strategy: 'openai-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 503);
+            const body = await response.json();
+            assert.equal(body.error.code, 'configuration_error');
+            assert.equal(body.error.diagnostics.channel_request_mode, 'images-sse');
+            assert.equal(body.error.diagnostics.channel_request_mode_fallback_applied, false);
+            assert.deepEqual(body.error.diagnostics.route_decision, {
+                requested_backend: 'images-api',
+                preferred_channel_request_mode: 'images-sse',
+                selected_channel_request_mode: 'images-sse',
+                fallback_applied: false,
+                no_channel_reason: '当前没有支持 images-sse 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。'
+            });
+            assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();
         }
@@ -1027,6 +1140,7 @@ describe('Agent route integration', () => {
             assert.match(body.error.diagnostics.upstream_host, /^127\.0\.0\.1:\d+$/);
             assert.equal(body.error.diagnostics.channel_cooldown_scope, 'channel');
             assert.equal(body.error.diagnostics.cooldown_target.channel_id, 'default');
+            assert.equal(body.error.diagnostics.cooldown_target.request_mode, 'images-non-stream');
             assert.equal(typeof body.error.diagnostics.retry_after_ms, 'number');
             assert.equal(typeof body.error.diagnostics.cooldown_until, 'string');
             assert.equal(typeof body.error.diagnostics.elapsed_ms, 'number');
@@ -1056,6 +1170,10 @@ describe('Agent route integration', () => {
             assert.equal(diagnosticsBody.diagnostics.error.diagnostics.selected_channel_id, 'default');
             assert.match(diagnosticsBody.diagnostics.error.diagnostics.upstream_host, /^127\.0\.0\.1:\d+$/);
             assert.equal(diagnosticsBody.diagnostics.error.diagnostics.cooldown_target.channel_id, 'default');
+            assert.equal(
+                diagnosticsBody.diagnostics.error.diagnostics.cooldown_target.request_mode,
+                'images-non-stream'
+            );
             assert.equal(typeof diagnosticsBody.diagnostics.error.diagnostics.retry_after_ms, 'number');
             assert.equal(JSON.stringify(diagnosticsBody).includes('test-key'), false);
         } finally {
@@ -1105,6 +1223,8 @@ describe('Agent route integration', () => {
             assert.equal(resultBody.execution.transport, 'agent_job_polling');
             assert.equal(resultBody.execution.endpoint, '/api/agent/jobs/images/generate');
             assert.equal(resultBody.execution.route_mode, 'job');
+            assert.equal(resultBody.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(resultBody.execution.channel_request_mode_fallback_applied, false);
             assert.equal(typeof resultBody.timing.elapsed_ms, 'number');
             assert.equal(resultBody.timing.elapsed_ms >= 0, true);
         } finally {
@@ -1141,6 +1261,8 @@ describe('Agent route integration', () => {
             assert.equal(resultBody.execution.transport, 'agent_job_polling');
             assert.equal(resultBody.execution.endpoint, '/api/agent/image-requests');
             assert.equal(resultBody.execution.route_mode, 'job');
+            assert.equal(resultBody.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(resultBody.execution.channel_request_mode_fallback_applied, false);
             assert.equal(upstreamCalls, 1);
         } finally {
             await upstream.close();

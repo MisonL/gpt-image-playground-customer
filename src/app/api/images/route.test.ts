@@ -32,6 +32,11 @@ function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
 beforeEach(() => {
     originalEnv = { ...process.env };
     console.error = () => {};
+    for (const key of Object.keys(process.env)) {
+        if (/^OPENAI_CHANNEL_\d+_/.test(key)) {
+            delete process.env[key];
+        }
+    }
     delete process.env.APP_PASSWORD;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
@@ -39,6 +44,7 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED;
@@ -113,6 +119,38 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
             assert.equal(upstreamJson.stream, true);
             assert.equal(upstreamJson.partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('uses a non-streaming channel request mode when page auto streaming has no SSE channel', async () => {
+        const { POST } = await import('./route');
+        const upstreamBodies: string[] = [];
+        const upstream = await startImagesJsonUpstream(async (body, _url, request) => {
+            if (request.method === 'POST') {
+                upstreamBodies.push(body);
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-only';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            assert.equal(upstreamBodies.length, 1);
+            const upstreamJson = JSON.parse(upstreamBodies[0] || '{}') as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, false);
+            assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
         } finally {
             await upstream.close();
         }

@@ -22,6 +22,12 @@ import {
 } from './agent-state-store';
 import { AgentApiError, normalizeAgentError, storedAgentErrorResponse, type AgentErrorBody } from './api-error-response';
 import type { AgentErrorDiagnostics } from './api-error-response';
+import {
+    buildAgentChannelRequestModeDecision,
+    createAgentChannelRequestModePlan,
+    selectAgentChannelCredential,
+    type AgentChannelRequestModePlan
+} from './agent-channel-request-mode';
 import { appLogger } from './app-logger';
 import type { ChannelCapacityLease } from './channel-capacity-queue';
 import {
@@ -32,6 +38,11 @@ import {
     isCredentialFailure,
     resolveEffectiveCredential
 } from './channel-router';
+import {
+    isStreamingChannelRequestMode,
+    type ChannelRequestMode,
+    type ChannelRequestModeDecision
+} from './channel-request-mode';
 import {
     RequestValidationError,
     assertMaskCompatibility,
@@ -78,7 +89,7 @@ import {
 import { buildOpenAIImageRequestOptions, createOpenAIImageClientOptions } from './openai-image-transport';
 import { getServerChannelState } from './server-channel-router';
 import type { StreamingAvailabilityKey } from './streaming-availability';
-import { readAffinityKey, readBooleanEnv } from './server-runtime';
+import { readBooleanEnv } from './server-runtime';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import OpenAI from 'openai';
@@ -93,6 +104,9 @@ export type AgentRequestExecutionResult = {
 type CredentialContext = {
     openai: OpenAI;
     selectedCredential?: ChannelCredential;
+    channelRequestMode?: ChannelRequestMode;
+    channelRequestModeFallbackApplied: boolean;
+    channelRequestModeDecision: ChannelRequestModeDecision;
     baseUrl?: string;
     apiKey: string;
     upstreamProfile: ImageUpstreamProfile;
@@ -123,6 +137,7 @@ type AgentStreamOptions = {
     streamingStrategy: ImageStreamingStrategy;
     partialImages: PartialImagesCount;
     selectedCredential?: ChannelCredential;
+    channelRequestMode?: ChannelRequestMode;
 };
 
 type AgentEditStreamRequest = {
@@ -141,6 +156,9 @@ type AgentExecutionMetadata = {
     imageBackend: AgentImageResponseExecution['image_backend'];
     streamMode: ImageStreamMode;
     streamingStrategy: ImageStreamingStrategy;
+    channelRequestMode?: ChannelRequestMode;
+    channelRequestModeFallbackApplied: boolean;
+    channelRequestModeDecision: ChannelRequestModeDecision;
     selectedCredential?: ChannelCredential;
 };
 
@@ -242,16 +260,32 @@ export async function agentBeginResultResponse(
 }
 
 export function prepareAgentGenerate(request: AgentGenerateRequest, headers: Headers): AgentGeneratePreparation {
-    const credentialContext = createOpenAiClient(headers);
+    const credentialContext = createOpenAiClient(headers, resolveAgentGenerateChannelRequestModePlan(request));
     validateAgentGenerateAgainstUpstreamProfile(request, credentialContext.upstreamProfile);
     return { credentialContext };
+}
+
+function resolveAgentGenerateChannelRequestModePlan(request: AgentGenerateRequest): AgentChannelRequestModePlan {
+    return createAgentChannelRequestModePlan({
+        imageBackend: request.image_backend,
+        streamMode: request.stream_mode,
+        streamingStrategy: request.streaming_strategy
+    });
+}
+
+function resolveAgentEditChannelRequestModePlan(formData: FormData): AgentChannelRequestModePlan {
+    return createAgentChannelRequestModePlan({
+        imageBackend: 'images-api',
+        streamMode: readAgentEditStreamMode(formData),
+        streamingStrategy: readAgentEditStreamingStrategy(formData)
+    });
 }
 
 export async function prepareAgentEdit(formData: FormData, headers: Headers): Promise<AgentEditPreparation> {
     const prompt = readRequiredText(formData, 'prompt');
     const model = readModel(formData);
     assertImageFilesPresent(formData);
-    const credentialContext = createOpenAiClient(headers);
+    const credentialContext = createOpenAiClient(headers, resolveAgentEditChannelRequestModePlan(formData));
     const n = readCount(
         formData,
         'n',
@@ -388,12 +422,19 @@ export async function executeAgentGenerate(options: {
                 imageBackend: options.request.image_backend,
                 streamMode: options.request.stream_mode,
                 streamingStrategy: options.request.streaming_strategy,
+                channelRequestMode: credentialContext.channelRequestMode,
+                channelRequestModeFallbackApplied: credentialContext.channelRequestModeFallbackApplied,
+                channelRequestModeDecision: credentialContext.channelRequestModeDecision,
                 selectedCredential: credentialContext.selectedCredential
             },
             abortSignal: options.abortSignal
         });
     } catch (error) {
-        const failureReport = reportServerCredentialFailure(credentialContext.selectedCredential, error);
+        const failureReport = reportServerCredentialFailure(
+            credentialContext.selectedCredential,
+            error,
+            credentialContext.channelRequestMode
+        );
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs, failureReport));
     } finally {
         channelLease?.release();
@@ -412,7 +453,8 @@ async function executeAgentGenerateUpstream(
         streamMode: request.stream_mode,
         streamingStrategy: request.streaming_strategy,
         partialImages: request.partial_images,
-        selectedCredential: credentialContext.selectedCredential
+        selectedCredential: credentialContext.selectedCredential,
+        channelRequestMode: credentialContext.channelRequestMode
     };
     if (request.image_backend === 'responses-image-generation') {
         return executeAgentResponsesGenerate(request, credentialContext, abortSignal);
@@ -528,7 +570,8 @@ async function executeAgentResponsesGenerate(
         streamMode: request.stream_mode,
         streamingStrategy: request.streaming_strategy,
         partialImages: request.partial_images,
-        selectedCredential: credentialContext.selectedCredential
+        selectedCredential: credentialContext.selectedCredential,
+        channelRequestMode: credentialContext.channelRequestMode
     };
     if (!shouldUseAgentUpstreamStream(streamOptions)) {
         return generateImageWithResponsesBackend(input);
@@ -561,6 +604,7 @@ function shouldUseAgentUpstreamStream(input: AgentStreamOptions): boolean {
     const key = createAgentStreamingAvailabilityKey(input);
     const availability = getServerChannelState().streamingAvailability;
     if (input.streamMode === 'non_stream') return false;
+    if (input.channelRequestMode && !isStreamingChannelRequestMode(input.channelRequestMode)) return false;
     if (input.streamMode === 'auto' && availability.isUnavailable(key)) return false;
     return resolveImageStreamEnabled({
         imageBackend: input.imageBackend,
@@ -660,7 +704,8 @@ export async function executeAgentEdit(options: {
             streamMode: preparation.streamRequest.streamMode,
             streamingStrategy: preparation.streamRequest.streamingStrategy,
             partialImages: preparation.streamRequest.partialImages,
-            selectedCredential: credentialContext.selectedCredential
+            selectedCredential: credentialContext.selectedCredential,
+            channelRequestMode: credentialContext.channelRequestMode
         };
         channelLease = await acquireAgentChannelCapacity(credentialContext, options.abortSignal);
         const result = shouldUseAgentUpstreamStream(streamOptions)
@@ -702,12 +747,19 @@ export async function executeAgentEdit(options: {
                 imageBackend: 'images-api',
                 streamMode: preparation.streamRequest.streamMode,
                 streamingStrategy: preparation.streamRequest.streamingStrategy,
+                channelRequestMode: credentialContext.channelRequestMode,
+                channelRequestModeFallbackApplied: credentialContext.channelRequestModeFallbackApplied,
+                channelRequestModeDecision: credentialContext.channelRequestModeDecision,
                 selectedCredential: credentialContext.selectedCredential
             },
             abortSignal: options.abortSignal
         });
     } catch (error) {
-        const failureReport = reportServerCredentialFailure(credentialContext?.selectedCredential, error);
+        const failureReport = reportServerCredentialFailure(
+            credentialContext?.selectedCredential,
+            error,
+            credentialContext?.channelRequestMode
+        );
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs, failureReport));
     } finally {
         channelLease?.release();
@@ -895,9 +947,14 @@ export async function hydrateAgentReplayResponse(
     };
 }
 
-function createOpenAiClient(headers: Headers): CredentialContext {
+function createOpenAiClient(headers: Headers, requestModePlan?: AgentChannelRequestModePlan): CredentialContext {
     const serverChannelRouter = getServerChannelState().router;
-    const selectedCredential = serverChannelRouter?.select({ affinityKey: readAffinityKey(headers) });
+    const selection = selectAgentChannelCredential({
+        router: serverChannelRouter,
+        headers,
+        requestModePlan
+    });
+    const selectedCredential = selection.selectedCredential;
     const {
         apiKey,
         baseUrl,
@@ -912,12 +969,21 @@ function createOpenAiClient(headers: Headers): CredentialContext {
     validateApiBaseUrl(baseUrl || '', {
         allowedPlainHttpBaseUrls: readPlainHttpApiBaseUrlAllowlist(process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS)
     });
+    const channelRequestModeDecision = buildAgentChannelRequestModeDecision({
+        requestModePlan,
+        selection,
+        selectedCredential: effectiveSelectedCredential,
+        upstreamHost: baseUrl ? readUrlHost(baseUrl) : undefined
+    });
     if (!apiKey) {
         throw new AgentApiError({
             code: 'configuration_error',
             message: '未配置服务端 API Key。请设置 OPENAI_API_KEY 或 OPENAI_CHANNEL_N_API_KEYS。',
             status: 500,
-            retryable: false
+            retryable: false,
+            diagnostics: {
+                route_decision: channelRequestModeDecision
+            }
         });
     }
     return {
@@ -929,6 +995,9 @@ function createOpenAiClient(headers: Headers): CredentialContext {
             })
         ),
         selectedCredential: effectiveSelectedCredential,
+        channelRequestMode: selection.requestMode,
+        channelRequestModeFallbackApplied: selection.fallbackApplied,
+        channelRequestModeDecision,
         baseUrl,
         apiKey,
         upstreamProfile:
@@ -950,6 +1019,9 @@ function buildAgentExecutionDiagnostics(
     const upstreamHost = context?.baseUrl ? readUrlHost(context.baseUrl) : undefined;
     return {
         elapsed_ms: Date.now() - startedAtMs,
+        ...(context?.channelRequestMode ? { channel_request_mode: context.channelRequestMode } : {}),
+        ...(context ? { channel_request_mode_fallback_applied: context.channelRequestModeFallbackApplied } : {}),
+        ...(context?.channelRequestModeDecision ? { route_decision: context.channelRequestModeDecision } : {}),
         ...(context?.selectedCredential?.channelId
             ? { selected_channel_id: context.selectedCredential.channelId }
             : {}),
@@ -959,7 +1031,8 @@ function buildAgentExecutionDiagnostics(
             cooldown_until: isoDate(new Date(failureReport.cooldownUntil)),
             cooldown_target: {
                 channel_id: failureReport.target.channelId,
-                ...(failureReport.target.credentialId ? { credential_id: failureReport.target.credentialId } : {})
+                ...(failureReport.target.credentialId ? { credential_id: failureReport.target.credentialId } : {}),
+                ...(failureReport.target.requestMode ? { request_mode: failureReport.target.requestMode } : {})
             },
             channel_cooldown_scope: failureReport.scope
         } : {})
@@ -976,13 +1049,17 @@ function readUrlHost(value: string): string | undefined {
 
 function reportServerCredentialFailure(
     credential: ChannelCredential | undefined,
-    error: unknown
+    error: unknown,
+    requestMode?: ChannelRequestMode
 ): ChannelFailureReport | undefined {
     const serverChannelRouter = getServerChannelState().router;
     if (!credential || !serverChannelRouter) return undefined;
     if (isChannelFailure(error)) {
-        const reason = describeChannelFailure(error, 'channel');
-        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', reason });
+        const reason = {
+            ...describeChannelFailure(error, 'channel'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
         appLogger.warn(
             report.cooldownApplied
                 ? `Temporarily cooling down API channel: ${credential.channelId}`
@@ -992,8 +1069,11 @@ function reportServerCredentialFailure(
         return report;
     }
     if (isCredentialFailure(error)) {
-        const reason = describeChannelFailure(error, 'credential');
-        const report = serverChannelRouter.reportFailure(credential, { reason });
+        const reason = {
+            ...describeChannelFailure(error, 'credential'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { requestMode, reason });
         appLogger.warn(
             report.cooldownApplied
                 ? `Temporarily cooling down API channel credential: ${credential.channelId}/${credential.id}`
@@ -1126,6 +1206,12 @@ function buildAgentImageExecution(
         image_backend: metadata.imageBackend,
         stream_mode: metadata.streamMode,
         streaming_strategy: metadata.streamingStrategy,
+        ...(metadata.channelRequestMode ? { channel_request_mode: metadata.channelRequestMode } : {}),
+        channel_request_mode_fallback_applied: metadata.channelRequestModeFallbackApplied,
+        route_decision: {
+            ...metadata.channelRequestModeDecision,
+            ...(upstreamHost ? { upstream_host: upstreamHost } : {})
+        },
         ...(metadata.selectedCredential?.channelId
             ? { selected_channel_id: metadata.selectedCredential.channelId }
             : {}),
