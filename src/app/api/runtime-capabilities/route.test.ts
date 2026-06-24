@@ -62,7 +62,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
     it('exposes streaming batch capability by default without the removed env gate', async () => {
         const { GET } = await import('./route');
 
-        const body = (await (await GET()).json()) as Record<string, { enabled: boolean; recommendedConcurrency?: number }>;
+        const body = (await (await GET()).json()) as Record<
+            string,
+            { enabled: boolean; recommendedConcurrency?: number }
+        >;
 
         assert.equal(body.streamingBatch.enabled, true);
         assert.equal(typeof body.streamingBatch.recommendedConcurrency, 'number');
@@ -207,7 +210,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.equal(defaultBody.upstreamProfile.serverProfile, 'openai-compatible');
         assert.equal(defaultBody.upstreamProfile.serverProfileMixed, false);
         assert.equal(defaultBody.upstreamProfile.requestProfile, 'openai-compatible');
-        assert.equal((defaultBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages, 10);
+        assert.equal(
+            (defaultBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages,
+            10
+        );
 
         process.env.OPENAI_CHANNEL_1_ID = 'matsca';
         process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-matsca';
@@ -226,7 +232,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             (matscaBody.upstreamProfile.activeConstraints as { generateCount: { max: number } }).generateCount.max,
             4
         );
-        assert.equal((matscaBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages, 8);
+        assert.equal(
+            (matscaBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages,
+            8
+        );
         assert.equal(JSON.stringify(matscaBody).includes('sk-matsca'), false);
 
         process.env.OPENAI_CHANNEL_2_ID = 'official';
@@ -243,7 +252,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             (mixedBody.upstreamProfile.activeConstraints as { generateCount: { max: number } }).generateCount.max,
             4
         );
-        assert.equal((mixedBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages, 8);
+        assert.equal(
+            (mixedBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages,
+            8
+        );
         assert.deepEqual(
             (mixedBody.upstreamProfile.activeConstraints as { partialImages: { min: number; max: number } })
                 .partialImages,
@@ -373,7 +385,6 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.equal(enabled.responsesImageBackend.mode, 'experimental');
         assert.equal(enabled.responsesImageBackend.hasDefaultModel, true);
         assert.deepEqual(enabled.responsesImageBackend.missingEnv, []);
-        });
     });
 
     it('exposes sanitized channel request modes for routing diagnostics', async () => {
@@ -420,12 +431,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             strategy: 'round_robin',
             credentialCount: 1,
             channelCount: 1,
-            supportedRequestModes: [
-                'images-non-stream',
-                'images-sse',
-                'responses-non-stream',
-                'responses-sse'
-            ],
+            supportedRequestModes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
             configuredRequestModes: ['images-non-stream', 'images-sse'],
             effectiveRequestModes: ['images-non-stream', 'images-sse'],
             requestModeControls: {
@@ -495,3 +501,4 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         });
         assert.equal(JSON.stringify(body.channelRouting).includes('sk-secret'), false);
     });
+});
