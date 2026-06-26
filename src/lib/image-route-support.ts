@@ -4,6 +4,7 @@ import {
     type ChannelCredential,
     describeChannelFailure,
     isChannelFailure,
+    isChannelRequestModeFailure,
     isCredentialFailure
 } from './channel-router';
 import type { ChannelRequestMode } from './channel-request-mode';
@@ -52,6 +53,20 @@ export function reportServerCredentialFailure(
 ) {
     const serverChannelRouter = getServerChannelState().router;
     if (!credential || !serverChannelRouter) return;
+    if (isChannelRequestModeFailure(error, requestMode)) {
+        const reason = {
+            ...describeChannelFailure(error, 'channel'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
+        appLogger.warn(
+            report.cooldownApplied
+                ? `暂时冷却 API 渠道请求方式：${credential.channelId}/${requestMode}`
+                : `记录 API 渠道请求方式失败，未启用冷却：${credential.channelId}/${requestMode}`,
+            reason
+        );
+        return;
+    }
     if (isChannelFailure(error)) {
         const reason = {
             ...describeChannelFailure(error, 'channel'),

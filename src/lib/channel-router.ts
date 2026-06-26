@@ -755,6 +755,18 @@ export function isCredentialFailure(error: unknown): boolean {
     );
 }
 
+export function isChannelRequestModeFailure(error: unknown, requestMode?: ChannelRequestMode): boolean {
+    if (!requestMode || !requestMode.startsWith('responses-')) {
+        return false;
+    }
+    const status = readErrorStatusCode(error);
+    if (status !== 403) {
+        return false;
+    }
+    const message = readErrorMessage(error);
+    return /image generation is not enabled for this group/i.test(message);
+}
+
 export function isChannelFailure(error: unknown): boolean {
     if (error instanceof ChannelCapacityQueueError) {
         return false;
@@ -1044,7 +1056,7 @@ function readErrorNumber(error: unknown, fieldName: string): number | undefined 
 }
 
 function readStatusField(error: unknown): { status?: number } {
-    const value = readErrorNumber(error, 'status') ?? readNestedErrorNumber(error, 'status');
+    const value = readErrorStatusCode(error);
     return value === undefined ? {} : { status: value };
 }
 
@@ -1088,6 +1100,39 @@ function readNestedErrorNumber(error: unknown, fieldName: string): number | unde
         return undefined;
     }
     return readErrorNumber((error as { error?: unknown }).error, fieldName);
+}
+
+function readErrorStatusCode(error: unknown): number | undefined {
+    return (
+        readErrorNumber(error, 'status') ??
+        readErrorNumber(error, 'statusCode') ??
+        readErrorNumber(error, 'status_code') ??
+        readNestedErrorNumber(error, 'status') ??
+        readNestedErrorNumber(error, 'statusCode') ??
+        readNestedErrorNumber(error, 'status_code') ??
+        readStatusCodeFromMessage(readErrorMessage(error))
+    );
+}
+
+function readErrorMessage(error: unknown): string {
+    if (typeof error === 'string') return error;
+    return [
+        readErrorString(error, 'message'),
+        readNestedErrorString(error, 'message'),
+        readErrorString(error, 'detail'),
+        readNestedErrorString(error, 'detail'),
+        readErrorString(error, 'raw'),
+        readNestedErrorString(error, 'raw')
+    ]
+        .filter((value): value is string => Boolean(value))
+        .join('\n');
+}
+
+function readStatusCodeFromMessage(message: string): number | undefined {
+    const match = /\bstatus(?:_code)?\s*=\s*(\d{3})\b/i.exec(message);
+    if (!match) return undefined;
+    const status = Number(match[1]);
+    return Number.isInteger(status) ? status : undefined;
 }
 
 function isConnectionFailure(error: unknown): boolean {

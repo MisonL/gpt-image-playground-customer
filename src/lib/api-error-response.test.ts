@@ -7,6 +7,7 @@ import {
     toTerminalAgentErrorBody
 } from './api-error-response';
 import { RequestValidationError } from './image-request-utils';
+import { type ChannelRequestMode } from './channel-request-mode';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -73,6 +74,23 @@ describe('normalizeAgentError', () => {
         assert.equal(error.upstreamStatus, undefined);
         assert.equal(error.diagnostics?.transport_error, true);
         assert.equal(error.diagnostics?.transport_error_kind, 'unknown_transport');
+        assert.equal(error.diagnostics?.channel_cooldown_scope, 'channel');
+    });
+
+    it('maps Responses image generation disabled 403s to unavailable channel failures', () => {
+        const error = normalizeAgentError(
+            Object.assign(new Error('status_code=403, Image generation is not enabled for this group'), {
+                status: 403
+            }),
+            {
+                channel_request_mode: 'responses-sse' as ChannelRequestMode
+            }
+        );
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, true);
+        assert.equal(error.upstreamStatus, 403);
         assert.equal(error.diagnostics?.channel_cooldown_scope, 'channel');
     });
 

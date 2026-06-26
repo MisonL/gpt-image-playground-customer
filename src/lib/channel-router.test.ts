@@ -3,6 +3,7 @@ import {
     describeChannelFailure,
     getChannelPoolSummary,
     isChannelFailure,
+    isChannelRequestModeFailure,
     isCredentialFailure,
     parseChannelPoolConfig,
     resolveEffectiveCredential,
@@ -1556,6 +1557,35 @@ describe('isCredentialFailure', () => {
 
     it('does not treat local channel capacity queue errors as credential failures', () => {
         assert.equal(isCredentialFailure(createCapacityQueueError()), false);
+    });
+});
+
+describe('isChannelRequestModeFailure', () => {
+    it('treats Responses image_generation-disabled 403 as a request-mode failure', () => {
+        assert.equal(
+            isChannelRequestModeFailure(
+                new Error('status_code=403, Image generation is not enabled for this group'),
+                'responses-sse'
+            ),
+            true
+        );
+        assert.equal(
+            isChannelRequestModeFailure(
+                { status: 403, error: { message: 'Image generation is not enabled for this group' } },
+                'responses-non-stream'
+            ),
+            true
+        );
+    });
+
+    it('does not apply the Responses image_generation-disabled rule to Images API modes', () => {
+        assert.equal(
+            isChannelRequestModeFailure(
+                { status: 403, message: 'Image generation is not enabled for this group' },
+                'images-sse'
+            ),
+            false
+        );
     });
 });
 

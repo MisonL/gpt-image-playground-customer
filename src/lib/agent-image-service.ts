@@ -45,6 +45,7 @@ import {
     type ChannelFailureReport,
     describeChannelFailure,
     isChannelFailure,
+    isChannelRequestModeFailure,
     isCredentialFailure,
     resolveEffectiveCredential
 } from './channel-router';
@@ -1067,6 +1068,20 @@ function reportServerCredentialFailure(
 ): ChannelFailureReport | undefined {
     const serverChannelRouter = getServerChannelState().router;
     if (!credential || !serverChannelRouter) return undefined;
+    if (isChannelRequestModeFailure(error, requestMode)) {
+        const reason = {
+            ...describeChannelFailure(error, 'channel'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
+        appLogger.warn(
+            report.cooldownApplied
+                ? `Temporarily cooling down API channel request mode: ${credential.channelId}/${requestMode}`
+                : `Recording API channel request mode failure without cooldown: ${credential.channelId}/${requestMode}`,
+            reason
+        );
+        return report;
+    }
     if (isChannelFailure(error)) {
         const reason = {
             ...describeChannelFailure(error, 'channel'),
