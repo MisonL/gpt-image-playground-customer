@@ -97,6 +97,8 @@ export const AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS = [
     'streaming_strategy',
     'partial_images'
 ] as const;
+export const AGENT_PAGE_SSE_AGENT_USAGE =
+    'explicit_for_generate_recommended_for_page_only_fields_default_webp_edit_high_resolution_edit_long_image_recovery_and_complex_batch' as const;
 const AGENT_DEFAULT_PARTIAL_IMAGES = 2;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
@@ -334,7 +336,7 @@ export type AgentCapabilities = {
                 source_header: 'Idempotency-Key';
                 max_length: number;
             };
-            agent_usage: 'explicit_for_generate_recommended_for_page_only_fields_high_resolution_edit_and_complex_batch';
+            agent_usage: typeof AGENT_PAGE_SSE_AGENT_USAGE;
         };
     };
     orchestration: {
@@ -1013,7 +1015,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     source_header: 'Idempotency-Key',
                     max_length: PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
                 },
-                agent_usage: 'explicit_for_generate_recommended_for_page_only_fields_high_resolution_edit_and_complex_batch'
+                agent_usage: AGENT_PAGE_SSE_AGENT_USAGE
             }
         },
         orchestration: {

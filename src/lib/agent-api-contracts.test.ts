@@ -1,5 +1,6 @@
 import {
     AGENT_PAGE_REQUEST_DIAGNOSTICS_NO_MATCH_HINT,
+    AGENT_PAGE_SSE_AGENT_USAGE,
     AGENT_SCHEMA_VERSION,
     PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH,
     buildAgentAuthCapabilities,
@@ -439,7 +440,7 @@ describe('buildAgentCapabilities', () => {
         });
         assert.equal(
             capabilities.agent_streaming.page_sse.agent_usage,
-            'explicit_for_generate_recommended_for_page_only_fields_high_resolution_edit_and_complex_batch'
+            AGENT_PAGE_SSE_AGENT_USAGE
         );
         assert.deepEqual(capabilities.upstream_request_headers.default, {
             user_agent_effective: 'gpt-image-playground/2.1.0',
