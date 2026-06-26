@@ -785,6 +785,42 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('marks Responses image_generation-disabled 403s as unavailable request modes', async () => {
+        process.env.AGENT_STATE_BACKEND = 'memory';
+        delete process.env.AGENT_SQLITE_PATH;
+        const { generateImage } = await loadAgentRoutes();
+        const upstream = await startResponsesImageJsonUpstream(403, {
+            error: { message: 'Image generation is not enabled for this group' }
+        });
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-responses-image-disabled-key', {
+                    prompt: 'agent responses disabled',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 502);
+            const body = await response.json();
+            assert.equal(body.error.code, 'upstream_unavailable');
+            assert.equal(body.error.upstream_status, 403);
+            assert.equal(body.error.diagnostics.channel_request_mode, 'responses-sse');
+            assert.equal(body.error.diagnostics.channel_cooldown_scope, 'channel');
+            assert.equal(body.error.diagnostics.cooldown_target.channel_id, 'default');
+            assert.equal(body.error.diagnostics.cooldown_target.request_mode, 'responses-sse');
+            assert.equal(JSON.stringify(body).includes('test-key'), false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('uses force-sse for Agent Responses image_generation SSE while keeping the final JSON contract', async () => {
         const { generateImage } = await loadAgentRoutes();
         let upstreamBody = '';
@@ -3452,6 +3488,29 @@ async function startStreamingResponsesImageUpstream(
         }
         response.write('data: [DONE]\n\n');
         response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    };
+}
+
+async function startResponsesImageJsonUpstream(
+    status: number,
+    body: unknown
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer((request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        request.resume();
+        response.writeHead(status, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(body));
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();

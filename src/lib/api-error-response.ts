@@ -1,5 +1,5 @@
 import { RequestValidationError } from './image-request-utils';
-import { isChannelFailure } from './channel-router';
+import { isChannelFailure, isChannelRequestModeFailure } from './channel-router';
 import { ChannelCapacityQueueError } from './channel-capacity-queue';
 import {
     CHANNEL_REQUEST_MODES,
@@ -469,6 +469,23 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
 
     const status = readNumberField(error, 'status') ?? readNumberField(error, 'statusCode');
     const message = error instanceof Error ? error.message : (readStringField(error, 'message') ?? '发生未知错误。');
+    if (isChannelRequestModeFailure(error, diagnostics.channel_request_mode)) {
+        const retryAfterSeconds = readRetryAfterSeconds(error) ?? 15;
+        return new AgentApiError({
+            code: 'upstream_unavailable',
+            message,
+            status: 502,
+            retryable: true,
+            upstreamStatus: 403,
+            retryAfterSeconds,
+            diagnostics: buildDiagnostics(error, {
+                ...diagnostics,
+                upstreamStatus: 403,
+                retryAfterSeconds,
+                channel_cooldown_scope: 'channel'
+            })
+        });
+    }
     if (error instanceof ChannelCapacityQueueError) {
         const retryAfterSeconds = Math.max(1, Math.ceil(Number(error.details.max_wait_ms ?? 30_000) / 1000));
         return new AgentApiError({
