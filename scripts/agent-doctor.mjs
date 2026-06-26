@@ -391,6 +391,10 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
             runtime: runtime.ok ? runtime.body : undefined,
             smoke
         }),
+        runtime_environment: buildRuntimeEnvironmentSummary({
+            capabilities: capabilities.ok ? capabilities.body : undefined,
+            runtime: runtime.ok ? runtime.body : undefined
+        }),
         responses_gpt2image_ready:
             capabilities.ok && runtime.ok
                 ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true &&
@@ -400,6 +404,26 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
             ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.supported === true
             : false,
         billable_smoke: smoke.skipped ? 'skipped' : smoke.ok ? 'ok' : 'failed'
+    };
+}
+
+function buildRuntimeEnvironmentSummary({ capabilities, runtime }) {
+    return {
+        state_backend: capabilities?.defaults?.state_backend || 'unknown',
+        image_storage_mode: capabilities?.storage?.image_storage_mode || 'unknown',
+        postgres_configured: capabilities?.storage?.postgres_configured === true,
+        page_sse_auth_required: capabilities?.agent_streaming?.page_sse?.auth?.required === true,
+        agent_auth_schemes: Array.isArray(capabilities?.auth?.schemes) ? capabilities.auth.schemes : [],
+        orchestration_endpoint: capabilities?.orchestration?.endpoint || null,
+        orchestration_transport_selection: capabilities?.orchestration?.transport_selection || null,
+        request_mode_control_policy: capabilities?.request_mode_controls?.agent_client_policy || null,
+        request_mode_controls: runtime?.channelRouting?.requestModeControls || capabilities?.request_mode_controls || null,
+        runtime_strategy: runtime?.channelRouting?.strategy || null,
+        effective_request_modes: readRequestModeList(runtime?.channelRouting?.effectiveRequestModes),
+        streaming_batch_enabled: runtime?.streamingBatch?.enabled === true,
+        recommended_concurrency: runtime?.streamingBatch?.recommendedConcurrency ?? null,
+        channel_queue_enabled: runtime?.channelQueue?.enabled === true,
+        channel_queue_capacity_per_credential: runtime?.channelQueue?.capacityPerCredential ?? null
     };
 }
 

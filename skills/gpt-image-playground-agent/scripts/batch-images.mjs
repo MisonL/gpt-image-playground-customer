@@ -173,7 +173,7 @@ try {
   process.exit(2);
 }
 
-const manifestPath = options.manifest || `${options.input}.manifest.jsonl`;
+const manifestPath = resolveManifestPath(options);
 let planned;
 try {
   planned = tasks.map((task, index) => normalizeTask(task, index, options));
@@ -218,6 +218,11 @@ if (!options.allowBillable || options.dryRun) {
     )
   );
   process.exit(0);
+}
+
+if (!manifestPath) {
+  console.error('--input - 真实执行必须显式设置 --manifest，避免无法续跑或审计。');
+  process.exit(2);
 }
 
 try {
@@ -275,7 +280,7 @@ function parseArgs(argv) {
     else if (arg === '--resume') parsed.resume = true;
     else if (arg === '--dimension-check') parsed.dimensionCheck = true;
     else if (arg === '--help' || arg === '-h') parsed.help = true;
-    else if (arg === '--input') parsed.input = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--input') parsed.input = normalizeInputPath(readOptionValue(argv, (index += 1), arg));
     else if (arg === '--manifest') parsed.manifest = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--ordered-prefix') parsed.orderedPrefix = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
@@ -286,10 +291,20 @@ function parseArgs(argv) {
     }
     else if (arg === '--concurrency') parsed.concurrency = readOptionValue(argv, (index += 1), arg);
     else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
-    else if (!parsed.input) parsed.input = arg;
+    else if (!parsed.input) parsed.input = normalizeInputPath(arg);
     else throw new Error(`未知位置参数：${arg}`);
   }
   return parsed;
+}
+
+function normalizeInputPath(value) {
+  return value === '-' ? '/dev/stdin' : value;
+}
+
+function resolveManifestPath(parsed) {
+  if (parsed.manifest) return parsed.manifest;
+  if (parsed.input === '/dev/stdin') return null;
+  return `${parsed.input}.manifest.jsonl`;
 }
 
 function buildDryRunVerificationScope() {

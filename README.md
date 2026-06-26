@@ -279,7 +279,7 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 - 远程 Space、云服务或内网服务必须显式传 `--base-url`，避免误用本机默认服务。
 - Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`；shell 环境变量优先。首次配置可复制 `.env.agent.local.example`。不要提交 token、访问码或哈希。
 - `GPT_IMAGE_AGENT_TOKEN` 只用于 `/api/agent/*`；页面 SSE `/api/images` 可能还需要 `GPT_IMAGE_APP_PASSWORD_HASH`。
-- dry-run 只验证本地请求构造；`verification_scope.mode=local_planning_only` 不是远端已可执行。远端合同检查用 `--contract-check`，真实执行必须加 `--allow-billable`。
+- dry-run 只验证本地请求构造；`verification_scope.mode=local_planning_only` 不是远端已可执行。需要只读读取远端 capabilities 和 runtime 时加 `--check-remote`，输出 `verification_scope.mode=remote_contract_and_local_planning`。远端合同检查用 `--contract-check`，真实执行必须加 `--allow-billable`。
 - 多张真实任务优先用 `batch-images.mjs`、`--manifest`、`--resume` 和 `--dimension-check`；不要手动并行启动多个单张脚本。需要并发时先看 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 和 `channelQueue.capacityPerCredential`。
 - 选择 `responses-image-generation` 或兼容别名 `responses` 时，`partial_images` 必须优先按 `partial_images_by_backend["responses-image-generation"]` 校验，不能套用 Matsca Images API 的范围。
 - 页面 SSE 返回 503 或断流时，先用诊断脚本读取结构化摘要，再用新的幂等键显式选择备用路径。`page_sse_supported=true` 只是声明支持，不代表实测一定成功。Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致，尺寸敏感任务必须重新校验或用 `--dimension-check`。

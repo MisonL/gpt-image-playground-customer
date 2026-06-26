@@ -439,7 +439,7 @@ describe('buildAgentCapabilities', () => {
         });
         assert.equal(
             capabilities.agent_streaming.page_sse.agent_usage,
-            'explicit_for_generate_recommended_for_high_resolution_edit_and_complex_batch'
+            'explicit_for_generate_recommended_for_page_only_fields_high_resolution_edit_and_complex_batch'
         );
         assert.deepEqual(capabilities.upstream_request_headers.default, {
             user_agent_effective: 'gpt-image-playground/2.1.0',

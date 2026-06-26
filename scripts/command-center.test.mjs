@@ -752,6 +752,11 @@ describe('Command center scripts', () => {
                                 endpoint: '/api/agent/image-requests',
                                 transport_selection: 'server_owned'
                             },
+                            request_mode_controls: {
+                                global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
+                                channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                                agent_client_policy: 'diagnostics_only'
+                            },
                             routing_rules: {
                                 high_resolution_edit: {
                                     conditions: { operation: 'edit', max_edge: { operator: 'gt', value: 2048 } }
@@ -796,9 +801,16 @@ describe('Command center scripts', () => {
                                 defaultMode: 'auto',
                                 unavailableMarkScope: 'channel+backend+strategy+operation'
                             },
-                            streamingBatch: { enabled: true },
+                            streamingBatch: { enabled: true, recommendedConcurrency: 2 },
+                            channelQueue: { enabled: true, capacityPerCredential: 1 },
                             responsesImageBackend: { enabled: true, mode: 'experimental' },
                             channelRouting: {
+                                strategy: 'round_robin',
+                                requestModeControls: {
+                                    global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
+                                    channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                                    agent_client_policy: 'diagnostics_only'
+                                },
                                 configuredRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
                                 effectiveRequestModes: ['images-non-stream', 'images-sse'],
                                 effectiveRequestModesByChannel: [
@@ -900,6 +912,27 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.request_modes.smoke['responses-sse'].billable, false);
                 assert.equal(body.summary.responses_gpt2image_ready, true);
                 assert.equal(body.summary.responses_image_backend_declared_supported, true);
+                assert.deepEqual(body.summary.runtime_environment, {
+                    state_backend: 'memory',
+                    image_storage_mode: 'indexeddb',
+                    postgres_configured: false,
+                    page_sse_auth_required: true,
+                    agent_auth_schemes: [],
+                    orchestration_endpoint: '/api/agent/image-requests',
+                    orchestration_transport_selection: 'server_owned',
+                    request_mode_control_policy: 'diagnostics_only',
+                    request_mode_controls: {
+                        global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
+                        channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                        agent_client_policy: 'diagnostics_only'
+                    },
+                    runtime_strategy: 'round_robin',
+                    effective_request_modes: ['images-non-stream', 'images-sse'],
+                    streaming_batch_enabled: true,
+                    recommended_concurrency: 2,
+                    channel_queue_enabled: true,
+                    channel_queue_capacity_per_credential: 1
+                });
                 assert.equal(body.summary.billable_smoke, 'skipped');
                 assert.equal(body.layers.find((layer) => layer.name === 'billable_smoke').skipped, true);
                 assert.ok(
@@ -1013,16 +1046,27 @@ describe('Command center scripts', () => {
                     return;
                 }
                 if (request.url === '/api/images') {
-                    response.writeHead(200, { 'content-type': 'text/event-stream' });
-                    response.end(
-                        [
-                            'data: {"type":"completed","filename":"doctor-page-sse.png","path":"/api/image/doctor-page-sse.png","output_format":"png"}',
-                            '',
-                            'data: {"type":"done","client_request_id":"doctor-page-sse-request","images":[{"filename":"doctor-page-sse.png"}]}',
-                            '',
-                            ''
-                        ].join('\n')
-                    );
+                    (async () => {
+                        const requestText = await readRequestText(request);
+                        if (requestText.includes('contract check')) {
+                            response.writeHead(400, { 'content-type': 'application/json' });
+                            response.end(JSON.stringify({ error: 'clientRequestId 长度不能超过 128 个字符。' }));
+                            return;
+                        }
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"doctor-page-sse.png","path":"/api/image/doctor-page-sse.png","output_format":"png"}',
+                                '',
+                                'data: {"type":"done","client_request_id":"doctor-page-sse-request","images":[{"filename":"doctor-page-sse.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                    })().catch((error) => {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: error.message }));
+                    });
                     return;
                 }
                 if (request.url === '/api/agent/image-requests') {
@@ -1127,8 +1171,19 @@ describe('Command center scripts', () => {
                     return;
                 }
                 if (request.url === '/api/images') {
-                    response.writeHead(503, { 'content-type': 'text/plain' });
-                    response.end('503 Service temporarily unavailable');
+                    (async () => {
+                        const requestText = await readRequestText(request);
+                        if (requestText.includes('contract check')) {
+                            response.writeHead(400, { 'content-type': 'application/json' });
+                            response.end(JSON.stringify({ error: 'clientRequestId 长度不能超过 128 个字符。' }));
+                            return;
+                        }
+                        response.writeHead(503, { 'content-type': 'text/plain' });
+                        response.end('503 Service temporarily unavailable');
+                    })().catch((error) => {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: error.message }));
+                    });
                     return;
                 }
                 if (request.url === '/api/agent/jobs/images/generate') {
@@ -1354,5 +1409,17 @@ function runNodeCommandAsync(args, options = {}) {
                 elapsed_ms: Date.now() - startedAt
             });
         });
+    });
+}
+
+function readRequestText(request) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        request.setEncoding('utf8');
+        request.on('data', (chunk) => {
+            body += chunk;
+        });
+        request.on('end', () => resolve(body));
+        request.on('error', reject);
     });
 }
