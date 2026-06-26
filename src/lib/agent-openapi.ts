@@ -5,6 +5,7 @@ import {
     AGENT_MODERATIONS,
     AGENT_MODELS,
     AGENT_OUTPUT_FORMATS,
+    AGENT_PAGE_SSE_AGENT_USAGE,
     AGENT_QUALITIES,
     AGENT_RESPONSE_MODES,
     AGENT_STREAM_MODES,
@@ -1084,7 +1085,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 },
                                 agent_usage: {
                                     type: 'string',
-                                    enum: ['explicit_for_generate_recommended_for_high_resolution_edit_and_complex_batch']
+                                    enum: [AGENT_PAGE_SSE_AGENT_USAGE]
                                 }
                             }
                         }

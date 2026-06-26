@@ -40,7 +40,8 @@ describe('Command center scripts', () => {
             docker_cleanup_fixtures: 'npm run docker:cleanup-fixtures',
             agent_doctor: 'npm run agent:doctor',
             hf_space_doctor: 'npm run doctor:hf-space',
-            hf_space_smoke: 'npm run smoke:hf-space'
+            hf_space_local_smoke: 'npm run smoke:hf-space-local',
+            hf_space_smoke_legacy_alias: 'npm run smoke:hf-space'
         });
     });
 

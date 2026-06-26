@@ -46,7 +46,7 @@ hf auth whoami
 - npm 随 Node.js 一起可用。
 - Hugging Face CLI 使用当前官方 `hf` 命令。
 - `hf auth login` 使用 Hugging Face Access Token，不是账号密码。
-- Docker 只对 `npm run smoke:hf-space` 和本地容器验证必需；部署到远端 Space 使用 `hf` CLI。
+- Docker 只对本地 Space-like 容器 smoke（推荐 `npm run smoke:hf-space-local`，兼容别名 `npm run smoke:hf-space`）和本地容器验证必需；部署到远端 Space 使用 `hf` CLI。
 
 安装 Hugging Face CLI 时，以官方文档为准。不要把远程安装脚本直接管道到 shell；如需使用官方脚本，先下载、核对来源和内容后再执行。
 
@@ -208,7 +208,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 提交前运行：
 
 ```bash
-npm run smoke:hf-space
+npm run smoke:hf-space-local
 ```
 
 该命令会：
@@ -278,7 +278,7 @@ npm run lint
 npm run lint:scripts
 npm run build
 npm run keepalive:hf-space
-npm run smoke:hf-space
+npm run smoke:hf-space-local
 git diff --check
 ```
 

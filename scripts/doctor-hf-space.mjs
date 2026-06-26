@@ -200,7 +200,7 @@ function main() {
     if (docker.ok) {
         addCheck(checks, 'pass', 'docker', 'docker is available.', { version: docker.stdout.split(/\r?\n/)[0] });
     } else {
-        addCheck(checks, 'warn', 'docker', 'Docker is unavailable; npm run smoke:hf-space will not work.', {
+        addCheck(checks, 'warn', 'docker', 'Docker is unavailable; npm run smoke:hf-space-local will not work.', {
             error: docker.error
         });
         const dockerCli = runDoctorCommand('docker', ['--version']);
