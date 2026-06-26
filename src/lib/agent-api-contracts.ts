@@ -98,7 +98,7 @@ export const AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS = [
     'partial_images'
 ] as const;
 export const AGENT_PAGE_SSE_AGENT_USAGE =
-    'explicit_for_generate_recommended_for_page_only_fields_default_webp_edit_high_resolution_edit_long_image_recovery_and_complex_batch' as const;
+    'explicit_diagnostics_for_generate_recommended_for_default_webp_edit_high_resolution_edit_long_image_recovery_and_complex_batch' as const;
 const AGENT_DEFAULT_PARTIAL_IMAGES = 2;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
@@ -152,6 +152,10 @@ export type AgentGenerateRequest = {
     stream_mode: ImageStreamMode;
     streaming_strategy: ImageStreamingStrategy;
     partial_images: 0 | 1 | 2 | 3 | 4;
+    responsesModel?: string;
+    thinking?: 'minimal' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+    promptOptimization?: boolean;
+    force_web?: boolean;
 };
 
 export type AgentImageResponseItem = {
@@ -358,7 +362,7 @@ export type AgentCapabilities = {
         complex_ui_batch: AgentRoutingRule;
         long_image_recovery: AgentRoutingRule;
         agent_generate_small_smoke: AgentRoutingRule;
-        page_sse_large_generate: AgentRoutingRule;
+        page_sse_generate_diagnostics: AgentRoutingRule;
         retry_recovery: {
             reuse_failed_idempotency_key: false;
             new_attempt_guidance: string;
@@ -437,6 +441,7 @@ export type AgentRoutingRule = {
 
 export type AgentRoutingCondition = {
     operation: 'generate' | 'edit' | 'generate_or_edit';
+    explicit_page_sse?: boolean;
     max_edge?: {
         operator: 'gt' | 'lte';
         value: number;
@@ -669,6 +674,60 @@ function readModeration(body: Record<string, unknown>, fields: FieldErrors): Age
     return value;
 }
 
+function readOptionalStringField(
+    body: Record<string, unknown>,
+    field: string,
+    fields: FieldErrors,
+    options: { maxLength?: number } = {}
+): string | undefined {
+    const value = body[field];
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string') {
+        fields[field] = '必须是字符串';
+        return undefined;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        fields[field] = '必须是非空字符串';
+        return undefined;
+    }
+    if (options.maxLength !== undefined && trimmed.length > options.maxLength) {
+        fields[field] = `长度不能超过 ${options.maxLength} 个字符`;
+        return undefined;
+    }
+    return trimmed;
+}
+
+function readOptionalBooleanField(body: Record<string, unknown>, field: string, fields: FieldErrors): boolean | undefined {
+    const value = body[field];
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value === 'boolean') return value;
+    fields[field] = '必须是布尔值';
+    return undefined;
+}
+
+function readAgentResponsesModel(
+    body: Record<string, unknown>,
+    imageBackend: ImageGenerationBackend,
+    fields: FieldErrors
+): string | undefined {
+    const value = readOptionalStringField(body, 'responsesModel', fields, { maxLength: 128 });
+    if (value && imageBackend !== 'responses-image-generation') {
+        fields.responsesModel = '仅适用于 image_backend=responses-image-generation';
+    }
+    return value;
+}
+
+function readAgentThinking(body: Record<string, unknown>, fields: FieldErrors): AgentGenerateRequest['thinking'] {
+    const value = readOptionalStringField(body, 'thinking', fields);
+    if (value === undefined) return undefined;
+    if (['minimal', 'none', 'low', 'medium', 'high', 'xhigh'].includes(value)) {
+        return value as AgentGenerateRequest['thinking'];
+    }
+    fields.thinking = '必须是 minimal、none、low、medium、high 或 xhigh';
+    return undefined;
+}
+
 function readOutputCompression(
     body: Record<string, unknown>,
     outputFormat: ValidOutputFormat,
@@ -712,6 +771,10 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const streamMode = readAgentStreamMode(objectBody, fields);
     const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
     const partialImages = readPartialImagesForBackend(objectBody, imageBackend, fields, upstreamLimits.profile);
+    const responsesModel = readAgentResponsesModel(objectBody, imageBackend, fields);
+    const thinking = readAgentThinking(objectBody, fields);
+    const promptOptimization = readOptionalBooleanField(objectBody, 'promptOptimization', fields);
+    const forceWeb = readOptionalBooleanField(objectBody, 'force_web', fields);
     validateAgentImageUpstreamStrategy({ imageBackend, streamMode, streamingStrategy, fields });
 
     if (Object.keys(fields).length > 0) {
@@ -732,7 +795,11 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
         image_backend: imageBackend,
         stream_mode: streamMode,
         streaming_strategy: streamingStrategy,
-        partial_images: partialImages
+        partial_images: partialImages,
+        ...(responsesModel ? { responsesModel } : {}),
+        ...(thinking ? { thinking } : {}),
+        ...(promptOptimization !== undefined ? { promptOptimization } : {}),
+        ...(forceWeb !== undefined ? { force_web: forceWeb } : {})
     };
 }
 
@@ -1113,11 +1180,11 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 },
                 reason: 'Agent JSON generate remains available for compatibility and explicit diagnostics; ordinary generate clients should use orchestration.endpoint.'
             },
-            page_sse_large_generate: {
-                when: ['operation=generate', 'max_edge>2048', 'single_request=true'],
+            page_sse_generate_diagnostics: {
+                when: ['operation=generate', 'explicit_page_sse=true'],
                 conditions: {
                     operation: 'generate',
-                    max_edge: { operator: 'gt', value: 2048 },
+                    explicit_page_sse: true,
                     single_request: true
                 },
                 endpoint: '/api/images',
@@ -1127,12 +1194,12 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     endpoint: '/api/images',
                     transport: 'page_sse',
                     strength: 'explicit',
-                    fallback_endpoint: AGENT_ENDPOINTS.generate,
+                    fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
                     fallback_mode: 'manual_after_diagnosis',
                     requires_new_idempotency_key_on_retry: true,
                     no_automatic_fallback: true
                 },
-                reason: 'Page form-data SSE is available for explicit page-workbench or diagnostic large generate runs; ordinary generate clients should use orchestration.endpoint.'
+                reason: 'Page form-data SSE is available for explicit page-workbench or diagnostic generate runs; ordinary generate clients should use orchestration.endpoint.'
             },
             retry_recovery: {
                 reuse_failed_idempotency_key: false,

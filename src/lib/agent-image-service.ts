@@ -468,7 +468,8 @@ async function executeAgentGenerateUpstream(
         output_format: request.output_format,
         background: request.background as OpenAI.Images.ImageGenerateParams['background'],
         moderation: request.moderation as OpenAI.Images.ImageGenerateParams['moderation'],
-        ...(request.output_compression !== undefined ? { output_compression: request.output_compression } : {})
+        ...(request.output_compression !== undefined ? { output_compression: request.output_compression } : {}),
+        ...(request.force_web !== undefined ? { force_web: request.force_web } : {})
     };
     if (!shouldUseAgentUpstreamStream(streamOptions)) {
         return openai.images.generate(
@@ -557,7 +558,7 @@ async function executeAgentResponsesGenerate(
     const input: ResponsesImageGenerateInput = {
         responses: openai.responses,
         prompt: request.prompt,
-        responsesModel: readAgentResponsesApiModel(),
+        responsesModel: readAgentResponsesApiModel(request.responsesModel),
         imageModel: request.model,
         size: readAgentResponsesImageSize(request.size),
         quality: request.quality,
@@ -565,7 +566,9 @@ async function executeAgentResponsesGenerate(
         background: request.background,
         moderation: request.moderation,
         abortSignal,
-        ...(request.output_compression !== undefined ? { outputCompression: request.output_compression } : {})
+        ...(request.output_compression !== undefined ? { outputCompression: request.output_compression } : {}),
+        ...(request.promptOptimization !== undefined ? { promptOptimization: request.promptOptimization } : {}),
+        ...(request.thinking ? { thinking: request.thinking } : {})
     };
     const streamOptions: AgentStreamOptions = {
         mode: 'generate',
@@ -660,13 +663,16 @@ function isAbortLikeError(error: unknown, abortSignal?: AbortSignal): boolean {
     return name === 'AbortError' || name === 'CanceledError';
 }
 
-function readAgentResponsesApiModel(): string {
-    const model = process.env.OPENAI_RESPONSES_API_MODEL?.trim();
+function readAgentResponsesApiModel(requestModel?: string): string {
+    const model = requestModel?.trim() || process.env.OPENAI_RESPONSES_API_MODEL?.trim();
     if (!model) {
         throw new RequestValidationError(
-            'Responses API 图片后端必须配置 OPENAI_RESPONSES_API_MODEL，作为 /responses 顶层模型。',
+            'Responses API 图片后端必须配置 OPENAI_RESPONSES_API_MODEL 或请求字段 responsesModel，作为 /responses 顶层模型。',
             500
         );
+    }
+    if (model.length > 128) {
+        throw new RequestValidationError('Responses API 顶层模型名称不能超过 128 个字符。', 400);
     }
     return model;
 }

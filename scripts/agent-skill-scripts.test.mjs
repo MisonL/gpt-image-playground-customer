@@ -555,7 +555,7 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
-    it('routes GPT2Image-compatible generate options through page SSE dry-runs', () => {
+    it('keeps GPT2Image-compatible generate options on server orchestration dry-runs', () => {
         const result = runSkillScript('generate-image.mjs', [
             '--image-backend',
             'responses',
@@ -571,8 +571,8 @@ describe('Agent skill script argument validation', () => {
 
         assert.equal(result.status, 0);
         const body = JSON.parse(result.stdout);
-        assert.equal(body.endpoint, 'http://localhost:4783/api/images');
-        assert.equal(body.routing_guidance.transport, 'page_sse');
+        assert.equal(body.endpoint, 'http://localhost:4783/api/agent/image-requests');
+        assert.equal(body.routing_guidance.transport, 'server_orchestrated');
         assert.equal(body.request.image_backend, 'responses');
         assert.equal(body.request.responsesModel, 'gpt-5.4-mini');
         assert.equal(body.request.thinking, 'medium');
@@ -816,6 +816,15 @@ describe('Agent skill script argument validation', () => {
                         '3072x2048',
                         '--streaming-strategy',
                         'off',
+                        '--image-backend',
+                        'responses',
+                        '--responses-model',
+                        'gpt-5.4-mini',
+                        '--thinking',
+                        'medium',
+                        '--prompt-optimization',
+                        'false',
+                        '--force-web',
                         'prompt'
                     ],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
@@ -854,6 +863,11 @@ describe('Agent skill script argument validation', () => {
                 const requestBody = JSON.parse(imageRequestBody);
                 assert.equal(requestBody.size, '3072x2048');
                 assert.equal(requestBody.streaming_strategy, 'off');
+                assert.equal(requestBody.image_backend, 'responses');
+                assert.equal(requestBody.responsesModel, 'gpt-5.4-mini');
+                assert.equal(requestBody.thinking, 'medium');
+                assert.equal(requestBody.promptOptimization, false);
+                assert.equal(requestBody.force_web, true);
             }
         );
     });
@@ -1050,8 +1064,8 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.error.code, 'page_sse_failed');
                 assert.match(body.error.message, /stream failed/);
                 assert.match(body.next_step, /新的 Idempotency-Key/);
-                assert.match(body.next_step, /重新校验输出尺寸和格式/);
-                assert.equal(body.routing.fallback_endpoint, '/api/agent/images/generate');
+                assert.match(body.next_step, /服务端编排入口/);
+                assert.equal(body.routing.fallback_endpoint, '/api/agent/image-requests');
                 assert.equal(body.routing.fallback_mode, 'manual_after_diagnosis');
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
@@ -2556,7 +2570,7 @@ describe('Agent skill script argument validation', () => {
                     transport: 'page_sse',
                     endpoint: '/api/images',
                     route_mode: 'page_sse',
-                    fallback_endpoint: '/api/agent/images/generate',
+                    fallback_endpoint: '/api/agent/image-requests',
                     fallback_mode: 'manual_after_diagnosis',
                     stream_mode: null,
                     streaming_strategy: null
@@ -2577,7 +2591,7 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
-    it('passes GPT2Image-compatible generate options to page SSE form-data', async () => {
+    it('passes GPT2Image-compatible generate options to page SSE only when explicitly requested', async () => {
         const requests = [];
         let pageSseRequestBody = '';
         await withServer(
@@ -2615,6 +2629,7 @@ describe('Agent skill script argument validation', () => {
                     'generate-image.mjs',
                     [
                         '--allow-billable',
+                        '--page-sse',
                         '--image-backend',
                         'responses',
                         '--responses-model',
@@ -2726,13 +2741,77 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
-    it('rejects generate page-only options for explicit Agent routes before network requests', async () => {
+    it('passes generate response controls through explicit Agent and job diagnostic routes', async () => {
         const requests = [];
+        let agentRequestBody = '';
+        let jobRequestBody = '';
         await withServer(
-            (request, response) => {
+            async (request, response) => {
                 requests.push({ method: request.method, url: request.url });
-                response.writeHead(500, { 'content-type': 'application/json' });
-                response.end(JSON.stringify({ error: 'unexpected request' }));
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    agentRequestBody = await readRequestText(request);
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            images: [
+                                {
+                                    id: 'agent-artifact',
+                                    filename: 'agent.webp',
+                                    content_url: '/api/agent/artifacts/agent-artifact/content'
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/images/generate') {
+                    jobRequestBody = await readRequestText(request);
+                    response.writeHead(202, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-diagnostic-1',
+                                state: 'running',
+                                result_url: '/api/agent/jobs/job-diagnostic-1/result',
+                                retry_after_seconds: 1
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/job-diagnostic-1/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'job-diagnostic-1',
+                            idempotency_key: 'job-diagnostic-key',
+                            cached: false,
+                            images: [
+                                {
+                                    id: 'job-artifact',
+                                    filename: 'job.webp',
+                                    content_url: '/api/agent/artifacts/job-artifact/content'
+                                }
+                            ],
+                            execution: {
+                                transport: 'agent_job_polling',
+                                endpoint: '/api/agent/jobs/images/generate',
+                                route_mode: 'job',
+                                image_backend: 'responses-image-generation',
+                                stream_mode: 'auto',
+                                streaming_strategy: 'auto'
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
@@ -2749,39 +2828,108 @@ describe('Agent skill script argument validation', () => {
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
-                assert.equal(result.status, 2);
-                assert.equal(result.stdout.trim(), '');
-                assert.match(result.stderr, /Agent generate 不接受文生图高级页面字段/);
-                assert.deepEqual(requests, []);
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const agentBody = JSON.parse(agentRequestBody);
+                assert.equal(agentBody.image_backend, 'responses');
+                assert.equal(agentBody.responsesModel, 'gpt-5.4-mini');
 
-                const jobResult = runSkillScript('generate-image.mjs', [
-                    '--job',
-                    '--image-backend',
-                    'responses',
-                    '--responses-model',
-                    'gpt-5.4-mini',
-                    'prompt'
-                ]);
-                assert.equal(jobResult.status, 2);
-                assert.match(jobResult.stderr, /Agent generate job 不接受文生图高级页面字段/);
-                assert.equal(jobResult.stdout.trim(), '');
+                const jobResult = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--job',
+                        '--idempotency-key',
+                        'job-diagnostic-key',
+                        '--image-backend',
+                        'responses',
+                        '--responses-model',
+                        'gpt-5.4-mini',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+                assert.equal(jobResult.status, 0);
+                assert.equal(jobResult.stderr.trim(), '');
+                const jobBody = JSON.parse(jobRequestBody);
+                assert.equal(jobBody.image_backend, 'responses');
+                assert.equal(jobBody.responsesModel, 'gpt-5.4-mini');
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/images/generate',
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/jobs/images/generate',
+                        'GET /api/agent/jobs/job-diagnostic-1/result'
+                    ]
+                );
             }
         );
     });
 
-    it('rejects generate page-only options when streaming is disabled before network requests', async () => {
+    it('keeps generate response controls on server orchestration when streaming is disabled', async () => {
         const requests = [];
+        let imageRequestBody = '';
         await withServer(
-            (request, response) => {
+            async (request, response) => {
                 requests.push({ method: request.method, url: request.url });
-                response.writeHead(500, { 'content-type': 'application/json' });
-                response.end(JSON.stringify({ error: 'unexpected request' }));
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests') {
+                    imageRequestBody = await readRequestText(request);
+                    response.writeHead(202, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-nonstream-controls',
+                                state: 'running',
+                                result_url: '/api/agent/jobs/job-nonstream-controls/result',
+                                retry_after_seconds: 1
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/job-nonstream-controls/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'job-nonstream-controls',
+                            idempotency_key: 'nonstream-controls-key',
+                            cached: false,
+                            images: [
+                                {
+                                    id: 'artifact-nonstream-controls',
+                                    filename: 'nonstream.webp',
+                                    content_url: '/api/agent/artifacts/artifact-nonstream-controls/content'
+                                }
+                            ],
+                            execution: {
+                                transport: 'agent_job_polling',
+                                endpoint: '/api/agent/image-requests',
+                                route_mode: 'job',
+                                image_backend: 'responses-image-generation',
+                                stream_mode: 'non_stream',
+                                streaming_strategy: 'auto'
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
                     [
                         '--allow-billable',
+                        '--idempotency-key',
+                        'nonstream-controls-key',
                         '--image-backend',
                         'responses',
                         '--responses-model',
@@ -2793,10 +2941,20 @@ describe('Agent skill script argument validation', () => {
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
-                assert.equal(result.status, 2);
-                assert.equal(result.stdout.trim(), '');
-                assert.match(result.stderr, /文生图高级页面参数需要页面 SSE/);
-                assert.deepEqual(requests, []);
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const requestBody = JSON.parse(imageRequestBody);
+                assert.equal(requestBody.image_backend, 'responses');
+                assert.equal(requestBody.responsesModel, 'gpt-5.4-mini');
+                assert.equal(requestBody.stream_mode, 'non_stream');
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/image-requests',
+                        'GET /api/agent/jobs/job-nonstream-controls/result'
+                    ]
+                );
             }
         );
     });
@@ -3910,7 +4068,7 @@ describe('Agent skill script argument validation', () => {
             assert.equal(body.guardrails.repeat_ordered_prefix_on_real_run, true);
             assert.equal(body.guardrails.dimension_check_recommended, true);
             assert.match(body.guardrails.dimension_check_reason, /--dimension-check/);
-            assert.equal(body.tasks[0].endpoint, '/api/agent/images/generate');
+            assert.equal(body.tasks[0].endpoint, '/api/agent/image-requests');
             assert.equal(body.tasks[0].idempotency_key, 'demo-0001-first-item');
             assert.equal(body.tasks[0].request.model, 'gpt-image-2');
             assert.equal(body.tasks[0].request.output_format, 'jpeg');
@@ -3963,7 +4121,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         response.writeHead(500, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'fetch failed', retryable: false } }));
                         return;
@@ -4116,7 +4274,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         agentRequestBody = await readRequestText(request);
                         response.writeHead(200, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ images: [{ id: 'compressed-image', filename: 'compressed.jpg' }] }));
@@ -4170,7 +4328,7 @@ describe('Agent skill script argument validation', () => {
                         );
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         response.writeHead(500, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ error: 'generate should not be called' }));
                         return;
@@ -4297,7 +4455,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         response.writeHead(200, { 'content-type': 'application/json' });
                         response.end(
                             JSON.stringify({
@@ -4329,7 +4487,7 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(body.results[1].status, 'succeeded');
                     assert.deepEqual(
                         requests.map((item) => `${item.method} ${item.url}`),
-                        ['GET /api/agent/capabilities', 'POST /api/agent/images/generate']
+                        ['GET /api/agent/capabilities', 'POST /api/agent/image-requests']
                     );
                     const manifestLines = readFileSync(manifestPath, 'utf8').trim().split(/\r?\n/).map(JSON.parse);
                     assert.equal(manifestLines.length, 3);
@@ -4368,7 +4526,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         activeGenerateRequests += 1;
                         enteredGenerateRequests += 1;
                         maxActiveGenerateRequests = Math.max(maxActiveGenerateRequests, activeGenerateRequests);
@@ -4478,7 +4636,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         activeGenerateRequests += 1;
                         maxActiveGenerateRequests = Math.max(maxActiveGenerateRequests, activeGenerateRequests);
                         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -4521,8 +4679,8 @@ describe('Agent skill script argument validation', () => {
                         [
                             'GET /api/runtime-capabilities',
                             'GET /api/agent/capabilities',
-                            'POST /api/agent/images/generate',
-                            'POST /api/agent/images/generate'
+                            'POST /api/agent/image-requests',
+                            'POST /api/agent/image-requests'
                         ]
                     );
                 }
@@ -4576,7 +4734,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         response.writeHead(500, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ error: 'unexpected resumed request' }));
                         return;
@@ -4747,7 +4905,7 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
-    it('routes batch generate requests with responsesModel through page SSE', async () => {
+    it('routes batch generate requests with responsesModel through server orchestration', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-responses-model-'));
         try {
             const inputPath = join(tempRoot, 'tasks.jsonl');
@@ -4772,6 +4930,12 @@ describe('Agent skill script argument validation', () => {
                         response.writeHead(200, { 'content-type': 'application/json' });
                         response.end(
                             JSON.stringify({
+                                orchestration: {
+                                    supported: true,
+                                    transport_selection: 'server_owned',
+                                    endpoint: '/api/agent/image-requests'
+                                },
+                                agent_jobs: { supported: true, mode: 'job_polling' },
                                 agent_streaming: {
                                     page_sse: { supported: true, endpoint: '/api/images' }
                                 }
@@ -4779,23 +4943,56 @@ describe('Agent skill script argument validation', () => {
                         );
                         return;
                     }
-                    if (request.url === '/api/images') {
+                    if (request.url === '/api/agent/image-requests') {
                         pageSseRequestBody = await readRequestText(request);
-                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.writeHead(202, { 'content-type': 'application/json' });
                         response.end(
-                            [
-                                'data: {"type":"completed","filename":"responses.png","path":"/generated/responses.png"}',
-                                '',
-                                'data: {"type":"done","images":[{"filename":"responses.png","path":"/generated/responses.png"}]}',
-                                '',
-                                ''
-                            ].join('\n')
+                            JSON.stringify({
+                                job: {
+                                    id: 'batch-job-responses',
+                                    state: 'running',
+                                    result_url: '/api/agent/jobs/batch-job-responses/result',
+                                    retry_after_seconds: 1
+                                }
+                            })
                         );
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
-                        response.writeHead(500, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ error: 'unexpected Agent generate call' }));
+                    if (request.url === '/api/agent/jobs/batch-job-responses/result') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                request_id: 'batch-job-responses',
+                                idempotency_key: 'batch-responses-model-key',
+                                cached: false,
+                                images: [
+                                    {
+                                        id: 'responses-artifact',
+                                        filename: 'responses.png',
+                                        content_url: '/generated/responses.png'
+                                    }
+                                ],
+                                execution: {
+                                    transport: 'agent_job_polling',
+                                    endpoint: '/api/agent/image-requests',
+                                    route_mode: 'job',
+                                    image_backend: 'responses-image-generation',
+                                    stream_mode: 'auto',
+                                    streaming_strategy: 'auto',
+                                    channel_request_mode: 'responses-sse',
+                                    channel_request_mode_fallback_applied: false,
+                                    route_decision: {
+                                        requested_backend: 'responses-image-generation',
+                                        preferred_channel_request_mode: 'responses-sse',
+                                        selected_channel_request_mode: 'responses-sse',
+                                        fallback_applied: false,
+                                        selected_channel_id: 'responses-channel',
+                                        upstream_host: 'upstream.example.test'
+                                    }
+                                },
+                                timing: { server_elapsed_ms: 1234 }
+                            })
+                        );
                         return;
                     }
                     response.writeHead(404, { 'content-type': 'application/json' });
@@ -4809,14 +5006,26 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
                     const body = JSON.parse(result.stdout);
-                    assert.equal(body.results[0].routing.transport, 'page_sse');
+                    assert.deepEqual(body.results[0].routing, {
+                        strength: 'default',
+                        transport: 'server_orchestrated',
+                        endpoint: '/api/agent/image-requests',
+                        route_mode: 'job',
+                        result_mode: 'job_polling',
+                        reason: 'Batch generate tasks submit intent to the server orchestration endpoint; the service owns internal route selection.'
+                    });
+                    assert.equal(body.results[0].summary.transport, 'agent_job_polling');
+                    assert.equal(body.results[0].summary.endpoint, '/api/agent/image-requests');
+                    assert.equal(body.results[0].summary.route_mode, 'job');
+                    assert.equal(body.results[0].summary.channel_request_mode, 'responses-sse');
                     assert.deepEqual(
                         requests.map((item) => `${item.method} ${item.url}`),
-                        ['GET /api/agent/capabilities', 'POST /api/images']
+                        ['GET /api/agent/capabilities', 'POST /api/agent/image-requests', 'GET /api/agent/jobs/batch-job-responses/result']
                     );
-                    assert.match(pageSseRequestBody, /name="image_backend"\r?\n\r?\nresponses/);
-                    assert.match(pageSseRequestBody, /name="responsesModel"\r?\n\r?\ngpt-4\.1-responses/);
-                    assert.match(pageSseRequestBody, /name="image_streaming_strategy"\r?\n\r?\nresponses-sse/);
+                    const requestBody = JSON.parse(pageSseRequestBody);
+                    assert.equal(requestBody.image_backend, 'responses-image-generation');
+                    assert.equal(requestBody.responsesModel, 'gpt-4.1-responses');
+                    assert.equal(requestBody.streaming_strategy, 'responses-sse');
                 }
             );
         } finally {
@@ -4918,7 +5127,7 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
-    it('fails batch responsesModel routing when page SSE capability is unavailable', async () => {
+    it('keeps batch responsesModel routing on server orchestration when page SSE capability is unavailable', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-responses-model-no-sse-'));
         try {
             const inputPath = join(tempRoot, 'tasks.jsonl');
@@ -4938,12 +5147,67 @@ describe('Agent skill script argument validation', () => {
                     requests.push({ method: request.method, url: request.url });
                     if (request.url === '/api/agent/capabilities') {
                         response.writeHead(200, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ agent_streaming: {} }));
+                        response.end(
+                            JSON.stringify({
+                                orchestration: {
+                                    supported: true,
+                                    transport_selection: 'server_owned',
+                                    endpoint: '/api/agent/image-requests'
+                                },
+                                agent_jobs: { supported: true, mode: 'job_polling' }
+                            })
+                        );
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
-                        response.writeHead(500, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ error: 'unexpected Agent generate call' }));
+                    if (request.url === '/api/agent/image-requests') {
+                        response.writeHead(202, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                job: {
+                                    id: 'batch-no-page-sse-job',
+                                    state: 'running',
+                                    result_url: '/api/agent/jobs/batch-no-page-sse-job/result',
+                                    retry_after_seconds: 1
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/jobs/batch-no-page-sse-job/result') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                request_id: 'batch-no-page-sse-job',
+                                idempotency_key: 'responses-no-page-sse',
+                                cached: false,
+                                images: [
+                                    {
+                                        id: 'batch-no-page-sse-artifact',
+                                        filename: 'responses.png',
+                                        content_url: '/generated/responses.png'
+                                    }
+                                ],
+                                execution: {
+                                    transport: 'agent_job_polling',
+                                    endpoint: '/api/agent/image-requests',
+                                    route_mode: 'job',
+                                    image_backend: 'responses-image-generation',
+                                    stream_mode: 'auto',
+                                    streaming_strategy: 'auto',
+                                    channel_request_mode: 'images-non-stream',
+                                    channel_request_mode_fallback_applied: false,
+                                    route_decision: {
+                                        requested_backend: 'responses-image-generation',
+                                        preferred_channel_request_mode: 'images-non-stream',
+                                        selected_channel_request_mode: 'images-non-stream',
+                                        fallback_applied: false,
+                                        selected_channel_id: 'images-channel',
+                                        upstream_host: 'upstream.example.test'
+                                    }
+                                },
+                                timing: { server_elapsed_ms: 987 }
+                            })
+                        );
                         return;
                     }
                     response.writeHead(404, { 'content-type': 'application/json' });
@@ -4954,15 +5218,23 @@ describe('Agent skill script argument validation', () => {
                         GPT_IMAGE_PLAYGROUND_URL: baseUrl
                     });
 
-                    assert.equal(result.status, 1);
+                    assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
                     const body = JSON.parse(result.stdout);
-                    assert.equal(body.results[0].ok, false);
-                    assert.equal(body.results[0].error.code, 'page_sse_unavailable');
-                    assert.equal(body.results[0].routing.transport, 'page_sse');
+                    assert.equal(body.results[0].ok, true);
+                    assert.deepEqual(body.results[0].routing, {
+                        strength: 'default',
+                        transport: 'server_orchestrated',
+                        endpoint: '/api/agent/image-requests',
+                        route_mode: 'job',
+                        result_mode: 'job_polling',
+                        reason: 'Batch generate tasks submit intent to the server orchestration endpoint; the service owns internal route selection.'
+                    });
+                    assert.equal(body.results[0].summary.transport, 'agent_job_polling');
+                    assert.equal(body.results[0].summary.channel_request_mode, 'images-non-stream');
                     assert.deepEqual(
                         requests.map((item) => `${item.method} ${item.url}`),
-                        ['GET /api/agent/capabilities']
+                        ['GET /api/agent/capabilities', 'POST /api/agent/image-requests', 'GET /api/agent/jobs/batch-no-page-sse-job/result']
                     );
                 }
             );
@@ -4971,7 +5243,7 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
-    it('does not route batch tasks through page SSE when streaming is explicitly disabled', () => {
+    it('does not route batch generate tasks through page SSE when streaming is explicitly disabled', () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-disabled-page-sse-'));
         try {
             const inputPath = join(tempRoot, 'tasks.jsonl');
@@ -4989,8 +5261,9 @@ describe('Agent skill script argument validation', () => {
 
             assert.equal(result.status, 0);
             const body = JSON.parse(result.stdout);
-            assert.equal(body.tasks[0].routing.transport, 'agent_json');
-            assert.equal(body.tasks[0].endpoint, '/api/agent/images/generate');
+            assert.equal(body.tasks[0].routing.transport, 'server_orchestrated');
+            assert.equal(body.tasks[0].routing.endpoint, '/api/agent/image-requests');
+            assert.equal(body.tasks[0].routing.result_mode, 'job_polling');
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
@@ -5221,7 +5494,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         idempotencyKeys.push(request.headers['idempotency-key']);
                         response.writeHead(500, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
@@ -5285,7 +5558,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         idempotencyKeys.push(request.headers['idempotency-key']);
                         response.writeHead(500, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
@@ -5341,7 +5614,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         idempotencyKeys.push(request.headers['idempotency-key']);
                         response.writeHead(500, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
@@ -5392,7 +5665,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         idempotencyKeys.push(request.headers['idempotency-key']);
                         response.writeHead(500, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ error: 'upstream failed' }));
@@ -5452,7 +5725,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         response.writeHead(200, { 'content-type': 'application/json' });
                         response.end(JSON.stringify({ images: [{ id: 'dim-image', filename: 'dim.png', content_url: '/artifact/dim.png' }] }));
                         return;
@@ -5861,9 +6134,13 @@ describe('Agent skill script argument validation', () => {
                 '--input',
                 responsesModelNonStreamInputPath
             ]);
-            assert.equal(responsesModelNonStreamResult.status, 2);
-            assert.match(responsesModelNonStreamResult.stderr, /responses-model-non-stream\.responsesModel 需要页面 SSE 路径/);
-            assert.equal(responsesModelNonStreamResult.stdout.trim(), '');
+            assert.equal(responsesModelNonStreamResult.status, 0);
+            assert.equal(responsesModelNonStreamResult.stderr.trim(), '');
+            const responsesModelNonStreamBody = JSON.parse(responsesModelNonStreamResult.stdout);
+            assert.equal(responsesModelNonStreamBody.tasks[0].routing.transport, 'server_orchestrated');
+            assert.equal(responsesModelNonStreamBody.tasks[0].routing.endpoint, '/api/agent/image-requests');
+            assert.equal(responsesModelNonStreamBody.tasks[0].request.responsesModel, 'gpt-4.1');
+            assert.equal(responsesModelNonStreamBody.tasks[0].request.stream_mode, 'non_stream');
 
             const responsesModelWithoutBackendInputPath = join(tempRoot, 'responses-model-without-backend.jsonl');
             writeFileSync(
@@ -5915,7 +6192,7 @@ describe('Agent skill script argument validation', () => {
                         response.end(JSON.stringify({ ok: true }));
                         return;
                     }
-                    if (request.url === '/api/agent/images/generate') {
+                    if (request.url === '/api/agent/image-requests') {
                         response.writeHead(200, { 'content-type': 'application/json' });
                         response.end(
                             JSON.stringify({

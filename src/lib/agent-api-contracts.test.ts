@@ -74,6 +74,39 @@ describe('validateAgentGenerateRequest', () => {
         );
     });
 
+    it('accepts Agent generate response controls as service-owned intent fields', () => {
+        assert.deepEqual(
+            validateAgentGenerateRequest({
+                prompt: 'draw a stable generate request',
+                image_backend: 'responses-image-generation',
+                responsesModel: 'gpt-5.4-mini',
+                thinking: 'medium',
+                promptOptimization: false,
+                force_web: true
+            }),
+            {
+                model: 'gpt-image-2',
+                prompt: 'draw a stable generate request',
+                n: 1,
+                size: '1024x1024',
+                quality: 'high',
+                output_format: 'webp',
+                output_compression: 100,
+                background: 'auto',
+                moderation: 'auto',
+                response_mode: 'path',
+                image_backend: 'responses-image-generation',
+                stream_mode: 'auto',
+                streaming_strategy: 'auto',
+                partial_images: 2,
+                responsesModel: 'gpt-5.4-mini',
+                thinking: 'medium',
+                promptOptimization: false,
+                force_web: true
+            }
+        );
+    });
+
     it('rejects Responses backend partial image counts outside the backend contract', () => {
         assert.throws(
             () =>
@@ -489,13 +522,17 @@ describe('buildAgentCapabilities', () => {
             requires_new_idempotency_key_on_retry: true,
             no_automatic_fallback: true
         });
-        assert.equal(capabilities.routing_rules.page_sse_large_generate.endpoint, '/api/images');
-        assert.equal(capabilities.routing_rules.page_sse_large_generate.transport, 'page_sse');
-        assert.equal(capabilities.routing_rules.page_sse_large_generate.strength, 'explicit');
-        assert.equal(capabilities.routing_rules.page_sse_large_generate.action.strength, 'explicit');
-        assert.deepEqual(capabilities.routing_rules.page_sse_large_generate.conditions, {
+        assert.equal(capabilities.routing_rules.page_sse_generate_diagnostics.endpoint, '/api/images');
+        assert.equal(capabilities.routing_rules.page_sse_generate_diagnostics.transport, 'page_sse');
+        assert.equal(capabilities.routing_rules.page_sse_generate_diagnostics.strength, 'explicit');
+        assert.equal(capabilities.routing_rules.page_sse_generate_diagnostics.action.strength, 'explicit');
+        assert.equal(
+            capabilities.routing_rules.page_sse_generate_diagnostics.action.fallback_endpoint,
+            AGENT_ENDPOINTS.create_image_request
+        );
+        assert.deepEqual(capabilities.routing_rules.page_sse_generate_diagnostics.conditions, {
             operation: 'generate',
-            max_edge: { operator: 'gt', value: 2048 },
+            explicit_page_sse: true,
             single_request: true
         });
         assert.equal(capabilities.routing_rules.retry_recovery.reuse_failed_idempotency_key, false);
@@ -927,6 +964,10 @@ describe('buildAgentCapabilities', () => {
             'force-sse'
         ]);
         assert.deepEqual(generateProperties.stream_mode.enum, ['auto', 'stream', 'non_stream']);
+        assert.deepEqual(generateProperties.thinking.enum, ['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
+        assert.equal(generateProperties.responsesModel.maxLength, 128);
+        assert.equal(generateProperties.promptOptimization.type, 'boolean');
+        assert.equal(generateProperties.force_web.type, 'boolean');
         assert.deepEqual(generateProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
         assert.deepEqual(generateProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
         assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.partial_images, {
@@ -1051,6 +1092,7 @@ describe('buildAgentCapabilities', () => {
             'gt',
             'lte'
         ]);
+        assert.equal(document.components.schemas.AgentRoutingCondition.properties.explicit_page_sse.type, 'boolean');
         assert.equal(
             document.components.schemas.AgentRoutingAction.properties.requires_new_idempotency_key_on_retry.type,
             'boolean'
