@@ -146,7 +146,7 @@ OPENAI_CHANNEL_3_UPSTREAM_PROFILE=matsca
 
 ## Agent API
 
-Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先读取 capabilities，再按返回的认证、路由和端点能力选择路径。
+Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先读取 capabilities，并把普通 generate 提交到 capabilities 声明的 `orchestration.endpoint`；显式诊断或兼容入口才切换到其他路径。
 
 新增 probe、diagnostics 或路由可观测能力时，先落 API / capabilities / OpenAPI 契约，再让 Skill 脚本做薄封装；不要让脚本自己复制页面与 Agent 的边界判断。
 
