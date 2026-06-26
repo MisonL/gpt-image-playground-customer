@@ -141,7 +141,7 @@ OPENAI_CHANNEL_3_UPSTREAM_PROFILE=matsca
 - `OPENAI_CHANNEL_N_REQUEST_MODES` 是管理员基于真实上游 smoke 设置的服务端白名单；全局默认可用 `OPENAI_UPSTREAM_REQUEST_MODES`。`/api/runtime-capabilities` 的 `channelRouting.requestModeControls`、`channelRouting.requestModeHealth` 和 Agent capabilities 的 `request_mode_controls` 会暴露配置入口、健康覆盖和对应真实 smoke gate。Agent 客户端只提交业务意图，不应自行选择 Images、Responses、SSE 或非流式路径。`stream_mode=auto` 可由服务端在 SSE 不可用时显式退到非流式并标记 fallback；`stream_mode=stream` 或显式页面 SSE 诊断必须失败可见，不会静默降级。真实执行后可从 `execution.channel_request_mode`、`execution.channel_request_mode_fallback_applied` 和 `execution.route_decision` 读取服务端实际选路结果；失败冷却若能关联到本次服务端 request mode，会只冷却该渠道或凭证的对应 request mode，并在 `error.diagnostics.cooldown_target.request_mode` 暴露。
 - 渠道恢复探测使用非计费 `GET /models` 只确认 host、鉴权和 models 端点恢复；它不能替代 request mode 的真实 Images/Responses/SSE smoke。管理员应以真实 smoke 结果决定 `OPENAI_CHANNEL_N_REQUEST_MODES`。
 - Docker compose 本身不把默认图片后端改成 Responses；未在 `.env.local` 显式配置时仍是 `images-api` 和 `auto`。
-- Responses image backend 需要 `ENABLE_RESPONSES_IMAGE_BACKEND=true` 和 `OPENAI_RESPONSES_API_MODEL`。页面请求也可以用 `responsesModel`、`responses_model`、`gptModel` 或 `gpt_model` 覆盖单次 `/responses` 顶层模型；这些字段只影响本项目的 `responses-image-generation` 路径，不会改变兼容上游自身 `/v1/images/generations` 桥接层内部选择的模型。
+- Responses image backend 需要 `ENABLE_RESPONSES_IMAGE_BACKEND=true` 和 `OPENAI_RESPONSES_API_MODEL`。生成意图也可以用 `responsesModel`、`responses_model`、`gptModel` 或 `gpt_model` 覆盖单次 `/responses` 顶层模型；这些字段只影响本项目的 `responses-image-generation` 路径，不会改变兼容上游自身 `/v1/images/generations` 桥接层内部选择的模型。
 - Matsca、extra headers、provider manifest、真实上游 smoke 等高级配置以 [.env.example](./.env.example) 为准。
 
 ## Agent API
@@ -156,7 +156,7 @@ Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先
 | --- | --- |
 | `GET /api/agent/capabilities` | 查询模型、限制、认证方式和路由规则。 |
 | `GET /api/agent/openapi.json` | 获取 OpenAPI 描述。 |
-| `POST /api/agent/images/generate` | JSON 文生图。 |
+| `POST /api/agent/images/generate` | JSON 文生图（显式 Agent / 诊断）。 |
 | `POST /api/agent/images/edit` | multipart 图片编辑，支持源图和 mask。 |
 | `POST /api/agent/jobs/images/generate` | 创建文生图 job。 |
 | `GET /api/agent/jobs/{id}` | 查询 job 状态。 |
@@ -168,7 +168,7 @@ Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先
 生成示例：
 
 ```bash
-curl -s http://localhost:4783/api/agent/images/generate \
+curl -s http://localhost:4783/api/agent/image-requests \
   -H "Authorization: Bearer your-agent-token" \
   -H "Idempotency-Key: demo-$(date +%s)" \
   -H "Content-Type: application/json" \

@@ -1098,7 +1098,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'complex_ui_batch',
                         'long_image_recovery',
                         'agent_generate_small_smoke',
-                        'page_sse_large_generate',
+                        'page_sse_generate_diagnostics',
                         'retry_recovery'
                     ],
                     properties: {
@@ -1106,7 +1106,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         complex_ui_batch: { $ref: '#/components/schemas/AgentRoutingRule' },
                         long_image_recovery: { $ref: '#/components/schemas/AgentRoutingRule' },
                         agent_generate_small_smoke: { $ref: '#/components/schemas/AgentRoutingRule' },
-                        page_sse_large_generate: { $ref: '#/components/schemas/AgentRoutingRule' },
+                        page_sse_generate_diagnostics: { $ref: '#/components/schemas/AgentRoutingRule' },
                         retry_recovery: {
                             type: 'object',
                             required: ['reuse_failed_idempotency_key', 'new_attempt_guidance'],
@@ -1154,6 +1154,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         batch: { type: 'boolean' },
                         single_request: { type: 'boolean' },
+                        explicit_page_sse: { type: 'boolean' },
                         complex_ui: { type: 'boolean' },
                         long_image: { type: 'boolean' },
                         resume_or_recover: { type: 'boolean' }
@@ -1305,6 +1306,17 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             enum: AGENT_IMAGE_BACKENDS,
                             default: 'images-api'
                         },
+                        responsesModel: {
+                            type: 'string',
+                            maxLength: 128,
+                            description: 'Responses image_generation 顶层模型；仅适用于 image_backend=responses-image-generation。'
+                        },
+                        thinking: {
+                            type: 'string',
+                            enum: ['minimal', 'none', 'low', 'medium', 'high', 'xhigh']
+                        },
+                        promptOptimization: { type: 'boolean' },
+                        force_web: { type: 'boolean' },
                         streaming_strategy: {
                             type: 'string',
                             enum: AGENT_STREAMING_STRATEGIES,

@@ -59,10 +59,10 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--output-compression`：默认 `100`，仅适用于 `jpeg` 或 `webp`。
 - `--response-mode`：默认 `path`。
 - `--image-backend`：可选，显式选择 `images-api`、`images`、`responses` 或 `responses-image-generation`。
-- `--responses-model` / `--gpt-model`：页面 SSE 专属字段，覆盖本次请求的 Responses 顶层模型；未传时使用服务端 `OPENAI_RESPONSES_API_MODEL`。必须同时设置 `--image-backend responses-image-generation` 或兼容别名 `responses`。该字段只影响本项目的 `responses-image-generation` 路径，不改变兼容上游自身 Images API 桥接层内部选择的模型。
-- `--thinking`：页面 SSE 专属字段，可选值为 `minimal`、`none`、`low`、`medium`、`high` 或 `xhigh`。
-- `--prompt-optimization`：页面 SSE 专属字段，必须是 `true` 或 `false`。
-- `--force-web`：页面 SSE 专属字段，会发送为 form-data `force_web=true`。
+- `--responses-model` / `--gpt-model`：生成意图字段，覆盖本次请求的 Responses 顶层模型；未传时使用服务端 `OPENAI_RESPONSES_API_MODEL`。必须同时设置 `--image-backend responses-image-generation` 或兼容别名 `responses`。该字段只影响本项目的 `responses-image-generation` 路径，不改变兼容上游自身 Images API 桥接层内部选择的模型。
+- `--thinking`：生成意图字段，可选值为 `minimal`、`none`、`low`、`medium`、`high` 或 `xhigh`。
+- `--prompt-optimization`：生成意图字段，必须是 `true` 或 `false`。
+- `--force-web`：生成意图字段，服务端在 Images API 路径发送为 `force_web=true`。
 - `--stream-mode`：可选，显式选择 `auto`、`stream` 或 `non_stream`。
 - `--streaming-strategy`：可选，显式选择 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse` 或 `force-sse`。
 - `--partial-images`：可选，显式设置上游 SSE partial image 数量。generate 或页面 SSE 请求包含 `image_backend` 时优先按 capabilities 的 `limits.partial_images_by_backend[image_backend]` 校验；缺少 backend 专属范围时才使用 `limits.partial_images`。
@@ -77,7 +77,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--preset`：常用 dry-run/真实调用参数集，当前包括 `1k-smoke-agent`、`4k-agent-nonstream`、`4k-page-sse` 和 `4k-upstream-sse-newapi`。dry-run 会展开真实请求字段，不触发计费。
 
 普通单次文生图默认提交到 `/api/agent/image-requests` 服务端编排入口；脚本不再按 `max_edge>2048`、公网 HTTPS 或 `--streaming-strategy off` 自行选择 page SSE、Agent JSON 或 job endpoint。需要对照时显式使用 `--page-sse`、`--agent` 或 `--job`。
-单张 generate 脚本使用 `--responses-model`/`--gpt-model`、`--thinking`、`--prompt-optimization` 或 `--force-web` 时会选择页面端 `/api/images` SSE。显式 `--agent`、`--job`、`stream_mode=non_stream` 或 `streaming_strategy=off` 与这些页面高级字段同时出现时会在网络请求前失败，避免字段被 Agent JSON 忽略。
+单张 generate 脚本使用 `--responses-model`/`--gpt-model`、`--thinking`、`--prompt-optimization` 或 `--force-web` 时仍默认提交到 `/api/agent/image-requests`。服务端会在内部决定使用 Responses image_generation、Images API、SSE 或非流式路径；Agent 客户端不应因为这些字段自行选择 `/api/images`。
 当服务端默认 `IMAGE_STREAMING_STRATEGY=off` 且请求未覆盖 `streaming_strategy` 时，运行时默认策略为 `off`；WebUI 会把 server-default 流式请求切到 `non_stream`，并发批量开关不可用。generate 脚本显式传 `--streaming-strategy off` 时仍提交给服务端编排入口，除非同时显式使用 `--agent`。
 
 编辑脚本参数：
@@ -125,7 +125,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 
 批量 dry-run 不写 manifest，输出会声明 `manifest_written=false`、`manifest_write_reason=dry_run` 和 `guardrails`。`guardrails.ordered_prefix` 是本次 dry-run 用于自动生成幂等键的前缀，真实执行应复用同一个 `--ordered-prefix`；`guardrails.dimension_check_recommended=true` 表示输入包含固定尺寸但未启用 `--dimension-check`。只有真实执行时 manifest 才作为 append-only 续跑记录写入；Agent JSON 失败时 manifest 会同时保存增强后的 `summary` 和 `agent_failure_diagnostics`。尺寸门禁失败同样写入结构化 summary 和可审查产物 URL，避免只能从中文错误文本解析期望和实际尺寸。批量总摘要会输出 `failure_summary.validation_failure_count` 和 `failure_summary.request_failure_count`，用于区分“上游已生成但本地验收失败”和“请求未成功完成”。当 `validation_failure_count>0` 而 `request_failure_count=0` 时，要按验收失败处理，不能当成上游不可用。
 
-批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`streaming_strategy`、`partial_images`、`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 可用于页面 SSE 路径。edit 任务设置 `image_backend=responses-image-generation` 时会走页面 SSE；不要把它改成 Agent edit。`responsesModel` 会选择页面 SSE 路径，且必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`，因为 Agent JSON 不接收请求级 Responses 顶层模型。JSONL 字段名必须使用 `streaming_strategy`；`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段，会被脚本在真实请求前拒绝。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
+批量 JSONL 每行字段按 `mode` 区分。`background` 只适用于 `generate`；`image_path`、`image_paths`、`mask_path` 只适用于 `edit`。批量 generate 默认提交到 `/api/agent/image-requests`，`responsesModel`/`gptModel`/`gpt_model`、`thinking`、`promptOptimization`/`prompt_optimization`、`force_web`/`forceWeb` 会随 JSON 业务意图提交给服务端编排入口。默认 WebP edit 任务走页面 SSE；如需 Agent edit 固定输出，请拆成单张 `edit-image.mjs --agent`。`output_format`、`format`、`output_compression`、`moderation`、`image_backend`、`streaming_strategy`、`partial_images` 以及上述 Responses 控制字段可用于页面 SSE edit 路径。edit 任务设置 `image_backend=responses-image-generation` 时会走页面 SSE；不要把它改成 Agent edit。`responsesModel` 必须同时设置 `image_backend=responses-image-generation` 或兼容值 `responses`。JSONL 字段名必须使用 `streaming_strategy`；`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段，会被脚本在真实请求前拒绝。PNG 搭配 `output_compression` 会在 dry-run 标记 normalization，真实请求不会发送压缩字段。`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`。脚本会在 dry-run 阶段显式拒绝跨模式字段、未知字段和无效路由控制字段，避免参数被真实接口忽略。
 
 Responses edit JSONL 正例：
 
@@ -216,7 +216,7 @@ GET /api/agent/capabilities
 - `orchestration.transport_selection`：当前为 `server_owned`，表示 Agent 客户端不应按尺寸、远端 HTTPS 或流式参数自行选择 page SSE、Agent JSON 或 job endpoint。
 - `orchestration.result_mode`：当前为 `job_polling`，脚本会轮询 `job.result_url` 并输出标准 `AgentImageResponse`。
 - `routing_rules.agent_generate_small_smoke`：`strength=explicit`，兼容旧客户端和显式 `--agent` 诊断路径；不是普通 generate 默认入口。
-- `routing_rules.page_sse_large_generate`：`strength=explicit`，显式 page SSE 诊断和页面工作台路径的参考规则；普通 generate 默认仍走 `orchestration.endpoint`。
+- `routing_rules.page_sse_generate_diagnostics`：`strength=explicit`，显式 page SSE 诊断和页面工作台路径的参考规则；普通 generate 默认仍走 `orchestration.endpoint`。
 - `routing_rules.retry_recovery`：终态失败不会用同一 `Idempotency-Key` 重新执行，必须诊断后创建新的业务操作和新的 key。
 - 批量 JSONL 路由控制字段：`page_sse`、`complex_ui`、`long_image`、`resume_or_recover` 必须是 JSON 布尔值，`transport` 目前只接受 `page_sse`；脚本会在 dry-run 阶段拒绝字符串布尔值和未知 transport。
 - `GET /api/runtime-capabilities` 不属于 Agent capabilities。它是页面工作台读取的运行态能力摘要，用于展示流式默认值、图片上游传输配置、渠道健康、渠道队列、并发建议、Responses 后端 enablement 和缺失环境变量，不进入 Agent OpenAPI。
@@ -336,7 +336,7 @@ Agent JSON 生成端点对外始终返回最终 JSON，不会对客户端返回 
 
 - 页面 SSE 使用独立的 `POST /api/images` form-data 路径。
 - 若 capabilities 中 `agent_streaming.upstream_sse.supported=true`，generate 可通过 `request_fields_by_mode.generate` 声明的字段控制服务端内部上游 SSE 消费。Agent JSON 的 `image_backend=responses-image-generation` 当前只支持 generate；Responses backend edit 使用页面端 `/api/images` form-data SSE。
-- 不要向 Agent 生成端点发送 `responsesModel`、`gptModel`、`gpt_model`、`thinking`、`promptOptimization`、`prompt_optimization`、`force_web` 或 `forceWeb`。这些是页面 form-data 高级字段；单张 generate 脚本会在需要时走 `/api/images` SSE。
+- 不要向 Agent 生成端点发送 `responsesModel`、`gptModel`、`gpt_model`、`thinking`、`promptOptimization`、`prompt_optimization`、`force_web` 或 `forceWeb`。这些是 generate 意图字段；脚本默认把它们交给服务端编排入口处理，只有显式 `--page-sse` 才会进入 `/api/images` SSE。
 - `/api/agent/image-requests` 的最终轮询结果和 Agent JSON 生成端点最终响应都使用 `AgentImageResponse`。
 - `stream_mode=stream` 强制流式并直接暴露失败。
 - `stream_mode=non_stream` 直接非流式。

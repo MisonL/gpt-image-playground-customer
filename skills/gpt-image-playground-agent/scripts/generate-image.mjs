@@ -213,7 +213,7 @@ try {
                 JSON.stringify(
                     buildSuccessOutput(formatPageSseOutput(result), {
                         ...buildPageSseSummaryRouting(),
-                        fallback_endpoint: AGENT_ENDPOINTS.generate,
+                        fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
                         fallback_mode: 'manual_after_diagnosis'
                     }, completeScriptTiming(scriptTiming)),
                     null,
@@ -412,19 +412,10 @@ function validateUpstreamStrategyOptions(parsed) {
     if (parsed.routeMode === 'page_sse' && (parsed.streamingStrategy === 'off' || parsed.streamMode === 'non_stream')) {
         throw new Error('stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。');
     }
-    if (hasPageOnlyGenerateOptions(parsed) && !isPageSseAllowed(parsed)) {
-        throw new Error('文生图高级页面参数需要页面 SSE，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。');
-    }
-    if (parsed.routeMode === 'agent') {
-        assertNoPageOnlyGenerateOptions(parsed, 'Agent generate');
-    }
     if (!OUTPUT_FORMATS.has(normalizeOutputFormat(parsed.format))) {
         throw new Error('--format 必须是 png、jpeg 或 webp。');
     }
     if (parsed.outputCompression !== undefined) readOutputCompression(parsed);
-    if (parsed.routeMode === 'job') {
-        assertNoPageOnlyGenerateOptions(parsed, 'Agent generate job');
-    }
 }
 
 function validateResponsesModelBackend(parsed) {
@@ -447,21 +438,6 @@ function readOutputCompression(parsed) {
         throw new Error('--output-compression 必须是 0 到 100 之间的整数。');
     }
     return parsedValue;
-}
-
-function hasPageOnlyGenerateOptions(value) {
-    return Boolean(
-        value.responsesModel ||
-            value.thinking ||
-            value.promptOptimization !== undefined ||
-            value.forceWeb !== undefined ||
-            value.force_web !== undefined
-    );
-}
-
-function assertNoPageOnlyGenerateOptions(parsed, context) {
-    if (!hasPageOnlyGenerateOptions(parsed)) return;
-    throw new Error(`${context} 不接受文生图高级页面字段；请去掉这些字段或使用 --page-sse。`);
 }
 
 function readBooleanOption(value, name) {
@@ -582,9 +558,7 @@ function dryRunEndpoint(body, routeMode) {
     if (routeMode === 'job') return `${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`;
     if (routeMode === 'agent') return `${baseUrl}${AGENT_ENDPOINTS.generate}`;
     if (routeMode === 'page_sse') return `${baseUrl}${PAGE_SSE_ENDPOINT}`;
-    return (hasPageOnlyGenerateOptions(body) || isLargeGenerate(body)) && isPageSseAllowed(body)
-        ? `${baseUrl}${PAGE_SSE_ENDPOINT}`
-        : `${baseUrl}${AGENT_ENDPOINTS.generate}`;
+    return `${baseUrl}${AGENT_ENDPOINTS.generate}`;
 }
 
 function buildGenerateRoutingGuidance(body, routeMode) {
@@ -608,23 +582,14 @@ function buildGenerateRoutingGuidance(body, routeMode) {
     if (routeMode === 'page_sse' && !isPageSseAllowed(body)) {
         throw new Error('stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。');
     }
-    if (
-        (routeMode === 'page_sse' ||
-            (routeMode !== 'agent' && (hasPageOnlyGenerateOptions(body) || isLargeGenerate(body)))) &&
-        isPageSseAllowed(body)
-    ) {
-        const reason = routeMode === 'page_sse'
-            ? 'Explicit --page-sse requests use the page form-data SSE endpoint.'
-            : hasPageOnlyGenerateOptions(body)
-            ? 'Responses/GPT2Image-compatible generate options require the page form-data SSE endpoint; Agent JSON generate does not accept those fields.'
-            : 'Generate requests with page-workbench-only requirements should use the page form-data SSE endpoint; if the stream fails, diagnose first and rerun manually with Agent JSON.';
+    if (routeMode === 'page_sse' && isPageSseAllowed(body)) {
         return {
             recommended_endpoint: PAGE_SSE_ENDPOINT,
             transport: 'page_sse',
             strength: 'recommended',
-            fallback_endpoint: AGENT_ENDPOINTS.generate,
+            fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
             fallback_mode: 'manual_after_diagnosis',
-            reason
+            reason: 'Explicit --page-sse requests use the page form-data SSE endpoint.'
         };
     }
     return {
@@ -1101,7 +1066,7 @@ function buildPageSseFailureOutput(error, timing = completeScriptTiming(scriptTi
 function buildPageSseRouting(fallbackMode) {
     return {
         ...buildPageSseSummaryRouting(),
-        fallback_endpoint: AGENT_ENDPOINTS.generate,
+        fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
         fallback_mode: fallbackMode
     };
 }
@@ -1127,7 +1092,7 @@ function buildPageSseScriptFailure(error, diagnostics, timing) {
             ...(diagnostics ? { diagnostics } : {})
         },
         routing: buildPageSseRouting('manual_after_diagnosis'),
-        next_step: '先补齐页面流式 capability 或访问码哈希，再重新执行；不要静默切换到 Agent JSON。'
+        next_step: '先补齐页面流式 capability 或访问码哈希，再重新执行；不要静默切换到其他端点。'
     };
     return attachSummary(output, buildFailureSummary({
         errorBody: output,
@@ -1174,7 +1139,7 @@ function buildBillablePageSseFailure(error, diagnostics, timing) {
         },
         routing: buildPageSseRouting('manual_after_diagnosis'),
         next_step:
-            '先用 diagnose-request 诊断页面流式失败原因，再用新的 Idempotency-Key 显式选择备用路径；若改用 Agent JSON 对照，必须重新校验输出尺寸和格式。'
+            '先用 diagnose-request 诊断页面流式失败原因，再用新的 Idempotency-Key 显式选择服务端编排入口或其他诊断路径。'
     };
     return attachSummary(output, buildFailureSummary({
         errorBody: output,
@@ -1554,19 +1519,15 @@ function shouldUsePageSse(capabilitiesValue, request, routeMode) {
         }
         return false;
     }
-    if (routeMode === 'page_sse' || hasPageOnlyGenerateOptions(request) || isLargeGenerate(request)) {
+    if (routeMode === 'page_sse') {
         assertPageSseReady(capabilitiesValue);
         return true;
     }
     return false;
 }
 
-function isLargeGenerate(request) {
-    return readMaxImageEdge(request.size) > 2048;
-}
-
 function shouldPreferServerOrchestration(request) {
-    return !hasPageOnlyGenerateOptions(request);
+    return true;
 }
 
 function isPageSseAllowed(request) {
