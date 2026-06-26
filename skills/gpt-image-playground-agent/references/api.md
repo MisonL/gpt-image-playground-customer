@@ -29,9 +29,9 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - `scripts/diagnose-request.mjs`：按页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断，支持 `--base-url` 固定目标服务。
 - `scripts/probe-upstream-image.mjs`：上游图片接口连通性探针。
 
-生成、编辑和批量脚本默认只做 dry-run，不触发真实生图或编辑。dry-run 输出的 `verification_scope.mode=local_planning_only` 表示只完成本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。必须显式添加 `--allow-billable` 才会调用真实端点。generate 默认提交到 `/api/agent/image-requests` 服务端编排入口；`--agent`、`--job`、`--page-sse` 才会显式改用 `/api/agent/images/generate`、`/api/agent/jobs/images/generate` 或页面端 `/api/images` SSE。
+生成、编辑和批量脚本默认只做 dry-run，不触发真实生图或编辑。dry-run 输出的 `verification_scope.mode=local_planning_only` 表示只完成本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。generate 可添加 `--check-remote` 做只读远端检查，输出 `verification_scope.mode=remote_contract_and_local_planning`，仅访问 `/api/agent/capabilities` 和 `/api/runtime-capabilities`，不会发送真实生图请求。必须显式添加 `--allow-billable` 才会调用真实端点。generate 默认提交到 `/api/agent/image-requests` 服务端编排入口；`--agent`、`--job`、`--page-sse` 才会显式改用 `/api/agent/images/generate`、`/api/agent/jobs/images/generate` 或页面端 `/api/images` SSE。
 上游探针默认只检查 DNS、TLS 和 `/models`，必须显式添加 `--allow-billable` 才会调用上游 `/images/generations`。
-脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 或 `--contract-check` 做只读契约检查，会覆盖服务声明的默认编排入口，不触发真实生图或编辑。
+脚本支持 `GPT_IMAGE_AGENT_CONTRACT_CHECK=1` 或 `--contract-check` 做只读契约检查，会覆盖服务声明的默认编排入口和页面 SSE 边界，不触发真实生图或编辑。
 位于仓库根目录且是首次配置、换机器、服务地址不确定或 token 不确定时，先运行 `npm run first-run`。它只读、非计费、不写 env 文件，默认输出中文摘要，并报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程鉴权、页面 SSE 鉴权和下一步动作。
 自动化消费时使用 `npm run first-run -- --json`。
 Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API_TOKEN` 时只接受 Bearer token；只有未配置 `AGENT_API_TOKEN` 且配置了 `APP_PASSWORD` 时，Agent 端点才接受访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。页面端 `/api/images` SSE 另看 `agent_streaming.page_sse.auth`；当其声明 `required=true` 时，form-data 必须包含 `passwordHash`。`GPT_IMAGE_AGENT_TOKEN` 不能替代页面 SSE 表单鉴权。

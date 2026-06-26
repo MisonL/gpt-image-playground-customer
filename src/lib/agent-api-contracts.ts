@@ -334,7 +334,7 @@ export type AgentCapabilities = {
                 source_header: 'Idempotency-Key';
                 max_length: number;
             };
-            agent_usage: 'explicit_for_generate_recommended_for_high_resolution_edit_and_complex_batch';
+            agent_usage: 'explicit_for_generate_recommended_for_page_only_fields_high_resolution_edit_and_complex_batch';
         };
     };
     orchestration: {
@@ -1013,7 +1013,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     source_header: 'Idempotency-Key',
                     max_length: PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
                 },
-                agent_usage: 'explicit_for_generate_recommended_for_high_resolution_edit_and_complex_batch'
+                agent_usage: 'explicit_for_generate_recommended_for_page_only_fields_high_resolution_edit_and_complex_batch'
             }
         },
         orchestration: {
@@ -1050,7 +1050,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     requires_new_idempotency_key_on_retry: true,
                     no_automatic_fallback: true
                 },
-                reason: 'High-resolution edit defaults to the page form-data SSE endpoint; if streaming has issues, diagnose first and explicitly fall back to Agent edit.'
+                reason: 'High-resolution edit uses the page form-data SSE endpoint because Agent edit has a fixed output contract; if streaming has issues, diagnose first and explicitly fall back to Agent edit.'
             },
             complex_ui_batch: {
                 when: ['operation=generate_or_edit', 'complex_ui=true', 'batch=true'],

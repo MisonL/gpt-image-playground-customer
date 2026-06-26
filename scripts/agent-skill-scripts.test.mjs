@@ -618,6 +618,18 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
+    it('explains explicit page SSE dry-runs without blaming high-resolution routing', () => {
+        const result = runSkillScript('generate-image.mjs', ['--page-sse', '--size', '1024x1024', 'prompt']);
+
+        assert.equal(result.status, 0);
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.endpoint, 'http://localhost:4783/api/images');
+        assert.equal(body.routing_guidance.transport, 'page_sse');
+        assert.match(body.routing_guidance.reason, /Explicit --page-sse/);
+        assert.doesNotMatch(body.routing_guidance.reason, /max_edge>2048/);
+        assert.equal(result.stderr.trim(), '');
+    });
+
     it('prints server orchestration guidance for remote HTTPS small generate dry-runs', () => {
         const result = runSkillScript('generate-image.mjs', ['--base-url', 'https://space.example.test', 'prompt']);
 
@@ -629,6 +641,70 @@ describe('Agent skill script argument validation', () => {
         assert.equal(body.routing_guidance.strength, 'recommended');
         assert.match(body.routing_guidance.reason, /只提交生成意图/);
         assert.equal(result.stderr.trim(), '');
+    });
+
+    it('can combine generate dry-run planning with non-billable remote checks', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({ method: request.method, url: request.url });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify(
+                            agentGenerateCapabilities({
+                                supported: {
+                                    request_modes: ['images-non-stream', 'images-sse']
+                                },
+                                agent_streaming: {
+                                    page_sse: { supported: true, endpoint: '/api/images' }
+                                }
+                            })
+                        )
+                    );
+                    return;
+                }
+                if (request.url === '/api/runtime-capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            streamingBatch: { enabled: true, recommendedConcurrency: 2 },
+                            channelRouting: { effectiveRequestModes: ['images-non-stream'] }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--check-remote', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.verification_scope.mode, 'remote_contract_and_local_planning');
+                assert.equal(body.verification_scope.remote_capabilities_verified, true);
+                assert.equal(body.verification_scope.runtime_capacity_verified, true);
+                assert.equal(body.verification_scope.auth_verified, true);
+                assert.equal(body.verification_scope.billable_request_sent, false);
+                assert.deepEqual(body.verification_scope.remote_check.capabilities.request_modes, [
+                    'images-non-stream',
+                    'images-sse'
+                ]);
+                assert.deepEqual(body.verification_scope.remote_check.runtime.effective_request_modes, [
+                    'images-non-stream'
+                ]);
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    ['GET /api/agent/capabilities', 'GET /api/runtime-capabilities']
+                );
+            }
+        );
     });
 
     it('keeps default generate on server orchestration when request modes are declared', async () => {
@@ -789,7 +865,19 @@ describe('Agent skill script argument validation', () => {
                 requests.push({ method: request.method, url: request.url });
                 if (request.url === '/api/agent/capabilities') {
                     response.writeHead(200, { 'content-type': 'application/json' });
-                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    response.end(
+                        JSON.stringify(
+                            agentGenerateCapabilities({
+                                agent_streaming: {
+                                    page_sse: {
+                                        supported: true,
+                                        endpoint: '/api/images',
+                                        client_request_id: { max_length: 128 }
+                                    }
+                                }
+                            })
+                        )
+                    );
                     return;
                 }
                 if (
@@ -807,6 +895,11 @@ describe('Agent skill script argument validation', () => {
                             }
                         })
                     );
+                    return;
+                }
+                if (request.url === '/api/images') {
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'clientRequestId 长度不能超过 128 个字符。' }));
                     return;
                 }
                 response.writeHead(404, { 'content-type': 'application/json' });
@@ -827,7 +920,8 @@ describe('Agent skill script argument validation', () => {
                     [
                         '/api/agent/images/generate',
                         '/api/agent/image-requests',
-                        '/api/agent/jobs/images/generate'
+                        '/api/agent/jobs/images/generate',
+                        '/api/images'
                     ]
                 );
                 assert.deepEqual(
@@ -836,7 +930,8 @@ describe('Agent skill script argument validation', () => {
                         'GET /api/agent/capabilities',
                         'POST /api/agent/images/generate',
                         'POST /api/agent/image-requests',
-                        'POST /api/agent/jobs/images/generate'
+                        'POST /api/agent/jobs/images/generate',
+                        'POST /api/images'
                     ]
                 );
             }
@@ -3618,6 +3713,8 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /Codex 会话日志会持久保存命令输出/);
         assert.match(skillText, /npm run env:summary/);
         assert.match(skillText, /verification_scope\.mode=local_planning_only/);
+        assert.match(skillText, /--check-remote/);
+        assert.match(skillText, /remote_contract_and_local_planning/);
         assert.match(skillText, /manifest_written=false/);
         assert.match(skillText, /Hugging Face Space Secrets 只能写入和列出名称/);
 
@@ -3628,6 +3725,8 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /channel_capacity_queue_aborted/);
         assert.match(apiReference, /npm run env:summary/);
         assert.match(apiReference, /verification_scope\.mode=local_planning_only/);
+        assert.match(apiReference, /--check-remote/);
+        assert.match(apiReference, /remote_contract_and_local_planning/);
         assert.match(apiReference, /manifest_written=false/);
         assert.match(apiReference, /Hugging Face Space Secrets 只能写入和列出名称/);
         assert.match(apiReference, /这个失败表示上游已生成但本地验收未通过/);
@@ -3829,6 +3928,25 @@ describe('Agent skill script argument validation', () => {
         } finally {
             rmSync(tempRoot, { recursive: true, force: true });
         }
+    });
+
+    it('prints stdin batch dry-run plans without inventing a /dev/stdin manifest path', () => {
+        const input = `${JSON.stringify({
+            id: 'stdin-task',
+            prompt: 'stdin prompt',
+            size: '1024x1024'
+        })}\n`;
+
+        const result = runSkillScript('batch-images.mjs', ['--input', '-'], {}, { input });
+
+        assert.equal(result.status, 0);
+        assert.equal(result.stderr.trim(), '');
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.input, '/dev/stdin');
+        assert.equal(body.manifest, null);
+        assert.equal(body.manifest_written, false);
+        assert.equal(body.total, 1);
+        assert.equal(body.tasks[0].id, 'stdin-task');
     });
 
     it('records enriched Agent diagnostics for failed batch tasks and manifests', async () => {
@@ -5990,6 +6108,9 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(result.stderr.trim(), '');
                 const body = JSON.parse(result.stdout);
                 assert.equal(body.client_request_id, 'web-diag');
+                assert.equal(body.found, true);
+                assert.equal(body.page_request_query_count, 1);
+                assert.equal(body.page_request_found_count, 1);
                 assert.equal(body.feedback.value, 'usable');
                 assert.equal(body.diagnostics.matched_log_count, 1);
                 assert.equal(body.request_count, 1);
@@ -6479,7 +6600,11 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(result.stderr.trim(), '');
                 const body = JSON.parse(result.stdout);
                 assert.deepEqual(body.diagnostics_retention, retention);
+                assert.equal(body.found, false);
+                assert.equal(body.page_request_query_count, 1);
+                assert.equal(body.page_request_found_count, 0);
                 assert.equal(body.diagnostics_note.code, 'no_matching_logs_in_retention_window');
+                assert.equal(body.requests[0].found, false);
                 assert.equal(body.requests[0].diagnostics_note.code, 'no_matching_logs_in_retention_window');
                 assert.equal(body.requests[0].diagnostics_note.retention.max_entries, 123);
                 assert.match(body.requests[0].diagnostics_note.message, /最近 123 条本地应用日志/);
@@ -6570,7 +6695,8 @@ function runSkillScript(filename, args, env = {}, options = {}) {
     return spawnSync(process.execPath, [join(skillScriptsRoot, filename), ...args], {
         cwd: options.cwd || repoRoot,
         encoding: 'utf8',
-        env: { ...baseEnv, ...env }
+        env: { ...baseEnv, ...env },
+        ...(options.input !== undefined ? { input: options.input } : {})
     });
 }
 

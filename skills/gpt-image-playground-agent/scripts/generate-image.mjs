@@ -134,13 +134,20 @@ try {
 }
 
 if (isNonBillableDryRun(options, contractCheck)) {
+    let remoteCheck;
+    try {
+        remoteCheck = options.checkRemote ? await runRemotePlanningCheck() : buildSkippedRemotePlanningCheck();
+    } catch (error) {
+        console.error(errorMessage(error));
+        process.exit(1);
+    }
     console.log(
         JSON.stringify(
             {
                 ok: true,
                 billable: false,
                 dry_run: true,
-                verification_scope: buildDryRunVerificationScope(),
+                verification_scope: buildDryRunVerificationScope(remoteCheck),
                 endpoint: dryRunEndpoint(requestBody, options.routeMode),
                 route_mode: options.routeMode,
                 routing_guidance: buildGenerateRoutingGuidance(requestBody, options.routeMode),
@@ -256,6 +263,7 @@ function parseArgs(argv) {
         routeMode: 'auto',
         dryRun: false,
         allowBillable: false,
+        checkRemote: false,
         help: false,
         promptParts: []
     };
@@ -289,6 +297,7 @@ function parseArgs(argv) {
         else if (arg === '--base-url') parsed.baseUrl = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--prompt-file') parsed.promptFile = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--check-remote') parsed.checkRemote = true;
         else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
         else parsed.promptParts.push(arg);
     }
@@ -497,18 +506,73 @@ function enrichImageUrls(result) {
     };
 }
 
-function buildDryRunVerificationScope() {
+function buildDryRunVerificationScope(remoteCheck = buildSkippedRemotePlanningCheck()) {
     return {
-        mode: 'local_planning_only',
+        mode: remoteCheck.remote_capabilities_verified ? 'remote_contract_and_local_planning' : 'local_planning_only',
         service_base_url: baseUrl,
         service_base_url_source: baseUrlInfo.source,
         interactive_confirmation_required: baseUrlInfo.interactive_confirmation_required,
+        remote_capabilities_verified: remoteCheck.remote_capabilities_verified,
+        runtime_capacity_verified: remoteCheck.runtime_capacity_verified,
+        auth_verified: remoteCheck.auth_verified,
+        billable_request_sent: false,
+        remote_check: {
+            capabilities: remoteCheck.capabilities,
+            runtime: remoteCheck.runtime
+        },
+        note: remoteCheck.remote_capabilities_verified
+            ? 'Dry-run validated local request construction and read non-billable remote capabilities/runtime state; it did not send a billable image request.'
+            : 'Dry-run validates local request construction and routing guidance only; run --check-remote, --contract-check or --allow-billable to verify the remote service.'
+    };
+}
+
+async function runRemotePlanningCheck() {
+    const capabilities = await readCapabilities();
+    const runtime = await readRuntimeCapabilities();
+    return {
+        remote_capabilities_verified: true,
+        runtime_capacity_verified: true,
+        auth_verified: true,
+        capabilities: {
+            endpoint: AGENT_ENDPOINTS.capabilities,
+            orchestration_supported: capabilities?.orchestration?.supported === true,
+            orchestration_endpoint: capabilities?.orchestration?.endpoint || null,
+            page_sse_supported: capabilities?.agent_streaming?.page_sse?.supported === true,
+            request_modes: readRequestModeList(capabilities?.supported?.request_modes)
+        },
+        runtime: {
+            endpoint: '/api/runtime-capabilities',
+            streaming_batch_enabled: runtime?.streamingBatch?.enabled === true,
+            recommended_concurrency: runtime?.streamingBatch?.recommendedConcurrency ?? null,
+            effective_request_modes: readRequestModeList(runtime?.channelRouting?.effectiveRequestModes)
+        }
+    };
+}
+
+async function readRuntimeCapabilities() {
+    const { response, result, text } = await fetchJson(`${baseUrl}/api/runtime-capabilities`, {
+        headers: authHeaders(),
+        timeoutMs
+    });
+    if (!response.ok) {
+        throw new Error(`runtime-capabilities 请求失败，状态码 ${response.status}：${text}`);
+    }
+    return result;
+}
+
+function buildSkippedRemotePlanningCheck() {
+    return {
         remote_capabilities_verified: false,
         runtime_capacity_verified: false,
         auth_verified: false,
-        billable_request_sent: false,
-        note: 'Dry-run validates local request construction and routing guidance only; run --contract-check or --allow-billable to verify the remote service.'
+        capabilities: null,
+        runtime: null
     };
+}
+
+function readRequestModeList(value) {
+    if (!Array.isArray(value)) return [];
+    return value.filter((item) => typeof item === 'string');
 }
 
 function dryRunEndpoint(body, routeMode) {
@@ -549,9 +613,11 @@ function buildGenerateRoutingGuidance(body, routeMode) {
             (routeMode !== 'agent' && (hasPageOnlyGenerateOptions(body) || isLargeGenerate(body)))) &&
         isPageSseAllowed(body)
     ) {
-        const reason = hasPageOnlyGenerateOptions(body)
+        const reason = routeMode === 'page_sse'
+            ? 'Explicit --page-sse requests use the page form-data SSE endpoint.'
+            : hasPageOnlyGenerateOptions(body)
             ? 'Responses/GPT2Image-compatible generate options require the page form-data SSE endpoint; Agent JSON generate does not accept those fields.'
-            : 'Generate requests with max_edge>2048 should use page form-data SSE first; if the stream fails, diagnose first and rerun manually with Agent JSON.';
+            : 'Generate requests with page-workbench-only requirements should use the page form-data SSE endpoint; if the stream fails, diagnose first and rerun manually with Agent JSON.';
         return {
             recommended_endpoint: PAGE_SSE_ENDPOINT,
             transport: 'page_sse',
@@ -724,7 +790,7 @@ function assertPageSseReady(capabilitiesValue) {
     if (!supportsPageSse(capabilitiesValue)) {
         throw createScriptError(
             'page_sse_unavailable',
-            '大图默认路由需要 agent_streaming.page_sse.supported=true；capabilities 未声明时不能静默降级到 Agent JSON。'
+            '显式页面 SSE 或页面专属字段需要 agent_streaming.page_sse.supported=true；capabilities 未声明时不能静默降级到 Agent JSON。'
         );
     }
     if (pageSse?.auth?.required === true && !passwordHash) {
@@ -1278,6 +1344,19 @@ async function runContractCheck(capabilitiesValue) {
         checks.push(await checkContractEndpoint(AGENT_ENDPOINTS.create_generate_job));
     }
 
+    if (supportsPageSse(capabilitiesValue)) {
+        const pageSse = capabilitiesValue?.agent_streaming?.page_sse;
+        if (pageSse?.auth?.required === true && !passwordHash) {
+            checks.push({
+                endpoint: PAGE_SSE_ENDPOINT,
+                skipped: true,
+                reason: '页面 SSE 需要 passwordHash；contract-check 在未提供 GPT_IMAGE_APP_PASSWORD_HASH 时跳过。'
+            });
+        } else {
+            checks.push(await checkPageSseContract());
+        }
+    }
+
     console.log(JSON.stringify({ ok: true, billable: false, checks }, null, 2));
 }
 
@@ -1296,6 +1375,35 @@ async function checkContractEndpoint(endpoint) {
         process.exit(1);
     }
     return { endpoint, status: response.status, error_code: result.error.code };
+}
+
+async function checkPageSseContract() {
+    const formData = new FormData();
+    formData.append('mode', 'generate');
+    formData.append('prompt', 'contract check');
+    formData.append('model', requestBody.model);
+    formData.append('n', String(requestBody.n));
+    formData.append('size', requestBody.size);
+    formData.append('quality', requestBody.quality);
+    formData.append('output_format', requestBody.output_format);
+    formData.append('response_mode', requestBody.response_mode);
+    formData.append('stream', 'true');
+    formData.append('clientRequestId', 'x'.repeat(pageSseClientRequestIdMaxLength + 1));
+    if (passwordHash) formData.append('passwordHash', passwordHash);
+    const { response, text } = await fetchJson(`${baseUrl}${PAGE_SSE_ENDPOINT}`, {
+        method: 'POST',
+        body: formData,
+        timeoutMs
+    });
+    if (response.status !== 400 || !text.includes('clientRequestId')) {
+        console.error(JSON.stringify({ ok: false, billable: false, endpoint: PAGE_SSE_ENDPOINT, status: response.status, text }, null, 2));
+        process.exit(1);
+    }
+    return {
+        endpoint: PAGE_SSE_ENDPOINT,
+        status: response.status,
+        error_code: 'page_sse_client_request_id_too_long'
+    };
 }
 
 function readOrchestrationEndpoint(capabilitiesValue) {
@@ -1498,7 +1606,7 @@ function printUsage() {
     console.error('用法：generate-image.mjs [options] <prompt>');
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
     console.error(
-        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --page-sse --agent --job --no-job(兼容别名)'
+        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --check-remote --page-sse --agent --job --no-job(兼容别名)'
     );
     console.error(
         '契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check'

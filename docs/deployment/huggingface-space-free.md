@@ -199,7 +199,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 
 脚本会先读取 `GET /api/agent/capabilities`，再调用 Agent API。成功响应会保留相对 `content_url`，同时补充 `absolute_content_url` 和 `absolute_metadata_url`，便于在桌面环境直接下载产物。
 
-远端 Agent 调用不要硬编码路径。脚本会按 capabilities 中的 `routing_rules`、`agent_streaming` 和 `agent_jobs` 判断默认路径：普通小图走 Agent JSON，`max_edge>2048` 的单次文生图和高分辨率 edit 默认优先走页面端 `/api/images` SSE；页面流式失败或不可用时，先诊断结构化错误，再显式回退到 Agent JSON、Agent edit 或 job 路径。job polling 只在显式选择时使用。需要诊断对照时可用 `--agent` 或 `--streaming-strategy off` 强制 Agent JSON，也可用 `--page-sse` 或 `--job` 显式选择路径。
+远端 Agent 调用不要硬编码路径。普通文生图默认提交业务意图到 capabilities 声明的 `orchestration.endpoint`，由服务端选择内部执行路径、上游 request mode 和轮询方式；Agent 客户端不按尺寸、远端 HTTPS 或流式参数自行选择 Images、Responses、SSE 或非流式路径。页面高级字段、默认 WebP edit、高分辨率 edit 和复杂批量仍按 Skill 规则使用页面端 `/api/images` SSE；页面流式失败或不可用时，先诊断结构化错误，再用新的 `Idempotency-Key` 显式选择 Agent JSON、Agent edit 或 job 路径对照。job polling 只在显式选择时使用。需要诊断对照时可用 `--agent` 或 `--streaming-strategy off` 强制 Agent JSON，也可用 `--page-sse` 或 `--job` 显式选择路径。
 
 如果 Space 同时配置了 `APP_PASSWORD` 和 `AGENT_API_TOKEN`，Agent JSON 端点用 `GPT_IMAGE_AGENT_TOKEN` 发送 Bearer token；页面端 `/api/images` SSE 仍按 capabilities 的 `agent_streaming.page_sse.auth` 判断，可能需要额外设置 `GPT_IMAGE_APP_PASSWORD_HASH`，并通过 form-data `passwordHash` 发送页面访问码哈希。页面 SSE 会把业务 key 写入 `clientRequestId`，长度上限以 capabilities 中的 `agent_streaming.page_sse.client_request_id.max_length` 为准。
 
