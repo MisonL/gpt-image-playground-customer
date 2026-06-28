@@ -141,7 +141,7 @@ AGENT_DB_PASSWORD_FILE=/path/to/password-file
 AGENT_PUBLIC_BASE_URL=https://<user>-<space>.hf.space
 ```
 
-`AGENT_PUBLIC_BASE_URL` 只影响 OpenAPI `servers[0].url`，必须填写绝对 `http`/`https` URL，不能包含凭据、查询参数或片段；Agent skill 仍应以 `GPT_IMAGE_PLAYGROUND_URL` 指向实际 Space 地址。
+`AGENT_PUBLIC_BASE_URL` 影响 OpenAPI `servers[0].url`，也用于 `POST /api/agent/artifacts/{id}/share` 返回用户可打开的分享外链。必须填写绝对 `http`/`https` URL，不能包含凭据、查询参数或片段；Agent skill 仍应以 `GPT_IMAGE_PLAYGROUND_URL` 指向实际 Space 地址。
 
 ## Space Secrets
 

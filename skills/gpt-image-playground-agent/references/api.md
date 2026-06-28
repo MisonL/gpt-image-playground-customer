@@ -47,7 +47,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 同一个 `Idempotency-Key` 如果已经进入终态 `failed`，再次调用 generate/edit 或 job result/status 只会回放该失败，且 `retryable=false`。需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
 页面端 `/api/images` SSE 会把同一个业务 key 复用到 `clientRequestId`，因此脚本使用的 `Idempotency-Key` 不能超过 capabilities 中 `agent_streaming.page_sse.client_request_id.max_length` 声明的字符数；超长时会直接报错，不会静默截断。
 脚本会在 dry-run 和真实请求前前置校验 `--size` 或 JSONL `size`。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI-compatible 上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量和上游探针默认请求 `output_format=webp`、`output_compression=100`。
-真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。`transport` 表示 Agent 对外访问的服务端端点形态，`route_mode` 表示 Agent/job/page SSE 路径，`channel_request_mode` 表示服务端实际调用上游的 Images/Responses 与 SSE/非流式组合，`route_decision` 记录 requested backend、preferred/fallback/selected request mode、fallback 是否发生、选中渠道、上游 host 或 no-channel 原因。失败摘要也稳定包含空数组或 `null` 形式的产物、路由、渠道和尺寸字段，便于 subagent 按同一模板汇报；尺寸门禁失败属于“上游已生成但本地验收失败”，失败摘要会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls` 和 `image_dimensions`。失败摘要还包含 `route_decision`、`transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`。Agent JSON 失败时脚本会按幂等键只读查询 Agent state；若命中，会把 `request_id`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host`、`transport_error_kind` 合并进首次失败摘要，并输出 `agent_failure_diagnostics`。回答耗时问题时优先读取 `summary.elapsed_ms`；需要区分脚本等待和上游耗时时读取 `summary.elapsed_breakdown`。
+真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`share_urls`、`direct_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。`transport` 表示 Agent 对外访问的服务端端点形态，`route_mode` 表示 Agent/job/page SSE 路径，`channel_request_mode` 表示服务端实际调用上游的 Images/Responses 与 SSE/非流式组合，`route_decision` 记录 requested backend、preferred/fallback/selected request mode、fallback 是否发生、选中渠道、上游 host 或 no-channel 原因。`share_urls` 只在显式 `--share` 后出现，用于给用户浏览器打开；`content_urls` 仍是需要 Agent 鉴权的 artifact 下载路径。失败摘要也稳定包含空数组或 `null` 形式的产物、路由、渠道和尺寸字段，便于 subagent 按同一模板汇报；尺寸门禁失败属于“上游已生成但本地验收失败”，失败摘要会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls` 和 `image_dimensions`。失败摘要还包含 `route_decision`、`transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`。Agent JSON 失败时脚本会按幂等键只读查询 Agent state；若命中，会把 `request_id`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host`、`transport_error_kind` 合并进首次失败摘要，并输出 `agent_failure_diagnostics`。回答耗时问题时优先读取 `summary.elapsed_ms`；需要区分脚本等待和上游耗时时读取 `summary.elapsed_breakdown`。
 
 生成脚本参数：
 
@@ -66,6 +66,9 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--stream-mode`：可选，显式选择 `auto`、`stream` 或 `non_stream`。
 - `--streaming-strategy`：可选，显式选择 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse` 或 `force-sse`。
 - `--partial-images`：可选，显式设置上游 SSE partial image 数量。generate 或页面 SSE 请求包含 `image_backend` 时优先按 capabilities 的 `limits.partial_images_by_backend[image_backend]` 校验；缺少 backend 专属范围时才使用 `limits.partial_images`。
+- `--share`：真实生图成功后，为每个 Agent artifact 调用 `POST /api/agent/artifacts/{id}/share` 创建用户可打开的分享链接，并在顶层 `shares` 和 `summary.share_urls` 输出结果。
+- `--share-expires-minutes`：可选，设置分享有效期分钟数；省略时使用服务端默认值。
+- `GPT_IMAGE_SHARE_ACCESS_CODE`：可选，创建需要访问码的分享链接；访问码不会出现在返回 URL 中，也不会出现在命令行参数里。
 - `--timeout-ms`：未显式指定时，脚本先用 `420000ms` 读取 capabilities；真实请求会采用 `420000ms` 与 `capabilities.image_transport.upstream_timeout_ms` 中较大的值。
 - `--prompt-file`：从文本文件读取 prompt。
 - `--idempotency-key`：指定稳定幂等键。
@@ -424,12 +427,25 @@ Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`�
 ```http
 GET /api/agent/artifacts/{id}
 GET /api/agent/artifacts/{id}/content
+POST /api/agent/artifacts/{id}/share
 DELETE /api/agent/artifacts/{id}
 ```
 
 所有产物端点都需要和生成接口相同的鉴权。
 
-`GET /api/agent/artifacts/{id}` 返回 Agent 产物元数据；`GET /content` 返回产物图片二进制；`DELETE /api/agent/artifacts/{id}` 会删除 Agent 产物文件和状态库元数据，并把关联请求标记为 `artifact_not_found`。不存在的产物返回 `artifact_not_found`。页面端 `POST /api/image-delete` 是按文件名删除页面图片文件的 WebUI API，使用页面访问码哈希和 `filenames` JSON，不等同于 Agent artifact delete。
+`GET /api/agent/artifacts/{id}` 返回 Agent 产物元数据；`GET /content` 返回产物图片二进制；`POST /share` 为已有 Agent artifact 复制出独立分享产物，返回 `share_url`、`direct_content_url`、过期时间和是否需要访问码；`DELETE /api/agent/artifacts/{id}` 会删除 Agent 产物文件和状态库元数据，并把关联请求标记为 `artifact_not_found`。不存在的产物返回 `artifact_not_found`。页面端 `POST /api/image-delete` 是按文件名删除页面图片文件的 WebUI API，使用页面访问码哈希和 `filenames` JSON，不等同于 Agent artifact delete。
+
+Agent 创建分享链接的请求示例：
+
+```http
+POST /api/agent/artifacts/{id}/share
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{"expires_in_minutes":1440,"access_code":"optional-code"}
+```
+
+公开分享可直接打开返回的 `share_url` 或 `direct_content_url`。设置访问码的分享需要用户访问 `share_url` 并输入访问码；不要把访问码或 Agent Bearer token 拼进图片 URL。
 
 ## 结果反馈与诊断
 
@@ -635,8 +651,8 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 - `PUT /api/feedback`：页面结果反馈写入端点。页面把最近生成的可用性标记和备注写入服务端状态；Agent 只读查询使用 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback`。
 - `DELETE /api/feedback`：页面结果反馈清理端点。页面删除历史时按 `clientRequestId` 清理对应服务端反馈；该端点不接受 Agent Bearer token。
 - `GET /api/runtime-capabilities`：页面运行态能力摘要。它暴露流式默认值、图片上游传输配置、渠道健康、渠道队列、并发建议和 Responses 后端 enablement，不返回 API key 或本地密钥。
-- `POST /api/shares`：页面分享创建端点。配置 `APP_PASSWORD` 时要求页面访问 cookie；请求是 form-data `image`、`sourceFilename`、`expiresInMinutes` 和可选 `accessCode`。返回分享 token、URL、过期时间和是否需要访问码。
-- `GET /api/shares/{token}` 和 `POST /api/shares/{token}/content`：分享元数据和图片内容端点。私密分享的内容读取通过 JSON `accessCode` 校验，并有访问码失败限流；这不是 Agent artifact 下载。
+- `POST /api/shares`：页面分享上传创建端点。配置 `APP_PASSWORD` 时要求页面访问 cookie；请求是 form-data `image`、`sourceFilename`、`expiresInMinutes` 和可选 `accessCode`。Agent 客户端不要用它上传 artifact；应使用 `/api/agent/artifacts/{id}/share`。
+- `GET /api/shares/{token}`、`GET /api/shares/{token}/content` 和 `POST /api/shares/{token}/content`：分享元数据和图片内容端点。公开分享支持浏览器直接 GET 内容；私密分享的内容读取通过分享页 POST JSON `accessCode` 校验，并有访问码失败限流；这不是 Agent artifact 下载。
 - `GET /api/logs`：页面日志 SSE。必须配置 `APP_PASSWORD`，并在 `Authorization: Bearer <sha256(APP_PASSWORD)>` 中发送访问码哈希；查询参数中的哈希会被拒绝。它不接受 `AGENT_API_TOKEN`。Agent 只读诊断使用 `/api/agent/diagnostics/page-requests/{id}`。
 - `POST /api/image-delete`：页面图片文件删除端点。请求 JSON 为 `filenames` 和可选 `passwordHash`，按页面生成文件名删除 `generated-images/` 中的图片；它不删除 Agent 状态库 artifact 记录。
 
@@ -646,7 +662,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 
 | 前端能力或端点 | 归属契约 | 进入 Agent OpenAPI | 自动化口径 |
 | --- | --- | --- | --- |
-| `POST /api/agent/image-requests`、`POST /api/agent/images/generate`、`POST /api/agent/images/edit`、Agent jobs、Agent artifacts | Agent API | 是 | 普通 generate 默认用 image-requests；其他 Agent 端点通过 skill 脚本和 Agent 鉴权调用。 |
+| `POST /api/agent/image-requests`、`POST /api/agent/images/generate`、`POST /api/agent/images/edit`、Agent jobs、Agent artifacts、`POST /api/agent/artifacts/{id}/share` | Agent API | 是 | 普通 generate 默认用 image-requests；其他 Agent 端点通过 skill 脚本和 Agent 鉴权调用。分享创建需要 Agent 鉴权，返回的分享 URL 给用户浏览器访问。 |
 | `POST /api/images` | 页面 form-data SSE API | 否 | 仅在默认 WebP edit、复杂 UI 批量、页面高级字段或显式 `--page-sse` 诊断时由 skill 选择。 |
 | `GET /api/runtime-capabilities` | 页面运行态能力 API | 否 | 页面展示运行态默认值、图片上游传输配置、渠道健康和后端 enablement；不是 Agent capabilities。 |
 | `PUT/DELETE /api/feedback` | 页面结果反馈写入和清理 API | 否 | 页面写入最近生成的结果反馈；删除历史时清理对应反馈。 |
@@ -654,7 +670,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 | `GET /api/agent/page-requests/{id}/feedback` | Agent 结果反馈只读 API | 是 | 按页面 `clientRequestId` 查询最新反馈。 |
 | `POST /api/agent/diagnostics/page-requests` | Agent 日志诊断批量只读 API | 是 | 按多个页面 `clientRequestId` 批量查询脱敏日志摘要。 |
 | `GET /api/agent/diagnostics/page-requests/{id}` | Agent 日志诊断摘要 API | 是 | 按页面 `clientRequestId` 查询脱敏日志摘要，不直接读取 `/api/logs` SSE。 |
-| `POST /api/shares`、`GET /api/shares/{token}`、`POST /api/shares/{token}/content` | 页面分享 API | 否 | 使用页面 cookie、访问码和分享 token，不复用 Agent artifact 下载契约。 |
+| `POST /api/shares`、`GET /api/shares/{token}`、`GET/POST /api/shares/{token}/content` | 分享访问 API | 否 | `POST /api/shares` 是页面上传创建端点，不进入 Agent OpenAPI；`GET/POST /content` 使用分享 token 或访问码服务用户浏览器，不复用 Agent artifact 下载契约。Agent 只通过 `/api/agent/artifacts/{id}/share` 创建这类分享记录。 |
 | `GET /api/logs` | 页面日志 SSE API | 否 | 使用页面访问码哈希的 Bearer 头，不接受 `AGENT_API_TOKEN`。 |
 | `POST /api/image-delete` | 页面图片文件删除 API | 否 | 按页面文件名删除 `generated-images/` 文件，不删除 Agent 状态库 artifact。 |
 | 灵感相册 | 浏览器本地工作台状态 | 否 | 只服务页面提示词复用，不作为 Agent capabilities。 |
