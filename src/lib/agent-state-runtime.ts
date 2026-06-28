@@ -1,5 +1,3 @@
-import path from 'path';
-import { readFileSync } from 'fs';
 import {
     readAgentRecoveryIntervalMs,
     readAgentStateBackend,
@@ -11,6 +9,8 @@ import { PostgresAgentStateStore } from './agent-state-postgres';
 import { SqliteAgentStateStore } from './agent-state-sqlite';
 import type { AgentStateStore } from './agent-state-store';
 import { purgeExpiredImageSharesForStore } from './share-store';
+import { readFileSync } from 'fs';
+import path from 'path';
 
 type CachedStore = {
     backend: AgentStateBackend;
@@ -22,7 +22,9 @@ type CachedStore = {
 };
 
 let cachedStore: CachedStore | undefined;
-let storeFactoryForTests: ((backend: AgentStateBackend, key: string, env: Record<string, string | undefined>) => AgentStateStore) | undefined;
+let storeFactoryForTests:
+    | ((backend: AgentStateBackend, key: string, env: Record<string, string | undefined>) => AgentStateStore)
+    | undefined;
 
 function cacheAgentStateStore(backend: AgentStateBackend, key: string, store: AgentStateStore): AgentStateStore {
     const initPromise = store.init().catch((error) => {
@@ -40,7 +42,11 @@ function readEnvValue(env: Record<string, string | undefined>, fieldName: string
     return value ? value : undefined;
 }
 
-function readEnvSecret(env: Record<string, string | undefined>, fieldName: string, fileFieldName: string): string | undefined {
+function readEnvSecret(
+    env: Record<string, string | undefined>,
+    fieldName: string,
+    fileFieldName: string
+): string | undefined {
     const directValue = readEnvValue(env, fieldName);
     if (directValue) return directValue;
     const filePath = readEnvValue(env, fileFieldName);
@@ -67,7 +73,9 @@ export function resetAgentStateStoreForTests(): void {
 }
 
 export function setAgentStateStoreFactoryForTests(
-    factory: ((backend: AgentStateBackend, key: string, env: Record<string, string | undefined>) => AgentStateStore) | undefined
+    factory:
+        | ((backend: AgentStateBackend, key: string, env: Record<string, string | undefined>) => AgentStateStore)
+        | undefined
 ): void {
     storeFactoryForTests = factory;
 }
@@ -109,7 +117,9 @@ export async function ensureAgentStateStoreReady(
     return store;
 }
 
-export async function recoverAgentStateOnStartup(env: Record<string, string | undefined> = process.env): Promise<number> {
+export async function recoverAgentStateOnStartup(
+    env: Record<string, string | undefined> = process.env
+): Promise<number> {
     const store = getAgentStateStore(env);
     await cachedStore?.initPromise;
     const recovered = await store.recoverExpiredRequests();
@@ -121,7 +131,11 @@ export async function recoverAgentStateOnStartup(env: Record<string, string | un
     return recovered;
 }
 
-async function recoverAgentStateIfDue(store: AgentStateStore, env: Record<string, string | undefined>, now: Date): Promise<void> {
+async function recoverAgentStateIfDue(
+    store: AgentStateStore,
+    env: Record<string, string | undefined>,
+    now: Date
+): Promise<void> {
     if (!cachedStore) return;
     const nowMs = now.getTime();
     const intervalMs = readAgentRecoveryIntervalMs(env);

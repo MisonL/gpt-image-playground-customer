@@ -1,3 +1,13 @@
+import { ChannelCapacityQueueError } from './channel-capacity-queue';
+import {
+    CHANNEL_REQUEST_MODES,
+    channelSupportsRequestMode,
+    getEffectiveChannelRequestModes,
+    parseChannelRequestModes,
+    type ChannelRequestMode,
+    type ChannelRequestModeHealthSummary
+} from './channel-request-mode';
+import { RequestValidationError, readPlainHttpApiBaseUrlAllowlist, validateApiBaseUrl } from './image-request-utils';
 import {
     IMAGE_UPSTREAM_PROFILES,
     buildMatscaAppHeaders,
@@ -17,16 +27,6 @@ import {
     type ImageProviderManifest,
     type ImageProviderManifestSummary
 } from './image-upstream-provider-manifest';
-import {
-    CHANNEL_REQUEST_MODES,
-    channelSupportsRequestMode,
-    getEffectiveChannelRequestModes,
-    parseChannelRequestModes,
-    type ChannelRequestMode,
-    type ChannelRequestModeHealthSummary
-} from './channel-request-mode';
-import { ChannelCapacityQueueError } from './channel-capacity-queue';
-import { RequestValidationError, readPlainHttpApiBaseUrlAllowlist, validateApiBaseUrl } from './image-request-utils';
 
 export type RoutingStrategy = 'sticky' | 'round_robin' | 'random';
 
@@ -199,8 +199,8 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             (unhealthyUntilByChannelId.get(credential.channelId) ?? 0) > currentTime ||
             Boolean(
                 requestMode &&
-                    ((unhealthyUntilByCredentialRequestMode.get(credentialRequestModeKey(credential, requestMode)) ?? 0) >
-                        currentTime ||
+                    ((unhealthyUntilByCredentialRequestMode.get(credentialRequestModeKey(credential, requestMode)) ??
+                        0) > currentTime ||
                         (unhealthyUntilByChannelRequestMode.get(channelRequestModeKey(credential, requestMode)) ?? 0) >
                             currentTime)
             )
@@ -229,7 +229,11 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
         return !mode || channelSupportsRequestMode(credential, mode);
     };
     const isHealthyForRequestMode = (credential: ChannelCredential, mode: ChannelRequestMode | undefined) => {
-        return supportsRequestedMode(credential, mode) && !isCoolingDown(credential, mode) && !isWaitingForProbe(credential, mode);
+        return (
+            supportsRequestedMode(credential, mode) &&
+            !isCoolingDown(credential, mode) &&
+            !isWaitingForProbe(credential, mode)
+        );
     };
     const setCooldown = (
         credential: ChannelCredential,
@@ -254,7 +258,10 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             return { cooldownApplied: true, cooldownUntil: unhealthyUntil, retryAfterMs: cooldownMs };
         }
         if (requestMode) {
-            unhealthyUntilByCredentialRequestMode.set(credentialRequestModeKey(credential, requestMode), unhealthyUntil);
+            unhealthyUntilByCredentialRequestMode.set(
+                credentialRequestModeKey(credential, requestMode),
+                unhealthyUntil
+            );
             if (options.requireProbeForRecovery) {
                 probeRequiredCredentialRequestModes.add(credentialRequestModeKey(credential, requestMode));
             }
@@ -363,16 +370,11 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 const credentialProbeIsNewer =
                     probeRequiredCredentialIds.has(credential.id) && credentialUnhealthyUntil > channelUnhealthyUntil;
                 const channelReady =
-                    probeRequiredChannelIds.has(credential.channelId) &&
-                    channelUnhealthyUntil <= currentTime;
+                    probeRequiredChannelIds.has(credential.channelId) && channelUnhealthyUntil <= currentTime;
                 if (channelReady) {
                     dueChannelIds.add(credential.channelId);
                 }
-                if (
-                    channelReady &&
-                    !credentialProbeIsNewer &&
-                    !queuedChannelIds.has(credential.channelId)
-                ) {
+                if (channelReady && !credentialProbeIsNewer && !queuedChannelIds.has(credential.channelId)) {
                     candidates.push({
                         scope: 'channel',
                         credential,
@@ -531,8 +533,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 unhealthyChannelCount: channelIds.length - healthyChannelCount,
                 pendingRecoveryProbeCredentialCount:
                     probeRequiredCredentialIds.size + probeRequiredCredentialRequestModes.size,
-                pendingRecoveryProbeChannelCount:
-                    probeRequiredChannelIds.size + probeRequiredChannelRequestModes.size,
+                pendingRecoveryProbeChannelCount: probeRequiredChannelIds.size + probeRequiredChannelRequestModes.size,
                 ...(lastFailure ? { lastFailure } : {})
             };
         },
@@ -541,7 +542,10 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 configuredRequestModes: summarizeCredentialRequestModes(options.credentials),
                 effectiveRequestModes: summarizeHealthyRequestModes(options.credentials, isHealthyForRequestMode),
                 modes: summarizeRequestModeCoverage(options.credentials, isHealthyForRequestMode),
-                effectiveRequestModesByChannel: summarizeHealthyRequestModesByChannel(options.credentials, isHealthyForRequestMode)
+                effectiveRequestModesByChannel: summarizeHealthyRequestModesByChannel(
+                    options.credentials,
+                    isHealthyForRequestMode
+                )
             };
         }
     };
@@ -563,11 +567,13 @@ function readChannelRequestModeKey(value: string): { channelId: string; requestM
     return { channelId, requestMode };
 }
 
-function readCredentialRequestModeKey(value: string): {
-    channelId: string;
-    credentialId: string;
-    requestMode: ChannelRequestMode;
-} | undefined {
+function readCredentialRequestModeKey(value: string):
+    | {
+          channelId: string;
+          credentialId: string;
+          requestMode: ChannelRequestMode;
+      }
+    | undefined {
     const [channelId, credentialId, requestMode] = value.split(REQUEST_MODE_KEY_SEPARATOR);
     if (!channelId || !credentialId || !isChannelRequestMode(requestMode)) return undefined;
     return { channelId, credentialId, requestMode };
@@ -717,7 +723,9 @@ export function resolveEffectiveCredential(options: {
     selectedCredential?: ChannelCredential;
 }): EffectiveCredential {
     if (options.requestApiKey) {
-        const requestProfile = readImageUpstreamProfile({ baseUrl: options.requestApiBaseUrl || options.legacyBaseUrl });
+        const requestProfile = readImageUpstreamProfile({
+            baseUrl: options.requestApiBaseUrl || options.legacyBaseUrl
+        });
         return {
             apiKey: options.requestApiKey,
             baseUrl: options.requestApiBaseUrl || normalizeOptionalString(options.legacyBaseUrl),
@@ -778,10 +786,23 @@ export function isChannelFailure(error: unknown): boolean {
         return true;
     }
     const status = readErrorNumber(error, 'status') ?? readNestedErrorNumber(error, 'status');
-    return status === 500 || status === 502 || status === 503 || status === 504 || status === 520 || status === 522 || status === 523 || status === 524;
+    return (
+        status === 500 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504 ||
+        status === 520 ||
+        status === 522 ||
+        status === 523 ||
+        status === 524
+    );
 }
 
-export function describeChannelFailure(error: unknown, scope: 'credential' | 'channel', at = Date.now()): ChannelFailureReason {
+export function describeChannelFailure(
+    error: unknown,
+    scope: 'credential' | 'channel',
+    at = Date.now()
+): ChannelFailureReason {
     return {
         at,
         scope,
@@ -792,7 +813,9 @@ export function describeChannelFailure(error: unknown, scope: 'credential' | 'ch
     };
 }
 
-export function toPublicChannelFailure(reason: ChannelFailureReason | undefined): PublicChannelFailureReason | undefined {
+export function toPublicChannelFailure(
+    reason: ChannelFailureReason | undefined
+): PublicChannelFailureReason | undefined {
     if (!reason) {
         return undefined;
     }
@@ -949,15 +972,24 @@ function readChannelJsonHeaders(
     try {
         parsed = JSON.parse(rawHeaders);
     } catch {
-        throw new RequestValidationError(`OPENAI_CHANNEL_${channelIndex}_UPSTREAM_HEADERS_JSON 必须是 JSON 对象。`, 500);
+        throw new RequestValidationError(
+            `OPENAI_CHANNEL_${channelIndex}_UPSTREAM_HEADERS_JSON 必须是 JSON 对象。`,
+            500
+        );
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new RequestValidationError(`OPENAI_CHANNEL_${channelIndex}_UPSTREAM_HEADERS_JSON 必须是 JSON 对象。`, 500);
+        throw new RequestValidationError(
+            `OPENAI_CHANNEL_${channelIndex}_UPSTREAM_HEADERS_JSON 必须是 JSON 对象。`,
+            500
+        );
     }
     const headers: UpstreamRequestHeaders = {};
     for (const [name, value] of Object.entries(parsed)) {
         if (typeof value !== 'string') {
-            throw new RequestValidationError(`OPENAI_CHANNEL_${channelIndex}_UPSTREAM_HEADERS_JSON 的值必须都是字符串。`, 500);
+            throw new RequestValidationError(
+                `OPENAI_CHANNEL_${channelIndex}_UPSTREAM_HEADERS_JSON 的值必须都是字符串。`,
+                500
+            );
         }
         headers[name] = value;
     }
@@ -1018,7 +1050,10 @@ function readOptionalEnv(env: Record<string, string | undefined>, fieldName: str
     return normalized || undefined;
 }
 
-function readOptionalPositiveIntegerEnv(env: Record<string, string | undefined>, fieldName: string): number | undefined {
+function readOptionalPositiveIntegerEnv(
+    env: Record<string, string | undefined>,
+    fieldName: string
+): number | undefined {
     const value = readOptionalEnv(env, fieldName);
     if (!value || !/^\d+$/.test(value)) {
         return undefined;
@@ -1069,10 +1104,7 @@ function readRequestIdField(error: unknown): { requestId?: string } {
     return value ? { requestId: value } : {};
 }
 
-function readErrorStringField(
-    error: unknown,
-    fieldName: 'code' | 'message'
-): { code?: string; message?: string } {
+function readErrorStringField(error: unknown, fieldName: 'code' | 'message'): { code?: string; message?: string } {
     const value = readErrorString(error, fieldName) || readNestedErrorString(error, fieldName);
     if (!value) {
         return {};

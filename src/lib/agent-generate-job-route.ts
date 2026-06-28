@@ -1,4 +1,5 @@
-import { buildAgentJobStatusResponse, startAgentGenerateJob } from './agent-job-service';
+import { readAgentLeaseMs, readAgentRequestTtlSeconds } from './agent-api-contracts';
+import { assertAgentAuthorized } from './agent-auth';
 import {
     buildGenerateRequestHash,
     parseAgentGenerateRequest,
@@ -6,11 +7,10 @@ import {
     resolveExistingAgentRequest,
     readIdempotencyKey
 } from './agent-image-service';
-import { readAgentLeaseMs, readAgentRequestTtlSeconds } from './agent-api-contracts';
-import { AgentApiError, agentErrorResponse, normalizeAgentError } from './api-error-response';
-import { assertAgentAuthorized } from './agent-auth';
+import { buildAgentJobStatusResponse, startAgentGenerateJob } from './agent-job-service';
 import { ensureAgentStateStoreReady } from './agent-state-runtime';
 import { createRequestId, type BeginAgentRequestResult } from './agent-state-store';
+import { AgentApiError, agentErrorResponse, normalizeAgentError } from './api-error-response';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function createAgentGenerateJobResponse(

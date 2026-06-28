@@ -1,8 +1,4 @@
-import {
-    extractImageBase64FromDataUrl,
-    isRemoteHttpUrl,
-    readResponsesImageResultBase64
-} from './image-payload';
+import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 

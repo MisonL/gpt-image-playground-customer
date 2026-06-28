@@ -38,11 +38,13 @@ export function createOpenAIImageClientOptions(input: {
     };
 }
 
-export function buildOpenAIImageRequestOptions(input: {
-    abortSignal?: AbortSignal;
-    headers?: OpenAI.RequestOptions['headers'];
-    env?: ImageTransportEnv;
-} = {}): OpenAI.RequestOptions {
+export function buildOpenAIImageRequestOptions(
+    input: {
+        abortSignal?: AbortSignal;
+        headers?: OpenAI.RequestOptions['headers'];
+        env?: ImageTransportEnv;
+    } = {}
+): OpenAI.RequestOptions {
     return {
         ...(input.abortSignal ? { signal: input.abortSignal } : {}),
         ...(input.headers ? { headers: input.headers } : {}),

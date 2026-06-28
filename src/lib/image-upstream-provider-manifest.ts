@@ -1,3 +1,4 @@
+import { RequestValidationError } from './image-request-utils';
 import {
     DEFAULT_IMAGE_UPSTREAM_PROFILE_ID,
     IMAGE_UPSTREAM_PROFILES,
@@ -5,7 +6,6 @@ import {
     type ImageUpstreamProfile,
     type ImageUpstreamProfileId
 } from './image-upstream-profile';
-import { RequestValidationError } from './image-request-utils';
 
 export type ProviderSubmitContentType = 'application/json' | 'multipart/form-data';
 export type ProviderSubmitMethod = 'POST';
@@ -113,7 +113,10 @@ export function validateImageProviderManifest(value: unknown): ImageProviderMani
 
     const id = readRequiredString(manifest, 'id');
     if (!PROVIDER_ID_PATTERN.test(id)) {
-        throw new RequestValidationError('图片 provider manifest id 必须是 2 到 64 位小写字母、数字、下划线或连字符。', 500);
+        throw new RequestValidationError(
+            '图片 provider manifest id 必须是 2 到 64 位小写字母、数字、下划线或连字符。',
+            500
+        );
     }
 
     const baseProfile = readBaseProfile(manifest.base_profile);
@@ -124,9 +127,12 @@ export function validateImageProviderManifest(value: unknown): ImageProviderMani
     if (constraints?.generate_count) validateRangeConstraint(constraints.generate_count, 'constraints.generate_count');
     if (constraints?.edit_count) validateRangeConstraint(constraints.edit_count, 'constraints.edit_count');
     if (constraints?.partial_images) validateRangeConstraint(constraints.partial_images, 'constraints.partial_images');
-    if (constraints?.generate_count) validateRangeUpperBound(constraints.generate_count, 'constraints.generate_count', MAX_PROVIDER_IMAGE_COUNT);
-    if (constraints?.edit_count) validateRangeUpperBound(constraints.edit_count, 'constraints.edit_count', MAX_PROVIDER_IMAGE_COUNT);
-    if (constraints?.partial_images) validateRangeUpperBound(constraints.partial_images, 'constraints.partial_images', MAX_PROVIDER_PARTIAL_IMAGES);
+    if (constraints?.generate_count)
+        validateRangeUpperBound(constraints.generate_count, 'constraints.generate_count', MAX_PROVIDER_IMAGE_COUNT);
+    if (constraints?.edit_count)
+        validateRangeUpperBound(constraints.edit_count, 'constraints.edit_count', MAX_PROVIDER_IMAGE_COUNT);
+    if (constraints?.partial_images)
+        validateRangeUpperBound(constraints.partial_images, 'constraints.partial_images', MAX_PROVIDER_PARTIAL_IMAGES);
     if (constraints?.upload) validateUploadUpperBounds(constraints.upload);
 
     return {
@@ -240,7 +246,10 @@ function readSubmit(value: unknown, fieldName: string): ImageProviderModeManifes
     }
     const contentType = readOptionalString(submit, 'content_type') || JSON_CONTENT_TYPE;
     if (contentType !== 'application/json' && contentType !== 'multipart/form-data') {
-        throw new RequestValidationError(`${fieldName}.content_type 只支持 application/json 或 multipart/form-data。`, 500);
+        throw new RequestValidationError(
+            `${fieldName}.content_type 只支持 application/json 或 multipart/form-data。`,
+            500
+        );
     }
     const responseFormat = readOptionalString(submit, 'response_format') || OPENAI_IMAGES_RESPONSE_FORMAT;
     if (responseFormat !== 'openai-images' && responseFormat !== 'custom-json') {
@@ -328,10 +337,20 @@ function validateRangeUpperBound(value: PartialRange, fieldName: string, maxValu
     }
 }
 
-function validateUploadUpperBounds(upload: NonNullable<NonNullable<ImageProviderManifest['constraints']>['upload']>): void {
+function validateUploadUpperBounds(
+    upload: NonNullable<NonNullable<ImageProviderManifest['constraints']>['upload']>
+): void {
     validateOptionalUpperBound(upload.max_images, 'constraints.upload.max_images', MAX_PROVIDER_UPLOAD_IMAGES);
-    validateOptionalUpperBound(upload.max_single_bytes, 'constraints.upload.max_single_bytes', MAX_PROVIDER_UPLOAD_SINGLE_BYTES);
-    validateOptionalUpperBound(upload.max_total_bytes, 'constraints.upload.max_total_bytes', MAX_PROVIDER_UPLOAD_TOTAL_BYTES);
+    validateOptionalUpperBound(
+        upload.max_single_bytes,
+        'constraints.upload.max_single_bytes',
+        MAX_PROVIDER_UPLOAD_SINGLE_BYTES
+    );
+    validateOptionalUpperBound(
+        upload.max_total_bytes,
+        'constraints.upload.max_total_bytes',
+        MAX_PROVIDER_UPLOAD_TOTAL_BYTES
+    );
 }
 
 function validateOptionalUpperBound(value: number | undefined, fieldName: string, maxValue: number): void {
@@ -343,7 +362,8 @@ function validateOptionalUpperBound(value: number | undefined, fieldName: string
 function readConstraintsField(value: unknown): Pick<ImageProviderManifest, 'constraints'> {
     if (value === undefined) return {};
     const constraints = readObject(value, 'constraints');
-    const gptImage2 = constraints.gpt_image_2 === undefined ? undefined : readGptImage2Constraints(constraints.gpt_image_2);
+    const gptImage2 =
+        constraints.gpt_image_2 === undefined ? undefined : readGptImage2Constraints(constraints.gpt_image_2);
     return {
         constraints: {
             ...readOptionalRangeField(constraints, 'generate_count'),

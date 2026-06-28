@@ -1,8 +1,8 @@
+import { AgentApiError } from './api-error-response';
+import { outputDir } from './server-runtime';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
-import { AgentApiError } from './api-error-response';
-import { outputDir } from './server-runtime';
 
 export type ImageDimensions = {
     width: number | null;
@@ -164,7 +164,11 @@ function readJpegDimensions(buffer: Buffer): ImageDimensions {
         const marker = buffer[offset + 1];
         const length = buffer.readUInt16BE(offset + 2);
         if (length < 2) break;
-        if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb)) {
+        if (
+            (marker >= 0xc0 && marker <= 0xc3) ||
+            (marker >= 0xc5 && marker <= 0xc7) ||
+            (marker >= 0xc9 && marker <= 0xcb)
+        ) {
             return {
                 height: buffer.readUInt16BE(offset + 5),
                 width: buffer.readUInt16BE(offset + 7)
@@ -224,5 +228,7 @@ function isJpeg(buffer: Buffer): boolean {
 }
 
 function isWebp(buffer: Buffer): boolean {
-    return buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP';
+    return (
+        buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP'
+    );
 }

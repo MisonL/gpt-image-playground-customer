@@ -1,5 +1,5 @@
-import { asRecord, type JsonRecord } from './json-record';
 import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
+import { asRecord, type JsonRecord } from './json-record';
 import { createHash } from 'node:crypto';
 import type OpenAI from 'openai';
 
@@ -331,10 +331,12 @@ function completedSourceKey(source: CompletedImageSource): string | undefined {
 }
 
 function appendCompletedSource(completed: CompletedImageSource[], sourceValues: CompletedImageSource[]) {
-    const previousKeys = new Set(completed.flatMap((item) => {
-        const key = completedSourceKey(item);
-        return key ? [key] : [];
-    }));
+    const previousKeys = new Set(
+        completed.flatMap((item) => {
+            const key = completedSourceKey(item);
+            return key ? [key] : [];
+        })
+    );
     for (const value of sourceValues) {
         const key = completedSourceKey(value);
         if (key && previousKeys.has(key)) {

@@ -28,17 +28,17 @@ import {
     resolveImageUpstreamEffectiveStreamingStrategy
 } from '@/lib/image-upstream-form';
 import {
-    shouldRecommendImageStreaming,
-    type ImageStreamMode,
-    type ImageStreamingStrategy
-} from '@/lib/image-upstream-strategy';
-import {
     buildIntegerRangeOptions,
     clampIntegerToRange,
     getPartialImagesRangeForBackend,
     type ImageUpstreamProfile,
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
+import {
+    shouldRecommendImageStreaming,
+    type ImageStreamMode,
+    type ImageStreamingStrategy
+} from '@/lib/image-upstream-strategy';
 import {
     getPresetDimensions,
     getPresetTooltip,
@@ -589,11 +589,7 @@ export function GenerationForm({
                                 onClick={onOpenPasswordDialog}
                                 className='text-muted-foreground hover:text-foreground ml-auto min-h-11 min-w-11 px-2 lg:min-h-7 lg:min-w-0'
                                 aria-label={t('password.configure')}>
-                                {clientPasswordHash ? (
-                                    <Lock className='h-4 w-4' />
-                                ) : (
-                                    <LockOpen className='h-4 w-4' />
-                                )}
+                                {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                             </Button>
                         )}
                     </div>
@@ -985,7 +981,9 @@ export function GenerationForm({
                                                     }
                                                     disabled={isLoading}
                                                     name='image_backend'>
-                                                    <SelectTrigger id='image-backend-select' className='min-h-11 lg:min-h-9'>
+                                                    <SelectTrigger
+                                                        id='image-backend-select'
+                                                        className='min-h-11 lg:min-h-9'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
@@ -1123,7 +1121,9 @@ export function GenerationForm({
                                                             }
                                                             disabled={isLoading}
                                                             name='thinking'>
-                                                            <SelectTrigger id='thinking-select' className='min-h-11 lg:min-h-9'>
+                                                            <SelectTrigger
+                                                                id='thinking-select'
+                                                                className='min-h-11 lg:min-h-9'>
                                                                 <SelectValue />
                                                             </SelectTrigger>
                                                             <SelectContent>
@@ -1522,7 +1522,7 @@ export function GenerationForm({
                                 {streamStatusLabel}
                             </span>
                             {parallelBatchChecked && (
-                                <span className='border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] text-[oklch(0.38_0.075_148)] rounded-full border px-2 py-1'>
+                                <span className='rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-[oklch(0.38_0.075_148)]'>
                                     {t('streaming.parallelBatchEnabled')}
                                 </span>
                             )}

@@ -1,13 +1,13 @@
 import { AGENT_ENDPOINTS, AGENT_JOB_ENDPOINTS } from './agent-api-paths.mjs';
 import type { AgentErrorDiagnostics } from './api-error-response';
 import { readAppLogRetentionMetadata, type AppLogRetentionMetadata } from './app-log-retention';
-import { getChannelPoolSummary, parseChannelPoolConfig } from './channel-router';
 import {
     CHANNEL_REQUEST_MODES,
     CHANNEL_REQUEST_MODE_ADMIN_CONTROL,
     type ChannelRequestMode,
     type ChannelRequestModeDecision
 } from './channel-request-mode';
+import { getChannelPoolSummary, parseChannelPoolConfig } from './channel-router';
 import {
     MAX_IMAGE_COUNT,
     MAX_PROMPT_LENGTH,
@@ -16,15 +16,6 @@ import {
     type GptImageModel,
     type ValidOutputFormat
 } from './image-request-utils';
-import {
-    parseImageGenerationBackendValue,
-    parseImageStreamModeValue,
-    parseImageStreamingStrategyValue,
-    resolveImageStreamEnabled,
-    type ImageGenerationBackend,
-    type ImageStreamMode,
-    type ImageStreamingStrategy
-} from './image-upstream-strategy';
 import {
     summarizeImageUpstreamProfile,
     summarizeUpstreamRequestHeaders,
@@ -36,8 +27,17 @@ import {
     type PartialImagesCount,
     type UpstreamRequestHeaderSummary
 } from './image-upstream-profile';
-import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
+import {
+    parseImageGenerationBackendValue,
+    parseImageStreamModeValue,
+    parseImageStreamingStrategyValue,
+    resolveImageStreamEnabled,
+    type ImageGenerationBackend,
+    type ImageStreamMode,
+    type ImageStreamingStrategy
+} from './image-upstream-strategy';
 import { summarizeOpenAIImageTransport } from './openai-image-transport';
+import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
 import { readBooleanEnv } from './server-runtime';
 import {
     GPT_IMAGE_2_EDGE_MULTIPLE,
@@ -92,11 +92,7 @@ export const AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS = [
     'streaming_strategy',
     'partial_images'
 ] as const;
-export const AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS = [
-    'stream_mode',
-    'streaming_strategy',
-    'partial_images'
-] as const;
+export const AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS = ['stream_mode', 'streaming_strategy', 'partial_images'] as const;
 export const AGENT_PAGE_SSE_AGENT_USAGE =
     'explicit_diagnostics_for_generate_recommended_for_default_webp_edit_high_resolution_edit_long_image_recovery_and_complex_batch' as const;
 const AGENT_DEFAULT_PARTIAL_IMAGES = 2;
@@ -698,7 +694,11 @@ function readOptionalStringField(
     return trimmed;
 }
 
-function readOptionalBooleanField(body: Record<string, unknown>, field: string, fields: FieldErrors): boolean | undefined {
+function readOptionalBooleanField(
+    body: Record<string, unknown>,
+    field: string,
+    fields: FieldErrors
+): boolean | undefined {
     const value = body[field];
     if (value === undefined || value === null || value === '') return undefined;
     if (typeof value === 'boolean') return value;
@@ -1261,7 +1261,9 @@ function buildAgentRequestModeControlsCapabilities(): AgentCapabilities['request
     };
 }
 
-function buildAgentUpstreamRequestHeadersCapabilities(env: Record<string, string | undefined>): AgentCapabilities['upstream_request_headers'] {
+function buildAgentUpstreamRequestHeadersCapabilities(
+    env: Record<string, string | undefined>
+): AgentCapabilities['upstream_request_headers'] {
     const channelSummary = getChannelPoolSummary(parseChannelPoolConfig(env));
     return {
         default: summarizeUpstreamRequestHeaders(undefined, env),

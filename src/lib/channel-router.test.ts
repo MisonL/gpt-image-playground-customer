@@ -1,3 +1,5 @@
+import { ChannelCapacityQueueError } from './channel-capacity-queue';
+import { CHANNEL_REQUEST_MODES } from './channel-request-mode';
 import {
     createChannelRouter,
     describeChannelFailure,
@@ -9,10 +11,8 @@ import {
     resolveEffectiveCredential,
     toPublicChannelFailure
 } from './channel-router';
-import { ChannelCapacityQueueError } from './channel-capacity-queue';
-import { CHANNEL_REQUEST_MODES } from './channel-request-mode';
-import { IMAGE_UPSTREAM_PROFILES } from './image-upstream-profile';
 import { RequestValidationError } from './image-request-utils';
+import { IMAGE_UPSTREAM_PROFILES } from './image-upstream-profile';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -989,10 +989,7 @@ describe('createChannelRouter', () => {
         router.reportFailure(failed);
 
         now = 1100;
-        assert.deepEqual(
-            [router.select().id, router.select().id, router.select().id],
-            ['a#1', 'b#0', 'a#1']
-        );
+        assert.deepEqual([router.select().id, router.select().id, router.select().id], ['a#1', 'b#0', 'a#1']);
 
         const candidates = router.getRecoveryProbeCandidates();
         assert.deepEqual(
@@ -1314,14 +1311,20 @@ describe('createChannelRouter', () => {
         router.reportRecoveryProbeSuccess(staleCandidate);
 
         assert.equal(router.getHealthSummary().pendingRecoveryProbeChannelCount, 1);
-        assert.deepEqual(config.credentials.filter((credential) => credential.channelId === 'a').filter(canSelect(router)), []);
+        assert.deepEqual(
+            config.credentials.filter((credential) => credential.channelId === 'a').filter(canSelect(router)),
+            []
+        );
 
         now = 1210;
         const freshCandidate = router.getRecoveryProbeCandidates()[0];
         assert.equal(freshCandidate.scope, 'channel');
         router.reportRecoveryProbeSuccess(freshCandidate);
         assert.deepEqual(
-            config.credentials.filter((credential) => credential.channelId === 'a').filter(canSelect(router)).map((credential) => credential.id),
+            config.credentials
+                .filter((credential) => credential.channelId === 'a')
+                .filter(canSelect(router))
+                .map((credential) => credential.id),
             ['a#0', 'a#1']
         );
     });

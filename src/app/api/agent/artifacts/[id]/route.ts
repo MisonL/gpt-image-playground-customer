@@ -1,8 +1,8 @@
 import { assertAgentAuthorized } from '@/lib/agent-auth';
-import { AgentApiError, agentErrorResponse, normalizeAgentError } from '@/lib/api-error-response';
 import { deleteAgentArtifactFiles } from '@/lib/agent-image-service';
 import { ensureAgentStateStoreReady } from '@/lib/agent-state-runtime';
 import { artifactRecordToResponseItem, createRequestId } from '@/lib/agent-state-store';
+import { AgentApiError, agentErrorResponse, normalizeAgentError } from '@/lib/api-error-response';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -20,7 +20,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
                 retryable: false
             });
         }
-        return NextResponse.json({ artifact: artifactRecordToResponseItem(artifact) }, { headers: { 'X-Request-Id': requestId } });
+        return NextResponse.json(
+            { artifact: artifactRecordToResponseItem(artifact) },
+            { headers: { 'X-Request-Id': requestId } }
+        );
     } catch (error) {
         return agentErrorResponse(normalizeAgentError(error), requestId);
     }

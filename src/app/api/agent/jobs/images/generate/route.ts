@@ -1,5 +1,5 @@
-import { createAgentGenerateJobResponse } from '@/lib/agent-generate-job-route';
 import { AGENT_ENDPOINTS } from '@/lib/agent-api-paths.mjs';
+import { createAgentGenerateJobResponse } from '@/lib/agent-generate-job-route';
 import type { NextRequest } from 'next/server';
 
 export async function POST(request: NextRequest) {

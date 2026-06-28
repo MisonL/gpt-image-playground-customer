@@ -1,5 +1,5 @@
-import { createImageStreamResponse } from './image-stream-service';
 import { clearAppLogEntriesForTest, readAppLogEntries } from './app-logger';
+import { createImageStreamResponse } from './image-stream-service';
 import { readSseEvents, upstreamEvents } from './sse-test-utils';
 import assert from 'node:assert/strict';
 import http from 'node:http';

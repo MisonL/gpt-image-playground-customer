@@ -1,9 +1,9 @@
+import { resetAgentStateStoreForTests } from './agent-state-runtime';
 import assert from 'node:assert/strict';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { resetAgentStateStoreForTests } from './agent-state-runtime';
 
 let originalCwd = '';
 let tempDir = '';
@@ -22,13 +22,8 @@ afterEach(async () => {
 
 describe('image share store', { concurrency: false }, () => {
     it('stores a copied image share with hashed access code and expiry', async () => {
-        const {
-            createImageShare,
-            isImageShareExpired,
-            readImageShare,
-            readImageShareContent,
-            verifyImageShareAccess
-        } = await import('./share-store');
+        const { createImageShare, isImageShareExpired, readImageShare, readImageShareContent, verifyImageShareAccess } =
+            await import('./share-store');
         const now = new Date('2026-05-14T08:00:00.000Z');
 
         const created = await createImageShare({
@@ -148,7 +143,10 @@ describe('image share store', { concurrency: false }, () => {
             expiresInMinutes: null
         });
 
-        await assert.rejects(() => readImageShareContent({ ...created, contentFilename: '../outside.png' }), /分享目录之外/);
+        await assert.rejects(
+            () => readImageShareContent({ ...created, contentFilename: '../outside.png' }),
+            /分享目录之外/
+        );
     });
 
     it('purges expired share metadata and share files', async () => {

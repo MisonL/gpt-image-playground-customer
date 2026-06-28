@@ -1,8 +1,8 @@
-import { validateGptImage2Size } from './size-utils';
 import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from './image-upstream-profile';
-import type OpenAI from 'openai';
+import { validateGptImage2Size } from './size-utils';
 import { promisify } from 'node:util';
 import { inflate } from 'node:zlib';
+import type OpenAI from 'openai';
 
 export const VALID_IMAGE_FILENAME_PATTERN = /^\d{13}(?:-[a-f0-9]{16})?-\d+\.(png|jpe?g|webp)$/i;
 export const MAX_IMAGE_COUNT = 10;
@@ -232,10 +232,7 @@ export function assertSafeApiOverride(requestApiKey: string, requestApiBaseUrl: 
     }
 }
 
-export function validateApiBaseUrl(
-    baseUrl: string,
-    options: { allowedPlainHttpBaseUrls?: string[] } = {}
-): void {
+export function validateApiBaseUrl(baseUrl: string, options: { allowedPlainHttpBaseUrls?: string[] } = {}): void {
     if (!baseUrl) return;
     let parsed: URL;
     try {
@@ -268,7 +265,12 @@ function isAllowedPlainHttpApiBaseUrl(parsed: URL, allowedBaseUrls: string[] | u
 
 function isLoopbackHost(hostname: string): boolean {
     const normalized = hostname.toLowerCase();
-    return normalized === 'localhost' || normalized === '::1' || normalized === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(normalized);
+    return (
+        normalized === 'localhost' ||
+        normalized === '::1' ||
+        normalized === '[::1]' ||
+        /^127(?:\.\d{1,3}){3}$/.test(normalized)
+    );
 }
 
 export function readPlainHttpApiBaseUrlAllowlist(rawValue: string | undefined): string[] {
@@ -304,17 +306,16 @@ export function safeImagePath(baseDir: string, filename: string): string {
     return `${baseDir}/${filename}`;
 }
 
-export function readImageFiles(
-    formData: FormData,
-    profile: ImageUpstreamProfile = DEFAULT_IMAGE_PROFILE
-): File[] {
+export function readImageFiles(formData: FormData, profile: ImageUpstreamProfile = DEFAULT_IMAGE_PROFILE): File[] {
     const imageFilesByIndex = new Map<number, File>();
     for (const [key, value] of formData.entries()) {
         if (!key.startsWith('image_')) continue;
         if (IMAGE_UPLOAD_CONTROL_FIELDS.has(key)) continue;
         const imageIndex = readImageFileIndex(key, profile);
         if (imageIndex === undefined) {
-            throw new RequestValidationError(`图片字段 ${key} 无效，必须使用 image_0 到 image_${profile.upload.maxImages - 1}。`);
+            throw new RequestValidationError(
+                `图片字段 ${key} 无效，必须使用 image_0 到 image_${profile.upload.maxImages - 1}。`
+            );
         }
         if (imageFilesByIndex.has(imageIndex)) {
             throw new RequestValidationError(`图片字段 ${key} 重复。`);
@@ -526,7 +527,14 @@ function unfilterPngScanlines(raw: Uint8Array, rowBytes: number, height: number,
         const filter = raw[rawOffset++];
         const currentRow = new Uint8Array(rowBytes);
         for (let column = 0; column < rowBytes; column += 1) {
-            currentRow[column] = unfilterPngByte(filter, raw[rawOffset++], column, bytesPerPixel, currentRow, previousRow);
+            currentRow[column] = unfilterPngByte(
+                filter,
+                raw[rawOffset++],
+                column,
+                bytesPerPixel,
+                currentRow,
+                previousRow
+            );
         }
         output.set(currentRow, outputOffset);
         outputOffset += rowBytes;
@@ -544,9 +552,9 @@ function unfilterPngByte(
     previousRow: Uint8Array
 ): number {
     const rawValue = value ?? 0;
-    const left = column >= bytesPerPixel ? currentRow[column - bytesPerPixel] ?? 0 : 0;
+    const left = column >= bytesPerPixel ? (currentRow[column - bytesPerPixel] ?? 0) : 0;
     const up = previousRow[column] ?? 0;
-    const upLeft = column >= bytesPerPixel ? previousRow[column - bytesPerPixel] ?? 0 : 0;
+    const upLeft = column >= bytesPerPixel ? (previousRow[column - bytesPerPixel] ?? 0) : 0;
     if (filter === 0) return rawValue;
     if (filter === 1) return (rawValue + left) & 255;
     if (filter === 2) return (rawValue + up) & 255;

@@ -1,8 +1,8 @@
 import { POST } from './route';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
+import { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import { NextRequest } from 'next/server';
 
 const originalAppPassword = process.env.APP_PASSWORD;
 const PAGE_PASSWORD_FIXTURE = ['customer', 'access', 'code'].join('-');

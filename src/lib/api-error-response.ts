@@ -1,11 +1,11 @@
-import { RequestValidationError } from './image-request-utils';
-import { isChannelFailure, isChannelRequestModeFailure } from './channel-router';
 import { ChannelCapacityQueueError } from './channel-capacity-queue';
 import {
     CHANNEL_REQUEST_MODES,
     type ChannelRequestMode,
     type ChannelRequestModeDecision
 } from './channel-request-mode';
+import { isChannelFailure, isChannelRequestModeFailure } from './channel-router';
+import { RequestValidationError } from './image-request-utils';
 import { NextResponse } from 'next/server';
 
 export type AgentErrorCode =
@@ -165,12 +165,12 @@ function cleanDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): Agent
             ? normalizeNonNegativeInteger(diagnostics.partial_image_count)
             : undefined;
     const retryAfterMs =
-        diagnostics.retry_after_ms !== undefined
-            ? normalizeNonNegativeInteger(diagnostics.retry_after_ms)
-            : undefined;
+        diagnostics.retry_after_ms !== undefined ? normalizeNonNegativeInteger(diagnostics.retry_after_ms) : undefined;
     const cooldownTarget = cleanCooldownTarget(diagnostics.cooldown_target);
     const cleaned: AgentErrorDiagnostics = {
-        ...(diagnostics.elapsed_ms !== undefined ? { elapsed_ms: Math.max(0, Math.round(diagnostics.elapsed_ms)) } : {}),
+        ...(diagnostics.elapsed_ms !== undefined
+            ? { elapsed_ms: Math.max(0, Math.round(diagnostics.elapsed_ms)) }
+            : {}),
         ...(diagnostics.channel_request_mode ? { channel_request_mode: diagnostics.channel_request_mode } : {}),
         ...(diagnostics.channel_request_mode_fallback_applied !== undefined
             ? { channel_request_mode_fallback_applied: diagnostics.channel_request_mode_fallback_applied }
@@ -330,22 +330,30 @@ function isTransportError(error: unknown): boolean {
     const name = readStringField(error, 'name') || readConstructorName(error);
     if (name === 'APIConnectionError' || name === 'APIConnectionTimeoutError') return true;
     const code = readStringField(error, 'code') || readCauseChainString(error, 'code');
-    if (code === 'ENOTFOUND' || code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'EAI_AGAIN') {
+    if (
+        code === 'ENOTFOUND' ||
+        code === 'ECONNRESET' ||
+        code === 'ECONNREFUSED' ||
+        code === 'ETIMEDOUT' ||
+        code === 'EAI_AGAIN'
+    ) {
         return true;
     }
     const message = (readStringField(error, 'message') || '')
         .trim()
         .toLowerCase()
         .replace(/[.!?]+$/, '');
-    return message.includes('connection error') || message.includes('request timed out') || message.includes('fetch failed');
+    return (
+        message.includes('connection error') ||
+        message.includes('request timed out') ||
+        message.includes('fetch failed')
+    );
 }
 
 function classifyTransportErrorKind(error: unknown): AgentTransportErrorKind | undefined {
     const name = readStringField(error, 'name') || readConstructorName(error);
     const code = readStringField(error, 'code') || readCauseChainString(error, 'code');
-    const message = (readStringField(error, 'message') || '')
-        .trim()
-        .toLowerCase();
+    const message = (readStringField(error, 'message') || '').trim().toLowerCase();
 
     if (
         name === 'MissingFinalImageStreamResultError' ||

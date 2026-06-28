@@ -26,7 +26,6 @@ import {
     isImageUpstreamStreamingStrategySelectable,
     resolveImageUpstreamEffectiveStreamingStrategy
 } from '@/lib/image-upstream-form';
-import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import {
     buildIntegerRangeOptions,
     clampIntegerToRange,
@@ -34,6 +33,7 @@ import {
     type ImageUpstreamProfile,
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
+import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import {
     getPresetTooltip,
     getSizePresetOptions,
@@ -479,11 +479,7 @@ export function EditingForm({
         if (partialImages < partialImagesRange.min || partialImages > partialImagesRange.max) {
             setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
         }
-    }, [
-        partialImages,
-        partialImagesRange,
-        setPartialImages,
-    ]);
+    }, [partialImages, partialImagesRange, setPartialImages]);
 
     React.useEffect(() => {
         if (editN[0] < upstreamProfile.editCount.min || editN[0] > upstreamProfile.editCount.max) {
@@ -1312,7 +1308,9 @@ export function EditingForm({
                                                 }
                                                 disabled={isLoading}
                                                 name='edit-model'>
-                                                <SelectTrigger id='edit-model-select' className='min-h-11 w-full lg:min-h-9'>
+                                                <SelectTrigger
+                                                    id='edit-model-select'
+                                                    className='min-h-11 w-full lg:min-h-9'>
                                                     <SelectValue placeholder={t('form.selectModel')} />
                                                 </SelectTrigger>
                                                 <SelectContent>
@@ -1860,7 +1858,7 @@ export function EditingForm({
                                 {streamStatusLabel}
                             </span>
                             {parallelBatchChecked && (
-                                <span className='border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] text-[oklch(0.38_0.075_148)] rounded-full border px-2 py-1'>
+                                <span className='rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-[oklch(0.38_0.075_148)]'>
                                     {t('streaming.parallelBatchEnabled')}
                                 </span>
                             )}

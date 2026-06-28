@@ -1,4 +1,10 @@
 import { appLogger } from '@/lib/app-logger';
+import type { ChannelCapacityLease } from '@/lib/channel-capacity-queue';
+import {
+    isStreamingChannelRequestMode,
+    resolveChannelRequestMode,
+    type ChannelRequestMode
+} from '@/lib/channel-request-mode';
 import { type ChannelCredential, resolveEffectiveCredential } from '@/lib/channel-router';
 import {
     RequestValidationError,
@@ -11,11 +17,6 @@ import {
     readStorageMode,
     validateApiBaseUrl
 } from '@/lib/image-request-utils';
-import {
-    mergeUpstreamHeadersWithFixed,
-    readImageUpstreamProfile,
-    type PartialImagesCount
-} from '@/lib/image-upstream-profile';
 import { handleEditImageMode, handleGenerateImageMode } from '@/lib/image-route-mode-handlers';
 import {
     assertResponsesImageBackendAllowed,
@@ -35,6 +36,11 @@ import {
     persistOpenAiImages
 } from '@/lib/image-service';
 import {
+    mergeUpstreamHeadersWithFixed,
+    readImageUpstreamProfile,
+    type PartialImagesCount
+} from '@/lib/image-upstream-profile';
+import {
     readImageGenerationBackend,
     readImageStreamMode,
     readImageStreamingStrategy,
@@ -43,17 +49,11 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
-import {
-    isStreamingChannelRequestMode,
-    resolveChannelRequestMode,
-    type ChannelRequestMode
-} from '@/lib/channel-request-mode';
+import { createOpenAIImageClientOptions } from '@/lib/openai-image-transport';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { getServerChannelState } from '@/lib/server-channel-router';
-import { createOpenAIImageClientOptions } from '@/lib/openai-image-transport';
-import type { ChannelCapacityLease } from '@/lib/channel-capacity-queue';
-import type { StreamingAvailabilityKey, StreamingOperation } from '@/lib/streaming-availability';
 import { buildAccessCookie, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
+import type { StreamingAvailabilityKey, StreamingOperation } from '@/lib/streaming-availability';
 import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
@@ -118,7 +118,10 @@ function createAvailabilityKey(input: StreamResolutionInput): StreamingAvailabil
     };
 }
 
-function createAvailabilitySourceId(input: { selectedCredential?: ChannelCredential; baseUrl?: string }): string | undefined {
+function createAvailabilitySourceId(input: {
+    selectedCredential?: ChannelCredential;
+    baseUrl?: string;
+}): string | undefined {
     if (input.selectedCredential) return undefined;
     const normalized = normalizeAvailabilityBaseUrl(input.baseUrl);
     const digest = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
@@ -444,7 +447,13 @@ export async function POST(request: NextRequest) {
         );
 
         const partialImagesCount = toPartialImagesCount(
-            readCount(formData, 'partial_images', 2, upstreamProfile.partialImages.min, upstreamProfile.partialImages.max)
+            readCount(
+                formData,
+                'partial_images',
+                2,
+                upstreamProfile.partialImages.min,
+                upstreamProfile.partialImages.max
+            )
         );
         const streamResolution = resolvePageStream({
             streamMode,
@@ -610,7 +619,10 @@ export async function POST(request: NextRequest) {
                 ...requestLogContext
             });
             reportServerCredentialFailure(selectedCredential, { status: 502 }, selectedServerRequestMode);
-            const response = NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
+            const response = NextResponse.json(
+                { error: describeInvalidImagesResponse(invalidResult) },
+                { status: 502 }
+            );
             const responseWithHeaders = appendChannelQueueHeaders(response, channelLease);
             channelLease?.release();
             channelLease = undefined;

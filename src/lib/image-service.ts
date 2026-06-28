@@ -1,11 +1,7 @@
 import { detectImageFormat, readImageDimensions, writeFileAtomic } from './agent-file-utils';
-import {
-    createImageResult,
-    type StorageMode,
-    type ValidOutputFormat
-} from './image-request-utils';
-import { downloadSameOriginImageAsBase64 } from './image-url-result';
+import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
 import type { UpstreamRequestHeaders } from './image-upstream-profile';
+import { downloadSameOriginImageAsBase64 } from './image-url-result';
 import { createBatchId, createImageFilename, outputDir } from './server-runtime';
 import fs from 'fs/promises';
 import type OpenAI from 'openai';

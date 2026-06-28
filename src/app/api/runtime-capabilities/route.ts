@@ -1,11 +1,11 @@
-import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
 import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_ADMIN_CONTROL } from '@/lib/channel-request-mode';
+import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
 import { summarizeImageUpstreamProfile } from '@/lib/image-upstream-profile';
 import { readImageStreamMode, readImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { summarizeOpenAIImageTransport } from '@/lib/openai-image-transport';
 import { getServerChannelState } from '@/lib/server-channel-router';
-import { computeStreamingBatchRecommendation } from '@/lib/streaming-batch';
 import { readBooleanEnv, readPositiveIntegerEnv } from '@/lib/server-runtime';
+import { computeStreamingBatchRecommendation } from '@/lib/streaming-batch';
 import { NextResponse } from 'next/server';
 
 const RESPONSES_IMAGE_BACKEND_REQUIRED_ENV = ['ENABLE_RESPONSES_IMAGE_BACKEND'] as const;
@@ -82,9 +82,11 @@ export async function GET() {
                 channelCount: summary.channelCount,
                 supportedRequestModes: CHANNEL_REQUEST_MODES,
                 configuredRequestModes:
-                    requestModeHealthSummary?.configuredRequestModes ?? (summary.credentialCount > 0 ? CHANNEL_REQUEST_MODES : []),
+                    requestModeHealthSummary?.configuredRequestModes ??
+                    (summary.credentialCount > 0 ? CHANNEL_REQUEST_MODES : []),
                 effectiveRequestModes:
-                    requestModeHealthSummary?.effectiveRequestModes ?? (summary.credentialCount > 0 ? CHANNEL_REQUEST_MODES : []),
+                    requestModeHealthSummary?.effectiveRequestModes ??
+                    (summary.credentialCount > 0 ? CHANNEL_REQUEST_MODES : []),
                 requestModeControls: CHANNEL_REQUEST_MODE_ADMIN_CONTROL,
                 requestModeHealth: requestModeHealthSummary?.modes ?? [],
                 requestModesByChannel: summary.channels.map((channel) => ({
@@ -111,10 +113,7 @@ export async function GET() {
             }
         });
     } catch (error) {
-        return NextResponse.json(
-            { error: error instanceof Error ? error.message : '配置错误' },
-            { status: 500 }
-        );
+        return NextResponse.json({ error: error instanceof Error ? error.message : '配置错误' }, { status: 500 });
     }
 }
 

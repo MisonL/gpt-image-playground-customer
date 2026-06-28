@@ -3,10 +3,15 @@ import type { ImageGenerationBackend, ImageStreamingStrategy } from './image-ups
 export const IMAGE_UPSTREAM_FORM_SERVER_DEFAULT = 'server-default';
 
 export type ImageUpstreamFormBackend = ImageGenerationBackend | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
-export type ImageUpstreamFormStreamingStrategy =
-    | ImageStreamingStrategy
+export type ImageUpstreamFormStreamingStrategy = ImageStreamingStrategy | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
+export type ImageUpstreamFormThinking =
+    | 'none'
+    | 'minimal'
+    | 'low'
+    | 'medium'
+    | 'high'
+    | 'xhigh'
     | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
-export type ImageUpstreamFormThinking = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
 export type ImageUpstreamFormPromptOptimization = 'on' | 'off' | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
 export type ImageUpstreamRouteImpactKey =
     | 'upstream.backendImpactImages'
@@ -127,12 +132,11 @@ export function normalizeImageUpstreamRuntimeFields<T extends ImageUpstreamRunti
     const resetResponsesBackend =
         !input.allowResponsesImageBackend && fields.image_backend === 'responses-image-generation';
     const nextImageBackend = resetResponsesBackend ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : fields.image_backend;
-    const resetResponsesStreaming =
-        !isImageUpstreamStreamingStrategySelectable({
-            imageBackend: nextImageBackend,
-            streamingStrategy: fields.streaming_strategy,
-            allowResponsesImageBackend: input.allowResponsesImageBackend
-        });
+    const resetResponsesStreaming = !isImageUpstreamStreamingStrategySelectable({
+        imageBackend: nextImageBackend,
+        streamingStrategy: fields.streaming_strategy,
+        allowResponsesImageBackend: input.allowResponsesImageBackend
+    });
 
     if (!resetResponsesBackend && !resetResponsesStreaming) {
         return fields;
@@ -141,14 +145,10 @@ export function normalizeImageUpstreamRuntimeFields<T extends ImageUpstreamRunti
     return {
         ...fields,
         image_backend: nextImageBackend,
-        streaming_strategy: resetResponsesStreaming
-            ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
-            : fields.streaming_strategy,
+        streaming_strategy: resetResponsesStreaming ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : fields.streaming_strategy,
         responsesModel: resetResponsesOptions ? '' : fields.responsesModel,
         thinking: resetResponsesOptions ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : fields.thinking,
-        promptOptimization: resetResponsesOptions
-            ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
-            : fields.promptOptimization
+        promptOptimization: resetResponsesOptions ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : fields.promptOptimization
     };
 }
 

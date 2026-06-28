@@ -1,6 +1,6 @@
-import { asRecord } from './json-record';
-import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
 import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
+import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
+import { asRecord } from './json-record';
 import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import type OpenAI from 'openai';
 
@@ -215,7 +215,9 @@ export async function generateImageWithResponsesBackend(
     };
 }
 
-export async function editImageWithResponsesBackend(input: ResponsesImageEditInput): Promise<OpenAI.Images.ImagesResponse> {
+export async function editImageWithResponsesBackend(
+    input: ResponsesImageEditInput
+): Promise<OpenAI.Images.ImagesResponse> {
     const response = await input.responses.create(
         {
             model: input.responsesModel,
@@ -256,7 +258,9 @@ export async function createResponsesImageStream(input: ResponsesImageStreamInpu
     );
 }
 
-export async function createResponsesImageEditStream(input: ResponsesImageEditStreamInput): Promise<AsyncIterable<unknown>> {
+export async function createResponsesImageEditStream(
+    input: ResponsesImageEditStreamInput
+): Promise<AsyncIterable<unknown>> {
     return input.responses.create(
         {
             model: input.responsesModel,

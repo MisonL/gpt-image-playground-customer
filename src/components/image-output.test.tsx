@@ -309,10 +309,7 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /生成失败/);
         assert.match(html, /上游或 API 中转站异常。请稍后重试。/);
-        assert.match(
-            html,
-            new RegExp(`<button[^>]*>${buttonContentPattern}重试生成${buttonContentPattern}</button>`)
-        );
+        assert.match(html, new RegExp(`<button[^>]*>${buttonContentPattern}重试生成${buttonContentPattern}</button>`));
         assert.doesNotMatch(html, /灵感样张/);
     });
 });

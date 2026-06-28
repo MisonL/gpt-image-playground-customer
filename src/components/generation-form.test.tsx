@@ -1,7 +1,7 @@
 import { GenerationForm, resolveGenerationFooterPromptTarget } from './generation-form';
 import { I18nProvider } from '@/lib/i18n';
-import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from '@/lib/image-upstream-profile';
+import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';

@@ -1,8 +1,8 @@
-import { assertAgentAuthorized } from '@/lib/agent-auth';
 import {
     buildPageRequestDiagnosticsNoMatchNote,
     buildPageRequestDiagnosticsRetention
 } from '@/lib/agent-api-contracts';
+import { assertAgentAuthorized } from '@/lib/agent-auth';
 import { buildPageRequestDiagnostics } from '@/lib/agent-request-diagnostics';
 import { createRequestId } from '@/lib/agent-state-store';
 import { AgentApiError, agentErrorResponse, normalizeAgentError } from '@/lib/api-error-response';
@@ -54,7 +54,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 function readFilenameFilters(request: NextRequest): string[] {
-    const values = new URL(request.url).searchParams.getAll('filename').map((value) => value.trim()).filter(Boolean);
+    const values = new URL(request.url).searchParams
+        .getAll('filename')
+        .map((value) => value.trim())
+        .filter(Boolean);
     if (values.length > MAX_FILENAME_FILTERS) {
         throw new FeedbackValidationError('filename 过滤条件数量无效。');
     }

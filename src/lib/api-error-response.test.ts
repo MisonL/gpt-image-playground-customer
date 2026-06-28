@@ -6,8 +6,8 @@ import {
     normalizeAgentError,
     toTerminalAgentErrorBody
 } from './api-error-response';
-import { RequestValidationError } from './image-request-utils';
 import { type ChannelRequestMode } from './channel-request-mode';
+import { RequestValidationError } from './image-request-utils';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -106,10 +106,12 @@ describe('normalizeAgentError', () => {
             'socket_closed'
         );
         assert.equal(
-            normalizeAgentError(Object.assign(new Error('流式图片响应未返回最终图片 b64_json。'), {
-                name: 'MissingFinalImageStreamResultError',
-                status: 502
-            })).diagnostics?.transport_error_kind,
+            normalizeAgentError(
+                Object.assign(new Error('流式图片响应未返回最终图片 b64_json。'), {
+                    name: 'MissingFinalImageStreamResultError',
+                    status: 502
+                })
+            ).diagnostics?.transport_error_kind,
             'sse_final_missing'
         );
     });

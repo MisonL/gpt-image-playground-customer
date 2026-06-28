@@ -524,7 +524,7 @@ function HistoryPanelImpl({
                         <div className='flex items-center justify-between rounded-md px-1 text-sm'>
                             <button
                                 type='button'
-                                className='text-muted-foreground hover:text-primary focus-visible:ring-ring -ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 transition-[color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:outline-none lg:ml-0 lg:min-h-8 lg:px-0'
+                                className='text-muted-foreground hover:text-primary focus-visible:ring-ring -ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 transition-[color,box-shadow] focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 lg:ml-0 lg:min-h-8 lg:px-0'
                                 disabled={!inspirations[0]}
                                 onClick={() =>
                                     inspirations[0] &&
@@ -953,9 +953,7 @@ function HistoryPanelImpl({
                                                     <Button
                                                         type='button'
                                                         variant={
-                                                            resultFeedback?.value === 'usable'
-                                                                ? 'secondary'
-                                                                : 'outline'
+                                                            resultFeedback?.value === 'usable' ? 'secondary' : 'outline'
                                                         }
                                                         size='sm'
                                                         className='min-h-11 min-w-0 px-2 text-[11px] lg:h-7 lg:min-h-0 lg:px-2'
@@ -1333,7 +1331,9 @@ function HistoryPanelImpl({
                                                                     <div className='flex items-center justify-between gap-3'>
                                                                         <span className='text-muted-foreground'>
                                                                             {resultFeedback
-                                                                                ? formatTimestamp(resultFeedback.updatedAt)
+                                                                                ? formatTimestamp(
+                                                                                      resultFeedback.updatedAt
+                                                                                  )
                                                                                 : t('history.resultFeedbackEmpty')}
                                                                         </span>
                                                                         <span className='text-foreground font-medium'>

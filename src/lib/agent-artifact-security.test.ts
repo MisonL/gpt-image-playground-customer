@@ -1,7 +1,7 @@
 import { assertArtifactFilepathAllowed } from './agent-file-utils';
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
 import path from 'node:path';
+import { describe, it } from 'node:test';
 
 describe('assertArtifactFilepathAllowed', () => {
     it('accepts artifact files under the generated image directory', () => {
@@ -13,7 +13,10 @@ describe('assertArtifactFilepathAllowed', () => {
     });
 
     it('rejects path traversal attempts under the generated image directory', () => {
-        assert.throws(() => assertArtifactFilepathAllowed(path.join('generated-images', '..', '..', 'outside-file.png')), /目录之外/);
+        assert.throws(
+            () => assertArtifactFilepathAllowed(path.join('generated-images', '..', '..', 'outside-file.png')),
+            /目录之外/
+        );
         assert.throws(() => assertArtifactFilepathAllowed('generated-images/../../../outside-file.png'), /目录之外/);
     });
 });

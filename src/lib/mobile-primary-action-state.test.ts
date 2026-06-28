@@ -48,7 +48,7 @@ function resolveReason(overrides: Partial<MobileOptions>): string {
 describe('resolveMobilePrimaryDisabledReason', () => {
     it('explains an empty prompt before mobile generate submit', () => {
         const reason = resolveReason({
-            prompt: '   ',
+            prompt: '   '
         });
 
         assert.equal(reason, '请输入提示词后再提交。');

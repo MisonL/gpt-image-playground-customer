@@ -4,10 +4,7 @@ import { describe, it } from 'node:test';
 
 describe('buildShareApiPath', () => {
     it('uses root API paths for root share pages', () => {
-        assert.equal(
-            buildShareApiPath({ pathname: '/share/abc123', token: 'abc123' }),
-            '/api/shares/abc123'
-        );
+        assert.equal(buildShareApiPath({ pathname: '/share/abc123', token: 'abc123' }), '/api/shares/abc123');
         assert.equal(
             buildShareApiPath({ pathname: '/share/abc123', token: 'abc123', suffix: 'content' }),
             '/api/shares/abc123/content'

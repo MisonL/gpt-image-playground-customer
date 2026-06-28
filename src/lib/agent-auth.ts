@@ -1,6 +1,6 @@
 import { AgentApiError } from './api-error-response';
-import crypto from 'crypto';
 import { verifyPasswordHash } from './server-runtime';
+import crypto from 'crypto';
 
 export function assertAgentAuthorized(headers: Headers, env: Record<string, string | undefined> = process.env): void {
     const configuredToken = env.AGENT_API_TOKEN?.trim();

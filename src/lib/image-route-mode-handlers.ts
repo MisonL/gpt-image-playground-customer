@@ -22,14 +22,6 @@ import {
     type StorageMode,
     type ValidOutputFormat
 } from './image-request-utils';
-import { createImageStreamResponse } from './image-stream-service';
-import { createImagesApiGenerateStream } from './images-api-stream';
-import {
-    mergeUpstreamHeadersWithFixed,
-    type ImageUpstreamProfile,
-    type PartialImagesCount,
-    type UpstreamRequestHeaders
-} from './image-upstream-profile';
 import {
     appendAccessCookie,
     reportServerCredentialFailure,
@@ -38,6 +30,15 @@ import {
     type ImageBackend,
     type RequestLogContext
 } from './image-route-support';
+import { createImageStreamResponse } from './image-stream-service';
+import {
+    mergeUpstreamHeadersWithFixed,
+    type ImageUpstreamProfile,
+    type PartialImagesCount,
+    type UpstreamRequestHeaders
+} from './image-upstream-profile';
+import { createImagesApiGenerateStream } from './images-api-stream';
+import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import {
     createResponsesImageEditStream,
     createResponsesImageStream,
@@ -45,7 +46,6 @@ import {
     generateImageWithResponsesBackend,
     type ResponsesImageGenerateInput
 } from './responses-image-backend';
-import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import type OpenAI from 'openai';
 
 type CommonModeInput = {
@@ -120,7 +120,13 @@ function toResponsesPartialImagesCount(value: PartialImagesCount): 1 | 2 | 3 {
 }
 
 function readGenerateOptions(input: CommonModeInput): GenerateOptions {
-    const n = readCount(input.formData, 'n', 1, input.upstreamProfile.generateCount.min, input.upstreamProfile.generateCount.max);
+    const n = readCount(
+        input.formData,
+        'n',
+        1,
+        input.upstreamProfile.generateCount.min,
+        input.upstreamProfile.generateCount.max
+    );
     const size = readSize(input.formData, 'size', '1024x1024', input.model, input.upstreamProfile);
     const quality = readGenerateQuality(input.formData);
     const outputFormat = readOutputFormat(input.formData);
@@ -306,9 +312,7 @@ async function createResponsesImageStreamResponse(
         onError: (error) => reportServerCredentialFailure(input.selectedCredential, error),
         onStreamUnavailable: input.onStreamUnavailable,
         onStreamingDegraded: input.onStreamingDegraded,
-        fallbackOnError: input.streamFallbackEnabled
-            ? () => createResponsesImageResultOnly(input, options)
-            : undefined
+        fallbackOnError: input.streamFallbackEnabled ? () => createResponsesImageResultOnly(input, options) : undefined
     });
     return appendAccessCookie(response, input.accessCookie);
 }
@@ -323,7 +327,10 @@ async function createImagesGenerateResultOnly(
     return input.openai.images.generate(params, openAiRequestOptions(input));
 }
 
-async function createGenerateStreamResponse(input: CommonModeInput, options: GenerateOptions): Promise<ImageModeResult> {
+async function createGenerateStreamResponse(
+    input: CommonModeInput,
+    options: GenerateOptions
+): Promise<ImageModeResult> {
     const streamParams = {
         ...options.baseParams,
         stream: true as const,
@@ -360,9 +367,7 @@ async function createGenerateStreamResponse(input: CommonModeInput, options: Gen
         onError: (error) => reportServerCredentialFailure(input.selectedCredential, error),
         onStreamUnavailable: input.onStreamUnavailable,
         onStreamingDegraded: input.onStreamingDegraded,
-        fallbackOnError: input.streamFallbackEnabled
-            ? () => createImagesGenerateResultOnly(input, options)
-            : undefined
+        fallbackOnError: input.streamFallbackEnabled ? () => createImagesGenerateResultOnly(input, options) : undefined
     });
     return appendAccessCookie(response, input.accessCookie);
 }
@@ -387,7 +392,13 @@ export async function handleGenerateImageMode(
 }
 
 function readEditOptions(input: CommonModeInput): EditOptions {
-    const n = readCount(input.formData, 'n', 1, input.upstreamProfile.editCount.min, input.upstreamProfile.editCount.max);
+    const n = readCount(
+        input.formData,
+        'n',
+        1,
+        input.upstreamProfile.editCount.min,
+        input.upstreamProfile.editCount.max
+    );
     const size = readSize(input.formData, 'size', 'auto', input.model, input.upstreamProfile);
     const quality = readEditQuality(input.formData);
     const outputFormat = readOutputFormat(input.formData);
@@ -535,7 +546,10 @@ export async function handleEditImageMode(
                 if (!input.streamFallbackEnabled) throw error;
                 reportServerCredentialFailure(input.selectedCredential, error);
                 input.onStreamUnavailable?.(error, 'stream_request_failed');
-                return { outputFormat: options.outputFormat, result: await editImageWithResponsesBackend(responseInput) };
+                return {
+                    outputFormat: options.outputFormat,
+                    result: await editImageWithResponsesBackend(responseInput)
+                };
             }
             const response = createImageStreamResponse({
                 stream,

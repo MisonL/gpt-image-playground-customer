@@ -110,27 +110,31 @@ describe('buildHistoryFeedbackTargets', () => {
     });
 
     it('creates a stable sync key from target ids and feedback content', () => {
-        const input = buildHistoryFeedbackSyncInputs(historyItems([
-            {
-                timestamp: 10,
-                clientRequestIds: [' web-b ', 'web-a'],
-                images: [{ filename: 'a.png', clientRequestId: ' web-b ' }],
-                resultFeedback: { value: 'needs_revision', updatedAt: 123, note: ' revise ' }
-            }
-        ]))[0];
+        const input = buildHistoryFeedbackSyncInputs(
+            historyItems([
+                {
+                    timestamp: 10,
+                    clientRequestIds: [' web-b ', 'web-a'],
+                    images: [{ filename: 'a.png', clientRequestId: ' web-b ' }],
+                    resultFeedback: { value: 'needs_revision', updatedAt: 123, note: ' revise ' }
+                }
+            ])
+        )[0];
 
         assert.equal(buildHistoryFeedbackSyncKey(input), '10|web-a,web-b|needs_revision|123|revise');
     });
 
     it('builds serializable sync payloads without retaining full history entries', () => {
-        const payloads = buildHistoryFeedbackSyncPayloads(historyItems([
-            {
-                timestamp: 10,
-                clientRequestIds: ['web-a'],
-                images: [{ filename: 'a.png', clientRequestId: 'web-a' }],
-                resultFeedback: { value: 'usable', updatedAt: 123, note: ' ok ' }
-            }
-        ]));
+        const payloads = buildHistoryFeedbackSyncPayloads(
+            historyItems([
+                {
+                    timestamp: 10,
+                    clientRequestIds: ['web-a'],
+                    images: [{ filename: 'a.png', clientRequestId: 'web-a' }],
+                    resultFeedback: { value: 'usable', updatedAt: 123, note: ' ok ' }
+                }
+            ])
+        );
 
         assert.deepEqual(payloads, [
             {
@@ -241,61 +245,71 @@ describe('buildHistoryFeedbackTargets', () => {
 
     it('serializes, parses, upserts, and removes persisted sync queue entries', () => {
         const older = buildHistoryFeedbackSyncPayload(
-            buildHistoryFeedbackSyncInputs(historyItems([
-                {
-                    timestamp: 1,
-                    clientRequestIds: ['web-a'],
-                    images: [],
-                    resultFeedback: { value: 'usable', updatedAt: 100 }
-                }
-            ]))[0]
+            buildHistoryFeedbackSyncInputs(
+                historyItems([
+                    {
+                        timestamp: 1,
+                        clientRequestIds: ['web-a'],
+                        images: [],
+                        resultFeedback: { value: 'usable', updatedAt: 100 }
+                    }
+                ])
+            )[0]
         );
         const newer = buildHistoryFeedbackSyncPayload(
-            buildHistoryFeedbackSyncInputs(historyItems([
-                {
-                    timestamp: 1,
-                    clientRequestIds: ['web-a'],
-                    images: [],
-                    resultFeedback: { value: 'needs_revision', updatedAt: 200, note: 'fix' }
-                }
-            ]))[0]
+            buildHistoryFeedbackSyncInputs(
+                historyItems([
+                    {
+                        timestamp: 1,
+                        clientRequestIds: ['web-a'],
+                        images: [],
+                        resultFeedback: { value: 'needs_revision', updatedAt: 200, note: 'fix' }
+                    }
+                ])
+            )[0]
         );
         const other = buildHistoryFeedbackSyncPayload(
-            buildHistoryFeedbackSyncInputs(historyItems([
-                {
-                    timestamp: 2,
-                    clientRequestIds: ['web-b'],
-                    images: [],
-                    resultFeedback: { value: 'usable', updatedAt: 150 }
-                }
-            ]))[0]
+            buildHistoryFeedbackSyncInputs(
+                historyItems([
+                    {
+                        timestamp: 2,
+                        clientRequestIds: ['web-b'],
+                        images: [],
+                        resultFeedback: { value: 'usable', updatedAt: 150 }
+                    }
+                ])
+            )[0]
         );
         assert.ok(older);
         assert.ok(newer);
         assert.ok(other);
 
         const queue = upsertHistoryFeedbackSyncQueue(upsertHistoryFeedbackSyncQueue([older], newer), other);
-        assert.deepEqual(queue.map((item) => item.key), [newer.key, other.key]);
+        assert.deepEqual(
+            queue.map((item) => item.key),
+            [newer.key, other.key]
+        );
 
         const parsed = parseHistoryFeedbackSyncQueue(serializeHistoryFeedbackSyncQueue(queue));
         assert.deepEqual(parsed, queue);
         assert.deepEqual(removeHistoryFeedbackSyncQueueItem(parsed, newer.key), [other]);
-        assert.deepEqual(
-            removeHistoryFeedbackSyncQueueTargets(parsed, [{ type: 'page_request', id: ' web-b ' }]),
-            [newer]
-        );
+        assert.deepEqual(removeHistoryFeedbackSyncQueueTargets(parsed, [{ type: 'page_request', id: ' web-b ' }]), [
+            newer
+        ]);
     });
 
     it('keeps remaining sync targets when only one target is removed', () => {
         const payload = buildHistoryFeedbackSyncPayload(
-            buildHistoryFeedbackSyncInputs(historyItems([
-                {
-                    timestamp: 10,
-                    clientRequestIds: ['web-a', 'web-b'],
-                    images: [],
-                    resultFeedback: { value: 'usable', updatedAt: 100 }
-                }
-            ]))[0]
+            buildHistoryFeedbackSyncInputs(
+                historyItems([
+                    {
+                        timestamp: 10,
+                        clientRequestIds: ['web-a', 'web-b'],
+                        images: [],
+                        resultFeedback: { value: 'usable', updatedAt: 100 }
+                    }
+                ])
+            )[0]
         );
         assert.ok(payload);
 
@@ -416,10 +430,7 @@ describe('buildHistoryFeedbackTargets', () => {
         assert.ok(initialPayload);
         assert.ok(nextPayload);
 
-        const queue = upsertHistoryFeedbackDeleteQueue(
-            [initialPayload],
-            nextPayload
-        );
+        const queue = upsertHistoryFeedbackDeleteQueue([initialPayload], nextPayload);
 
         assert.deepEqual(queue, [
             {
@@ -651,7 +662,9 @@ describe('buildHistoryFeedbackTargets', () => {
 
         assert.equal(shouldFeedbackDeleteClearSync(deletePayload, olderSync), true);
         assert.equal(shouldFeedbackDeleteClearSync(deletePayload, newerSync), false);
-        assert.deepEqual(removeHistoryFeedbackSyncQueueTargetsForDelete([olderSync, newerSync], deletePayload), [newerSync]);
+        assert.deepEqual(removeHistoryFeedbackSyncQueueTargetsForDelete([olderSync, newerSync], deletePayload), [
+            newerSync
+        ]);
     });
 
     it('treats legacy unbounded deletes as clearing overlapping sync payloads', () => {
