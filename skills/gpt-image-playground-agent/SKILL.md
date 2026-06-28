@@ -27,7 +27,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 
 Agent API 只作为自动化客户端接口，不作为首战场景或用户验证的主证明。首阶段产品判断以页面工作台上的真实发布任务、结果下载、继续编辑、复用和最近生成里的结果反馈为准。
 
-结果反馈由页面工作台通过 `/api/feedback` 写入和清理，Agent 客户端通过 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback` 只读查询。日志查看的原始流仍是 WebUI/page API `/api/logs`，不接受 Agent token；Agent 客户端通过 `/api/agent/diagnostics/page-requests/{id}` 或 `/api/agent/diagnostics/page-requests` 查询脱敏日志摘要。诊断摘要来自本地 bounded app log，capabilities 的 `page_request_diagnostics.retention` 和诊断响应的 `diagnostics_retention` 声明当前窗口；`matched_log_count=0` 时响应会带 `diagnostics_note`，不等同于请求未发生。Agent JSON、Agent edit 和 job 的请求状态属于 Agent state，可通过 `/api/agent/diagnostics/requests/{request_id}` 或 `/api/agent/diagnostics/requests?idempotency_key=...` 只读查询，返回状态、时间线、artifact 摘要、成功响应 timing/execution、失败错误、状态后端和保留边界。灵感相册和历史复用属于页面工作台和浏览器本地体验，不作为 Agent capabilities 或机器 API 承诺。分享也是 WebUI/page API：分享使用 `/api/shares`、`/api/shares/{token}` 和 `/api/shares/{token}/content`，不进入 Agent OpenAPI，也不要和 `/api/agent/*` 鉴权混用。
+结果反馈由页面工作台通过 `/api/feedback` 写入和清理，Agent 客户端通过 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback` 只读查询。日志查看的原始流仍是 WebUI/page API `/api/logs`，不接受 Agent token；Agent 客户端通过 `/api/agent/diagnostics/page-requests/{id}` 或 `/api/agent/diagnostics/page-requests` 查询脱敏日志摘要。诊断摘要来自本地 bounded app log，capabilities 的 `page_request_diagnostics.retention` 和诊断响应的 `diagnostics_retention` 声明当前窗口；`matched_log_count=0` 时响应会带 `diagnostics_note`，不等同于请求未发生。Agent JSON、Agent edit 和 job 的请求状态属于 Agent state，可通过 `/api/agent/diagnostics/requests/{request_id}` 或 `/api/agent/diagnostics/requests?idempotency_key=...` 只读查询，返回状态、时间线、artifact 摘要、成功响应 timing/execution、失败错误、状态后端和保留边界。灵感相册和历史复用属于页面工作台和浏览器本地体验，不作为 Agent capabilities 或机器 API 承诺。Agent artifact 原始下载 URL 仍需要 Agent 鉴权；需要给用户浏览器访问时，使用 `POST /api/agent/artifacts/{id}/share` 或生成脚本 `--share` 显式创建分享链接。分享链接使用 `/share/{token}` 和 `/api/shares/{token}/content` 的随机 token/访问码模型，不把 Agent token 放进 URL。
 
 ## 路由规则
 
@@ -69,7 +69,7 @@ Agent API 只作为自动化客户端接口，不作为首战场景或用户验�
 12. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；generate 只在显式 `--page-sse` 或页面工作台诊断时使用它，默认 WebP edit、Responses edit、长图恢复或需要原始 SSE 日志的 edit 仍可使用页面 SSE。
 13. 读取 `agent_jobs` 只用于理解服务端编排结果和显式 `--job` 诊断路径。普通 generate 不再由 Agent 客户端根据本地/远端或尺寸选择 Agent JSON、page SSE 或 job。
 14. 处理失败时读取结构化 `error.code`、`error.retryable`、`error.diagnostics` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。页面 SSE 返回 `503`、断流，或 `summary` 里的 `selected_channel_id`、`upstream_host` 为空时，先按结构化失败诊断，再用新 key 显式换路径，不要把它当成已自动回退成功。
-15. 返回结果时优先给出 `summary`、`content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。回答“4K 非流式花了多久”时优先读 `summary.elapsed_ms`，服务端返回 timing 时也读 `summary.server_elapsed_ms`。
+15. 返回结果时优先给出 `summary`、`content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。需要用户直接在浏览器打开图片时添加 `--share`，并返回 `summary.share_urls`；不要把需要 Bearer token 的 artifact `content_url` 直接当作用户外链。回答“4K 非流式花了多久”时优先读 `summary.elapsed_ms`，服务端返回 timing 时也读 `summary.server_elapsed_ms`。
 16. 需要查询页面请求后的人工反馈或日志摘要时，使用页面 SSE 的 `clientRequestId` 或脚本复用的 `Idempotency-Key` 调用 `scripts/diagnose-request.mjs --client-request-id ...`；不要直接调用 `/api/logs`。需要查询 Agent state 请求状态时，使用 `scripts/diagnose-request.mjs --agent-request-id ...` 或 `--idempotency-key ...`。
 
 ## 鉴权
@@ -100,7 +100,7 @@ Authorization: Bearer <token>
 - 不要直接调用 job endpoints，除非 capabilities 明确返回 `agent_jobs.supported=true` 且 `mode=job_polling`，并且本次是显式 `--job` 诊断或兼容场景。默认 generate 使用 `orchestration.endpoint`。
 - 不要把一次高分辨率、高质量长耗时失败归纳为全局不可用。优先查看 `error.diagnostics.upstream_status`、`upstream_event_type`、`partial_image_count`、`transport_error`、`selected_channel_id`、`channel_cooldown_scope`、`error.diagnostics.cooldown_target.request_mode` 和 `retry_after_seconds`。
 - 不要在 `error.retryable=false` 时依据历史 `retry_after_seconds` 继续重试同一个 key；终态失败需要新业务操作和新 key。
-- 不要把 `/api/runtime-capabilities`、`/api/feedback`、`/api/shares`、`/api/logs` 或 `/api/image-delete` 当成 Agent API。它们是页面运行态或页面工作流端点，鉴权和字段契约与 `/api/agent/*` 不同；反馈和诊断的 Agent 只读入口是 `/api/agent/page-requests/{id}/feedback`、`/api/agent/page-requests/feedback`、`/api/agent/diagnostics/page-requests/{id}` 和 `/api/agent/diagnostics/page-requests`。
+- 不要把 `/api/runtime-capabilities`、`/api/feedback`、页面创建分享的 `POST /api/shares`、`/api/logs` 或 `/api/image-delete` 当成 Agent API。它们是页面运行态或页面工作流端点，鉴权和字段契约与 `/api/agent/*` 不同；反馈和诊断的 Agent 只读入口是 `/api/agent/page-requests/{id}/feedback`、`/api/agent/page-requests/feedback`、`/api/agent/diagnostics/page-requests/{id}` 和 `/api/agent/diagnostics/page-requests`。Agent 只通过 `/api/agent/artifacts/{id}/share` 为已有 artifact 创建分享链接，不上传任意新图片到页面分享端点。
 
 ## Job Polling
 
@@ -118,14 +118,14 @@ Authorization: Bearer <token>
 
 以下脚本都位于当前 Skill 目录的 `scripts/` 下。不要硬编码本机安装路径；由运行环境按当前 `SKILL.md` 所在目录解析脚本路径。
 
-- `scripts/generate-image.mjs`：文生图调用。默认 dry-run，不消耗额度；真实执行默认提交到服务端编排入口，必须添加 `--allow-billable` 才会真实生图。
+- `scripts/generate-image.mjs`：文生图调用。默认 dry-run，不消耗额度；真实执行默认提交到服务端编排入口，必须添加 `--allow-billable` 才会真实生图。需要浏览器可直接打开的用户外链时添加 `--share`，可选 `--share-expires-minutes`；私密分享访问码从 `GPT_IMAGE_SHARE_ACCESS_CODE` 读取，不放进命令行参数。
 - `scripts/edit-image.mjs`：multipart 编辑调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实编辑。
 - `scripts/batch-images.mjs`：JSONL 批量 generate/edit 调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实执行，支持 append-only manifest、`--resume`、`--ordered-prefix`、`--dimension-check`、`--max-attempts`、`--concurrency` 和顺序执行下的 `--max-consecutive-failures`。`--concurrency` 默认 `1`，大于 `1` 时并发执行并按输入顺序输出结果。
 - `scripts/convert-image-format.mjs`：本地 PNG/JPEG/WebP 互转。默认输出 WebP，质量 `100`；JPEG 会把透明背景铺成白色，PNG/WebP 保留透明。
 - `scripts/diagnose-request.mjs`：按一个或多个页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断；支持读取批量 manifest 和 `--base-url`，不触发生图计费。
 - `scripts/probe-upstream-image.mjs`：直接探测上游图片接口连通性。默认只检查 DNS、TLS 和 `/models`，必须添加 `--allow-billable` 才会真实调用 `/images/generations`。
 
-生成、编辑和批量脚本的 dry-run 输出会包含 `verification_scope.mode=local_planning_only`，表示只验证了本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。生成 dry-run 添加 `--check-remote` 后会只读查询 `/api/agent/capabilities` 和 `/api/runtime-capabilities`，输出 `verification_scope.mode=remote_contract_and_local_planning`，仍不会发送真实生图请求。生成 dry-run 默认 `routing_guidance.transport=server_orchestrated`，表示真实请求只提交业务意图到服务端编排入口；显式 `--agent`、`--job`、`--page-sse` 才会显示对应诊断路径。批量 dry-run 还会包含 `guardrails`，提示真实执行要复用同一个 `--ordered-prefix`，固定尺寸任务是否建议加 `--dimension-check`。真实执行输出会包含 `summary`；成功摘要含 `ok=true`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host` 和脱敏 `request_headers`。失败摘要含 `route_decision`、`transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`；尺寸门禁失败时还会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls` 和 `image_dimensions`，便于人工审查。
+生成、编辑和批量脚本的 dry-run 输出会包含 `verification_scope.mode=local_planning_only`，表示只验证了本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。生成 dry-run 添加 `--check-remote` 后会只读查询 `/api/agent/capabilities` 和 `/api/runtime-capabilities`，输出 `verification_scope.mode=remote_contract_and_local_planning`，仍不会发送真实生图请求。生成 dry-run 默认 `routing_guidance.transport=server_orchestrated`，表示真实请求只提交业务意图到服务端编排入口；显式 `--agent`、`--job`、`--page-sse` 才会显示对应诊断路径。批量 dry-run 还会包含 `guardrails`，提示真实执行要复用同一个 `--ordered-prefix`，固定尺寸任务是否建议加 `--dimension-check`。真实执行输出会包含 `summary`；成功摘要含 `ok=true`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`share_urls`、`direct_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host` 和脱敏 `request_headers`。失败摘要含 `route_decision`、`transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`；尺寸门禁失败时还会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls` 和 `image_dimensions`，便于人工审查。
 所有生成、编辑、批量和探针脚本在 dry-run 或真实请求前都会校验尺寸参数。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI-compatible 上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量页面 SSE 和上游探针默认请求 `output_format=webp`、`output_compression=100`；普通 Agent edit 不发送输出格式字段，输出格式固定为 Agent 契约。
 
 如果当前上下文位于仓库根目录，管理员侧优先使用顶层命令：
@@ -185,6 +185,12 @@ node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.
 
 ```text
 node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --timeout-ms 420000 --size 2048x2048 "a product photo of a ceramic mug"
+```
+
+创建浏览器可直接打开的分享链接：
+
+```text
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --share --share-expires-minutes 1440 --size 2048x2048 "a product photo of a ceramic mug"
 ```
 
 本地格式转换不触发生图计费：
@@ -255,6 +261,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 - `GPT_IMAGE_AGENT_CLIENT_REQUEST_ID`：供 `diagnose-request.mjs` 读取的页面请求 ID；页面 SSE 路径通常等于脚本使用的 `Idempotency-Key`，多个 ID 可重复传 `--client-request-id`。
 - `GPT_IMAGE_AGENT_REQUEST_ID`：供 `diagnose-request.mjs` 读取 Agent state 请求诊断的 Agent `request_id`。
 - `GPT_IMAGE_AGENT_MAX_ATTEMPTS`：最大尝试次数，默认 `3`。
+- `GPT_IMAGE_SHARE_ACCESS_CODE`：仅在 `generate-image.mjs --share` 时读取，用于创建需要访问码的分享链接；不要放进命令行参数、manifest 或日志。
 - `GPT_IMAGE_AGENT_CONTRACT_CHECK=1`：只检查 capabilities 和错误契约，不触发真实生图或编辑。
 
 Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 仍必须通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`，shell 环境变量优先。不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。

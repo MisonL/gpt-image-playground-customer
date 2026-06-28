@@ -96,6 +96,7 @@ start-windows.bat
 | 默认上游 | `OPENAI_API_KEY`、`OPENAI_API_BASE_URL` | 服务端默认 OpenAI 或兼容接口配置。页面 `API 设置` 优先级更高。 |
 | 页面访问码 | `APP_PASSWORD` | 设置后访问页面和受保护图片需要访问码。公网部署建议开启。 |
 | Agent 鉴权 | `AGENT_API_TOKEN` | 设置后 `/api/agent/*` 需要 Bearer token。 |
+| Agent 公开地址 | `AGENT_PUBLIC_BASE_URL` | OpenAPI `servers[0].url` 和 Agent artifact 分享外链使用的公网 base URL。 |
 | 图片存储 | `NEXT_PUBLIC_IMAGE_STORAGE_MODE` | `fs` 或 `indexeddb`。Docker 默认使用 `fs`。 |
 | Agent 状态 | `AGENT_STATE_BACKEND` | `memory`、`sqlite` 或 `postgres`。Docker 默认使用 `sqlite`。 |
 | 默认后端 | `IMAGE_GENERATION_BACKEND` | 默认 `images-api`；可设为 `responses-image-generation`。 |
@@ -162,6 +163,7 @@ Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先
 | `GET /api/agent/jobs/{id}` | 查询 job 状态。 |
 | `GET /api/agent/jobs/{id}/result` | 读取成功 job 的标准图片响应。 |
 | `GET /api/agent/artifacts/{id}/content` | 下载产物图片。 |
+| `POST /api/agent/artifacts/{id}/share` | 为产物创建浏览器可访问的分享链接。 |
 | `POST /api/agent/diagnostics/page-requests` | 批量读取页面请求的脱敏日志诊断摘要。 |
 | `GET /api/agent/diagnostics/requests` | 按 request id 或幂等键查询诊断。 |
 
@@ -279,6 +281,7 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 - 远程 Space、云服务或内网服务必须显式传 `--base-url`，避免误用本机默认服务。
 - Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`；shell 环境变量优先。首次配置可复制 `.env.agent.local.example`。不要提交 token、访问码或哈希。
 - `GPT_IMAGE_AGENT_TOKEN` 只用于 `/api/agent/*`；页面 SSE `/api/images` 可能还需要 `GPT_IMAGE_APP_PASSWORD_HASH`。
+- 需要给用户浏览器访问图片时，不要公开原始 artifact 下载 URL。使用 `POST /api/agent/artifacts/{id}/share` 或 skill 的 `--share` 创建分享链接；创建动作需要 Agent 鉴权，返回的 `share_url` 使用随机分享 token，公开分享可直接打开，设置访问码的分享需要用户在分享页输入访问码。
 - dry-run 只验证本地请求构造；`verification_scope.mode=local_planning_only` 不是远端已可执行。需要只读读取远端 capabilities 和 runtime 时加 `--check-remote`，输出 `verification_scope.mode=remote_contract_and_local_planning`。远端合同检查用 `--contract-check`，真实执行必须加 `--allow-billable`。
 - 多张真实任务优先用 `batch-images.mjs`、`--manifest`、`--resume` 和 `--dimension-check`；不要手动并行启动多个单张脚本。需要并发时先看 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 和 `channelQueue.capacityPerCredential`。
 - 选择 `responses-image-generation` 或兼容别名 `responses` 时，`partial_images` 必须优先按 `partial_images_by_backend["responses-image-generation"]` 校验，不能套用 Matsca Images API 的范围。
@@ -286,7 +289,7 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 - 排查环境配置时优先运行 `npm run env:summary`，不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。
 - Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。
 - 边界矩阵精简版：
-- `/api/agent/*` 返回最终 JSON；`POST /api/images`、`GET /api/runtime-capabilities`、`/api/feedback`、`/api/shares`、`/api/logs` 和 `POST /api/image-delete` 属于页面或运行态 API，不进入 Agent OpenAPI。Agent 只读反馈和诊断入口是 `/api/agent/page-requests/feedback`、`/api/agent/page-requests/{id}/feedback`、`/api/agent/diagnostics/page-requests` 和 `/api/agent/diagnostics/page-requests/{id}`。灵感相册和历史复用是浏览器工作台体验，不作为机器 API 契约承诺。
+- `/api/agent/*` 返回最终 JSON；Agent artifact 的原始下载仍需要 Agent 鉴权。`POST /api/agent/artifacts/{id}/share` 只负责创建分享链接，用户浏览器访问走 `/share/{token}` 或 `/api/shares/{token}/content` 的分享 token/访问码模型。`POST /api/images`、`GET /api/runtime-capabilities`、`/api/feedback`、页面创建分享的 `POST /api/shares`、`/api/logs` 和 `POST /api/image-delete` 属于页面或运行态 API，不进入 Agent OpenAPI。Agent 只读反馈和诊断入口是 `/api/agent/page-requests/feedback`、`/api/agent/page-requests/{id}/feedback`、`/api/agent/diagnostics/page-requests` 和 `/api/agent/diagnostics/page-requests/{id}`。灵感相册和历史复用是浏览器工作台体验，不作为机器 API 契约承诺。
 
 ## Docker 与部署
 
