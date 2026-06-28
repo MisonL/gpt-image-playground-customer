@@ -3862,6 +3862,9 @@ describe('Agent skill script argument validation', () => {
         assert.match(readmeText, /verification_scope\.mode=local_planning_only/);
         assert.match(readmeText, /Hugging Face Space Secrets 只能写入和列出名称/);
         assert.match(readmeText, /`page_sse_supported=true` 只是声明支持，不代表实测一定成功/);
+        assert.match(skillText, /`share_urls` 是分享页入口，`direct_content_urls` 是分享后的内容直链/);
+        assert.match(apiReference, /`share_urls` 只在显式 `--share` 后出现，用于给用户浏览器打开分享页/);
+        assert.match(apiReference, /`direct_content_urls` 只在显式 `--share` 后出现，用于分享后的内容直链/);
 
         assert.match(skillText, /不要手动并行启动多个单张脚本/);
         assert.match(skillText, /capacity_feedback/);
