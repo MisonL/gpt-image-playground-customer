@@ -69,7 +69,7 @@ Agent API 只作为自动化客户端接口，不作为首战场景或用户验�
 12. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；generate 只在显式 `--page-sse` 或页面工作台诊断时使用它，默认 WebP edit、Responses edit、长图恢复或需要原始 SSE 日志的 edit 仍可使用页面 SSE。
 13. 读取 `agent_jobs` 只用于理解服务端编排结果和显式 `--job` 诊断路径。普通 generate 不再由 Agent 客户端根据本地/远端或尺寸选择 Agent JSON、page SSE 或 job。
 14. 处理失败时读取结构化 `error.code`、`error.retryable`、`error.diagnostics` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。页面 SSE 返回 `503`、断流，或 `summary` 里的 `selected_channel_id`、`upstream_host` 为空时，先按结构化失败诊断，再用新 key 显式换路径，不要把它当成已自动回退成功。
-15. 返回结果时优先给出 `summary`、`content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。需要用户直接在浏览器打开图片时添加 `--share`，并返回 `summary.share_urls` 和 `summary.direct_content_urls`；其中 `share_urls` 是分享页入口，`direct_content_urls` 是分享后的内容直链，二者都不是需要 Bearer token 的 artifact `content_url`。回答“4K 非流式花了多久”时优先读 `summary.elapsed_ms`，服务端返回 timing 时也读 `summary.server_elapsed_ms`。
+15. 返回结果时优先给出 `summary`、`content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。需要用户直接在浏览器打开图片时添加 `--share`，并返回 `summary.share_urls` 和 `summary.direct_content_urls`；其中 `share_urls` 是分享页入口，公开分享可直接打开 `direct_content_urls`，设置访问码时优先给用户 `share_urls`，二者都不是需要 Bearer token 的 artifact `content_url`。回答“4K 非流式花了多久”时优先读 `summary.elapsed_ms`，服务端返回 timing 时也读 `summary.server_elapsed_ms`。
 16. 需要查询页面请求后的人工反馈或日志摘要时，使用页面 SSE 的 `clientRequestId` 或脚本复用的 `Idempotency-Key` 调用 `scripts/diagnose-request.mjs --client-request-id ...`；不要直接调用 `/api/logs`。需要查询 Agent state 请求状态时，使用 `scripts/diagnose-request.mjs --agent-request-id ...` 或 `--idempotency-key ...`。
 
 ## 鉴权
