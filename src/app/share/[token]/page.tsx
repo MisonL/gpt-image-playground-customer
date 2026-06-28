@@ -3,6 +3,7 @@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useI18n } from '@/lib/i18n';
+import { buildShareApiPath } from '@/lib/share-route-paths';
 import Image from 'next/image';
 import * as React from 'react';
 
@@ -35,7 +36,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
             setIsLoading(true);
             setError(null);
             try {
-                const response = await fetch(`/api/shares/${token}`);
+                const response = await fetch(buildShareApiPath({ pathname: window.location.pathname, token }));
                 const body = await response.json();
                 if (!response.ok) {
                     throw new Error(body.error || t('share.loadFailed'));
@@ -44,11 +45,14 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                     const nextMetadata = body as ShareMetadata;
                     setMetadata(nextMetadata);
                     if (!nextMetadata.expired && !nextMetadata.accessCodeRequired) {
-                        const imageResponse = await fetch(`/api/shares/${token}/content`, {
-                            method: 'POST',
-                            headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({})
-                        });
+                        const imageResponse = await fetch(
+                            buildShareApiPath({ pathname: window.location.pathname, token, suffix: 'content' }),
+                            {
+                                method: 'POST',
+                                headers: { 'content-type': 'application/json' },
+                                body: JSON.stringify({})
+                            }
+                        );
                         if (!imageResponse.ok) {
                             const imageBody = await imageResponse.json().catch(() => ({}));
                             throw new Error(imageBody.error || t('share.unlockFailed'));
@@ -86,7 +90,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
         setIsUnlocking(true);
         setError(null);
         try {
-            const response = await fetch(`/api/shares/${token}/content`, {
+            const response = await fetch(buildShareApiPath({ pathname: window.location.pathname, token, suffix: 'content' }), {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
                 body: JSON.stringify(accessCode.trim() ? { accessCode: accessCode.trim() } : {})
