@@ -1,7 +1,7 @@
 import { buildEditRequestHash, completeAgentExecutionState, hydrateAgentReplayResponse } from './agent-image-service';
+import type { AgentArtifactRecord, AgentStateStore } from './agent-state-store';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { AgentArtifactRecord, AgentStateStore } from './agent-state-store';
 
 describe('buildEditRequestHash', () => {
     it('includes uploaded file bytes so same metadata with different content conflicts', async () => {

@@ -1,8 +1,8 @@
-import { RequestValidationError } from './image-request-utils';
 import {
     CHANNEL_REQUEST_MODES as SHARED_CHANNEL_REQUEST_MODES,
     CHANNEL_REQUEST_MODE_ADMIN_CONTROL as SHARED_CHANNEL_REQUEST_MODE_ADMIN_CONTROL
 } from './channel-request-mode-values.mjs';
+import { RequestValidationError } from './image-request-utils';
 
 export const CHANNEL_REQUEST_MODES = SHARED_CHANNEL_REQUEST_MODES as readonly [
     'images-non-stream',
@@ -123,8 +123,5 @@ function normalizeChannelRequestMode(value: string): ChannelRequestMode | undefi
     if (CHANNEL_REQUEST_MODE_SET.has(normalized)) return normalized as ChannelRequestMode;
     const aliased = CHANNEL_REQUEST_MODE_ALIASES[normalized];
     if (aliased) return aliased;
-    throw new RequestValidationError(
-        `请求方式 ${value} 无效，必须是 ${CHANNEL_REQUEST_MODES.join(', ')} 之一。`,
-        500
-    );
+    throw new RequestValidationError(`请求方式 ${value} 无效，必须是 ${CHANNEL_REQUEST_MODES.join(', ')} 之一。`, 500);
 }

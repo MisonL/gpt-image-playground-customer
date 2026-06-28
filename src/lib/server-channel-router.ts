@@ -1,6 +1,6 @@
+import { createChannelCapacityQueue } from './channel-capacity-queue';
 import { createChannelHealthProber, type ChannelHealthProber } from './channel-health-prober';
 import { createChannelRouter, parseChannelPoolConfig } from './channel-router';
-import { createChannelCapacityQueue } from './channel-capacity-queue';
 import { readBooleanEnv, readPositiveIntegerEnv } from './server-runtime';
 import { createStreamingAvailabilityRegistry } from './streaming-availability';
 

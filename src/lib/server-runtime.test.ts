@@ -128,7 +128,10 @@ describe('createImageFilename', () => {
     it('uses the provided clock so filenames can be tested deterministically', () => {
         const clock: FilenameClock = () => 1715400000000;
 
-        assert.equal(createImageFilename('abcdef1234567890', 2, 'webp', clock), '1715400000000-abcdef1234567890-2.webp');
+        assert.equal(
+            createImageFilename('abcdef1234567890', 2, 'webp', clock),
+            '1715400000000-abcdef1234567890-2.webp'
+        );
     });
 });
 
@@ -163,26 +166,51 @@ describe('readOutputDirEnv', () => {
     });
 
     it('rejects absolute paths and path traversal', () => {
-        assert.throws(() => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '/tmp/generated-images' }, 'IMAGE_OUTPUT_DIR'), /安全的相对路径/);
-        assert.throws(() => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '\\tmp\\generated-images' }, 'IMAGE_OUTPUT_DIR'), /安全的相对路径/);
-        assert.throws(() => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '../generated-images' }, 'IMAGE_OUTPUT_DIR'), /安全的相对路径/);
-        assert.throws(() => readOutputDirEnv({ IMAGE_OUTPUT_DIR: 'generated/../images' }, 'IMAGE_OUTPUT_DIR'), /安全的相对路径/);
+        assert.throws(
+            () => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '/tmp/generated-images' }, 'IMAGE_OUTPUT_DIR'),
+            /安全的相对路径/
+        );
+        assert.throws(
+            () => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '\\tmp\\generated-images' }, 'IMAGE_OUTPUT_DIR'),
+            /安全的相对路径/
+        );
+        assert.throws(
+            () => readOutputDirEnv({ IMAGE_OUTPUT_DIR: '../generated-images' }, 'IMAGE_OUTPUT_DIR'),
+            /安全的相对路径/
+        );
+        assert.throws(
+            () => readOutputDirEnv({ IMAGE_OUTPUT_DIR: 'generated/../images' }, 'IMAGE_OUTPUT_DIR'),
+            /安全的相对路径/
+        );
     });
 });
 
 describe('readPositiveIntegerEnv', () => {
     it('reads a positive integer or falls back only when the value is absent', () => {
         assert.equal(readPositiveIntegerEnv({}, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 1);
-        assert.equal(readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: '2' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1), 2);
+        assert.equal(
+            readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: '2' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1),
+            2
+        );
     });
 
     it('fails explicitly when the configured value is invalid', () => {
         assert.throws(
-            () => readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: '0' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1),
+            () =>
+                readPositiveIntegerEnv(
+                    { OPENAI_MAX_STREAMS_PER_CREDENTIAL: '0' },
+                    'OPENAI_MAX_STREAMS_PER_CREDENTIAL',
+                    1
+                ),
             /OPENAI_MAX_STREAMS_PER_CREDENTIAL/
         );
         assert.throws(
-            () => readPositiveIntegerEnv({ OPENAI_MAX_STREAMS_PER_CREDENTIAL: 'bad' }, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1),
+            () =>
+                readPositiveIntegerEnv(
+                    { OPENAI_MAX_STREAMS_PER_CREDENTIAL: 'bad' },
+                    'OPENAI_MAX_STREAMS_PER_CREDENTIAL',
+                    1
+                ),
             /OPENAI_MAX_STREAMS_PER_CREDENTIAL/
         );
     });

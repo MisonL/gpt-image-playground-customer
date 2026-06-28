@@ -229,7 +229,11 @@ function readProbeErrorCode(body: unknown): { code?: string } {
     return typeof code === 'string' && code.trim() ? { code: code.trim() } : {};
 }
 
-function toProbeRecord(candidate: ChannelRecoveryProbeCandidate, result: ProbeResult, at: number): ChannelHealthProbeRecord {
+function toProbeRecord(
+    candidate: ChannelRecoveryProbeCandidate,
+    result: ProbeResult,
+    at: number
+): ChannelHealthProbeRecord {
     return {
         at,
         scope: candidate.scope,

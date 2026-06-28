@@ -1,10 +1,10 @@
-import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
 import {
     PAGE_PASSWORD_AUTH_ERROR_CODES,
     hasPreservedDisplayedAuthError,
     isPagePasswordAuthErrorCode
 } from './page-password-auth';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 
 describe('page access code auth error codes', () => {
     it('recognizes only page access code auth errors', () => {

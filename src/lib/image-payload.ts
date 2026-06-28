@@ -1,6 +1,13 @@
 const IMAGE_DATA_URL_PATTERN = /^data:([^;,]+);base64,/i;
 const BASE64_PAYLOAD_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-const ALLOWED_IMAGE_DATA_URL_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif', 'image/avif']);
+const ALLOWED_IMAGE_DATA_URL_MIME_TYPES = new Set([
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'image/webp',
+    'image/gif',
+    'image/avif'
+]);
 
 export function extractImageBase64FromDataUrl(value: string | undefined): string | undefined {
     if (!value) return undefined;

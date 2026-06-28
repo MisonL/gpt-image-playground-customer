@@ -11,8 +11,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const originalLogLevel = process.env.APP_LOG_LEVEL;
 const originalMaxEntries = process.env.APP_LOG_MAX_ENTRIES;

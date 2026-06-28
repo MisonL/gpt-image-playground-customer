@@ -1,8 +1,8 @@
 import { createChannelHealthProber, probeChannelModelsEndpoint } from './channel-health-prober';
 import { createChannelRouter, parseChannelPoolConfig } from './channel-router';
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
 import http from 'node:http';
+import { describe, it } from 'node:test';
 
 describe('probeChannelModelsEndpoint', () => {
     it('checks the non-billable models endpoint with the selected credential', async () => {

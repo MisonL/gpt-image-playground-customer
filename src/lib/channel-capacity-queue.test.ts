@@ -1,6 +1,6 @@
+import { ChannelCapacityQueueError, createChannelCapacityQueue } from './channel-capacity-queue';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { ChannelCapacityQueueError, createChannelCapacityQueue } from './channel-capacity-queue';
 
 describe('createChannelCapacityQueue', () => {
     it('queues requests per key and releases them in FIFO order', async () => {

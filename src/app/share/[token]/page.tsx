@@ -90,11 +90,14 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
         setIsUnlocking(true);
         setError(null);
         try {
-            const response = await fetch(buildShareApiPath({ pathname: window.location.pathname, token, suffix: 'content' }), {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(accessCode.trim() ? { accessCode: accessCode.trim() } : {})
-            });
+            const response = await fetch(
+                buildShareApiPath({ pathname: window.location.pathname, token, suffix: 'content' }),
+                {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(accessCode.trim() ? { accessCode: accessCode.trim() } : {})
+                }
+            );
             if (!response.ok) {
                 const body = await response.json().catch(() => ({}));
                 throw new Error(body.error || t('share.unlockFailed'));
@@ -143,8 +146,14 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                     </form>
                 ) : null}
                 {imageUrl ? (
-                    <div className='relative aspect-square w-full overflow-hidden rounded-md border border-border bg-muted'>
-                        <Image src={imageUrl} alt={metadata?.sourceFilename || t('share.imageAlt')} fill className='object-contain' unoptimized />
+                    <div className='border-border bg-muted relative aspect-square w-full overflow-hidden rounded-md border'>
+                        <Image
+                            src={imageUrl}
+                            alt={metadata?.sourceFilename || t('share.imageAlt')}
+                            fill
+                            className='object-contain'
+                            unoptimized
+                        />
                     </div>
                 ) : null}
             </section>

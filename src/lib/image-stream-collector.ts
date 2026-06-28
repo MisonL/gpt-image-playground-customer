@@ -1,8 +1,8 @@
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
+import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
 import { readImageStreamDataIntervalTimeoutMs } from './openai-image-transport';
 import { withStreamDataIntervalTimeout } from './stream-data-interval-timeout';
-import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];

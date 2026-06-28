@@ -1,9 +1,9 @@
 import { GET } from './image/[filename]/route';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { createAccessToken } from '@/lib/server-runtime';
+import { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import { NextRequest } from 'next/server';
 
 const originalAppPassword = process.env.APP_PASSWORD;
 const PAGE_PASSWORD_FIXTURE = ['customer', 'access', 'code'].join('-');

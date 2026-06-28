@@ -496,7 +496,9 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                                 type: 'array',
                                                 items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
                                             },
-                                            request_headers: { $ref: '#/components/schemas/UpstreamRequestHeaderSummary' }
+                                            request_headers: {
+                                                $ref: '#/components/schemas/UpstreamRequestHeaderSummary'
+                                            }
                                         },
                                         additionalProperties: false
                                     }
@@ -631,11 +633,13 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                             properties: {
                                                 min: {
                                                     type: 'integer',
-                                                    const: capabilities.limits.partial_images_by_backend['images-api'].min
+                                                    const: capabilities.limits.partial_images_by_backend['images-api']
+                                                        .min
                                                 },
                                                 max: {
                                                     type: 'integer',
-                                                    const: capabilities.limits.partial_images_by_backend['images-api'].max
+                                                    const: capabilities.limits.partial_images_by_backend['images-api']
+                                                        .max
                                                 }
                                             },
                                             additionalProperties: false
@@ -1292,12 +1296,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 properties: {
                                     partial_images: {
                                         type: 'integer',
-                                        minimum: capabilities.limits.partial_images_by_backend[
-                                            'responses-image-generation'
-                                        ].min,
-                                        maximum: capabilities.limits.partial_images_by_backend[
-                                            'responses-image-generation'
-                                        ].max,
+                                        minimum:
+                                            capabilities.limits.partial_images_by_backend['responses-image-generation']
+                                                .min,
+                                        maximum:
+                                            capabilities.limits.partial_images_by_backend['responses-image-generation']
+                                                .max,
                                         default: capabilities.defaults.partial_images
                                     }
                                 }
@@ -1327,7 +1331,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         responsesModel: {
                             type: 'string',
                             maxLength: 128,
-                            description: 'Responses image_generation 顶层模型；仅适用于 image_backend=responses-image-generation。'
+                            description:
+                                'Responses image_generation 顶层模型；仅适用于 image_backend=responses-image-generation。'
                         },
                         thinking: {
                             type: 'string',
@@ -1359,8 +1364,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     anyOf: Array.from({ length: maxSourceImageCount }, (_, index) => ({
                         required: [`image_${index}`]
                     })),
-                    description:
-                        `Agent edit 返回最终 JSON。请求必须至少提供一个 image_0..image_${maxSourceImageCount - 1} 源图字段。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。`,
+                    description: `Agent edit 返回最终 JSON。请求必须至少提供一个 image_0..image_${maxSourceImageCount - 1} 源图字段。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。`,
                     properties: {
                         prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
                         model: { type: 'string', enum: AGENT_MODELS, default: 'gpt-image-2' },
@@ -1547,10 +1551,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     type: 'object',
                     properties: {
                         expires_in_minutes: {
-                            oneOf: [
-                                { type: 'integer', minimum: 1 },
-                                { type: 'null' }
-                            ],
+                            oneOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }],
                             description: '分享有效期分钟数；null 表示不过期，省略时使用服务端默认值。'
                         },
                         access_code: {
@@ -1579,10 +1580,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         share_url: { type: 'string' },
                         direct_content_url: { type: 'string' },
                         expires_at: {
-                            oneOf: [
-                                { type: 'string', format: 'date-time' },
-                                { type: 'null' }
-                            ]
+                            oneOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }]
                         },
                         access_code_required: { type: 'boolean' }
                     },
@@ -1685,7 +1683,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         diagnostics_retention: { $ref: '#/components/schemas/AgentRequestDiagnosticsRetention' },
                         diagnostics_boundary: {
                             type: 'object',
-                            required: ['source', 'not_page_request_log', 'raw_request_json_redacted', 'api_key_redacted'],
+                            required: [
+                                'source',
+                                'not_page_request_log',
+                                'raw_request_json_redacted',
+                                'api_key_redacted'
+                            ],
                             properties: {
                                 source: { type: 'string', enum: ['agent_state'] },
                                 not_page_request_log: { type: 'boolean', const: true },
@@ -1699,7 +1702,16 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 AgentRequestDiagnosticsRequest: {
                     type: 'object',
-                    required: ['request_id', 'idempotency_key', 'mode', 'status', 'cached', 'created_at', 'updated_at', 'expires_at'],
+                    required: [
+                        'request_id',
+                        'idempotency_key',
+                        'mode',
+                        'status',
+                        'cached',
+                        'created_at',
+                        'updated_at',
+                        'expires_at'
+                    ],
                     properties: {
                         request_id: { type: 'string' },
                         idempotency_key: { type: 'string' },
@@ -1754,7 +1766,15 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 AgentRequestDiagnosticsResponseSummary: {
                     type: 'object',
-                    required: ['request_id', 'idempotency_key', 'cached', 'image_count', 'artifact_ids', 'content_urls', 'created_at'],
+                    required: [
+                        'request_id',
+                        'idempotency_key',
+                        'cached',
+                        'image_count',
+                        'artifact_ids',
+                        'content_urls',
+                        'created_at'
+                    ],
                     properties: {
                         request_id: { type: 'string' },
                         idempotency_key: { type: 'string' },
@@ -1988,11 +2008,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 ImageTransportCapabilities: {
                     type: 'object',
-                    required: [
-                        'upstream_timeout_ms',
-                        'stream_data_interval_timeout_ms',
-                        'upstream_max_retries'
-                    ],
+                    required: ['upstream_timeout_ms', 'stream_data_interval_timeout_ms', 'upstream_max_retries'],
                     properties: {
                         upstream_timeout_ms: {
                             type: 'integer',

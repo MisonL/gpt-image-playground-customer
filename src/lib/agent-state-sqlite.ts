@@ -1,7 +1,4 @@
-import Database from 'better-sqlite3';
-import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
+import type { AgentImageResponse } from './agent-api-contracts';
 import {
     discardArtifactFiles,
     isArtifactFilepathAllowed,
@@ -26,7 +23,6 @@ import {
     type FailAgentRequestInput
 } from './agent-state-store';
 import type { AgentErrorBody } from './api-error-response';
-import type { AgentImageResponse } from './agent-api-contracts';
 import type {
     FeedbackDeleteOptions,
     FeedbackRecord,
@@ -37,6 +33,10 @@ import type {
     FeedbackSource
 } from './feedback-store';
 import type { ImageShareRecord, ImageShareStateStore } from './share-store';
+import Database from 'better-sqlite3';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
 type SqliteRequestRow = {
     request_id: string;
@@ -139,7 +139,9 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
                 }
             }
             if (expiredRows.length > 0) {
-                db.prepare('INSERT INTO agent_recovery_events (id, event_type, details_json, created_at) VALUES (?, ?, ?, ?)').run(
+                db.prepare(
+                    'INSERT INTO agent_recovery_events (id, event_type, details_json, created_at) VALUES (?, ?, ?, ?)'
+                ).run(
                     cryptoRandomId(),
                     'expired_running_requests',
                     serializeJson({ count: expiredRows.length }),
@@ -179,10 +181,14 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         const movedFiles = await moveArtifactFilesForDeletion(artifactFilepaths);
         const transaction = db.transaction(() => {
             for (const artifactId of artifactIds) {
-                db.prepare("DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = ?").run(artifactId);
+                db.prepare("DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = ?").run(
+                    artifactId
+                );
             }
             for (const requestId of requestIds) {
-                db.prepare("DELETE FROM result_feedback WHERE target_type = 'agent_request' AND target_id = ?").run(requestId);
+                db.prepare("DELETE FROM result_feedback WHERE target_type = 'agent_request' AND target_id = ?").run(
+                    requestId
+                );
                 db.prepare('DELETE FROM agent_artifacts WHERE request_id = ?').run(requestId);
                 db.prepare('DELETE FROM agent_requests WHERE request_id = ?').run(requestId);
             }
@@ -284,14 +290,22 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         if (existing.status === 'failed' && existing.error_json) {
             return { type: 'failed', record, error: JSON.parse(existing.error_json) as AgentErrorBody };
         }
-        if ((existing.status === 'running' || existing.status === 'pending') && existing.locked_until && existing.locked_until > nowIso) {
-            return { type: 'in_progress', record, retryAfterSeconds: computeRetryAfterSeconds(existing.locked_until, now) };
+        if (
+            (existing.status === 'running' || existing.status === 'pending') &&
+            existing.locked_until &&
+            existing.locked_until > nowIso
+        ) {
+            return {
+                type: 'in_progress',
+                record,
+                retryAfterSeconds: computeRetryAfterSeconds(existing.locked_until, now)
+            };
         }
 
         this.requireDb()
             .prepare(
-            "UPDATE agent_requests SET status = 'running', locked_until = ?, updated_at = ?, expires_at = ? WHERE idempotency_key = ?"
-        )
+                "UPDATE agent_requests SET status = 'running', locked_until = ?, updated_at = ?, expires_at = ? WHERE idempotency_key = ?"
+            )
             .run(lockedUntil, nowIso, expiresAt, input.idempotencyKey);
         return { type: 'acquired', record: this.mapRequestRow(this.getRequestRow(input.idempotencyKey)!) };
     }
@@ -322,9 +336,9 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
     }
 
     async getRequest(requestId: string): Promise<AgentRequestRecord | undefined> {
-        const row = this.requireDb()
-            .prepare('SELECT * FROM agent_requests WHERE request_id = ?')
-            .get(requestId) as SqliteRequestRow | undefined;
+        const row = this.requireDb().prepare('SELECT * FROM agent_requests WHERE request_id = ?').get(requestId) as
+            | SqliteRequestRow
+            | undefined;
         return row ? this.mapRequestRow(row) : undefined;
     }
 
@@ -336,7 +350,9 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
     }
 
     async getArtifact(id: string): Promise<AgentArtifactRecord | undefined> {
-        const row = this.requireDb().prepare('SELECT * FROM agent_artifacts WHERE id = ?').get(id) as SqliteArtifactRow | undefined;
+        const row = this.requireDb().prepare('SELECT * FROM agent_artifacts WHERE id = ?').get(id) as
+            | SqliteArtifactRow
+            | undefined;
         return row ? this.mapArtifactRow(row) : undefined;
     }
 
@@ -345,16 +361,15 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
     }
 
     async deleteArtifact(id: string): Promise<boolean> {
-        const result = this.requireDb()
-            .transaction(() => {
-                const deleteResult = this.requireDb().prepare('DELETE FROM agent_artifacts WHERE id = ?').run(id);
-                if (deleteResult.changes > 0) {
-                    this.requireDb()
-                        .prepare("DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = ?")
-                        .run(id);
-                }
-                return deleteResult;
-            })();
+        const result = this.requireDb().transaction(() => {
+            const deleteResult = this.requireDb().prepare('DELETE FROM agent_artifacts WHERE id = ?').run(id);
+            if (deleteResult.changes > 0) {
+                this.requireDb()
+                    .prepare("DELETE FROM result_feedback WHERE target_type = 'agent_artifact' AND target_id = ?")
+                    .run(id);
+            }
+            return deleteResult;
+        })();
         return result.changes > 0;
     }
 
@@ -370,7 +385,14 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
                     updated_at = excluded.updated_at
                  WHERE result_feedback.updated_at <= excluded.updated_at`
             )
-            .run(record.targetType, record.targetId, record.value, record.note ?? null, record.source, record.updatedAt);
+            .run(
+                record.targetType,
+                record.targetId,
+                record.value,
+                record.note ?? null,
+                record.source,
+                record.updatedAt
+            );
     }
 
     async upsertFeedbackBatch(records: FeedbackRecord[]): Promise<void> {
@@ -385,12 +407,18 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
                 updated_at = excluded.updated_at
              WHERE result_feedback.updated_at <= excluded.updated_at`
         );
-        this.requireDb()
-            .transaction(() => {
-                for (const record of records) {
-                    statement.run(record.targetType, record.targetId, record.value, record.note ?? null, record.source, record.updatedAt);
-                }
-            })();
+        this.requireDb().transaction(() => {
+            for (const record of records) {
+                statement.run(
+                    record.targetType,
+                    record.targetId,
+                    record.value,
+                    record.note ?? null,
+                    record.source,
+                    record.updatedAt
+                );
+            }
+        })();
     }
 
     async readFeedback(targetType: FeedbackTargetType, targetId: string): Promise<FeedbackRecord | undefined> {
@@ -414,7 +442,9 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         for (const target of targets) {
             const result = options.deletedAt
                 ? this.requireDb()
-                      .prepare('DELETE FROM result_feedback WHERE target_type = ? AND target_id = ? AND updated_at <= ?')
+                      .prepare(
+                          'DELETE FROM result_feedback WHERE target_type = ? AND target_id = ? AND updated_at <= ?'
+                      )
                       .run(target.targetType, target.targetId, options.deletedAt)
                 : this.requireDb()
                       .prepare('DELETE FROM result_feedback WHERE target_type = ? AND target_id = ?')
@@ -446,14 +476,18 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
     }
 
     async readImageShareRecord(token: string): Promise<ImageShareRecord | undefined> {
-        const row = this.requireDb().prepare('SELECT * FROM image_shares WHERE token = ?').get(token) as SqliteShareRow | undefined;
+        const row = this.requireDb().prepare('SELECT * FROM image_shares WHERE token = ?').get(token) as
+            | SqliteShareRow
+            | undefined;
         return row ? this.mapShareRow(row) : undefined;
     }
 
     async deleteExpiredImageShareRecords(nowIso: string): Promise<ImageShareRecord[]> {
         const db = this.requireDb();
         const rows = db
-            .prepare('SELECT * FROM image_shares WHERE expires_at IS NOT NULL AND expires_at < ? ORDER BY expires_at ASC, token ASC')
+            .prepare(
+                'SELECT * FROM image_shares WHERE expires_at IS NOT NULL AND expires_at < ? ORDER BY expires_at ASC, token ASC'
+            )
             .all(nowIso) as SqliteShareRow[];
         const transaction = db.transaction(() => {
             for (const row of rows) {
@@ -465,7 +499,9 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
     }
 
     async listImageShareRecords(): Promise<ImageShareRecord[]> {
-        const rows = this.requireDb().prepare('SELECT * FROM image_shares ORDER BY created_at ASC, token ASC').all() as SqliteShareRow[];
+        const rows = this.requireDb()
+            .prepare('SELECT * FROM image_shares ORDER BY created_at ASC, token ASC')
+            .all() as SqliteShareRow[];
         return rows.map((row) => this.mapShareRow(row));
     }
 
@@ -485,9 +521,9 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
     private insertArtifacts(artifacts: AgentArtifactRecord[]): void {
         artifacts.forEach((artifact) => {
             this.assertArtifactCanBeInserted(artifact);
-                this.requireDb()
-                    .prepare(
-                        `INSERT INTO agent_artifacts
+            this.requireDb()
+                .prepare(
+                    `INSERT INTO agent_artifacts
                         (id, request_id, filename, filepath, content_url, metadata_url, output_format, mime_type, size_bytes, width, height, model, prompt_hash, created_at)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(id) DO NOTHING`
@@ -698,7 +734,9 @@ function runSqliteMigrations(db: Database.Database): void {
     try {
         db.exec(SQLITE_MIGRATION_TABLE_SCHEMA);
         ensureSqliteMigrationChecksumColumn(db);
-        const appliedRows = db.prepare('SELECT id, checksum FROM state_schema_migrations').all() as SqliteMigrationRow[];
+        const appliedRows = db
+            .prepare('SELECT id, checksum FROM state_schema_migrations')
+            .all() as SqliteMigrationRow[];
         const applied = new Map(appliedRows.map((row) => [row.id, row.checksum ?? null]));
         for (const migration of SQLITE_MIGRATIONS) {
             const checksum = migrationChecksum(migration.sql);

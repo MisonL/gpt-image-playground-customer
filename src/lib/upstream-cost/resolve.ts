@@ -17,7 +17,8 @@ function detectKnownProvider(apiBaseUrl: string): UpstreamCostProvider {
     let upstreamProvider: UpstreamCostProvider = 'unknown';
     try {
         const parsed = new URL(apiBaseUrl);
-        const pathIsOpenAiApiRoot = parsed.pathname === '/' || parsed.pathname === '/v1' || parsed.pathname.startsWith('/v1/');
+        const pathIsOpenAiApiRoot =
+            parsed.pathname === '/' || parsed.pathname === '/v1' || parsed.pathname.startsWith('/v1/');
         if (parsed.protocol === 'https:' && parsed.hostname === 'api.openai.com' && pathIsOpenAiApiRoot) {
             upstreamProvider = 'openai';
         }

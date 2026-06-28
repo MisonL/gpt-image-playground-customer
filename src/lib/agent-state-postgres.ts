@@ -1,5 +1,4 @@
-import crypto from 'crypto';
-import { Pool, type PoolClient } from 'pg';
+import type { AgentImageResponse } from './agent-api-contracts';
 import {
     discardArtifactFiles,
     isArtifactFilepathAllowed,
@@ -22,7 +21,6 @@ import {
     type CompleteAgentRequestInput,
     type FailAgentRequestInput
 } from './agent-state-store';
-import type { AgentImageResponse } from './agent-api-contracts';
 import type { AgentErrorBody } from './api-error-response';
 import type {
     FeedbackDeleteOptions,
@@ -34,6 +32,8 @@ import type {
     FeedbackValue
 } from './feedback-store';
 import type { ImageShareRecord, ImageShareStateStore } from './share-store';
+import crypto from 'crypto';
+import { Pool, type PoolClient } from 'pg';
 
 type PostgresRequestRow = {
     request_id: string;
@@ -141,12 +141,7 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
             if (expiredResult.rowCount && expiredResult.rowCount > 0) {
                 await client.query(
                     'INSERT INTO agent_recovery_events (id, event_type, details_json, created_at) VALUES ($1, $2, $3, $4)',
-                    [
-                        crypto.randomUUID(),
-                        'expired_running_requests',
-                        { count: expiredResult.rowCount },
-                        nowIso
-                    ]
+                    [crypto.randomUUID(), 'expired_running_requests', { count: expiredResult.rowCount }, nowIso]
                 );
             }
             await client.query('COMMIT');
@@ -175,13 +170,18 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
             const artifactRows: Array<{ id: string; filepath: string | null }> =
                 requestIds.length > 0
                     ? (
-                          await client.query('SELECT id, filepath FROM agent_artifacts WHERE request_id = ANY($1)', [requestIds])
+                          await client.query('SELECT id, filepath FROM agent_artifacts WHERE request_id = ANY($1)', [
+                              requestIds
+                          ])
                       ).rows
                     : [];
             const artifactIds = artifactRows.map((row) => row.id);
             const artifactFilepaths = artifactRows
                 .map((row) => row.filepath)
-                .filter((filepath): filepath is string => typeof filepath === 'string' && isArtifactFilepathAllowed(filepath));
+                .filter(
+                    (filepath): filepath is string =>
+                        typeof filepath === 'string' && isArtifactFilepathAllowed(filepath)
+                );
             movedFiles = await moveArtifactFilesForDeletion([...new Set(artifactFilepaths)]);
             if (requestIds.length > 0) {
                 if (artifactIds.length > 0) {
@@ -283,7 +283,9 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
     }
 
     async getRequestByIdempotencyKey(idempotencyKey: string): Promise<AgentRequestRecord | undefined> {
-        const result = await this.pool.query('SELECT * FROM agent_requests WHERE idempotency_key = $1', [idempotencyKey]);
+        const result = await this.pool.query('SELECT * FROM agent_requests WHERE idempotency_key = $1', [
+            idempotencyKey
+        ]);
         const row = result.rows[0] as PostgresRequestRow | undefined;
         return row ? this.mapRequestRow(row) : undefined;
     }
@@ -295,9 +297,10 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
     }
 
     async listArtifactsForRequest(requestId: string): Promise<AgentArtifactRecord[]> {
-        const result = await this.pool.query('SELECT * FROM agent_artifacts WHERE request_id = $1 ORDER BY created_at ASC', [
-            requestId
-        ]);
+        const result = await this.pool.query(
+            'SELECT * FROM agent_artifacts WHERE request_id = $1 ORDER BY created_at ASC',
+            [requestId]
+        );
         return (result.rows as PostgresArtifactRow[]).map((row) => this.mapArtifactRow(row));
     }
 
@@ -351,7 +354,14 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
                         source = EXCLUDED.source,
                         updated_at = EXCLUDED.updated_at
                      WHERE result_feedback.updated_at <= EXCLUDED.updated_at`,
-                    [record.targetType, record.targetId, record.value, record.note ?? null, record.source, record.updatedAt]
+                    [
+                        record.targetType,
+                        record.targetId,
+                        record.value,
+                        record.note ?? null,
+                        record.source,
+                        record.updatedAt
+                    ]
                 );
             }
             await client.query('COMMIT');
@@ -364,10 +374,10 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
     }
 
     async readFeedback(targetType: FeedbackTargetType, targetId: string): Promise<FeedbackRecord | undefined> {
-        const result = await this.pool.query('SELECT * FROM result_feedback WHERE target_type = $1 AND target_id = $2', [
-            targetType,
-            targetId
-        ]);
+        const result = await this.pool.query(
+            'SELECT * FROM result_feedback WHERE target_type = $1 AND target_id = $2',
+            [targetType, targetId]
+        );
         const row = result.rows[0] as PostgresFeedbackRow | undefined;
         return row ? this.mapFeedbackRow(row) : undefined;
     }
@@ -460,9 +470,10 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
         const nowIso = isoDate(now);
         const lockedUntil = isoDate(addMilliseconds(now, input.leaseMs));
         const expiresAt = isoDate(addSeconds(now, input.ttlSeconds));
-        const existingResult = await client.query('SELECT * FROM agent_requests WHERE idempotency_key = $1 FOR UPDATE', [
-            input.idempotencyKey
-        ]);
+        const existingResult = await client.query(
+            'SELECT * FROM agent_requests WHERE idempotency_key = $1 FOR UPDATE',
+            [input.idempotencyKey]
+        );
         const existing = existingResult.rows[0] as PostgresRequestRow | undefined;
 
         if (!existing) {
@@ -488,13 +499,22 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
             if (insertResult.rowCount && insertResult.rowCount > 0) {
                 return { type: 'acquired', record: this.mapRequestRow(insertResult.rows[0] as PostgresRequestRow) };
             }
-            const conflicted = await client.query('SELECT * FROM agent_requests WHERE idempotency_key = $1 FOR UPDATE', [
-                input.idempotencyKey
-            ]);
+            const conflicted = await client.query(
+                'SELECT * FROM agent_requests WHERE idempotency_key = $1 FOR UPDATE',
+                [input.idempotencyKey]
+            );
             if (!conflicted.rows[0]) {
                 throw new Error('idempotency conflict row disappeared during acquisition');
             }
-            return this.beginFromExistingRow(conflicted.rows[0] as PostgresRequestRow, input, now, nowIso, lockedUntil, expiresAt, client);
+            return this.beginFromExistingRow(
+                conflicted.rows[0] as PostgresRequestRow,
+                input,
+                now,
+                nowIso,
+                lockedUntil,
+                expiresAt,
+                client
+            );
         }
 
         return this.beginFromExistingRow(existing, input, now, nowIso, lockedUntil, expiresAt, client);
@@ -520,7 +540,11 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
             return { type: 'failed', record, error: existing.error_json as AgentErrorBody };
         }
         const lockedUntilIso = toIso(existing.locked_until);
-        if ((existing.status === 'running' || existing.status === 'pending') && lockedUntilIso && lockedUntilIso > nowIso) {
+        if (
+            (existing.status === 'running' || existing.status === 'pending') &&
+            lockedUntilIso &&
+            lockedUntilIso > nowIso
+        ) {
             return { type: 'in_progress', record, retryAfterSeconds: computeRetryAfterSeconds(lockedUntilIso, now) };
         }
 
@@ -528,7 +552,9 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
             "UPDATE agent_requests SET status = 'running', locked_until = $1, updated_at = $2, expires_at = $3 WHERE idempotency_key = $4",
             [lockedUntil, nowIso, expiresAt, input.idempotencyKey]
         );
-        const updated = await client.query('SELECT * FROM agent_requests WHERE idempotency_key = $1', [input.idempotencyKey]);
+        const updated = await client.query('SELECT * FROM agent_requests WHERE idempotency_key = $1', [
+            input.idempotencyKey
+        ]);
         return { type: 'acquired', record: this.mapRequestRow(updated.rows[0] as PostgresRequestRow) };
     }
 
@@ -630,10 +656,14 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
         }
     }
 
-    private async listArtifactsForRequestInTransaction(client: PoolClient, requestId: string): Promise<AgentArtifactRecord[]> {
-        const result = await client.query('SELECT * FROM agent_artifacts WHERE request_id = $1 ORDER BY created_at ASC', [
-            requestId
-        ]);
+    private async listArtifactsForRequestInTransaction(
+        client: PoolClient,
+        requestId: string
+    ): Promise<AgentArtifactRecord[]> {
+        const result = await client.query(
+            'SELECT * FROM agent_artifacts WHERE request_id = $1 ORDER BY created_at ASC',
+            [requestId]
+        );
         return (result.rows as PostgresArtifactRow[]).map((row) => this.mapArtifactRow(row));
     }
 }

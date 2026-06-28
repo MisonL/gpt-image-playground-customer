@@ -120,7 +120,10 @@ async function readBoundedResponseBody(response: Response): Promise<Buffer> {
     } finally {
         reader.releaseLock();
     }
-    return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), totalBytes);
+    return Buffer.concat(
+        chunks.map((chunk) => Buffer.from(chunk)),
+        totalBytes
+    );
 }
 
 export function assertRemoteImageResultSafety(apiBaseUrl: string | undefined, imageUrl: string): void {

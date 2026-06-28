@@ -20,6 +20,7 @@ import {
 } from '@/lib/api-error-guidance';
 import { formatBatchPromptHistory, readBatchPromptLines } from '@/lib/batch-prompts';
 import { db, type ImageRecord } from '@/lib/db';
+import { hasReachedEditSourceImageLimit } from '@/lib/edit-source-limits';
 import {
     advanceGenerationBatchProgress,
     buildGenerationActivityItems,
@@ -77,7 +78,6 @@ import {
     shouldBlockExplicitResponsesRequest,
     type ImageUpstreamFormBackend
 } from '@/lib/image-upstream-form';
-import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import {
     IMAGE_UPSTREAM_PROFILES,
     summarizeImageUpstreamProfile,
@@ -85,13 +85,12 @@ import {
     type ImageUpstreamProfileId,
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
+import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
 import { resolveMobilePrimaryDisabledReason } from '@/lib/mobile-primary-action-state';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
 import { sha256Hex } from '@/lib/sha256';
 import { createImageShareFromBlob } from '@/lib/share-client';
-import { createZipBlob } from '@/lib/zip-export';
-import { hasReachedEditSourceImageLimit } from '@/lib/edit-source-limits';
 import { getPresetDimensions, validateGptImage2Size, validatePositiveIntegerImageSize } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
@@ -110,6 +109,7 @@ import {
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { formatEstimatedCredits } from '@/lib/workbench-cost-label';
+import { createZipBlob } from '@/lib/zip-export';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ArrowUp, Flower2, HelpCircle, Loader2, Lock, Pause, PenLine, Settings2, Activity, X } from 'lucide-react';
 import * as React from 'react';
@@ -141,7 +141,13 @@ const resultFeedbackDeleteMaxAttempts = 3;
 const resultFeedbackDeleteRetryDelaysMs = [1000, 3000] as const;
 const resultFeedbackRequestTimeoutMs = 10_000;
 
-type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, PartialImagesCount, boolean];
+type ApiCallRetryArgs = [
+    GenerationFormData | EditingFormData,
+    RequestMode,
+    ImageStreamMode,
+    PartialImagesCount,
+    boolean
+];
 type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
 type FeedbackSyncInput = HistoryFeedbackSyncInput;
 type FeedbackSyncPayload = HistoryFeedbackSyncPayload;
@@ -479,8 +485,9 @@ export default function HomePage() {
     const completedResultFeedbackSyncKeysRef = React.useRef<Set<string>>(new Set());
     const scheduledResultFeedbackDeleteKeysRef = React.useRef<Set<string>>(new Set());
     const scheduledResultFeedbackDeletePayloadsRef = React.useRef<Map<string, HistoryFeedbackDeletePayload>>(new Map());
-    const scheduleResultFeedbackDeletePayloadRef =
-        React.useRef<((payload: HistoryFeedbackDeletePayload) => void) | null>(null);
+    const scheduleResultFeedbackDeletePayloadRef = React.useRef<
+        ((payload: HistoryFeedbackDeletePayload) => void) | null
+    >(null);
     const resultFeedbackRetryTimersRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
     const resultFeedbackSyncAbortControllersRef = React.useRef<Map<string, AbortController>>(new Map());
     const resultFeedbackDeleteAbortControllersRef = React.useRef<Map<string, AbortController>>(new Map());
@@ -598,7 +605,9 @@ export default function HomePage() {
     const defaultStreamingStrategy = runtimeCapabilities?.streaming?.defaultStrategy ?? 'auto';
     const activeUpstreamProfileSummary = summarizeImageUpstreamProfile({
         requestApiBaseUrl: apiSettings.baseUrl,
-        serverProfileIds: runtimeCapabilities?.upstreamProfile ? [runtimeCapabilities.upstreamProfile.serverProfile] : []
+        serverProfileIds: runtimeCapabilities?.upstreamProfile
+            ? [runtimeCapabilities.upstreamProfile.serverProfile]
+            : []
     });
     const hasRequestApiBaseUrl = apiSettings.baseUrl.trim().length > 0;
     const activeUpstreamProfile = hasRequestApiBaseUrl
@@ -723,7 +732,8 @@ export default function HomePage() {
                 setGenBackground('auto');
             }
             setGenN((current) =>
-                current[0] < activeUpstreamProfile.generateCount.min || current[0] > activeUpstreamProfile.generateCount.max
+                current[0] < activeUpstreamProfile.generateCount.min ||
+                current[0] > activeUpstreamProfile.generateCount.max
                     ? [
                           Math.min(
                               activeUpstreamProfile.generateCount.max,
@@ -1684,8 +1694,9 @@ export default function HomePage() {
                     return;
                 }
             }
-            const allowRuntimeResponsesImageBackend =
-                isResponsesImageBackendRuntimeEnabled(latestRuntimeCapabilities ?? {});
+            const allowRuntimeResponsesImageBackend = isResponsesImageBackendRuntimeEnabled(
+                latestRuntimeCapabilities ?? {}
+            );
             if (
                 shouldBlockExplicitResponsesRequest({
                     imageBackend: formData.image_backend,
@@ -1705,8 +1716,7 @@ export default function HomePage() {
                 shouldBlockResponsesRequestWithoutModel({
                     imageBackend: runtimeFormData.image_backend,
                     responsesModel: runtimeFormData.responsesModel,
-                    hasDefaultResponsesModel:
-                        latestRuntimeCapabilities?.responsesImageBackend?.hasDefaultModel === true
+                    hasDefaultResponsesModel: latestRuntimeCapabilities?.responsesImageBackend?.hasDefaultModel === true
                 })
             ) {
                 throw new ApiRequestError(t('upstream.responsesModelRequired'));
@@ -2293,7 +2303,10 @@ export default function HomePage() {
                 window.localStorage.removeItem(resultFeedbackSyncQueueLocalStorageKey);
                 return;
             }
-            window.localStorage.setItem(resultFeedbackSyncQueueLocalStorageKey, serializeHistoryFeedbackSyncQueue(queue));
+            window.localStorage.setItem(
+                resultFeedbackSyncQueueLocalStorageKey,
+                serializeHistoryFeedbackSyncQueue(queue)
+            );
         } catch (error) {
             console.error('写入结果反馈补偿队列失败。', error);
         }
@@ -2334,12 +2347,15 @@ export default function HomePage() {
         scheduledResultFeedbackSyncPayloadsRef.current.delete(key);
     }, []);
 
-    const clearOverlappingResultFeedbackSyncs = React.useCallback((targets: HistoryFeedbackTarget[]) => {
-        scheduledResultFeedbackSyncPayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
-            if (!haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, targets)) return;
-            clearScheduledResultFeedbackSync(scheduledKey);
-        });
-    }, [clearScheduledResultFeedbackSync]);
+    const clearOverlappingResultFeedbackSyncs = React.useCallback(
+        (targets: HistoryFeedbackTarget[]) => {
+            scheduledResultFeedbackSyncPayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
+                if (!haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, targets)) return;
+                clearScheduledResultFeedbackSync(scheduledKey);
+            });
+        },
+        [clearScheduledResultFeedbackSync]
+    );
 
     const clearResultFeedbackSyncsForDelete = React.useCallback(
         (payload: HistoryFeedbackDeletePayload) => {
@@ -2367,19 +2383,23 @@ export default function HomePage() {
         scheduledResultFeedbackDeletePayloadsRef.current.delete(deleteKey);
     }, []);
 
-    const clearResultFeedbackDeletesForSync = React.useCallback((payload: FeedbackSyncPayload, clearLegacyDeletes: boolean) => {
-        const remainingPayloads: HistoryFeedbackDeletePayload[] = [];
-        scheduledResultFeedbackDeletePayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
-            const shouldClear =
-                scheduledPayload.deletedAt === undefined
-                    ? clearLegacyDeletes && haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, payload.targets)
-                    : shouldFeedbackSyncClearDelete(payload, scheduledPayload);
-            if (!shouldClear) return;
-            remainingPayloads.push(...removeHistoryFeedbackDeleteQueueTargets([scheduledPayload], payload.targets));
-            clearScheduledResultFeedbackDelete(scheduledKey);
-        });
-        return remainingPayloads;
-    }, [clearScheduledResultFeedbackDelete]);
+    const clearResultFeedbackDeletesForSync = React.useCallback(
+        (payload: FeedbackSyncPayload, clearLegacyDeletes: boolean) => {
+            const remainingPayloads: HistoryFeedbackDeletePayload[] = [];
+            scheduledResultFeedbackDeletePayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
+                const shouldClear =
+                    scheduledPayload.deletedAt === undefined
+                        ? clearLegacyDeletes &&
+                          haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, payload.targets)
+                        : shouldFeedbackSyncClearDelete(payload, scheduledPayload);
+                if (!shouldClear) return;
+                remainingPayloads.push(...removeHistoryFeedbackDeleteQueueTargets([scheduledPayload], payload.targets));
+                clearScheduledResultFeedbackDelete(scheduledKey);
+            });
+            return remainingPayloads;
+        },
+        [clearScheduledResultFeedbackDelete]
+    );
 
     const readQueuedResultFeedbackDeletes = React.useCallback((): HistoryFeedbackDeletePayload[] => {
         try {
@@ -2396,7 +2416,10 @@ export default function HomePage() {
                 window.localStorage.removeItem(resultFeedbackDeleteQueueLocalStorageKey);
                 return;
             }
-            window.localStorage.setItem(resultFeedbackDeleteQueueLocalStorageKey, serializeHistoryFeedbackDeleteQueue(queue));
+            window.localStorage.setItem(
+                resultFeedbackDeleteQueueLocalStorageKey,
+                serializeHistoryFeedbackDeleteQueue(queue)
+            );
         } catch (error) {
             console.error('写入结果反馈删除补偿队列失败。', error);
         }
@@ -2424,32 +2447,29 @@ export default function HomePage() {
         [readQueuedResultFeedbackDeletes, writeQueuedResultFeedbackDeletes]
     );
 
-    const syncResultFeedback = React.useCallback(
-        async (payload: FeedbackSyncPayload, signal: AbortSignal) => {
-            const hasNoteInput = Object.prototype.hasOwnProperty.call(payload, 'note');
-            const requestSignal = createFeedbackRequestSignal(signal);
-            try {
-                const response = await fetch('/api/feedback', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal: requestSignal.signal,
-                    body: JSON.stringify({
-                        targets: payload.targets,
-                        value: payload.value,
-                        updatedAt: new Date(payload.updatedAt).toISOString(),
-                        ...(hasNoteInput ? { note: payload.note ?? '' } : {})
-                    })
-                });
-                if (!response.ok) {
-                    const text = await response.text().catch(() => '');
-                    throw new Error(text || `反馈同步失败，状态码 ${response.status}`);
-                }
-            } finally {
-                requestSignal.cleanup();
+    const syncResultFeedback = React.useCallback(async (payload: FeedbackSyncPayload, signal: AbortSignal) => {
+        const hasNoteInput = Object.prototype.hasOwnProperty.call(payload, 'note');
+        const requestSignal = createFeedbackRequestSignal(signal);
+        try {
+            const response = await fetch('/api/feedback', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                signal: requestSignal.signal,
+                body: JSON.stringify({
+                    targets: payload.targets,
+                    value: payload.value,
+                    updatedAt: new Date(payload.updatedAt).toISOString(),
+                    ...(hasNoteInput ? { note: payload.note ?? '' } : {})
+                })
+            });
+            if (!response.ok) {
+                const text = await response.text().catch(() => '');
+                throw new Error(text || `反馈同步失败，状态码 ${response.status}`);
             }
-        },
-        []
-    );
+        } finally {
+            requestSignal.cleanup();
+        }
+    }, []);
 
     const scheduleResultFeedbackSyncPayload = React.useCallback(
         (payload: FeedbackSyncPayload, options: FeedbackSyncScheduleOptions = {}) => {
@@ -2460,7 +2480,9 @@ export default function HomePage() {
             const clearLegacyDeletes = options.pruneQueuedTargets === true;
             const isBlockedByDelete = (deletePayload: HistoryFeedbackDeletePayload) => {
                 if (deletePayload.deletedAt === undefined) {
-                    return !clearLegacyDeletes && haveHistoryFeedbackTargetOverlap(deletePayload.targets, payload.targets);
+                    return (
+                        !clearLegacyDeletes && haveHistoryFeedbackTargetOverlap(deletePayload.targets, payload.targets)
+                    );
                 }
                 return shouldFeedbackDeleteClearSync(deletePayload, payload);
             };
@@ -2512,7 +2534,9 @@ export default function HomePage() {
                     upsertQueuedResultFeedbackSync(payload);
                     if (attempt < resultFeedbackSyncMaxAttempts) {
                         const delayMs =
-                            resultFeedbackSyncRetryDelaysMs[Math.min(attempt - 1, resultFeedbackSyncRetryDelaysMs.length - 1)];
+                            resultFeedbackSyncRetryDelaysMs[
+                                Math.min(attempt - 1, resultFeedbackSyncRetryDelaysMs.length - 1)
+                            ];
                         console.warn('结果反馈同步到服务端失败，将重试。', {
                             attempt,
                             nextAttempt: attempt + 1,
@@ -2564,30 +2588,35 @@ export default function HomePage() {
         [scheduleResultFeedbackSyncPayload]
     );
 
-    const deleteResultFeedbackPayload = React.useCallback(async (payload: HistoryFeedbackDeletePayload, signal: AbortSignal) => {
-        for (let index = 0; index < payload.targets.length; index += feedbackApiTargetBatchSize) {
-            const chunk = payload.targets.slice(index, index + feedbackApiTargetBatchSize);
-            if (chunk.length === 0) continue;
-            const requestSignal = createFeedbackRequestSignal(signal);
-            try {
-                const response = await fetch('/api/feedback', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal: requestSignal.signal,
-                    body: JSON.stringify({
-                        targets: chunk,
-                        ...(payload.deletedAt !== undefined ? { deletedAt: new Date(payload.deletedAt).toISOString() } : {})
-                    })
-                });
-                if (!response.ok) {
-                    const text = await response.text().catch(() => '');
-                    throw new Error(text || `反馈删除同步失败，状态码 ${response.status}`);
+    const deleteResultFeedbackPayload = React.useCallback(
+        async (payload: HistoryFeedbackDeletePayload, signal: AbortSignal) => {
+            for (let index = 0; index < payload.targets.length; index += feedbackApiTargetBatchSize) {
+                const chunk = payload.targets.slice(index, index + feedbackApiTargetBatchSize);
+                if (chunk.length === 0) continue;
+                const requestSignal = createFeedbackRequestSignal(signal);
+                try {
+                    const response = await fetch('/api/feedback', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        signal: requestSignal.signal,
+                        body: JSON.stringify({
+                            targets: chunk,
+                            ...(payload.deletedAt !== undefined
+                                ? { deletedAt: new Date(payload.deletedAt).toISOString() }
+                                : {})
+                        })
+                    });
+                    if (!response.ok) {
+                        const text = await response.text().catch(() => '');
+                        throw new Error(text || `反馈删除同步失败，状态码 ${response.status}`);
+                    }
+                } finally {
+                    requestSignal.cleanup();
                 }
-            } finally {
-                requestSignal.cleanup();
             }
-        }
-    }, []);
+        },
+        []
+    );
 
     const scheduleResultFeedbackDeletePayload = React.useCallback(
         (payload: HistoryFeedbackDeletePayload) => {
@@ -2774,33 +2803,36 @@ export default function HomePage() {
         [history, scheduleResultFeedbackSync]
     );
 
-    const handleUpdateResultFeedbackNote = React.useCallback((item: HistoryMetadata, note: string) => {
-        if (!item.resultFeedback) return;
-        const resultFeedbackValue = item.resultFeedback.value;
-        const updatedAt = Date.now();
-        setHistory((current) =>
-            updateHistoryResultFeedback({
-                history: current,
-                timestamp: item.timestamp,
-                value: resultFeedbackValue,
-                updatedAt,
-                note
-            })
-        );
-        setActiveResultSource((current) =>
-            current?.timestamp === item.timestamp
-                ? {
-                      ...current,
-                      resultFeedback: {
-                          value: resultFeedbackValue,
-                          updatedAt,
-                          ...(note ? { note } : {})
+    const handleUpdateResultFeedbackNote = React.useCallback(
+        (item: HistoryMetadata, note: string) => {
+            if (!item.resultFeedback) return;
+            const resultFeedbackValue = item.resultFeedback.value;
+            const updatedAt = Date.now();
+            setHistory((current) =>
+                updateHistoryResultFeedback({
+                    history: current,
+                    timestamp: item.timestamp,
+                    value: resultFeedbackValue,
+                    updatedAt,
+                    note
+                })
+            );
+            setActiveResultSource((current) =>
+                current?.timestamp === item.timestamp
+                    ? {
+                          ...current,
+                          resultFeedback: {
+                              value: resultFeedbackValue,
+                              updatedAt,
+                              ...(note ? { note } : {})
+                          }
                       }
-                  }
-                : current
-        );
-        scheduleResultFeedbackSync({ item, value: resultFeedbackValue, updatedAt, ...(note ? { note } : {}) });
-    }, [scheduleResultFeedbackSync]);
+                    : current
+            );
+            scheduleResultFeedbackSync({ item, value: resultFeedbackValue, updatedAt, ...(note ? { note } : {}) });
+        },
+        [scheduleResultFeedbackSync]
+    );
 
     const handleDeleteInspiration = React.useCallback((id: number) => {
         setInspirations((current) => current.filter((item) => item.id !== id));
@@ -2913,14 +2945,17 @@ export default function HomePage() {
         [createErrorNotice, resolveImageBlob, t]
     );
 
-    const handleOpenShareImage = React.useCallback((filename: string, storageMode?: HistoryMetadata['storageModeUsed']) => {
-        setShareTargetFilename(filename);
-        setShareTargetStorageMode(storageMode);
-        setShareUrl(null);
-        setShareError(null);
-        setShareDialogSessionId((current) => current + 1);
-        setShareDialogOpen(true);
-    }, []);
+    const handleOpenShareImage = React.useCallback(
+        (filename: string, storageMode?: HistoryMetadata['storageModeUsed']) => {
+            setShareTargetFilename(filename);
+            setShareTargetStorageMode(storageMode);
+            setShareUrl(null);
+            setShareError(null);
+            setShareDialogSessionId((current) => current + 1);
+            setShareDialogOpen(true);
+        },
+        []
+    );
 
     const handleCreateShare = React.useCallback(
         async (values: ShareDialogValues) => {
@@ -3084,7 +3119,12 @@ export default function HomePage() {
             setEditN([imageCount]);
             restoredFields.push(t('reuse.fieldCount'));
         }
-        restoredFields.push(t('reuse.fieldModel'), t('reuse.fieldQuality'), t('reuse.fieldModeration'), t('reuse.fieldRoute'));
+        restoredFields.push(
+            t('reuse.fieldModel'),
+            t('reuse.fieldQuality'),
+            t('reuse.fieldModeration'),
+            t('reuse.fieldRoute')
+        );
         if (sizeSelection.restored) {
             restoredFields.push(t('reuse.fieldSize'));
         }
@@ -3651,7 +3691,7 @@ export default function HomePage() {
                                         {getStreamingStatusLabel(streamMode, t)}
                                     </span>
                                     {activeParallelBatchVisible && (
-                                        <span className='border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] text-[oklch(0.38_0.075_148)] rounded-full border px-2 py-1'>
+                                        <span className='rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-[oklch(0.38_0.075_148)]'>
                                             {t('streaming.parallelBatchEnabled')}
                                         </span>
                                     )}

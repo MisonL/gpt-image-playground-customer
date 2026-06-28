@@ -1,5 +1,6 @@
 import { PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH } from './agent-api-contracts';
 import { appLogger } from './app-logger';
+import type { ChannelRequestMode } from './channel-request-mode';
 import {
     type ChannelCredential,
     describeChannelFailure,
@@ -7,7 +8,6 @@ import {
     isChannelRequestModeFailure,
     isCredentialFailure
 } from './channel-router';
-import type { ChannelRequestMode } from './channel-request-mode';
 import { RequestValidationError } from './image-request-utils';
 import type { ImageGenerationBackend } from './image-upstream-strategy';
 import { getServerChannelState } from './server-channel-router';

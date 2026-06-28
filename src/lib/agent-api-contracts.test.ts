@@ -471,10 +471,7 @@ describe('buildAgentCapabilities', () => {
             source_header: 'Idempotency-Key',
             max_length: PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
         });
-        assert.equal(
-            capabilities.agent_streaming.page_sse.agent_usage,
-            AGENT_PAGE_SSE_AGENT_USAGE
-        );
+        assert.equal(capabilities.agent_streaming.page_sse.agent_usage, AGENT_PAGE_SSE_AGENT_USAGE);
         assert.deepEqual(capabilities.upstream_request_headers.default, {
             user_agent_effective: 'gpt-image-playground/2.1.0',
             has_extra_headers: false,
@@ -920,7 +917,8 @@ describe('buildAgentCapabilities', () => {
             'responses-sse'
         ]);
         assert.equal(
-            document.components.schemas.AgentImageResponseExecution.properties.channel_request_mode_fallback_applied.type,
+            document.components.schemas.AgentImageResponseExecution.properties.channel_request_mode_fallback_applied
+                .type,
             'boolean'
         );
         assert.equal(
@@ -928,7 +926,9 @@ describe('buildAgentCapabilities', () => {
             '#/components/schemas/ChannelRequestModeDecision'
         );
         assert.equal(
-            document.components.schemas.ChannelRequestModeDecision.properties.requested_backend.enum.includes('images-api'),
+            document.components.schemas.ChannelRequestModeDecision.properties.requested_backend.enum.includes(
+                'images-api'
+            ),
             true
         );
         assert.ok('UpstreamRequestHeaderSummary' in document.components.schemas);
@@ -1097,10 +1097,10 @@ describe('buildAgentCapabilities', () => {
             'edit',
             'generate_or_edit'
         ]);
-        assert.deepEqual(document.components.schemas.AgentRoutingCondition.properties.max_edge.properties.operator.enum, [
-            'gt',
-            'lte'
-        ]);
+        assert.deepEqual(
+            document.components.schemas.AgentRoutingCondition.properties.max_edge.properties.operator.enum,
+            ['gt', 'lte']
+        );
         assert.equal(document.components.schemas.AgentRoutingCondition.properties.explicit_page_sse.type, 'boolean');
         assert.equal(
             document.components.schemas.AgentRoutingAction.properties.requires_new_idempotency_key_on_retry.type,
@@ -1165,8 +1165,8 @@ describe('buildAgentCapabilities', () => {
             ['auto', 'openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
         );
         assert.deepEqual(
-            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
-                .stream_modes.items.enum,
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.stream_modes.items
+                .enum,
             ['auto', 'stream', 'non_stream']
         );
         assert.equal(

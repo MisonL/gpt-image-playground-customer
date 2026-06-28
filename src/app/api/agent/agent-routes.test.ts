@@ -145,12 +145,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
-                request_modes: [
-                    'images-non-stream',
-                    'images-sse',
-                    'responses-non-stream',
-                    'responses-sse'
-                ],
+                request_modes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -219,12 +214,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
-                request_modes: [
-                    'images-non-stream',
-                    'images-sse',
-                    'responses-non-stream',
-                    'responses-sse'
-                ],
+                request_modes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -339,7 +329,9 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const first = await generateImage(agentJsonRequest('route-feedback-diagnostics-key', { prompt: 'agent route success' }));
+            const first = await generateImage(
+                agentJsonRequest('route-feedback-diagnostics-key', { prompt: 'agent route success' })
+            );
             assert.equal(first.status, 200);
             const firstBody = await first.json();
             const { ensureAgentStateStoreReady } = await import('@/lib/agent-state-runtime');
@@ -538,7 +530,8 @@ describe('Agent route integration', () => {
                 preferred_channel_request_mode: 'images-sse',
                 selected_channel_request_mode: 'images-sse',
                 fallback_applied: false,
-                no_channel_reason: '当前没有支持 images-sse 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。'
+                no_channel_reason:
+                    '当前没有支持 images-sse 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。'
             });
             assert.equal(upstreamCalls, 0);
         } finally {
@@ -2028,11 +2021,16 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-upstream-sse-key', 'agent edit stream', {}, {
-                    stream_mode: 'stream',
-                    streaming_strategy: 'openai-sse',
-                    partial_images: '2'
-                })
+                agentEditRequest(
+                    'route-edit-upstream-sse-key',
+                    'agent edit stream',
+                    {},
+                    {
+                        stream_mode: 'stream',
+                        streaming_strategy: 'openai-sse',
+                        partial_images: '2'
+                    }
+                )
             );
 
             assert.equal(response.status, 200);
@@ -2112,9 +2110,14 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-mask-alpha-key', 'agent edit mask alpha', {}, {
-                    mask: Buffer.from(PNG_BASE64, 'base64')
-                })
+                agentEditRequest(
+                    'route-edit-mask-alpha-key',
+                    'agent edit mask alpha',
+                    {},
+                    {
+                        mask: Buffer.from(PNG_BASE64, 'base64')
+                    }
+                )
             );
 
             assert.equal(response.status, 422);
@@ -2138,19 +2141,24 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-generate-only-fields-key', 'agent edit invalid fields', {}, {
-                    imageBackend: 'responses-image-generation',
-                    image_backend: 'responses-image-generation',
-                    format: 'webp',
-                    outputFormat: 'jpeg',
-                    output_format: 'jpeg',
-                    outputCompression: '80',
-                    output_compression: '80',
-                    responsesModel: 'gpt-4.1',
-                    responses_model: 'gpt-4.1',
-                    background: 'opaque',
-                    moderation: 'auto'
-                })
+                agentEditRequest(
+                    'route-edit-generate-only-fields-key',
+                    'agent edit invalid fields',
+                    {},
+                    {
+                        imageBackend: 'responses-image-generation',
+                        image_backend: 'responses-image-generation',
+                        format: 'webp',
+                        outputFormat: 'jpeg',
+                        output_format: 'jpeg',
+                        outputCompression: '80',
+                        output_compression: '80',
+                        responsesModel: 'gpt-4.1',
+                        responses_model: 'gpt-4.1',
+                        background: 'opaque',
+                        moderation: 'auto'
+                    }
+                )
             );
 
             assert.equal(response.status, 422);
@@ -2185,10 +2193,15 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-page-streaming-field-key', 'agent edit invalid page streaming field', {}, {
-                    image_streaming_strategy: 'force-sse',
-                    imageStreamingStrategy: 'force-sse'
-                })
+                agentEditRequest(
+                    'route-edit-page-streaming-field-key',
+                    'agent edit invalid page streaming field',
+                    {},
+                    {
+                        image_streaming_strategy: 'force-sse',
+                        imageStreamingStrategy: 'force-sse'
+                    }
+                )
             );
 
             assert.equal(response.status, 422);
@@ -2215,11 +2228,16 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-profile-partial-key', 'agent edit invalid profile partial', {}, {
-                    stream_mode: 'stream',
-                    streaming_strategy: 'force-sse',
-                    partial_images: '0'
-                })
+                agentEditRequest(
+                    'route-edit-profile-partial-key',
+                    'agent edit invalid profile partial',
+                    {},
+                    {
+                        stream_mode: 'stream',
+                        streaming_strategy: 'force-sse',
+                        partial_images: '0'
+                    }
+                )
             );
 
             assert.equal(response.status, 422);
@@ -2595,10 +2613,9 @@ describe('Agent route integration', () => {
             `https://public.example.test/playground/api/shares/${publicShareWithPathBody.token}/content`
         );
 
-        const publicShareContent = await getShareContent(
-            new Request(publicShareBody.direct_content_url),
-            { params: Promise.resolve({ token: publicShareBody.token }) }
-        );
+        const publicShareContent = await getShareContent(new Request(publicShareBody.direct_content_url), {
+            params: Promise.resolve({ token: publicShareBody.token })
+        });
         assert.equal(publicShareContent.status, 200);
         assert.equal(publicShareContent.headers.get('content-type'), 'image/png');
         assert.ok((await publicShareContent.arrayBuffer()).byteLength > 0);
@@ -2615,10 +2632,9 @@ describe('Agent route integration', () => {
         const protectedShareBody = await protectedShare.json();
         assert.equal(protectedShareBody.access_code_required, true);
         assert.equal(protectedShareBody.expires_at, null);
-        const protectedGet = await getShareContent(
-            new Request(protectedShareBody.direct_content_url),
-            { params: Promise.resolve({ token: protectedShareBody.token }) }
-        );
+        const protectedGet = await getShareContent(new Request(protectedShareBody.direct_content_url), {
+            params: Promise.resolve({ token: protectedShareBody.token })
+        });
         assert.equal(protectedGet.status, 401);
         assert.equal((await protectedGet.json()).code, 'share_access_code_required');
 
@@ -3062,7 +3078,10 @@ describe('Agent route integration', () => {
         assert.deepEqual(batchBody.diagnostics[0].scope.filename_matched_request_ids, ['web-diagnostics-request-2']);
         assert.equal(batchBody.diagnostics[1].matched_log_count, 1);
         assert.equal(batchBody.diagnostics_retention.storage, 'bounded_local_jsonl');
-        assert.equal(batchBody.diagnostics[0].diagnostics_retention.max_entries, batchBody.diagnostics_retention.max_entries);
+        assert.equal(
+            batchBody.diagnostics[0].diagnostics_retention.max_entries,
+            batchBody.diagnostics_retention.max_entries
+        );
     });
 
     it('returns validation errors for malformed page diagnostics batch JSON requests', async () => {

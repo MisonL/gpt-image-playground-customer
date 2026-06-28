@@ -24,7 +24,9 @@ const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/;
 
 export function readDefaultUpstreamUserAgent(env: Record<string, string | undefined> = process.env): string {
-    return normalizeHeaderValue(env.OPENAI_UPSTREAM_USER_AGENT || env.UPSTREAM_USER_AGENT || DEFAULT_PRODUCT_USER_AGENT);
+    return normalizeHeaderValue(
+        env.OPENAI_UPSTREAM_USER_AGENT || env.UPSTREAM_USER_AGENT || DEFAULT_PRODUCT_USER_AGENT
+    );
 }
 
 export function buildDefaultUpstreamHeaders(

@@ -1,7 +1,7 @@
 import { buildAgentCapabilities } from '@/lib/agent-api-contracts';
-import { parseImageProviderManifest } from '@/lib/image-upstream-provider-manifest';
-import { normalizeConfiguredUpstreamHeaders, type UpstreamRequestHeaders } from '@/lib/image-upstream-profile';
 import { RequestValidationError } from '@/lib/image-request-utils';
+import { normalizeConfiguredUpstreamHeaders, type UpstreamRequestHeaders } from '@/lib/image-upstream-profile';
+import { parseImageProviderManifest } from '@/lib/image-upstream-provider-manifest';
 import { NextResponse } from 'next/server';
 
 const CONFIGURED_MARKER = 'configured';
@@ -44,7 +44,9 @@ function readPublicChannelEnv(env: NodeJS.ProcessEnv): Record<string, string | u
     const publicEnv: Record<string, string | undefined> = {};
     for (const key of Object.keys(env)) {
         const match =
-            /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|API_KEYS|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON)$/.exec(key);
+            /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|API_KEYS|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON)$/.exec(
+                key
+            );
         if (!match) continue;
         const [, , fieldName] = match;
         publicEnv[key] = readPublicChannelEnvValue(key, fieldName, env[key]);

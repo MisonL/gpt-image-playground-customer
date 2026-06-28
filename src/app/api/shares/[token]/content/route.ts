@@ -58,7 +58,11 @@ function sanitizeHeaderFilename(filename: string): string {
     return sanitized || 'shared-image';
 }
 
-function contentDispositionFilename(record: { accessCodeRequired: boolean; sourceFilename: string; mimeType: string }): string {
+function contentDispositionFilename(record: {
+    accessCodeRequired: boolean;
+    sourceFilename: string;
+    mimeType: string;
+}): string {
     if (record.accessCodeRequired) {
         return `shared-image${mimeExtension(record.mimeType)}`;
     }

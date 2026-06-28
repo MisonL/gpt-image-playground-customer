@@ -1,8 +1,4 @@
-import {
-    DEFAULT_SHARE_EXPIRY_VALUE,
-    ShareExpiryField,
-    getShareExpiryMinutes
-} from './share-dialog';
+import { DEFAULT_SHARE_EXPIRY_VALUE, ShareExpiryField, getShareExpiryMinutes } from './share-dialog';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';

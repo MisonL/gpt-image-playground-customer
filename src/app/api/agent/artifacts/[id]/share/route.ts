@@ -1,9 +1,9 @@
-import { assertAgentAuthorized } from '@/lib/agent-auth';
 import { readAgentPublicBaseUrl } from '@/lib/agent-api-contracts';
-import { AgentApiError, agentErrorResponse, normalizeAgentError } from '@/lib/api-error-response';
+import { assertAgentAuthorized } from '@/lib/agent-auth';
 import { assertArtifactFilepathAllowed } from '@/lib/agent-file-utils';
 import { ensureAgentStateStoreReady } from '@/lib/agent-state-runtime';
 import { createRequestId } from '@/lib/agent-state-store';
+import { AgentApiError, agentErrorResponse, normalizeAgentError } from '@/lib/api-error-response';
 import { createImageShare } from '@/lib/share-store';
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
@@ -62,13 +62,21 @@ function readConfiguredDefaultExpiry(): number | null {
     const rawValue = process.env.AGENT_ARTIFACT_SHARE_DEFAULT_EXPIRES_MINUTES?.trim();
     if (!rawValue) return Math.min(DEFAULT_EXPIRES_MINUTES, readConfiguredMaxExpiry());
     if (rawValue.toLowerCase() === 'none') return null;
-    return parseConfiguredPositiveInteger(rawValue, 'AGENT_ARTIFACT_SHARE_DEFAULT_EXPIRES_MINUTES', readConfiguredMaxExpiry());
+    return parseConfiguredPositiveInteger(
+        rawValue,
+        'AGENT_ARTIFACT_SHARE_DEFAULT_EXPIRES_MINUTES',
+        readConfiguredMaxExpiry()
+    );
 }
 
 function readConfiguredMaxExpiry(): number {
     const rawValue = process.env.AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES?.trim();
     if (!rawValue) return MAX_EXPIRES_MINUTES;
-    return parseConfiguredPositiveInteger(rawValue, 'AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES', Number.MAX_SAFE_INTEGER);
+    return parseConfiguredPositiveInteger(
+        rawValue,
+        'AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES',
+        Number.MAX_SAFE_INTEGER
+    );
 }
 
 function parseConfiguredPositiveInteger(value: string, name: string, max: number): number {

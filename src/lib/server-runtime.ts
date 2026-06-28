@@ -1,10 +1,7 @@
+import type { ValidOutputFormat } from './image-request-utils';
+import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
 import crypto from 'crypto';
 import path from 'path';
-import {
-    CHINESE_POSITIVE_INTEGER_MESSAGES,
-    readPositiveIntegerFromEnv
-} from './positive-integer-config.mjs';
-import type { ValidOutputFormat } from './image-request-utils';
 
 export type FilenameClock = () => number;
 

@@ -344,9 +344,7 @@ export function ImageOutput({
             await navigator.clipboard.writeText(logScopeDiagnostics.copyText);
             setCopiedLogScopeText(logScopeDiagnostics.copyText);
             window.setTimeout(() => {
-                setCopiedLogScopeText((current) =>
-                    current === logScopeDiagnostics.copyText ? null : current
-                );
+                setCopiedLogScopeText((current) => (current === logScopeDiagnostics.copyText ? null : current));
             }, 1500);
         } catch (error) {
             console.error('复制日志诊断范围失败。', error);
@@ -759,99 +757,101 @@ export function ImageOutput({
                 )}>
                 {hasSelectedImageBatch ? (
                     <>
-                    {showCarousel && (
-                        <div className='bg-card/80 border-border flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border p-1'>
-                            <Button
-                                variant='ghost'
-                                size='icon'
-                                className={cn(
-                                    'h-11 w-11 rounded p-1 lg:h-8 lg:w-8',
-                                    viewMode === 'grid' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
-                                )}
-                                onClick={() => onViewChange('grid')}
-                                aria-label={t('output.showGrid')}>
-                                <Grid className='h-4 w-4' />
-                            </Button>
-                            {imageBatch.map((img, index) => (
+                        {showCarousel && (
+                            <div className='bg-card/80 border-border flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border p-1'>
                                 <Button
-                                    key={img.filename}
                                     variant='ghost'
                                     size='icon'
                                     className={cn(
-                                        'h-11 w-11 overflow-hidden rounded p-0.5 lg:h-8 lg:w-8',
-                                        viewMode === index
-                                            ? 'ring-ring ring-offset-background ring-2 ring-offset-1'
-                                            : 'opacity-60 hover:opacity-100'
+                                        'h-11 w-11 rounded p-1 lg:h-8 lg:w-8',
+                                        viewMode === 'grid'
+                                            ? 'bg-accent text-accent-foreground'
+                                            : 'text-muted-foreground'
                                     )}
-                                    onClick={() => onViewChange(index)}
-                                    aria-label={t('output.selectImage', { index: index + 1 })}>
-                                    <Image
-                                        src={img.path}
-                                        alt={t('output.thumbnail', { index: index + 1 })}
-                                        width={28}
-                                        height={28}
-                                        className='h-full w-full object-cover'
-                                        unoptimized
-                                    />
+                                    onClick={() => onViewChange('grid')}
+                                    aria-label={t('output.showGrid')}>
+                                    <Grid className='h-4 w-4' />
                                 </Button>
-                            ))}
-                        </div>
-                    )}
+                                {imageBatch.map((img, index) => (
+                                    <Button
+                                        key={img.filename}
+                                        variant='ghost'
+                                        size='icon'
+                                        className={cn(
+                                            'h-11 w-11 overflow-hidden rounded p-0.5 lg:h-8 lg:w-8',
+                                            viewMode === index
+                                                ? 'ring-ring ring-offset-background ring-2 ring-offset-1'
+                                                : 'opacity-60 hover:opacity-100'
+                                        )}
+                                        onClick={() => onViewChange(index)}
+                                        aria-label={t('output.selectImage', { index: index + 1 })}>
+                                        <Image
+                                            src={img.path}
+                                            alt={t('output.thumbnail', { index: index + 1 })}
+                                            width={28}
+                                            height={28}
+                                            className='h-full w-full object-cover'
+                                            unoptimized
+                                        />
+                                    </Button>
+                                ))}
+                            </div>
+                        )}
 
-                    {canOpenLogs && (
+                        {canOpenLogs && (
+                            <ResultActionButton
+                                icon={<Activity className='mr-2 h-4 w-4' />}
+                                label={t('logs.open')}
+                                onClick={() => setIsLogDialogOpen(true)}
+                            />
+                        )}
+
                         <ResultActionButton
-                            icon={<Activity className='mr-2 h-4 w-4' />}
-                            label={t('logs.open')}
-                            onClick={() => setIsLogDialogOpen(true)}
+                            icon={<Download className='mr-2 h-4 w-4' />}
+                            label={t('output.download')}
+                            onClick={handleDownloadClick}
+                            disabled={!canUseSelectedImageActions}
+                            emphasized={showCarousel && viewMode === 'grid'}
                         />
-                    )}
-
-                    <ResultActionButton
-                        icon={<Download className='mr-2 h-4 w-4' />}
-                        label={t('output.download')}
-                        onClick={handleDownloadClick}
-                        disabled={!canUseSelectedImageActions}
-                        emphasized={showCarousel && viewMode === 'grid'}
-                    />
-                    <ResultActionButton
-                        icon={<Send className='mr-2 h-4 w-4' />}
-                        label={t('output.continueEdit')}
-                        onClick={handleSendClick}
-                        disabled={!canUseSelectedImageActions}
-                        emphasized={showCarousel && viewMode === 'grid'}
-                    />
-                    <ResultActionButton
-                        icon={<RefreshCcw className='mr-2 h-4 w-4' />}
-                        label={t('output.createVariant')}
-                        onClick={onCreateVariant}
-                        disabled={isLoading || !canCreateVariant}
-                    />
-                    <ResultActionButton
-                        icon={<Copy className='mr-2 h-4 w-4' />}
-                        label={t('output.reusePrompt')}
-                        onClick={onReusePrompt}
-                        disabled={isLoading || !canReusePrompt}
-                    />
-                    <ResultActionButton
-                        icon={<GitCompare className='mr-2 h-4 w-4' />}
-                        label={t('output.compare')}
-                        onClick={handleCompareClick}
-                        disabled={!canCompareImages}
-                        active={isCompareView}
-                    />
-                    <ResultActionButton
-                        icon={<Share2 className='mr-2 h-4 w-4' />}
-                        label={t('output.share')}
-                        onClick={handleShareClick}
-                        disabled={!canUseSelectedImageActions}
-                        emphasized={showCarousel && viewMode === 'grid'}
-                    />
-                    <ResultActionButton
-                        icon={<MoreHorizontal className='h-4 w-4' />}
-                        label={t('output.more')}
-                        disabled
-                        iconOnly
-                    />
+                        <ResultActionButton
+                            icon={<Send className='mr-2 h-4 w-4' />}
+                            label={t('output.continueEdit')}
+                            onClick={handleSendClick}
+                            disabled={!canUseSelectedImageActions}
+                            emphasized={showCarousel && viewMode === 'grid'}
+                        />
+                        <ResultActionButton
+                            icon={<RefreshCcw className='mr-2 h-4 w-4' />}
+                            label={t('output.createVariant')}
+                            onClick={onCreateVariant}
+                            disabled={isLoading || !canCreateVariant}
+                        />
+                        <ResultActionButton
+                            icon={<Copy className='mr-2 h-4 w-4' />}
+                            label={t('output.reusePrompt')}
+                            onClick={onReusePrompt}
+                            disabled={isLoading || !canReusePrompt}
+                        />
+                        <ResultActionButton
+                            icon={<GitCompare className='mr-2 h-4 w-4' />}
+                            label={t('output.compare')}
+                            onClick={handleCompareClick}
+                            disabled={!canCompareImages}
+                            active={isCompareView}
+                        />
+                        <ResultActionButton
+                            icon={<Share2 className='mr-2 h-4 w-4' />}
+                            label={t('output.share')}
+                            onClick={handleShareClick}
+                            disabled={!canUseSelectedImageActions}
+                            emphasized={showCarousel && viewMode === 'grid'}
+                        />
+                        <ResultActionButton
+                            icon={<MoreHorizontal className='h-4 w-4' />}
+                            label={t('output.more')}
+                            disabled
+                            iconOnly
+                        />
                     </>
                 ) : (
                     <>

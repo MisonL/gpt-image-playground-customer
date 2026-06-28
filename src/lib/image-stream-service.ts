@@ -1,12 +1,12 @@
-import { appLogger } from './app-logger';
 import { writeFileAtomic } from './agent-file-utils';
+import { appLogger } from './app-logger';
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
+import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
 import { readImageStreamDataIntervalTimeoutMs } from './openai-image-transport';
 import { createBatchId, createImageFilename, outputDir } from './server-runtime';
 import { withStreamDataIntervalTimeout } from './stream-data-interval-timeout';
-import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import type { ActualCostDetails } from './upstream-cost/types';
 import type OpenAI from 'openai';
 import path from 'path';
@@ -237,12 +237,7 @@ async function emitCompletedImage(
     const filename = createImageFilename(runtime.batchId, currentIndex, runtime.options.outputFormat);
     await persistStreamedImage({ options: runtime.options, filename, b64Json });
 
-    const imageData = createImageResult(
-        filename,
-        b64Json,
-        runtime.options.outputFormat,
-        runtime.options.storageMode
-    );
+    const imageData = createImageResult(filename, b64Json, runtime.options.outputFormat, runtime.options.storageMode);
     runtime.state.completedImages.push(imageData);
 
     const completedEvent: StreamingEvent = {
@@ -280,10 +275,7 @@ async function emitNormalizedEvent(
 }
 
 async function consumeUpstreamStream(runtime: StreamRuntime): Promise<boolean> {
-    const stream = withStreamDataIntervalTimeout(
-        runtime.options.stream,
-        readImageStreamDataIntervalTimeoutMs()
-    );
+    const stream = withStreamDataIntervalTimeout(runtime.options.stream, readImageStreamDataIntervalTimeoutMs());
     for await (const event of stream) {
         const diagnostics = normalizeUpstreamImageStreamEventWithDiagnostics(event);
         if (diagnostics.providerDialect === 'sdk_parsed_fallback' && !runtime.state.streamingDegraded) {

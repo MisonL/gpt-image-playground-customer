@@ -1,6 +1,6 @@
-import type OpenAI from 'openai';
 import { mergeUpstreamHeadersWithFixed, type UpstreamRequestHeaders } from './image-upstream-profile';
 import { readImageUpstreamTimeoutMs } from './openai-image-transport';
+import type OpenAI from 'openai';
 
 export class ImagesApiStreamError extends Error {
     readonly status: number;
@@ -33,7 +33,9 @@ function buildImagesGenerateUrl(apiBaseUrl: string | undefined): string {
     return `${normalizedBase}/images/generations`;
 }
 
-function createAbortContext(input: Pick<ImagesApiStreamInput, 'abortSignal' | 'timeoutMs'>): ImagesApiStreamAbortContext {
+function createAbortContext(
+    input: Pick<ImagesApiStreamInput, 'abortSignal' | 'timeoutMs'>
+): ImagesApiStreamAbortContext {
     const { abortSignal } = input;
     const controller = new AbortController();
     const abort = () => controller.abort();
