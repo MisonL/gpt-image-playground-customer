@@ -874,6 +874,7 @@ describe('buildAgentCapabilities', () => {
         assert.ok(AGENT_ENDPOINTS.create_generate_job in document.paths);
         assert.ok(AGENT_ENDPOINTS.job in document.paths);
         assert.ok(AGENT_ENDPOINTS.job_result in document.paths);
+        assert.ok(AGENT_ENDPOINTS.artifact_share in document.paths);
         assert.ok(AGENT_ENDPOINTS.page_request_feedback_batch in document.paths);
         assert.ok(AGENT_ENDPOINTS.page_request_feedback in document.paths);
         assert.ok(AGENT_ENDPOINTS.page_request_diagnostics_batch in document.paths);
@@ -884,6 +885,8 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentImageResponse' in document.components.schemas);
         assert.ok('AgentJobStatusResponse' in document.components.schemas);
         assert.ok('AgentArtifact' in document.components.schemas);
+        assert.ok('CreateArtifactShareRequest' in document.components.schemas);
+        assert.ok('ArtifactShareResponse' in document.components.schemas);
         assert.ok('ResultFeedback' in document.components.schemas);
         assert.ok('FeedbackTarget' in document.components.schemas);
         assert.ok('PageRequestFeedbackBatchRequest' in document.components.schemas);
@@ -933,6 +936,10 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentRequestDiagnosticsRetention' in document.components.schemas);
         assert.ok('AgentRequestDiagnosticsLookupResponse' in document.components.schemas);
         assert.ok('AgentRequestDiagnostics' in document.components.schemas);
+        assert.deepEqual(document.components.schemas.CreateArtifactShareRequest.properties.access_code.anyOf, [
+            { type: 'string', pattern: '^\\s*$' },
+            { type: 'string', minLength: 8, maxLength: 128 }
+        ]);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['403']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['429']);
@@ -945,6 +952,8 @@ describe('buildAgentCapabilities', () => {
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['422']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['429']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['502']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.artifact_share].post.responses['201']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.artifact_share].post.responses['400']);
         assert.ok(document.paths[AGENT_ENDPOINTS.page_request_feedback_batch].post.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.page_request_feedback].get.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.page_request_diagnostics_batch].post.responses['200']);
@@ -1320,6 +1329,7 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}'].get.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}'].delete.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}/content'].get.security, expectedSecurity);
+        assert.deepEqual(document.paths['/api/agent/artifacts/{id}/share'].post.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/page-requests/{id}/feedback'].get.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/diagnostics/requests'].get.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/diagnostics/requests/{id}'].get.security, expectedSecurity);

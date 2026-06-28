@@ -276,6 +276,24 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
+            [AGENT_ENDPOINTS.artifact_share]: {
+                post: {
+                    summary: '为 Agent 产物创建浏览器可访问的分享链接',
+                    security: agentSecurity,
+                    parameters: [{ $ref: '#/components/parameters/ArtifactId' }],
+                    requestBody: {
+                        required: false,
+                        ...jsonContent('#/components/schemas/CreateArtifactShareRequest')
+                    },
+                    responses: {
+                        '201': jsonContent('#/components/schemas/ArtifactShareResponse'),
+                        '400': jsonContent('#/components/schemas/AgentError'),
+                        '401': jsonContent('#/components/schemas/AgentError'),
+                        '404': jsonContent('#/components/schemas/AgentError'),
+                        '500': jsonContent('#/components/schemas/AgentError')
+                    }
+                }
+            },
             [AGENT_ENDPOINTS.page_request_feedback_batch]: {
                 post: {
                     summary: '批量读取页面请求的结果反馈',
@@ -1524,6 +1542,51 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     properties: {
                         artifact: { $ref: '#/components/schemas/AgentArtifact' }
                     }
+                },
+                CreateArtifactShareRequest: {
+                    type: 'object',
+                    properties: {
+                        expires_in_minutes: {
+                            oneOf: [
+                                { type: 'integer', minimum: 1 },
+                                { type: 'null' }
+                            ],
+                            description: '分享有效期分钟数；null 表示不过期，省略时使用服务端默认值。'
+                        },
+                        access_code: {
+                            anyOf: [
+                                { type: 'string', pattern: '^\\s*$' },
+                                { type: 'string', minLength: 8, maxLength: 128 }
+                            ],
+                            description: '可选访问码；省略或空白字符串表示公开分享。'
+                        }
+                    },
+                    additionalProperties: false
+                },
+                ArtifactShareResponse: {
+                    type: 'object',
+                    required: [
+                        'artifact_id',
+                        'token',
+                        'share_url',
+                        'direct_content_url',
+                        'expires_at',
+                        'access_code_required'
+                    ],
+                    properties: {
+                        artifact_id: { type: 'string' },
+                        token: { type: 'string', pattern: '^[a-f0-9]{24}$' },
+                        share_url: { type: 'string' },
+                        direct_content_url: { type: 'string' },
+                        expires_at: {
+                            oneOf: [
+                                { type: 'string', format: 'date-time' },
+                                { type: 'null' }
+                            ]
+                        },
+                        access_code_required: { type: 'boolean' }
+                    },
+                    additionalProperties: false
                 },
                 DeleteArtifactResponse: {
                     type: 'object',

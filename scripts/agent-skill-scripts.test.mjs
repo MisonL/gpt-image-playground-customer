@@ -6293,6 +6293,373 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
+    it('creates artifact share links through the Agent share endpoint when requested', async () => {
+        const requests = [];
+        await withServer(
+            async (request, response) => {
+                requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-share',
+                                state: 'succeeded',
+                                result_url: '/api/agent/jobs/job-share/result'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/job-share/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'request-share',
+                            idempotency_key: 'share-key',
+                            cached: false,
+                            images: [
+                                {
+                                    id: 'artifact-share',
+                                    content_url: '/api/agent/artifacts/artifact-share/content',
+                                    metadata_url: '/api/agent/artifacts/artifact-share',
+                                    output_format: 'png',
+                                    mime_type: 'image/png',
+                                    size_bytes: 12,
+                                    width: 1024,
+                                    height: 1024
+                                }
+                            ],
+                            created_at: '2026-06-27T00:00:00.000Z'
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/artifacts/artifact-share/share' && request.method === 'POST') {
+                    assert.equal(request.headers.authorization, 'Bearer share-token');
+                    assert.deepEqual(JSON.parse(await readRequestText(request)), {
+                        expires_in_minutes: 60,
+                        access_code: 'share-code'
+                    });
+                    response.writeHead(201, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            artifact_id: 'artifact-share',
+                            token: '0123456789abcdef01234567',
+                            share_url: `${serverOrigin(request)}/share/0123456789abcdef01234567`,
+                            direct_content_url: `${serverOrigin(request)}/api/shares/0123456789abcdef01234567/content`,
+                            expires_at: '2026-06-28T00:00:00.000Z',
+                            access_code_required: true
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--share',
+                        '--share-expires-minutes',
+                        '60',
+                        '--idempotency-key',
+                        'share-key',
+                        'prompt'
+                    ],
+                    {
+                        GPT_IMAGE_PLAYGROUND_URL: baseUrl,
+                        GPT_IMAGE_AGENT_TOKEN: 'share-token',
+                        GPT_IMAGE_SHARE_ACCESS_CODE: 'share-code'
+                    }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.shares.length, 1);
+                assert.equal(body.shares[0].artifact_id, 'artifact-share');
+                assert.equal(body.shares[0].access_code_required, true);
+                assert.equal(body.summary.share_urls[0], `${baseUrl}/share/0123456789abcdef01234567`);
+                assert.equal(
+                    body.summary.direct_content_urls[0],
+                    `${baseUrl}/api/shares/0123456789abcdef01234567/content`
+                );
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /api/agent/capabilities',
+                        'POST /api/agent/image-requests',
+                        'GET /api/agent/jobs/job-share/result',
+                        'POST /api/agent/artifacts/artifact-share/share'
+                    ]
+                );
+            }
+        );
+    });
+
+    it('resolves relative share URLs against the configured playground base url', async () => {
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-relative-share',
+                                state: 'succeeded',
+                                result_url: '/api/agent/jobs/job-relative-share/result'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/job-relative-share/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'request-relative-share',
+                            idempotency_key: 'relative-share-key',
+                            cached: false,
+                            images: [
+                                {
+                                    id: 'artifact-relative-share',
+                                    content_url: '/api/agent/artifacts/artifact-relative-share/content',
+                                    metadata_url: '/api/agent/artifacts/artifact-relative-share',
+                                    output_format: 'png',
+                                    mime_type: 'image/png',
+                                    size_bytes: 12,
+                                    width: 1024,
+                                    height: 1024
+                                }
+                            ],
+                            created_at: '2026-06-27T00:00:00.000Z'
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/artifacts/artifact-relative-share/share' && request.method === 'POST') {
+                    response.writeHead(201, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            artifact_id: 'artifact-relative-share',
+                            token: 'fedcba9876543210fedcba98',
+                            share_url: '/share/fedcba9876543210fedcba98',
+                            direct_content_url: '/api/shares/fedcba9876543210fedcba98/content',
+                            expires_at: null,
+                            access_code_required: false
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--share', '--idempotency-key', 'relative-share-key', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl, GPT_IMAGE_AGENT_TOKEN: 'share-token' }
+                );
+
+                assert.equal(result.status, 0);
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.summary.share_urls[0], `${baseUrl}/share/fedcba9876543210fedcba98`);
+                assert.equal(
+                    body.summary.direct_content_urls[0],
+                    `${baseUrl}/api/shares/fedcba9876543210fedcba98/content`
+                );
+            }
+        );
+    });
+
+    it('rejects share-only generate flags without share mode', async () => {
+        const result = await runSkillScriptAsync(
+            'generate-image.mjs',
+            ['--share-expires-minutes', '60', 'prompt'],
+            {}
+        );
+
+        assert.equal(result.status, 2);
+        assert.match(result.stderr, /--share-expires-minutes 需要和 --share 一起使用/);
+    });
+
+    it('keeps share URLs under configured playground subpaths', async () => {
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/playground/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/playground/api/agent/image-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-subpath-share',
+                                state: 'succeeded',
+                                result_url: '/playground/api/agent/jobs/job-subpath-share/result'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/playground/api/agent/jobs/job-subpath-share/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'request-subpath-share',
+                            idempotency_key: 'subpath-share-key',
+                            cached: false,
+                            images: [
+                                {
+                                    id: 'artifact-subpath-share',
+                                    content_url: '/playground/api/agent/artifacts/artifact-subpath-share/content',
+                                    metadata_url: '/playground/api/agent/artifacts/artifact-subpath-share',
+                                    output_format: 'png',
+                                    mime_type: 'image/png',
+                                    size_bytes: 12,
+                                    width: 1024,
+                                    height: 1024
+                                }
+                            ],
+                            created_at: '2026-06-27T00:00:00.000Z'
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/playground/api/agent/artifacts/artifact-subpath-share/share' && request.method === 'POST') {
+                    response.writeHead(201, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            artifact_id: 'artifact-subpath-share',
+                            token: 'abcdefabcdefabcdefabcdef',
+                            share_url: '/playground/share/abcdefabcdefabcdefabcdef',
+                            direct_content_url: '/playground/api/shares/abcdefabcdefabcdefabcdef/content',
+                            expires_at: null,
+                            access_code_required: false
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--share', '--idempotency-key', 'subpath-share-key', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: `${baseUrl}/playground`, GPT_IMAGE_AGENT_TOKEN: 'share-token' }
+                );
+
+                assert.equal(result.status, 0);
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.summary.share_urls[0], `${baseUrl}/playground/share/abcdefabcdefabcdefabcdef`);
+                assert.equal(
+                    body.summary.direct_content_urls[0],
+                    `${baseUrl}/playground/api/shares/abcdefabcdefabcdefabcdef/content`
+                );
+            }
+        );
+    });
+
+    it('treats blank share access code env as unset', async () => {
+        await withServer(
+            async (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-share-blank-access-code',
+                                state: 'succeeded',
+                                result_url: '/api/agent/jobs/job-share-blank-access-code/result'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/job-share-blank-access-code/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'request-share-blank-access-code',
+                            idempotency_key: 'share-blank-access-code-key',
+                            cached: false,
+                            images: [
+                                {
+                                    id: 'artifact-share-blank-access-code',
+                                    content_url: '/api/agent/artifacts/artifact-share-blank-access-code/content',
+                                    metadata_url: '/api/agent/artifacts/artifact-share-blank-access-code',
+                                    output_format: 'png',
+                                    mime_type: 'image/png',
+                                    size_bytes: 12,
+                                    width: 1024,
+                                    height: 1024
+                                }
+                            ],
+                            created_at: '2026-06-27T00:00:00.000Z'
+                        })
+                    );
+                    return;
+                }
+                if (
+                    request.url === '/api/agent/artifacts/artifact-share-blank-access-code/share' &&
+                    request.method === 'POST'
+                ) {
+                    response.writeHead(201, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            artifact_id: 'artifact-share-blank-access-code',
+                            token: '0123456789abcdef01234567',
+                            share_url: '/share/0123456789abcdef01234567',
+                            direct_content_url: '/api/shares/0123456789abcdef01234567/content',
+                            expires_at: null,
+                            access_code_required: false
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--share', '--idempotency-key', 'share-blank-access-code-key', 'prompt'],
+                    {
+                        GPT_IMAGE_PLAYGROUND_URL: baseUrl,
+                        GPT_IMAGE_AGENT_TOKEN: 'share-token',
+                        GPT_IMAGE_SHARE_ACCESS_CODE: '   '
+                    }
+                );
+
+                assert.equal(result.status, 0);
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.shares[0].access_code_required, false);
+                assert.equal(body.summary.share_urls[0], `${baseUrl}/share/0123456789abcdef01234567`);
+            }
+        );
+    });
+
     it('does not duplicate network failure prefixes in generate capability errors', async () => {
         await withServer(
             (request, response) => {
@@ -7094,6 +7461,10 @@ function readRequestText(request) {
 
 function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function serverOrigin(request) {
+    return `http://${request.headers.host}`;
 }
 
 function fakePngBuffer(width, height) {

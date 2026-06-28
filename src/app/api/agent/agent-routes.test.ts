@@ -44,6 +44,9 @@ beforeEach(async () => {
     }
     delete process.env.APP_PASSWORD;
     delete process.env.AGENT_API_TOKEN;
+    delete process.env.AGENT_PUBLIC_BASE_URL;
+    delete process.env.AGENT_ARTIFACT_SHARE_DEFAULT_EXPIRES_MINUTES;
+    delete process.env.AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
     delete process.env.OPENAI_UPSTREAM_USER_AGENT;
@@ -2480,7 +2483,8 @@ describe('Agent route integration', () => {
     });
 
     it('requires artifact content authorization and returns image bytes when authorized', async () => {
-        const { generateImage, getArtifact, getArtifactContent, deleteArtifact } = await loadAgentRoutes();
+        const { generateImage, getArtifact, getArtifactContent, createArtifactShare, getShareContent, deleteArtifact } =
+            await loadAgentRoutes();
         const upstream = await startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] }));
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2514,6 +2518,123 @@ describe('Agent route integration', () => {
         assert.equal(allowed.status, 200);
         assert.equal(allowed.headers.get('content-type'), 'image/png');
         assert.ok((await allowed.arrayBuffer()).byteLength > 0);
+
+        const invalidContentTypeShare = await createArtifactShare(
+            new Request(`http://internal.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token' },
+                body: JSON.stringify({ access_code: '12345678' })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(invalidContentTypeShare.status, 400);
+        assert.equal((await invalidContentTypeShare.json()).error.code, 'validation_error');
+
+        const deniedShare = await createArtifactShare(
+            new Request(`http://localhost/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ expires_in_minutes: 60 })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(deniedShare.status, 401);
+        assert.equal((await deniedShare.json()).error.code, 'unauthorized');
+
+        const relativeShare = await createArtifactShare(
+            new Request(`http://spoofed.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ expires_in_minutes: 60 })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(relativeShare.status, 201);
+        const relativeShareBody = await relativeShare.json();
+        assert.equal(relativeShareBody.share_url, `/share/${relativeShareBody.token}`);
+        assert.equal(relativeShareBody.direct_content_url, `/api/shares/${relativeShareBody.token}/content`);
+
+        process.env.AGENT_PUBLIC_BASE_URL = 'https://public.example.test';
+        const publicShare = await createArtifactShare(
+            new Request(`http://internal.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ expires_in_minutes: 60 })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(publicShare.status, 201);
+        const publicShareBody = await publicShare.json();
+        assert.equal(publicShareBody.artifact_id, artifactId);
+        assert.match(publicShareBody.token, /^[a-f0-9]{24}$/);
+        assert.equal(publicShareBody.share_url, `https://public.example.test/share/${publicShareBody.token}`);
+        assert.equal(
+            publicShareBody.direct_content_url,
+            `https://public.example.test/api/shares/${publicShareBody.token}/content`
+        );
+        assert.equal(publicShareBody.access_code_required, false);
+        assert.equal(typeof publicShareBody.expires_at, 'string');
+
+        process.env.AGENT_PUBLIC_BASE_URL = 'https://public.example.test/playground';
+        const publicShareWithPath = await createArtifactShare(
+            new Request(`http://internal.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ expires_in_minutes: 60 })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(publicShareWithPath.status, 201);
+        const publicShareWithPathBody = await publicShareWithPath.json();
+        assert.equal(
+            publicShareWithPathBody.share_url,
+            `https://public.example.test/playground/share/${publicShareWithPathBody.token}`
+        );
+        assert.equal(
+            publicShareWithPathBody.direct_content_url,
+            `https://public.example.test/playground/api/shares/${publicShareWithPathBody.token}/content`
+        );
+
+        const publicShareContent = await getShareContent(
+            new Request(publicShareBody.direct_content_url),
+            { params: Promise.resolve({ token: publicShareBody.token }) }
+        );
+        assert.equal(publicShareContent.status, 200);
+        assert.equal(publicShareContent.headers.get('content-type'), 'image/png');
+        assert.ok((await publicShareContent.arrayBuffer()).byteLength > 0);
+
+        const protectedShare = await createArtifactShare(
+            new Request(`http://localhost/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ access_code: '12345678', expires_in_minutes: null })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(protectedShare.status, 201);
+        const protectedShareBody = await protectedShare.json();
+        assert.equal(protectedShareBody.access_code_required, true);
+        assert.equal(protectedShareBody.expires_at, null);
+        const protectedGet = await getShareContent(
+            new Request(protectedShareBody.direct_content_url),
+            { params: Promise.resolve({ token: protectedShareBody.token }) }
+        );
+        assert.equal(protectedGet.status, 401);
+        assert.equal((await protectedGet.json()).code, 'share_access_code_required');
+
+        process.env.AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES = '30';
+        const defaultExpiryShare = await createArtifactShare(
+            new Request(`http://internal.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token' }
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(defaultExpiryShare.status, 201);
+        const defaultExpiryShareBody = await defaultExpiryShare.json();
+        const defaultExpiryMs = new Date(defaultExpiryShareBody.expires_at).getTime() - Date.now();
+        assert.ok(defaultExpiryMs > 0);
+        assert.ok(defaultExpiryMs <= 30 * 60 * 1000);
 
         const metadata = await getArtifact(
             new Request(`http://localhost/api/agent/artifacts/${artifactId}`, {
@@ -3205,6 +3326,7 @@ async function loadAgentRoutes() {
     const editRoute = await import('./images/edit/route');
     const artifactRoute = await import('./artifacts/[id]/route');
     const artifactContentRoute = await import('./artifacts/[id]/content/route');
+    const artifactShareRoute = await import('./artifacts/[id]/share/route');
     const capabilitiesRoute = await import('./capabilities/route');
     const imageRequestRoute = await import('./image-requests/route');
     const createGenerateJobRoute = await import('./jobs/images/generate/route');
@@ -3217,6 +3339,7 @@ async function loadAgentRoutes() {
     const agentRequestDiagnosticsRoute = await import('./diagnostics/requests/[id]/route');
     const pageRequestDiagnosticsBatchRoute = await import('./diagnostics/page-requests/route');
     const pageRequestDiagnosticsRoute = await import('./diagnostics/page-requests/[id]/route');
+    const shareContentRoute = await import('../shares/[token]/content/route');
     return {
         getCapabilities: () => capabilitiesRoute.GET(),
         generateImage: (request: Request) => generateRoute.POST(asNextRequest(request)),
@@ -3232,6 +3355,10 @@ async function loadAgentRoutes() {
             artifactRoute.DELETE(asNextRequest(request), context),
         getArtifactContent: (request: Request, context: AgentRouteContext) =>
             artifactContentRoute.GET(asNextRequest(request), context),
+        createArtifactShare: (request: Request, context: AgentRouteContext) =>
+            artifactShareRoute.POST(asNextRequest(request), context),
+        getShareContent: (request: Request, context: { params: Promise<{ token: string }> }) =>
+            shareContentRoute.GET(asNextRequest(request), context),
         putFeedback: (request: Request) => feedbackRoute.PUT(asNextRequest(request)),
         deleteFeedback: (request: Request) => feedbackRoute.DELETE(asNextRequest(request)),
         getPageRequestFeedbackBatch: (request: Request) => pageRequestFeedbackBatchRoute.POST(asNextRequest(request)),
