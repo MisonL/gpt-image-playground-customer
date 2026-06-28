@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
+import { AGENT_ENDPOINTS, buildAgentArtifactSharePath, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
 import { enrichFailureWithAgentDiagnostics } from './lib/agent-diagnostics-summary.mjs';
 import {
     errorMessage,
@@ -46,6 +46,8 @@ const DEFAULT_OUTPUT_COMPRESSION = 100;
 const DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
 const PAGE_SSE_ENDPOINT = '/api/images';
 const SERVER_ORCHESTRATED_TRANSPORT = 'server_orchestrated';
+const MIN_SHARE_ACCESS_CODE_LENGTH = 8;
+const MAX_SHARE_ACCESS_CODE_LENGTH = 128;
 const GENERATE_PRESETS = {
     '1k-smoke-agent': ['--agent', '--size', '1024x1024', '--quality', 'low', '--stream-mode', 'non_stream'],
     '4k-agent-nonstream': ['--agent', '--size', '3840x2160', '--quality', 'high', '--stream-mode', 'non_stream'],
@@ -211,7 +213,7 @@ try {
             const result = await runPageSseRequest();
             console.log(
                 JSON.stringify(
-                    buildSuccessOutput(formatPageSseOutput(result), {
+                    await buildSuccessOutput(formatPageSseOutput(result), {
                         ...buildPageSseSummaryRouting(),
                         fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
                         fallback_mode: 'manual_after_diagnosis'
@@ -252,6 +254,8 @@ function parseArgs(argv) {
         thinking: undefined,
         promptOptimization: undefined,
         forceWeb: undefined,
+        share: false,
+        shareExpiresMinutes: undefined,
         streamMode: undefined,
         streamingStrategy: undefined,
         partialImages: undefined,
@@ -289,6 +293,8 @@ function parseArgs(argv) {
         else if (arg === '--thinking') parsed.thinking = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--prompt-optimization') parsed.promptOptimization = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--force-web') parsed.forceWeb = true;
+        else if (arg === '--share') parsed.share = true;
+        else if (arg === '--share-expires-minutes') parsed.shareExpiresMinutes = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--stream-mode') parsed.streamMode = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--streaming-strategy') parsed.streamingStrategy = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--partial-images') parsed.partialImages = readOptionValue(expandedArgv, (index += 1), arg);
@@ -403,6 +409,15 @@ function validateUpstreamStrategyOptions(parsed) {
     if (parsed.promptOptimization !== undefined) readBooleanOption(parsed.promptOptimization, '--prompt-optimization');
     if (parsed.streamMode && !STREAM_MODES.has(parsed.streamMode)) {
         throw new Error('--stream-mode 必须是 auto、stream 或 non_stream。');
+    }
+    if (!parsed.share && parsed.shareExpiresMinutes !== undefined) {
+        throw new Error('--share-expires-minutes 需要和 --share 一起使用。');
+    }
+    if (parsed.shareExpiresMinutes !== undefined) {
+        readConfiguredPositiveInteger(parsed.shareExpiresMinutes, '--share-expires-minutes', 1);
+    }
+    if (parsed.share && process.env.GPT_IMAGE_SHARE_ACCESS_CODE !== undefined) {
+        readShareAccessCodeFromEnv();
     }
     if (parsed.streamingStrategy && !STREAMING_STRATEGIES.has(parsed.streamingStrategy)) {
         throw new Error(
@@ -657,7 +672,7 @@ async function runGenerateRequest(options = {}) {
         if (response.ok) {
             console.log(
                 JSON.stringify(
-                    buildSuccessOutput(enrichImageUrls(result), options.routing, completeScriptTiming(scriptTiming)),
+                    await buildSuccessOutput(enrichImageUrls(result), options.routing, completeScriptTiming(scriptTiming)),
                     null,
                     2
                 )
@@ -1039,8 +1054,8 @@ function parsePageSseEvent(rawEvent) {
     }
 }
 
-function buildSuccessOutput(result, routing, timing) {
-    return attachSummary(
+async function buildSuccessOutput(result, routing, timing) {
+    const output = attachSummary(
         routing ? { ...result, routing } : result,
         buildSuccessSummary({
             result,
@@ -1050,6 +1065,74 @@ function buildSuccessOutput(result, routing, timing) {
             billable: true
         })
     );
+    if (!options.share) {
+        return output;
+    }
+    const shareSummary = await maybeCreateShares(output);
+    return shareSummary ? attachSummary({ ...output, shares: shareSummary.share_results }, { ...output.summary, ...shareSummary }) : output;
+}
+
+async function maybeCreateShares(output) {
+    const images = Array.isArray(output?.images) ? output.images : [];
+    const shareResults = [];
+    for (const image of images) {
+        if (typeof image?.id !== 'string' || !image.id) continue;
+        shareResults.push(await createShareForArtifact(image.id));
+    }
+    if (shareResults.length === 0) {
+        throw new Error('--share 需要服务端返回可分享的 Agent artifact。');
+    }
+    return {
+        share_results: shareResults,
+        share_urls: shareResults.map((item) => item.share_url).filter(Boolean),
+        direct_content_urls: shareResults.map((item) => item.direct_content_url).filter(Boolean)
+    };
+}
+
+async function createShareForArtifact(artifactId) {
+    const body = {};
+    if (options.shareExpiresMinutes !== undefined) {
+        body.expires_in_minutes = readConfiguredPositiveInteger(options.shareExpiresMinutes, '--share-expires-minutes', 1);
+    }
+    if (process.env.GPT_IMAGE_SHARE_ACCESS_CODE !== undefined) {
+        body.access_code = readShareAccessCodeFromEnv();
+    }
+    const { response, result, text } = await fetchJson(`${baseUrl}${buildAgentArtifactSharePath(artifactId)}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders()
+        },
+        body: JSON.stringify(body),
+        timeoutMs
+    });
+    if (!response.ok) {
+        throw new Error(`创建分享链接失败，状态码 ${response.status}：${text || JSON.stringify(result)}`);
+    }
+    return {
+        artifact_id: result?.artifact_id || artifactId,
+        token: result?.token || null,
+        share_url: resolveShareOutputUrl(result?.share_url),
+        direct_content_url: resolveShareOutputUrl(result?.direct_content_url),
+        expires_at: result?.expires_at ?? null,
+        access_code_required: result?.access_code_required === true
+    };
+}
+
+function readShareAccessCodeFromEnv() {
+    const rawValue = process.env.GPT_IMAGE_SHARE_ACCESS_CODE;
+    if (rawValue === undefined) return undefined;
+    const accessCode = rawValue.trim();
+    if (!accessCode) return undefined;
+    if (accessCode.length < MIN_SHARE_ACCESS_CODE_LENGTH || accessCode.length > MAX_SHARE_ACCESS_CODE_LENGTH) {
+        throw new Error('GPT_IMAGE_SHARE_ACCESS_CODE 长度必须在 8 到 128 个字符之间。');
+    }
+    return accessCode;
+}
+
+function resolveShareOutputUrl(value) {
+    if (typeof value !== 'string' || !value) return null;
+    return new URL(value, `${baseUrl}/`).toString();
 }
 
 function buildPageSseFailureOutput(error, timing = completeScriptTiming(scriptTiming)) {
@@ -1227,7 +1310,7 @@ async function runGenerateJob(options = {}) {
             const jobResult = await pollJobResult(result?.job);
             console.log(
                 JSON.stringify(
-                    buildSuccessOutput(enrichImageUrls(jobResult), routing, completeScriptTiming(scriptTiming)),
+                    await buildSuccessOutput(enrichImageUrls(jobResult), routing, completeScriptTiming(scriptTiming)),
                     null,
                     2
                 )
@@ -1567,7 +1650,7 @@ function printUsage() {
     console.error('用法：generate-image.mjs [options] <prompt>');
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
     console.error(
-        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --check-remote --page-sse --agent --job --no-job(兼容别名)'
+        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --share --share-expires-minutes --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --check-remote --page-sse --agent --job --no-job(兼容别名)'
     );
     console.error(
         '契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check'

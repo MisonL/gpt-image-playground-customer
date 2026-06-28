@@ -93,7 +93,19 @@ async function readAccessCode(request: Request): Promise<string | undefined> {
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
-    const { token } = await params;
+    return serveShareContent(request, params);
+}
+
+export async function GET(request: Request, { params }: { params: Promise<{ token: string }> }) {
+    return serveShareContent(request, params, { publicOnly: true });
+}
+
+async function serveShareContent(
+    request: Request,
+    paramsPromise: Promise<{ token: string }>,
+    options: { publicOnly?: boolean } = {}
+) {
+    const { token } = await paramsPromise;
     const record = await readImageShare(token);
     if (!record) {
         return jsonError('share_not_found', '分享不存在。', 404);
@@ -107,7 +119,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
         return jsonError('share_rate_limited', '访问码尝试次数过多。', 429);
     }
 
-    const accessCode = await readAccessCode(request);
+    if (options.publicOnly && record.accessCodeRequired) {
+        return jsonError('share_access_code_required', '该分享需要访问码。', 401);
+    }
+
+    const accessCode = options.publicOnly ? undefined : await readAccessCode(request);
     if (!verifyImageShareAccess(record, accessCode)) {
         recordAccessFailure(token, now);
         return jsonError('share_access_denied', '访问码无效。', 401);
