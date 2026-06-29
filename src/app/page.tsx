@@ -3238,7 +3238,7 @@ export default function HomePage() {
     }
 
     return (
-        <main className='studio-paper text-foreground min-h-screen pb-[calc(10.5rem+env(safe-area-inset-bottom))] xl:h-dvh xl:overflow-hidden xl:pb-0'>
+        <main className='studio-paper text-foreground min-h-screen pb-[calc(6.5rem+env(safe-area-inset-bottom))] xl:h-dvh xl:overflow-hidden xl:pb-0'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -3349,7 +3349,7 @@ export default function HomePage() {
                                 </div>
                             </div>
                         </header>
-                        <div className='grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(330px,370px)_minmax(560px,1fr)_minmax(320px,360px)] 2xl:grid-cols-[minmax(360px,410px)_minmax(620px,1fr)_minmax(360px,430px)]'>
+                        <div className='grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(300px,340px)_minmax(620px,1fr)_minmax(280px,330px)] 2xl:grid-cols-[minmax(330px,370px)_minmax(760px,1fr)_minmax(330px,380px)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
@@ -3674,41 +3674,17 @@ export default function HomePage() {
                         </div>
                     </div>
                     {!isMobileCreationDrawerOpen && (
-                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden'>
-                            <button
-                                type='button'
-                                className='mx-auto mb-2 flex h-11 w-24 touch-none items-center justify-center rounded-full select-none'
+                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 border-t px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden'>
+                            <div
+                                className='mx-auto mb-2 flex h-3 w-24 touch-none items-center justify-center rounded-full select-none'
                                 onPointerDown={beginMobileCreationDrawerGesture}
                                 onPointerUp={finishMobileCreationDrawerGesture}
                                 onPointerCancel={cancelMobileCreationDrawerGesture}
                                 onClick={handleMobileCreationDrawerHandleClick}
-                                aria-label={t('ux.openCreationSheet')}
-                                aria-controls='mobile-creation-sheet'
-                                aria-expanded={false}>
+                                aria-hidden='true'>
                                 <span className='bg-border h-1 w-10 rounded-full' aria-hidden='true' />
-                            </button>
-                            <div className='mx-auto max-w-screen-sm space-y-2'>
-                                <div className='flex flex-wrap items-center justify-center gap-1.5 text-[11px]'>
-                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                        {activeWorkbenchModel}
-                                    </span>
-                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                        {activeWorkbenchBackendLabel}
-                                    </span>
-                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                        {getStreamingStatusLabel(streamMode, t)}
-                                    </span>
-                                    {activeParallelBatchVisible && (
-                                        <span className='rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-[oklch(0.38_0.075_148)]'>
-                                            {t('streaming.parallelBatchEnabled')}
-                                        </span>
-                                    )}
-                                    <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
-                                        {activeEstimatedCostLabel}
-                                    </span>
-                                </div>
                             </div>
-                            <div className='mx-auto mt-2 flex max-w-screen-sm items-stretch gap-2'>
+                            <div className='mx-auto flex max-w-screen-sm items-stretch gap-2'>
                                 <Button
                                     type='button'
                                     variant='outline'
