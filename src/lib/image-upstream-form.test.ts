@@ -2,10 +2,12 @@ import {
     IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
     appendImageUpstreamOverrideFields,
     getImageUpstreamRouteImpactKeys,
+    hasResponsesChannelRequestMode,
     isImageUpstreamStreamingStrategySelectable,
     isResponsesImageBackendRuntimeEnabled,
     normalizeImageUpstreamRuntimeFields,
     resolveImageUpstreamEffectiveStreamingStrategy,
+    shouldAllowResponsesImageBackend,
     shouldAllowResponsesHistoryRoute,
     shouldBlockResponsesRequestWithoutModel,
     shouldBlockExplicitResponsesRequest
@@ -139,6 +141,71 @@ describe('isResponsesImageBackendRuntimeEnabled', () => {
         assert.equal(isResponsesImageBackendRuntimeEnabled({ responsesImageBackend: {} }), false);
         assert.equal(isResponsesImageBackendRuntimeEnabled({ responsesImageBackend: { enabled: false } }), false);
         assert.equal(isResponsesImageBackendRuntimeEnabled({ responsesImageBackend: { enabled: true } }), true);
+    });
+});
+
+describe('hasResponsesChannelRequestMode', () => {
+    it('requires a currently effective Responses request mode on server channels', () => {
+        assert.equal(hasResponsesChannelRequestMode({}), false);
+        assert.equal(
+            hasResponsesChannelRequestMode({
+                channelRouting: { effectiveRequestModes: ['images-non-stream', 'images-sse'] }
+            }),
+            false
+        );
+        assert.equal(
+            hasResponsesChannelRequestMode({
+                channelRouting: { effectiveRequestModes: ['responses-non-stream'] }
+            }),
+            true
+        );
+        assert.equal(
+            hasResponsesChannelRequestMode({
+                channelRouting: { effectiveRequestModes: ['responses-sse'] }
+            }),
+            true
+        );
+    });
+});
+
+describe('shouldAllowResponsesImageBackend', () => {
+    it('keeps server-default Responses disabled when no healthy server channel supports it', () => {
+        assert.equal(
+            shouldAllowResponsesImageBackend({
+                runtimeCapabilities: {
+                    responsesImageBackend: { enabled: true },
+                    channelRouting: { effectiveRequestModes: ['images-non-stream', 'images-sse'] }
+                },
+                hasRequestApiOverride: false
+            }),
+            false
+        );
+    });
+
+    it('allows explicit user-provided upstream credentials to try Responses when the runtime supports the backend', () => {
+        assert.equal(
+            shouldAllowResponsesImageBackend({
+                runtimeCapabilities: {
+                    responsesImageBackend: { enabled: true },
+                    channelRouting: { effectiveRequestModes: ['images-non-stream', 'images-sse'] }
+                },
+                hasRequestApiOverride: true
+            }),
+            true
+        );
+    });
+
+    it('allows Responses for server channels that advertise a healthy Responses request mode', () => {
+        assert.equal(
+            shouldAllowResponsesImageBackend({
+                runtimeCapabilities: {
+                    responsesImageBackend: { enabled: true },
+                    channelRouting: { effectiveRequestModes: ['responses-sse'] }
+                },
+                hasRequestApiOverride: false
+            }),
+            true
+        );
     });
 });
 

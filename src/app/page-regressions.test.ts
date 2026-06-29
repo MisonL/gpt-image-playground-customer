@@ -11,4 +11,17 @@ describe('page state regressions', () => {
         assert.match(batchBranch, /handleBatchPromptTextChange\(nextPrompt\)/);
         assert.doesNotMatch(batchBranch, /setGenBatchPromptText\(nextPrompt\)/);
     });
+
+    it('gates explicit Responses controls on the current request context, not only the feature flag', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(
+            source,
+            /shouldAllowResponsesImageBackend\(\{\s*runtimeCapabilities,\s*hasRequestApiOverride\s*\}\)/
+        );
+        assert.doesNotMatch(
+            source,
+            /const allowResponsesImageBackend = isResponsesImageBackendRuntimeEnabled\(runtimeCapabilities \?\? \{\}\)/
+        );
+    });
 });
