@@ -33,10 +33,29 @@ export type ImageUpstreamRuntimeFields = {
     promptOptimization: ImageUpstreamFormPromptOptimization;
 };
 
+export function hasResponsesChannelRequestMode(input: {
+    channelRouting?: { effectiveRequestModes?: readonly string[] } | null;
+}): boolean {
+    const modes = input.channelRouting?.effectiveRequestModes;
+    return Array.isArray(modes) && modes.some((mode) => mode === 'responses-non-stream' || mode === 'responses-sse');
+}
+
 export function isResponsesImageBackendRuntimeEnabled(input: {
     responsesImageBackend?: { enabled?: boolean } | null;
 }): boolean {
     return input.responsesImageBackend?.enabled === true;
+}
+
+export function shouldAllowResponsesImageBackend(input: {
+    runtimeCapabilities?: {
+        responsesImageBackend?: { enabled?: boolean } | null;
+        channelRouting?: { effectiveRequestModes?: readonly string[] } | null;
+    } | null;
+    hasRequestApiOverride: boolean;
+}): boolean {
+    if (!isResponsesImageBackendRuntimeEnabled(input.runtimeCapabilities ?? {})) return false;
+    if (input.hasRequestApiOverride) return true;
+    return hasResponsesChannelRequestMode(input.runtimeCapabilities ?? {});
 }
 
 export function shouldBlockExplicitResponsesRequest(input: {

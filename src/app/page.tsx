@@ -71,8 +71,8 @@ import { useI18n } from '@/lib/i18n';
 import {
     IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
     appendImageUpstreamOverrideFields,
-    isResponsesImageBackendRuntimeEnabled,
     normalizeImageUpstreamRuntimeFields,
+    shouldAllowResponsesImageBackend,
     shouldAllowResponsesHistoryRoute,
     shouldBlockResponsesRequestWithoutModel,
     shouldBlockExplicitResponsesRequest,
@@ -346,6 +346,9 @@ type RuntimeCapabilities = {
         hasDefaultModel?: boolean;
         missingEnv?: string[];
     };
+    channelRouting?: {
+        effectiveRequestModes?: string[];
+    };
     upstreamProfile?: {
         activeProfile: ImageUpstreamProfileId;
         serverProfile: ImageUpstreamProfileId;
@@ -610,12 +613,16 @@ export default function HomePage() {
             : []
     });
     const hasRequestApiBaseUrl = apiSettings.baseUrl.trim().length > 0;
+    const hasRequestApiOverride = apiSettings.apiKey.trim().length > 0 || hasRequestApiBaseUrl;
     const activeUpstreamProfile = hasRequestApiBaseUrl
         ? activeUpstreamProfileSummary.activeConstraints
         : runtimeCapabilities?.upstreamProfile?.activeConstraints || IMAGE_UPSTREAM_PROFILES['openai-compatible'];
     const activeUpstreamProfileMixed =
         !hasRequestApiBaseUrl && runtimeCapabilities?.upstreamProfile?.serverProfileMixed === true;
-    const allowResponsesImageBackend = isResponsesImageBackendRuntimeEnabled(runtimeCapabilities ?? {});
+    const allowResponsesImageBackend = shouldAllowResponsesImageBackend({
+        runtimeCapabilities,
+        hasRequestApiOverride
+    });
     const allowResponsesHistoryRoute = shouldAllowResponsesHistoryRoute({
         runtimeCapabilitiesAvailable: runtimeCapabilities !== null,
         allowResponsesImageBackend
@@ -1694,9 +1701,10 @@ export default function HomePage() {
                     return;
                 }
             }
-            const allowRuntimeResponsesImageBackend = isResponsesImageBackendRuntimeEnabled(
-                latestRuntimeCapabilities ?? {}
-            );
+            const allowRuntimeResponsesImageBackend = shouldAllowResponsesImageBackend({
+                runtimeCapabilities: latestRuntimeCapabilities,
+                hasRequestApiOverride
+            });
             if (
                 shouldBlockExplicitResponsesRequest({
                     imageBackend: formData.image_backend,
