@@ -172,7 +172,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'upstream.backendImpactResponses':
             'Responses image_generation 需要实验开关和顶层模型，适合兼容测试，不建议作为默认路径。',
         'upstream.backendResponsesUnavailable':
-            '当前运行时未启用 Responses image_generation，页面会保持服务端默认或 Images API 路径。',
+            '当前运行时或默认服务器渠道未开放 Responses image_generation，页面会保持服务端默认或 Images API 路径。',
         'upstream.routeImpactMixedProfile':
             '当前服务端渠道包含不同上游模式，页面会按交集收窄数量、上传和预览能力，避免某个渠道收到不支持的参数。',
         'upstream.responsesRuntimeUnavailable':
@@ -300,6 +300,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'share.expired': '这个分享已过期。',
         'share.unlock': '打开',
         'share.accessCodePlaceholder': '输入访问码',
+        'share.accessCodeRequiredHint': '请输入访问码后再打开图片。',
         'share.imageAlt': '分享图片',
         'share.dialogTitle': '分享图片',
         'share.dialogDescription': '创建一个可访问的图片链接，可以设置访问码和有效期。',
@@ -698,7 +699,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'upstream.backendImpactResponses':
             'Responses image_generation requires the experimental flag and a top-level model. Use it for compatibility tests, not as the default path.',
         'upstream.backendResponsesUnavailable':
-            'Responses image_generation is not enabled in the current runtime, so the page stays on the server default or Images API path.',
+            'Responses image_generation is not enabled for the current runtime or default server channel, so the page stays on the server default or Images API path.',
         'upstream.routeImpactMixedProfile':
             'The server pool mixes upstream modes, so the page narrows count, upload, and preview capabilities to their shared safe range.',
         'upstream.responsesRuntimeUnavailable':
@@ -837,6 +838,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'share.expired': 'This share has expired.',
         'share.unlock': 'Open',
         'share.accessCodePlaceholder': 'Enter access code',
+        'share.accessCodeRequiredHint': 'Enter the access code to open the image.',
         'share.imageAlt': 'Shared image',
         'share.dialogTitle': 'Share Image',
         'share.dialogDescription': 'Create an image link with an optional access code and expiry.',

@@ -2,6 +2,7 @@
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { useI18n } from '@/lib/i18n';
 import { buildShareApiPath } from '@/lib/share-route-paths';
 import Image from 'next/image';
@@ -129,20 +130,33 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                 {metadata?.expired ? <p className='text-destructive text-sm'>{t('share.expired')}</p> : null}
                 {metadata && metadata.accessCodeRequired && !imageUrl && !metadata.expired ? (
                     <form
-                        className='flex max-w-sm gap-2'
+                        className='max-w-sm space-y-2'
                         onSubmit={(event) => {
                             event.preventDefault();
                             void loadImage();
                         }}>
-                        <Input
-                            value={accessCode}
-                            onChange={(event) => setAccessCode(event.target.value)}
-                            placeholder={t('share.accessCodePlaceholder')}
-                            type='password'
-                        />
-                        <Button type='submit' disabled={isUnlocking || accessCode.trim().length === 0}>
-                            {t('share.unlock')}
-                        </Button>
+                        <Label htmlFor='share-page-access-code'>{t('share.accessCode')}</Label>
+                        <div className='flex flex-col gap-2 sm:flex-row'>
+                            <Input
+                                id='share-page-access-code'
+                                name='accessCode'
+                                value={accessCode}
+                                onChange={(event) => setAccessCode(event.target.value)}
+                                placeholder={t('share.accessCodePlaceholder')}
+                                type='password'
+                                autoComplete='current-password'
+                                spellCheck={false}
+                            />
+                            <Button
+                                type='submit'
+                                className='min-h-11 sm:min-h-9'
+                                disabled={isUnlocking || accessCode.trim().length === 0}>
+                                {t('share.unlock')}
+                            </Button>
+                        </div>
+                        {accessCode.trim().length === 0 ? (
+                            <p className='text-muted-foreground text-xs'>{t('share.accessCodeRequiredHint')}</p>
+                        ) : null}
                     </form>
                 ) : null}
                 {imageUrl ? (

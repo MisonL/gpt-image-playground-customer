@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import { cn } from '@/lib/utils';
 import type {
     ImageUpstreamFormBackend,
     ImageUpstreamFormPromptOptimization,
@@ -621,7 +622,7 @@ export function GenerationForm({
                                         disabled={isLoading}
                                         className='min-h-[104px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-8 leading-6 shadow-inner lg:min-h-[92px]'
                                     />
-                                    <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
+                                    <span className='text-muted-foreground ui-stat pointer-events-none absolute bottom-3 left-4 text-xs'>
                                         {prompt.trim().length} / 1000
                                     </span>
                                 </div>
@@ -673,7 +674,7 @@ export function GenerationForm({
                             <div className='border-border/75 bg-background/65 space-y-2 rounded-md border p-3 shadow-sm'>
                                 <div className='flex items-center justify-between gap-3'>
                                     <Label htmlFor='batch-prompt-list'>{t('batch.promptList')}</Label>
-                                    <span className='text-muted-foreground shrink-0 text-xs'>
+                                    <span className='text-muted-foreground ui-stat shrink-0 text-xs'>
                                         {t('batch.promptCount', { count: batchPrompts.length })}
                                     </span>
                                 </div>
@@ -795,7 +796,7 @@ export function GenerationForm({
                                         />
                                     </div>
                                 </div>
-                                <p className='text-muted-foreground text-xs'>
+                                <p className='text-muted-foreground ui-stat text-xs'>
                                     {t('form.pixelsMeta', {
                                         pixels: customPixels.toLocaleString(locale),
                                         percent: ((customPixels / 8_294_400) * 100).toFixed(1),
@@ -808,7 +809,7 @@ export function GenerationForm({
                         )}
 
                         <div className={compactSettingRowClass}>
-                            <div className={compactSettingLabelClass}>
+                            <div className={cn(compactSettingLabelClass, 'ui-stat')}>
                                 {isBatchMode
                                     ? t('form.batchNumberOfImages', { count: batchPrompts.length })
                                     : t('form.numberOfImages', { count: n[0] })}

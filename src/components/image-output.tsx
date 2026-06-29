@@ -19,7 +19,6 @@ import {
     GitCompare,
     Grid,
     Loader2,
-    MoreHorizontal,
     RefreshCcw,
     Send,
     Share2,
@@ -154,7 +153,7 @@ function ResultActionButton({
             onClick={onClick}
             disabled={disabled}
             className={cn(
-                'text-muted-foreground hover:text-foreground min-h-11 shrink-0 rounded-md px-3 text-xs disabled:opacity-50 lg:h-8 lg:min-h-0 lg:px-2',
+                'touch-target text-muted-foreground hover:text-foreground shrink-0 rounded-md px-3 text-xs transition-[background-color,color,box-shadow,transform] enabled:active:scale-[0.96] disabled:opacity-50 lg:px-2',
                 active && 'bg-accent text-accent-foreground hover:text-accent-foreground',
                 emphasized && 'border-border/70 bg-card/80 border'
             )}
@@ -437,7 +436,7 @@ export function ImageOutput({
         <div className='workbench-panel text-card-foreground border-border flex h-full min-h-[300px] w-full flex-col overflow-hidden rounded-lg border'>
             <div className='border-border/70 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3'>
                 <h2 className='editorial-title text-xl font-semibold'>{t('output.previewTitle')}</h2>
-                <div className='text-muted-foreground flex flex-wrap items-center gap-3 text-xs'>
+                <div className='text-muted-foreground ui-stat flex flex-wrap items-center gap-3 text-xs'>
                     <span className='inline-flex items-center gap-1.5'>
                         {isLoading ? (
                             <Loader2 className='text-primary h-3.5 w-3.5 animate-spin' />
@@ -475,7 +474,7 @@ export function ImageOutput({
                                         alt={t('output.streaming')}
                                         width={512}
                                         height={512}
-                                        className='h-full w-full object-contain'
+                                        className='image-edge h-full w-full rounded-md object-contain'
                                         unoptimized
                                     />
                                 );
@@ -493,7 +492,7 @@ export function ImageOutput({
                                 alt={t('output.editing')}
                                 fill
                                 style={{ objectFit: 'contain' }}
-                                className='blur-md filter'
+                                className='image-edge rounded-md blur-md filter'
                                 unoptimized
                             />
                             <div className='absolute inset-0 flex flex-col items-center justify-center bg-black/50 text-white/80'>
@@ -564,6 +563,7 @@ export function ImageOutput({
                                         alt={t('output.generatedImage', { index: index + 1 })}
                                         fill
                                         style={{ objectFit: 'contain' }}
+                                        className='image-edge rounded-md'
                                         sizes='(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw'
                                         onLoad={(event) => handleImageLoad(img.filename, event)}
                                         unoptimized
@@ -578,7 +578,7 @@ export function ImageOutput({
                                 alt={altText}
                                 fill
                                 sizes='(max-width: 768px) 92vw, (max-width: 1800px) 44vw, 720px'
-                                className='object-contain'
+                                className='image-edge rounded-md object-contain'
                                 onLoad={(event) => handleImageLoad(imageBatch[viewMode].filename, event)}
                                 unoptimized
                             />
@@ -599,7 +599,7 @@ export function ImageOutput({
                                             alt={t('output.editReferenceAlt')}
                                             fill
                                             sizes='(max-width: 768px) 92vw, (max-width: 1800px) 44vw, 720px'
-                                            className='object-contain p-3'
+                                            className='image-edge rounded-md object-contain p-3'
                                             unoptimized
                                         />
                                         <div className='border-border/70 bg-background/86 text-muted-foreground absolute bottom-5 left-6 rounded-full border px-3 py-1 text-xs shadow-sm'>
@@ -752,18 +752,18 @@ export function ImageOutput({
 
             <div
                 className={cn(
-                    'border-border/40 flex w-full shrink-0 flex-wrap items-center justify-center gap-1 border-t bg-transparent px-3 py-2',
+                    'border-border/40 flex w-full shrink-0 flex-wrap items-center justify-center gap-1.5 border-t bg-transparent px-3 py-2',
                     !hasSelectedImageBatch && 'bg-background/36'
                 )}>
                 {hasSelectedImageBatch ? (
                     <>
                         {showCarousel && (
-                            <div className='bg-card/80 border-border flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border p-1'>
+                            <div className='bg-card/80 border-border literary-scrollbar flex max-w-full items-center gap-1.5 overflow-x-auto rounded-md border p-1'>
                                 <Button
                                     variant='ghost'
                                     size='icon'
                                     className={cn(
-                                        'h-11 w-11 rounded p-1 lg:h-8 lg:w-8',
+                                        'touch-target rounded p-1',
                                         viewMode === 'grid'
                                             ? 'bg-accent text-accent-foreground'
                                             : 'text-muted-foreground'
@@ -778,7 +778,7 @@ export function ImageOutput({
                                         variant='ghost'
                                         size='icon'
                                         className={cn(
-                                            'h-11 w-11 overflow-hidden rounded p-0.5 lg:h-8 lg:w-8',
+                                            'touch-target overflow-hidden rounded p-0.5',
                                             viewMode === index
                                                 ? 'ring-ring ring-offset-background ring-2 ring-offset-1'
                                                 : 'opacity-60 hover:opacity-100'
@@ -790,7 +790,7 @@ export function ImageOutput({
                                             alt={t('output.thumbnail', { index: index + 1 })}
                                             width={28}
                                             height={28}
-                                            className='h-full w-full object-cover'
+                                            className='image-edge h-full w-full rounded object-cover'
                                             unoptimized
                                         />
                                     </Button>
@@ -845,12 +845,6 @@ export function ImageOutput({
                             onClick={handleShareClick}
                             disabled={!canUseSelectedImageActions}
                             emphasized={showCarousel && viewMode === 'grid'}
-                        />
-                        <ResultActionButton
-                            icon={<MoreHorizontal className='h-4 w-4' />}
-                            label={t('output.more')}
-                            disabled
-                            iconOnly
                         />
                     </>
                 ) : (

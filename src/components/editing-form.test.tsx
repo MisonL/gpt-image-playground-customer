@@ -391,7 +391,7 @@ describe('EditingForm advanced upstream controls', () => {
             allowResponsesImageBackend: false
         });
 
-        assert.match(html, /当前运行时未启用 Responses image_generation/);
+        assert.match(html, /当前运行时或默认服务器渠道未开放 Responses image_generation/);
         assert.doesNotMatch(html, /GPT 顶层模型/);
     });
 

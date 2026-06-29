@@ -118,6 +118,22 @@
     * {
         @apply border-border outline-ring/50;
     }
+    html {
+        font-variant-numeric: tabular-nums;
+        text-rendering: optimizeLegibility;
+    }
+    h1,
+    h2,
+    h3 {
+        text-wrap: balance;
+    }
+    p,
+    li,
+    figcaption,
+    button,
+    label {
+        text-wrap: pretty;
+    }
     body {
         @apply bg-background text-foreground;
     }
@@ -138,6 +154,31 @@
 
     .paper-soft-shadow {
         box-shadow: 0 12px 28px oklch(0.37 0.038 54 / 0.09);
+    }
+
+    .touch-target {
+        min-width: 2.75rem;
+        min-height: 2.75rem;
+    }
+
+    @media (min-width: 1024px) {
+        .touch-target {
+            min-width: 2.25rem;
+            min-height: 2.25rem;
+        }
+    }
+
+    .ui-stat {
+        font-variant-numeric: tabular-nums;
+    }
+
+    .image-edge {
+        outline: 1px solid rgb(0 0 0 / 10%);
+        outline-offset: -1px;
+    }
+
+    .dark .image-edge {
+        outline-color: rgb(255 255 255 / 10%);
     }
 
     .literary-scrollbar {
@@ -185,6 +226,7 @@
 
     .photo-paper {
         background: oklch(0.99 0.008 85);
+        border-radius: 0.75rem;
         box-shadow:
             0 2px 0 oklch(0.82 0.026 74 / 0.48),
             0 18px 38px oklch(0.35 0.036 54 / 0.16);
