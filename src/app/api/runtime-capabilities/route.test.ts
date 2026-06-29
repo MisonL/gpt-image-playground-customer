@@ -20,6 +20,7 @@ beforeEach(() => {
     process.env.npm_lifecycle_event = 'test';
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
     delete process.env.OPENAI_RESPONSES_API_MODEL;
+    delete process.env.IMAGE_GENERATION_BACKEND;
     delete process.env.IMAGE_STREAMING_STRATEGY;
     delete process.env.IMAGE_UPSTREAM_TIMEOUT_MS;
     delete process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS;
@@ -71,7 +72,8 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.equal(typeof body.streamingBatch.recommendedConcurrency, 'number');
     });
 
-    it('exposes the runtime default streaming strategy for client-side fanout decisions', async () => {
+    it('exposes the runtime default streaming settings for client-side fanout decisions', async () => {
+        process.env.IMAGE_GENERATION_BACKEND = 'responses-image-generation';
         process.env.IMAGE_STREAMING_STRATEGY = 'off';
         process.env.IMAGE_UPSTREAM_TIMEOUT_MS = '1200000';
         process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS = '600000';
@@ -81,6 +83,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         const body = (await (await GET()).json()) as Record<
             string,
             {
+                defaultBackend?: string;
                 defaultMode?: string;
                 defaultStrategy?: string;
                 upstream_timeout_ms?: number;
@@ -89,6 +92,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             }
         >;
 
+        assert.equal(body.streaming.defaultBackend, 'responses-image-generation');
         assert.equal(body.streaming.defaultMode, 'non_stream');
         assert.equal(body.streaming.defaultStrategy, 'off');
         assert.deepEqual(body.imageTransport, {
