@@ -914,7 +914,7 @@ export function EditingForm({
                                     {t('edit.referenceHint', { count: maxImages })}
                                 </p>
                             </div>
-                            <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1 text-xs'>
+                            <span className='border-primary/20 bg-primary/10 text-primary ui-stat rounded-full border px-2 py-1 text-xs'>
                                 {t('edit.referenceCount', { count: imageFiles.length, max: maxImages })}
                             </span>
                         </div>
@@ -976,14 +976,14 @@ export function EditingForm({
                                             alt={t('edit.sourcePreview', { index: index + 1 })}
                                             width={96}
                                             height={96}
-                                            className='h-24 w-24 rounded-[3px] object-cover'
+                                            className='image-edge h-24 w-24 rounded-[3px] object-cover'
                                             unoptimized
                                         />
                                         <Button
                                             type='button'
                                             variant='secondary'
                                             size='icon'
-                                            className='border-background/80 absolute top-1.5 right-1.5 h-7 w-7 rounded-full border bg-[oklch(0.36_0.02_62/0.74)] p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-[oklch(0.32_0.02_62/0.86)] hover:text-white sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100'
+                                            className='border-background/80 absolute top-1.5 right-1.5 min-h-9 min-w-9 rounded-full border bg-[oklch(0.36_0.02_62/0.74)] p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-[oklch(0.32_0.02_62/0.86)] hover:text-white sm:opacity-0 sm:min-h-7 sm:min-w-7 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100'
                                             onClick={() => handleRemoveImage(index)}
                                             aria-label={t('edit.removeImage', { index: index + 1 })}>
                                             <X className='h-3 w-3' />
@@ -1007,7 +1007,7 @@ export function EditingForm({
                                 disabled={isLoading}
                                 className='min-h-[118px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-9 leading-7 shadow-inner'
                             />
-                            <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
+                            <span className='text-muted-foreground ui-stat pointer-events-none absolute bottom-3 left-4 text-xs'>
                                 {editPrompt.trim().length} / 1000
                             </span>
                         </div>
@@ -1041,7 +1041,7 @@ export function EditingForm({
                             <div className='bg-muted/20 border-border space-y-3 rounded-md border p-3'>
                                 <p className='text-muted-foreground text-xs'>{t('edit.drawMaskHint')}</p>
                                 <div
-                                    className='border-border relative mx-auto w-full overflow-hidden rounded border'
+                                    className='border-border image-edge relative mx-auto w-full overflow-hidden rounded border'
                                     style={{
                                         maxWidth: `min(100%, ${editOriginalImageSize.width}px)`,
                                         aspectRatio: `${editOriginalImageSize.width} / ${editOriginalImageSize.height}`
@@ -1071,7 +1071,7 @@ export function EditingForm({
                                 <div className='grid grid-cols-1 gap-4 pt-2'>
                                     <div className='space-y-2'>
                                         <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                            {t('edit.brushSize', { value: editBrushSize[0] })}
+                                            <span className='ui-stat'>{t('edit.brushSize', { value: editBrushSize[0] })}</span>
                                         </div>
                                         <Slider
                                             id='brush-size-slider'
@@ -1226,7 +1226,7 @@ export function EditingForm({
                                         />
                                     </div>
                                 </div>
-                                <p className='text-muted-foreground text-xs'>
+                                <p className='text-muted-foreground ui-stat text-xs'>
                                     {t('form.pixelsMeta', {
                                         pixels: editCustomPixels.toLocaleString(locale),
                                         percent: ((editCustomPixels / 8_294_400) * 100).toFixed(1),

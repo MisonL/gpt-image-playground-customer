@@ -1,4 +1,9 @@
-import { DEFAULT_SHARE_EXPIRY_VALUE, ShareExpiryField, getShareExpiryMinutes } from './share-dialog';
+import {
+    DEFAULT_SHARE_EXPIRY_VALUE,
+    ShareDialogFooterActions,
+    ShareExpiryField,
+    getShareExpiryMinutes
+} from './share-dialog';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -22,6 +27,14 @@ function renderOpenShareDialog() {
     return renderToStaticMarkup(
         <I18nProvider>
             <ShareExpiryField expiry='1440' onExpiryChange={noop} />
+        </I18nProvider>
+    );
+}
+
+function renderShareDialogFooterActions() {
+    return renderToStaticMarkup(
+        <I18nProvider>
+            <ShareDialogFooterActions isCreating={false} accessCodeError={null} onClose={noop} onCreate={noop} />
         </I18nProvider>
     );
 }
@@ -53,5 +66,13 @@ describe('ShareDialog', () => {
         const html = renderOpenShareDialog();
 
         assert.match(html, /share-expiry/);
+    });
+
+    it('renders an explicit footer close action', () => {
+        const html = renderShareDialogFooterActions();
+
+        assert.match(html, /type="button"/);
+        assert.match(html, />关闭</);
+        assert.match(html, />创建分享</);
     });
 });

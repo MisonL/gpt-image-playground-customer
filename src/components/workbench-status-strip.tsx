@@ -26,7 +26,7 @@ export function WorkbenchStatusStrip({
     return (
         <div
             className={cn(
-                'text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs sm:gap-2 sm:text-sm',
+                'text-muted-foreground ui-stat flex flex-wrap items-center gap-1.5 text-xs sm:gap-2 sm:text-sm',
                 className
             )}>
             <span className='border-border bg-card/70 inline-flex min-h-6 items-center gap-1.5 rounded-full border px-2 py-0.5 sm:min-h-7 sm:gap-2 sm:px-2.5 sm:py-1'>

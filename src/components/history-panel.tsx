@@ -326,7 +326,7 @@ function HistoryPanelImpl({
                             <DialogTrigger asChild>
                                 <button
                                     type='button'
-                                    className='bg-secondary text-secondary-foreground hover:bg-secondary/80 mt-0.5 flex min-h-6 cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[12px] transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0'
+                                    className='bg-secondary text-secondary-foreground hover:bg-secondary/80 ui-stat mt-0.5 flex min-h-9 cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 text-[12px] transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0 lg:min-h-7'
                                     aria-label={t('history.showTotalCost')}>
                                     {t('history.totalCost', { cost: totalCost.toFixed(4) })}
                                 </button>
@@ -391,15 +391,16 @@ function HistoryPanelImpl({
                                 <div className='text-muted-foreground space-y-2 py-4 text-sm'>
                                     <div className='flex justify-between'>
                                         <span>{t('history.totalImages')}</span>{' '}
-                                        <span>{totalImages.toLocaleString()}</span>
+                                        <span className='ui-stat'>{totalImages.toLocaleString()}</span>
                                     </div>
                                     <div className='flex justify-between'>
-                                        <span>{t('history.averageCost')}</span> <span>${averageCost.toFixed(4)}</span>
+                                        <span>{t('history.averageCost')}</span>{' '}
+                                        <span className='ui-stat'>${averageCost.toFixed(4)}</span>
                                     </div>
                                     <hr className='border-border my-2' />
                                     <div className='text-foreground flex justify-between font-medium'>
                                         <span>{t('history.totalEstimatedCost')}</span>
-                                        <span>${totalCost.toFixed(4)}</span>
+                                        <span className='ui-stat'>${totalCost.toFixed(4)}</span>
                                     </div>
                                 </div>
                                 <DialogFooter>
@@ -441,7 +442,7 @@ function HistoryPanelImpl({
                         variant='ghost'
                         size='sm'
                         onClick={onClearHistory}
-                        className='text-muted-foreground hover:text-foreground h-auto rounded-md px-2 py-1'>
+                        className='text-muted-foreground hover:text-foreground min-h-11 rounded-md px-2 py-1 lg:min-h-8'>
                         {t('history.clear')}
                     </Button>
                 )}
@@ -630,7 +631,7 @@ function HistoryPanelImpl({
                                                     })}
                                                     width={150}
                                                     height={150}
-                                                    className='h-full w-full object-cover'
+                                                    className='image-edge h-full w-full object-cover'
                                                     onLoad={(event) => handleThumbnailLoad(firstImage.filename, event)}
                                                     onError={() => handleThumbnailError(firstImage.filename)}
                                                     unoptimized
@@ -643,7 +644,7 @@ function HistoryPanelImpl({
                                             )}
                                             <div
                                                 className={cn(
-                                                    'pointer-events-none absolute top-1 left-1 z-10 flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[11px]',
+                                                    'ui-stat pointer-events-none absolute top-1 left-1 z-10 flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[11px]',
                                                     isFailedItem
                                                         ? 'border-destructive/35 bg-destructive/90 text-destructive-foreground'
                                                         : item.mode === 'edit'
@@ -664,7 +665,7 @@ function HistoryPanelImpl({
                                                       : t('history.modeCreate')}
                                             </div>
                                             {isMultiImage && (
-                                                <div className='pointer-events-none absolute right-1 bottom-1 z-10 flex items-center gap-1 rounded-sm bg-[oklch(0.28_0.028_58/0.78)] px-1.5 py-0.5 text-[12px] text-white'>
+                                                <div className='ui-stat pointer-events-none absolute right-1 bottom-1 z-10 flex items-center gap-1 rounded-sm bg-[oklch(0.28_0.028_58/0.78)] px-1.5 py-0.5 text-[12px] text-white'>
                                                     <Layers size={16} />
                                                     {imageCount}
                                                 </div>
@@ -698,7 +699,7 @@ function HistoryPanelImpl({
                                                             setOpenCostDialogTimestamp(itemKey);
                                                         }}
                                                         className={cn(
-                                                            'absolute top-7 right-1 z-20 flex min-h-6 cursor-pointer items-center gap-0.5 rounded-sm px-2 py-0.5 text-[11px] text-white shadow-sm transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0',
+                                                            'ui-stat absolute top-7 right-1 z-20 flex min-h-9 cursor-pointer items-center gap-0.5 rounded-sm px-2 py-1 text-[11px] text-white shadow-sm transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0 lg:min-h-7',
                                                             costBadge.actual
                                                                 ? 'bg-secondary text-secondary-foreground hover:bg-secondary/85'
                                                                 : 'bg-foreground/80 text-background hover:bg-foreground/70'
@@ -750,7 +751,7 @@ function HistoryPanelImpl({
                                                                         <div className='border-border bg-card/70 space-y-2 rounded-md border p-3'>
                                                                             <div className='flex justify-between gap-3'>
                                                                                 <span>{t('history.actualCost')}</span>
-                                                                                <span className='text-foreground font-medium'>
+                                                                                <span className='text-foreground ui-stat font-medium'>
                                                                                     {formatActualCostLabel(
                                                                                         item,
                                                                                         t(
@@ -780,7 +781,7 @@ function HistoryPanelImpl({
                                                                                     <span>
                                                                                         {t('history.actualQuota')}
                                                                                     </span>
-                                                                                    <span>
+                                                                                    <span className='ui-stat'>
                                                                                         {item.actualCostDetails.actualQuota.toLocaleString()}
                                                                                     </span>
                                                                                 </div>
@@ -791,7 +792,7 @@ function HistoryPanelImpl({
                                                                                     <span>
                                                                                         {t('history.matchedLogId')}
                                                                                     </span>
-                                                                                    <span>
+                                                                                    <span className='ui-stat'>
                                                                                         {
                                                                                             item.actualCostDetails
                                                                                                 .matchedLogId
@@ -812,7 +813,7 @@ function HistoryPanelImpl({
                                                                                 <span>
                                                                                     {t('history.textInputTokens')}
                                                                                 </span>{' '}
-                                                                                <span>
+                                                                                <span className='ui-stat'>
                                                                                     {item.costDetails.text_input_tokens.toLocaleString()}{' '}
                                                                                     (
                                                                                     {formatEstimatedTokenCost(
@@ -829,7 +830,7 @@ function HistoryPanelImpl({
                                                                                     <span>
                                                                                         {t('history.imageInputTokens')}
                                                                                     </span>{' '}
-                                                                                    <span>
+                                                                                    <span className='ui-stat'>
                                                                                         {item.costDetails.image_input_tokens.toLocaleString()}{' '}
                                                                                         (
                                                                                         {formatEstimatedTokenCost(
@@ -845,7 +846,7 @@ function HistoryPanelImpl({
                                                                                 <span>
                                                                                     {t('history.imageOutputTokens')}
                                                                                 </span>{' '}
-                                                                                <span>
+                                                                                <span className='ui-stat'>
                                                                                     {item.costDetails.image_output_tokens.toLocaleString()}{' '}
                                                                                     (
                                                                                     {formatEstimatedTokenCost(
@@ -861,7 +862,7 @@ function HistoryPanelImpl({
                                                                                 <span>
                                                                                     {t('history.totalEstimatedCost')}
                                                                                 </span>
-                                                                                <span>
+                                                                                <span className='ui-stat'>
                                                                                     $
                                                                                     {item.costDetails.estimated_cost_usd.toFixed(
                                                                                         4
@@ -933,7 +934,7 @@ function HistoryPanelImpl({
                                             {item.moderation}
                                         </p>
                                         <p
-                                            className='mt-2 max-h-8 min-h-8 overflow-hidden leading-4 break-words'
+                                            className='mt-2 max-h-10 min-h-8 overflow-hidden leading-5 break-words'
                                             title={item.prompt || t('history.noPrompt')}>
                                             {item.prompt || t('history.noPrompt')}
                                         </p>
@@ -1098,7 +1099,7 @@ function HistoryPanelImpl({
                                                                     key={`${item.timestamp}-${image.filename}`}
                                                                     type='button'
                                                                     onClick={() => onSelectImage(item)}
-                                                                    className='border-border bg-muted relative aspect-square overflow-hidden rounded-sm border'
+                                                                    className='border-border bg-muted image-edge relative aspect-square overflow-hidden rounded-sm border'
                                                                     aria-label={t('history.batchThumbnail', {
                                                                         index: index + 1
                                                                     })}>
@@ -1110,7 +1111,7 @@ function HistoryPanelImpl({
                                                                             })}
                                                                             fill
                                                                             sizes='88px'
-                                                                            className='object-cover'
+                                                                            className='h-full w-full object-cover'
                                                                             onLoad={(event) =>
                                                                                 handleThumbnailLoad(
                                                                                     image.filename,
@@ -1144,7 +1145,7 @@ function HistoryPanelImpl({
                                                     <Button
                                                         variant='outline'
                                                         size='sm'
-                                                        className='h-6 flex-grow px-2 py-1 text-xs'
+                                                        className='min-h-11 flex-grow px-2 py-1 text-xs lg:min-h-7'
                                                         onClick={() => setOpenPromptDialogTimestamp(itemKey)}>
                                                         {t('history.showDetails')}
                                                     </Button>
@@ -1389,7 +1390,7 @@ function HistoryPanelImpl({
                                                 }}>
                                                 <DialogTrigger asChild>
                                                     <Button
-                                                        className='bg-destructive hover:bg-destructive/90 h-6 w-6 text-white'
+                                                        className='bg-destructive hover:bg-destructive/90 min-h-11 min-w-11 text-white lg:min-h-7 lg:min-w-7'
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             onDeleteItemRequest(item);
