@@ -1,7 +1,11 @@
 import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_ADMIN_CONTROL } from '@/lib/channel-request-mode';
 import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
 import { summarizeImageUpstreamProfile } from '@/lib/image-upstream-profile';
-import { readImageStreamMode, readImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import {
+    readImageGenerationBackend,
+    readImageStreamMode,
+    readImageStreamingStrategy
+} from '@/lib/image-upstream-strategy';
 import { summarizeOpenAIImageTransport } from '@/lib/openai-image-transport';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { readBooleanEnv, readPositiveIntegerEnv } from '@/lib/server-runtime';
@@ -39,6 +43,7 @@ export async function GET() {
 
         return NextResponse.json({
             streaming: {
+                defaultBackend: readImageGenerationBackend(new FormData(), process.env),
                 defaultMode: readImageStreamMode(new FormData(), process.env),
                 defaultStrategy: readImageStreamingStrategy(new FormData(), process.env),
                 unavailableMarkScope: 'channel+backend+strategy+operation',
