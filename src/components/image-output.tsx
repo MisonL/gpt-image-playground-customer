@@ -461,7 +461,7 @@ export function ImageOutput({
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
                         // 展示流式预览图，单图时和最终视图一样居中。
-                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] items-center justify-center p-3'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] items-center justify-center p-3 2xl:max-w-[860px]'>
                             {/* 展示最新的预览图，也就是最大索引图片。 */}
                             {(() => {
                                 const entries = Array.from(streamingPreviewImages.entries());
@@ -486,7 +486,7 @@ export function ImageOutput({
                             </div>
                         </div>
                     ) : currentMode === 'edit' && baseImagePreviewUrl ? (
-                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] items-center justify-center p-3'>
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] items-center justify-center p-3 2xl:max-w-[860px]'>
                             <Image
                                 src={baseImagePreviewUrl}
                                 alt={t('output.editing')}
@@ -507,7 +507,7 @@ export function ImageOutput({
                         </div>
                     )
                 ) : hasFailure ? (
-                    <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] flex-col justify-between p-5 sm:p-6'>
+                    <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] flex-col justify-between p-5 sm:p-6 2xl:max-w-[860px]'>
                         <div className='space-y-3'>
                             <div className='text-muted-foreground text-xs'>{t('output.failedKicker')}</div>
                             <div className='space-y-2'>
@@ -545,7 +545,8 @@ export function ImageOutput({
                     />
                 ) : imageBatch && imageBatch.length > 0 ? (
                     viewMode === 'grid' ? (
-                        <div className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[720px] gap-2`}>
+                        <div
+                            className={`grid ${getGridColsClass(imageBatch.length)} w-full max-w-[780px] gap-2 2xl:max-w-[860px]`}>
                             {imageBatch.map((img, index) => (
                                 <button
                                     type='button'
@@ -572,12 +573,12 @@ export function ImageOutput({
                             ))}
                         </div>
                     ) : imageBatch[viewMode] ? (
-                        <div className='photo-paper relative aspect-[4/3] w-full max-w-[720px] p-3'>
+                        <div className='photo-paper relative aspect-[4/3] w-full max-w-[780px] p-3 2xl:max-w-[860px]'>
                             <Image
                                 src={imageBatch[viewMode].path}
                                 alt={altText}
                                 fill
-                                sizes='(max-width: 768px) 92vw, (max-width: 1800px) 44vw, 720px'
+                                sizes='(max-width: 768px) 92vw, (max-width: 1536px) 44vw, 860px'
                                 className='image-edge rounded-md object-contain'
                                 onLoad={(event) => handleImageLoad(imageBatch[viewMode].filename, event)}
                                 unoptimized
@@ -591,14 +592,14 @@ export function ImageOutput({
                 ) : (
                     <>
                         {currentMode === 'edit' ? (
-                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] flex-col justify-between p-5 sm:p-6'>
+                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] flex-col justify-between p-5 sm:p-6 2xl:max-w-[860px]'>
                                 {baseImagePreviewUrl ? (
                                     <>
                                         <Image
                                             src={baseImagePreviewUrl}
                                             alt={t('output.editReferenceAlt')}
                                             fill
-                                            sizes='(max-width: 768px) 92vw, (max-width: 1800px) 44vw, 720px'
+                                            sizes='(max-width: 768px) 92vw, (max-width: 1536px) 44vw, 860px'
                                             className='image-edge rounded-md object-contain p-3'
                                             unoptimized
                                         />
@@ -628,7 +629,7 @@ export function ImageOutput({
                                 )}
                             </div>
                         ) : (
-                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[720px] flex-col justify-between p-5 sm:p-6'>
+                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] flex-col justify-between p-5 sm:p-6 2xl:max-w-[860px]'>
                                 <div className='space-y-3'>
                                     <div className='text-muted-foreground text-xs'>{t('output.previewEyebrow')}</div>
                                     <div className='space-y-2'>

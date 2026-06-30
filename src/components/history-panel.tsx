@@ -391,7 +391,7 @@ function HistoryPanelImpl({
                                 <div className='text-muted-foreground space-y-2 py-4 text-sm'>
                                     <div className='flex justify-between'>
                                         <span>{t('history.totalImages')}</span>{' '}
-                                        <span className='ui-stat'>{totalImages.toLocaleString()}</span>
+                                        <span className='ui-stat'>{totalImages.toLocaleString(locale)}</span>
                                     </div>
                                     <div className='flex justify-between'>
                                         <span>{t('history.averageCost')}</span>{' '}
@@ -782,7 +782,9 @@ function HistoryPanelImpl({
                                                                                         {t('history.actualQuota')}
                                                                                     </span>
                                                                                     <span className='ui-stat'>
-                                                                                        {item.actualCostDetails.actualQuota.toLocaleString()}
+                                                                                        {item.actualCostDetails.actualQuota.toLocaleString(
+                                                                                            locale
+                                                                                        )}
                                                                                     </span>
                                                                                 </div>
                                                                             )}
@@ -814,7 +816,9 @@ function HistoryPanelImpl({
                                                                                     {t('history.textInputTokens')}
                                                                                 </span>{' '}
                                                                                 <span className='ui-stat'>
-                                                                                    {item.costDetails.text_input_tokens.toLocaleString()}{' '}
+                                                                                    {item.costDetails.text_input_tokens.toLocaleString(
+                                                                                        locale
+                                                                                    )}{' '}
                                                                                     (
                                                                                     {formatEstimatedTokenCost(
                                                                                         item.costDetails
@@ -831,7 +835,9 @@ function HistoryPanelImpl({
                                                                                         {t('history.imageInputTokens')}
                                                                                     </span>{' '}
                                                                                     <span className='ui-stat'>
-                                                                                        {item.costDetails.image_input_tokens.toLocaleString()}{' '}
+                                                                                        {item.costDetails.image_input_tokens.toLocaleString(
+                                                                                            locale
+                                                                                        )}{' '}
                                                                                         (
                                                                                         {formatEstimatedTokenCost(
                                                                                             item.costDetails
@@ -847,7 +853,9 @@ function HistoryPanelImpl({
                                                                                     {t('history.imageOutputTokens')}
                                                                                 </span>{' '}
                                                                                 <span className='ui-stat'>
-                                                                                    {item.costDetails.image_output_tokens.toLocaleString()}{' '}
+                                                                                    {item.costDetails.image_output_tokens.toLocaleString(
+                                                                                        locale
+                                                                                    )}{' '}
                                                                                     (
                                                                                     {formatEstimatedTokenCost(
                                                                                         item.costDetails

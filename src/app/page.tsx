@@ -173,7 +173,7 @@ function createFeedbackRequestSignal(signal: AbortSignal): { signal: AbortSignal
     };
 }
 
-function getImageBackendLabel(backend: ImageUpstreamFormBackend, t: (key: string) => string): string {
+function getWorkbenchRouteLabel(backend: ImageUpstreamFormBackend, t: (key: string) => string): string {
     if (backend === 'images-api') return t('upstream.backendImages');
     if (backend === 'responses-image-generation') return t('upstream.backendResponses');
     return t('upstream.workbenchDefaultRoute');
@@ -348,6 +348,10 @@ type RuntimeCapabilities = {
     };
     channelRouting?: {
         effectiveRequestModes?: string[];
+        effectiveRequestModesByChannel?: Array<{
+            channelId: string;
+            requestModes: string[];
+        }>;
     };
     upstreamProfile?: {
         activeProfile: ImageUpstreamProfileId;
@@ -357,6 +361,8 @@ type RuntimeCapabilities = {
         activeConstraints?: ImageUpstreamProfile;
     };
 };
+
+type RuntimeHealthStatus = 'connected' | 'disconnected' | 'custom-override';
 
 class ApiRequestError extends Error {
     readonly status?: number;
@@ -612,13 +618,15 @@ export default function HomePage() {
             ? [runtimeCapabilities.upstreamProfile.serverProfile]
             : []
     });
+    const hasRequestApiKey = apiSettings.apiKey.trim().length > 0;
     const hasRequestApiBaseUrl = apiSettings.baseUrl.trim().length > 0;
-    const hasRequestApiOverride = apiSettings.apiKey.trim().length > 0 || hasRequestApiBaseUrl;
-    const activeUpstreamProfile = hasRequestApiBaseUrl
+    const hasPairedRequestApiOverride = hasRequestApiKey && hasRequestApiBaseUrl;
+    const hasRequestApiOverride = hasRequestApiKey;
+    const activeUpstreamProfile = hasPairedRequestApiOverride
         ? activeUpstreamProfileSummary.activeConstraints
         : runtimeCapabilities?.upstreamProfile?.activeConstraints || IMAGE_UPSTREAM_PROFILES['openai-compatible'];
     const activeUpstreamProfileMixed =
-        !hasRequestApiBaseUrl && runtimeCapabilities?.upstreamProfile?.serverProfileMixed === true;
+        !hasPairedRequestApiOverride && runtimeCapabilities?.upstreamProfile?.serverProfileMixed === true;
     const allowResponsesImageBackend = shouldAllowResponsesImageBackend({
         runtimeCapabilities,
         hasRequestApiOverride
@@ -666,7 +674,9 @@ export default function HomePage() {
         activeWorkbenchStreamingStrategy === IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
             ? defaultStreamingStrategy
             : activeWorkbenchStreamingStrategy;
-    const activeWorkbenchBackendLabel = getImageBackendLabel(activeWorkbenchBackend, t);
+    const activeRouteLabel = getWorkbenchRouteLabel(activeWorkbenchBackend, t);
+    const activeRuntimeHealthStatus: RuntimeHealthStatus =
+        hasPairedRequestApiOverride ? 'custom-override' : runtimeCapabilities === null ? 'disconnected' : 'connected';
     const activeTaskCount =
         mode === 'generate' && workbenchMode === 'batch'
             ? readBatchPromptLines(genBatchPromptText).length
@@ -1154,6 +1164,9 @@ export default function HomePage() {
                 throw new Error('获取运行时能力失败');
             }
             const data = (await response.json()) as RuntimeCapabilities;
+            if (data === null || typeof data !== 'object') {
+                throw new Error('获取运行时能力失败');
+            }
             setRuntimeCapabilities(data);
             return data;
         } catch (error) {
@@ -1290,6 +1303,9 @@ export default function HomePage() {
     };
 
     const handleSaveApiSettings = (settings: ApiSettings) => {
+        if (settings.baseUrl && !settings.apiKey) {
+            throw new Error(t('api.urlPairRequired'));
+        }
         setApiSettings(settings);
         if (settings.apiKey || settings.baseUrl) {
             localStorage.setItem(apiSettingsLocalStorageKey, JSON.stringify(settings));
@@ -1411,7 +1427,7 @@ export default function HomePage() {
             if (apiSettings.apiKey) {
                 apiFormData.append('apiKey', apiSettings.apiKey);
             }
-            if (apiSettings.baseUrl) {
+            if (apiSettings.baseUrl && apiSettings.apiKey) {
                 apiFormData.append('apiBaseUrl', apiSettings.baseUrl);
             }
 
@@ -3332,10 +3348,11 @@ export default function HomePage() {
                             <div className='flex flex-wrap items-center gap-4 sm:justify-end'>
                                 <WorkbenchStatusStrip
                                     model={activeWorkbenchModel}
-                                    channelLabel={activeWorkbenchBackendLabel}
+                                    routeLabel={activeRouteLabel}
                                     streamStatus={getStreamingStatusLabel(streamMode, t)}
                                     parallelBatchEnabled={activeParallelBatchVisible}
                                     costLabel={activeEstimatedCostLabel}
+                                    runtimeHealthStatus={activeRuntimeHealthStatus}
                                 />
                                 <div className='text-muted-foreground hidden items-center gap-4 sm:flex'>
                                     <HelpCircle className='h-4 w-4' aria-hidden='true' />

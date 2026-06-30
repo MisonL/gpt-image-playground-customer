@@ -133,6 +133,9 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                         className='max-w-sm space-y-2'
                         onSubmit={(event) => {
                             event.preventDefault();
+                            if (accessCode.trim().length === 0) {
+                                return;
+                            }
                             void loadImage();
                         }}>
                         <Label htmlFor='share-page-access-code'>{t('share.accessCode')}</Label>
@@ -140,6 +143,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                             <Input
                                 id='share-page-access-code'
                                 name='accessCode'
+                                aria-describedby={accessCode.trim().length === 0 ? 'share-page-access-code-hint' : undefined}
                                 value={accessCode}
                                 onChange={(event) => setAccessCode(event.target.value)}
                                 placeholder={t('share.accessCodePlaceholder')}
@@ -155,7 +159,9 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                             </Button>
                         </div>
                         {accessCode.trim().length === 0 ? (
-                            <p className='text-muted-foreground text-xs'>{t('share.accessCodeRequiredHint')}</p>
+                            <p id='share-page-access-code-hint' className='text-muted-foreground text-xs'>
+                                {t('share.accessCodeRequiredHint')}
+                            </p>
                         ) : null}
                     </form>
                 ) : null}
