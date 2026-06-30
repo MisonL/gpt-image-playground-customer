@@ -12,6 +12,8 @@ import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_SMOKE_CASES } from '../src/
 const GENERATE_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url));
 const EDIT_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/edit-image.mjs', import.meta.url));
 const AGENT_DOCTOR_TIMEOUT_MS = 75_000;
+const ORCHESTRATION_GENERATE_SMOKE_NAME = 'orchestration_generate_1k';
+const AGENT_GENERATE_SMOKE_NAME = 'agent_generate_1k';
 const PAGE_SSE_GENERATE_SMOKE_NAME = 'responses_page_sse_generate_1k';
 const RESPONSES_AGENT_GENERATE_SMOKE_NAME = 'responses_agent_generate_1k';
 
@@ -131,7 +133,8 @@ function buildSkippedSmoke(options) {
         skipped: true,
         reason: 'requires --allow-billable',
         checks: [
-            { name: 'generate_1k', skipped: true, reason: 'requires --allow-billable' },
+            { name: ORCHESTRATION_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
+            { name: AGENT_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
             { name: PAGE_SSE_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
             { name: RESPONSES_AGENT_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
             {
@@ -150,7 +153,26 @@ function buildSkippedSmoke(options) {
 
 function runBillableSmoke(options, baseUrl) {
     const checks = [
-        runSmokeCommand('generate_1k', [
+        runSmokeCommand(ORCHESTRATION_GENERATE_SMOKE_NAME, [
+            GENERATE_SCRIPT,
+            '--base-url',
+            baseUrl,
+            '--allow-billable',
+            '--timeout-ms',
+            String(options.timeoutMs),
+            '--size',
+            '1024x1024',
+            '--quality',
+            'low',
+            '--image-backend',
+            'images-api',
+            '--stream-mode',
+            'non_stream',
+            '--idempotency-key',
+            `agent-doctor-orchestration-generate-${Date.now()}`,
+            'agent doctor orchestration 1k generate smoke'
+        ]),
+        runSmokeCommand(AGENT_GENERATE_SMOKE_NAME, [
             GENERATE_SCRIPT,
             '--base-url',
             baseUrl,
@@ -162,9 +184,13 @@ function runBillableSmoke(options, baseUrl) {
             '1024x1024',
             '--quality',
             'low',
+            '--image-backend',
+            'images-api',
+            '--stream-mode',
+            'non_stream',
             '--idempotency-key',
-            `agent-doctor-generate-${Date.now()}`,
-            'agent doctor 1k generate smoke'
+            `agent-doctor-agent-generate-${Date.now()}`,
+            'agent doctor agent JSON 1k generate smoke'
         ]),
         runSmokeCommand(PAGE_SSE_GENERATE_SMOKE_NAME, [
             GENERATE_SCRIPT,
@@ -383,6 +409,8 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
                 ? Boolean(process.env.GPT_IMAGE_APP_PASSWORD_HASH)
                 : capabilities.ok,
         page_sse_real_smoke: summarizePageSseSmoke(smoke),
+        orchestration_generate_smoke: summarizeSmokeCheck(smoke, ORCHESTRATION_GENERATE_SMOKE_NAME),
+        agent_generate_smoke: summarizeSmokeCheck(smoke, AGENT_GENERATE_SMOKE_NAME),
         responses_page_sse_generate_smoke: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
         responses_agent_generate_smoke: summarizeSmokeCheck(smoke, RESPONSES_AGENT_GENERATE_SMOKE_NAME),
         real_smoke_checks: summarizeSmokeChecks(smoke),
@@ -442,7 +470,8 @@ function summarizePageSseSmoke(smoke) {
 
 function summarizeSmokeChecks(smoke) {
     return {
-        agent_generate_1k: summarizeSmokeCheck(smoke, 'generate_1k'),
+        orchestration_generate_1k: summarizeSmokeCheck(smoke, ORCHESTRATION_GENERATE_SMOKE_NAME),
+        agent_generate_1k: summarizeSmokeCheck(smoke, AGENT_GENERATE_SMOKE_NAME),
         responses_page_sse_generate_1k: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
         responses_agent_generate_1k: summarizeSmokeCheck(smoke, RESPONSES_AGENT_GENERATE_SMOKE_NAME),
         agent_edit_1k: summarizeSmokeCheck(smoke, 'edit_1k'),

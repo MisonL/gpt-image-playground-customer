@@ -359,7 +359,7 @@ Hugging Face Space 免费层部署见 [docs/deployment/huggingface-space-free.md
 
 | 问题 | 处理 |
 | --- | --- |
-| 未检测到 Node.js | 安装 Node.js 20 或更高版本。 |
+| 未检测到 Node.js | 安装 Node.js >=20.9.0。 |
 | 依赖安装失败 | 检查 npm 网络后重新执行 `npm install`。 |
 | API 返回 HTML | API URL 填成了网页或管理后台；应填写 OpenAI 兼容 `/v1` 根地址。 |
 | 提示需要 API Key | 在 `.env.local` 写入 `OPENAI_API_KEY`，或在页面 `API 设置` 中填写。 |

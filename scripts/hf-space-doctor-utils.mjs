@@ -111,8 +111,8 @@ export function classifyRequiredAndRecommendedNames(names, requiredNames, recomm
 }
 
 const NEXT_ACTIONS = new Map([
-    ['node', 'Install Node.js 20 or newer, then reopen the terminal.'],
-    ['npm', 'Install Node.js 20 or newer with npm.'],
+    ['node', 'Install Node.js >=20.9.0, then reopen the terminal.'],
+    ['npm', 'Install Node.js >=20.9.0 with npm.'],
     ['hf-cli', 'Install the Hugging Face CLI from the official documentation; avoid piping remote install scripts directly to a shell.'],
     ['hf-auth', 'Check network/proxy access to Hugging Face, then run hf auth login if the token is missing or expired.'],
     ['node-modules', 'Run npm install.'],
