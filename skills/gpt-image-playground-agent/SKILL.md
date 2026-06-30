@@ -151,9 +151,11 @@ Authorization: Bearer <token>
 | `page_sse_real_smoke_status` | `first-run --json` | 结构化说明 `first-run` 未执行真实 `/api/images` smoke；`state=not_run` 且 `billable=false` 表示它只是只读就绪检查。 |
 | `responses_image_backend_real_smoke_status` | `first-run --json` | 结构化说明 `first-run` 未执行真实 Responses image_generation smoke；不要把声明支持当作实测通过。 |
 | `summary.page_sse_real_smoke` | `agent:doctor` | Page SSE 真实 smoke 的兼容聚合状态；任一 Page SSE smoke 失败为 `failed`，任一通过且无失败为 `passed`，全部跳过为 `skipped`；精确判断优先看 `summary.real_smoke_checks`。 |
+| `summary.orchestration_generate_smoke` | `agent:doctor` | `--allow-billable` 时默认 generate 主链 `/api/agent/image-requests` 的真实 smoke 状态；这是普通 generate 在 server-owned orchestration 下的主编排口径。 |
+| `summary.agent_generate_smoke` | `agent:doctor` | `--allow-billable` 时显式 `--agent` 的 Agent JSON 文生图 smoke 状态；用于诊断直连 Agent JSON，不代表默认主链。 |
 | `summary.responses_page_sse_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + page SSE + `responses-sse` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
 | `summary.responses_agent_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + Agent JSON + `responses-non-stream` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
-| `summary.real_smoke_checks` | `agent:doctor` | 各真实 smoke 的状态汇总，包含 `agent_generate_1k`、`responses_page_sse_generate_1k`、`responses_agent_generate_1k`、`agent_edit_1k` 和 `page_sse_edit_2k`。 |
+| `summary.real_smoke_checks` | `agent:doctor` | 各真实 smoke 的状态汇总，包含 `orchestration_generate_1k`、`agent_generate_1k`、`responses_page_sse_generate_1k`、`responses_agent_generate_1k`、`agent_edit_1k` 和 `page_sse_edit_2k`。 |
 | `summary.request_modes` | `agent:doctor` | 管理员 request mode 的配置和真实 smoke 摘要；`billable=false` 时只能证明配置可见，不能当作真实上游通过。 |
 | `request_mode_controls` | `capabilities` | 管理员 request mode 白名单控制面；包含 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、真实 smoke gate 和 `agent_client_policy=diagnostics_only`。 |
 | `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |

@@ -42,7 +42,7 @@ hf auth whoami
 
 要求：
 
-- Node.js 20 或更高版本。
+- Node.js >=20.9.0。
 - npm 随 Node.js 一起可用。
 - Hugging Face CLI 使用当前官方 `hf` 命令。
 - `hf auth login` 使用 Hugging Face Access Token，不是账号密码。

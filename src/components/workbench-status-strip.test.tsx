@@ -18,7 +18,7 @@ describe('WorkbenchStatusStrip', () => {
             </I18nProvider>
         );
 
-        assert.match(html, /运行时已连接/);
+        assert.match(html, /运行时可用/);
         assert.match(html, /gpt-image-2/);
         assert.match(html, /images-sse/);
         assert.match(html, /流式可用/);
@@ -41,7 +41,7 @@ describe('WorkbenchStatusStrip', () => {
         assert.match(html, /并发已启用/);
     });
 
-    it('renders disconnected and custom override runtime states explicitly', () => {
+    it('renders disconnected, route-limited, and custom override runtime states explicitly', () => {
         const disconnectedHtml = renderToStaticMarkup(
             <I18nProvider>
                 <WorkbenchStatusStrip
@@ -50,6 +50,17 @@ describe('WorkbenchStatusStrip', () => {
                     streamStatus='普通生成'
                     costLabel='预计 0.12 积分'
                     runtimeHealthStatus='disconnected'
+                />
+            </I18nProvider>
+        );
+        const routeLimitedHtml = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchStatusStrip
+                    model='gpt-image-2'
+                    routeLabel='服务器默认'
+                    streamStatus='流式可用'
+                    costLabel='预计 0.12 积分'
+                    runtimeHealthStatus='route-limited'
                 />
             </I18nProvider>
         );
@@ -66,6 +77,7 @@ describe('WorkbenchStatusStrip', () => {
         );
 
         assert.match(disconnectedHtml, /运行时未连接/);
+        assert.match(routeLimitedHtml, /运行态受限/);
         assert.match(customOverrideHtml, /使用自定义上游/);
     });
 });

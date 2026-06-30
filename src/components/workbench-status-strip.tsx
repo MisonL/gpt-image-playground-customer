@@ -1,10 +1,9 @@
 'use client';
 
 import { useI18n } from '@/lib/i18n';
+import type { RuntimeHealthStatus } from '@/lib/runtime-health-status';
 import { cn } from '@/lib/utils';
 import { CircleCheck } from 'lucide-react';
-
-type RuntimeHealthStatus = 'connected' | 'disconnected' | 'custom-override';
 
 type WorkbenchStatusStripProps = {
     model: string;
@@ -22,22 +21,26 @@ export function WorkbenchStatusStrip({
     streamStatus,
     parallelBatchEnabled = false,
     costLabel,
-    runtimeHealthStatus = 'connected',
+    runtimeHealthStatus = 'runtime-ready',
     className
 }: WorkbenchStatusStripProps) {
     const { t } = useI18n();
     const runtimeStatusLabel =
         runtimeHealthStatus === 'custom-override'
             ? t('app.apiCustomOverride')
-            : runtimeHealthStatus === 'connected'
-              ? t('app.apiConnected')
-              : t('app.apiDisconnected');
+            : runtimeHealthStatus === 'runtime-ready'
+              ? t('app.apiRuntimeReady')
+              : runtimeHealthStatus === 'route-limited'
+                ? t('app.apiRouteLimited')
+                : t('app.apiDisconnected');
     const runtimeStatusColorClass =
         runtimeHealthStatus === 'custom-override'
             ? 'text-[oklch(0.44_0.08_55)]'
-            : runtimeHealthStatus === 'connected'
+            : runtimeHealthStatus === 'runtime-ready'
               ? 'text-[oklch(0.5_0.12_150)]'
-              : 'text-[oklch(0.58_0.02_55)]';
+              : runtimeHealthStatus === 'route-limited'
+                ? 'text-[oklch(0.56_0.12_82)]'
+                : 'text-[oklch(0.58_0.02_55)]';
 
     return (
         <div

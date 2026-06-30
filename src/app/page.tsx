@@ -89,6 +89,7 @@ import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstre
 import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
 import { resolveMobilePrimaryDisabledReason } from '@/lib/mobile-primary-action-state';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
+import { resolveRuntimeHealthStatus, type RuntimeHealthStatus } from '@/lib/runtime-health-status';
 import { sha256Hex } from '@/lib/sha256';
 import { createImageShareFromBlob } from '@/lib/share-client';
 import { getPresetDimensions, validateGptImage2Size, validatePositiveIntegerImageSize } from '@/lib/size-utils';
@@ -153,6 +154,11 @@ type FeedbackSyncInput = HistoryFeedbackSyncInput;
 type FeedbackSyncPayload = HistoryFeedbackSyncPayload;
 type FeedbackSyncScheduleOptions = {
     pruneQueuedTargets?: boolean;
+};
+type StoredApiSettingsReadResult = {
+    settings: ApiSettings;
+    shouldPersist: boolean;
+    shouldRemove: boolean;
 };
 
 function createFeedbackRequestSignal(signal: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
@@ -221,19 +227,35 @@ function readStoredHistory(): HistoryMetadata[] {
     return [];
 }
 
-function readStoredApiSettings(): ApiSettings {
+function normalizeStoredApiSettings(settings: Partial<ApiSettings>): StoredApiSettingsReadResult {
+    const apiKey = typeof settings.apiKey === 'string' ? settings.apiKey.trim() : '';
+    const baseUrl = typeof settings.baseUrl === 'string' ? settings.baseUrl.trim() : '';
+    if (!apiKey && !baseUrl) {
+        return { settings: emptyApiSettings, shouldPersist: false, shouldRemove: true };
+    }
+    if (!apiKey && baseUrl) {
+        return { settings: emptyApiSettings, shouldPersist: false, shouldRemove: true };
+    }
+    const normalizedSettings: ApiSettings = { apiKey, baseUrl };
+    return {
+        settings: normalizedSettings,
+        shouldPersist: normalizedSettings.apiKey !== settings.apiKey || normalizedSettings.baseUrl !== settings.baseUrl,
+        shouldRemove: false
+    };
+}
+
+function readStoredApiSettings(): StoredApiSettingsReadResult {
     const storedApiSettings = readLocalStorageValue(apiSettingsLocalStorageKey);
-    if (!storedApiSettings) return emptyApiSettings;
+    if (!storedApiSettings) {
+        return { settings: emptyApiSettings, shouldPersist: false, shouldRemove: false };
+    }
     try {
         const parsedSettings = JSON.parse(storedApiSettings) as Partial<ApiSettings>;
-        return {
-            apiKey: typeof parsedSettings.apiKey === 'string' ? parsedSettings.apiKey : '',
-            baseUrl: typeof parsedSettings.baseUrl === 'string' ? parsedSettings.baseUrl : ''
-        };
+        return normalizeStoredApiSettings(parsedSettings);
     } catch (error) {
         console.error('从 localStorage 加载 API 设置失败：', error);
         window.localStorage.removeItem(apiSettingsLocalStorageKey);
-        return emptyApiSettings;
+        return { settings: emptyApiSettings, shouldPersist: false, shouldRemove: false };
     }
 }
 
@@ -320,6 +342,7 @@ type ApiUsage = {
 
 type RuntimeCapabilities = {
     streaming?: {
+        defaultBackend?: 'images-api' | 'responses-image-generation';
         defaultMode?: ImageStreamMode;
         defaultStrategy?: ImageStreamingStrategy;
     };
@@ -348,6 +371,13 @@ type RuntimeCapabilities = {
     };
     channelRouting?: {
         effectiveRequestModes?: string[];
+        requestModeHealth?: Array<{
+            mode: string;
+            configuredCredentialCount: number;
+            healthyCredentialCount: number;
+            configuredChannelCount: number;
+            healthyChannelCount: number;
+        }>;
         effectiveRequestModesByChannel?: Array<{
             channelId: string;
             requestModes: string[];
@@ -361,8 +391,6 @@ type RuntimeCapabilities = {
         activeConstraints?: ImageUpstreamProfile;
     };
 };
-
-type RuntimeHealthStatus = 'connected' | 'disconnected' | 'custom-override';
 
 class ApiRequestError extends Error {
     readonly status?: number;
@@ -675,8 +703,13 @@ export default function HomePage() {
             ? defaultStreamingStrategy
             : activeWorkbenchStreamingStrategy;
     const activeRouteLabel = getWorkbenchRouteLabel(activeWorkbenchBackend, t);
-    const activeRuntimeHealthStatus: RuntimeHealthStatus =
-        hasPairedRequestApiOverride ? 'custom-override' : runtimeCapabilities === null ? 'disconnected' : 'connected';
+    const activeRuntimeHealthStatus: RuntimeHealthStatus = resolveRuntimeHealthStatus({
+        runtimeCapabilities,
+        hasPairedRequestApiOverride,
+        imageBackend: activeWorkbenchBackend,
+        streamingStrategy: activeEffectiveStreamingStrategy,
+        streamMode
+    });
     const activeTaskCount =
         mode === 'generate' && workbenchMode === 'batch'
             ? readBatchPromptLines(genBatchPromptText).length
@@ -1153,7 +1186,13 @@ export default function HomePage() {
 
         fetchAuthStatus();
         queueMicrotask(() => {
-            setApiSettings(readStoredApiSettings());
+            const storedApiSettings = readStoredApiSettings();
+            setApiSettings(storedApiSettings.settings);
+            if (storedApiSettings.shouldRemove) {
+                window.localStorage.removeItem(apiSettingsLocalStorageKey);
+            } else if (storedApiSettings.shouldPersist) {
+                window.localStorage.setItem(apiSettingsLocalStorageKey, JSON.stringify(storedApiSettings.settings));
+            }
         });
     }, [createErrorNotice, t, verifyEntryPasswordHash]);
 

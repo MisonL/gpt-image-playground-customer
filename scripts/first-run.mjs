@@ -12,6 +12,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_ENV_FILES = ['.env.local', '.env.agent.local'];
+const MIN_NODE_VERSION = '>=20.9.0';
 
 function parseArgs(argv) {
     const parsed = {
@@ -58,7 +59,7 @@ export async function buildFirstRunReport(options = {}, env = process.env) {
               timeoutMs: options.timeoutMs || DEFAULT_TIMEOUT_MS,
               headers: authHeaders(env)
           });
-    const agentAuth = readAgentAuthState(env, envSummary);
+    const agentAuth = readAgentAuthState(env, envSummary, service);
     const checks = buildChecks({
         cwd,
         env,
@@ -76,6 +77,7 @@ export async function buildFirstRunReport(options = {}, env = process.env) {
         service_base_url_source: base.source,
         interactive_confirmation_required: base.interactive_confirmation_required,
         agent_auth_process: agentAuth.process,
+        agent_auth_service: agentAuth.service,
         private_agent_env: agentAuth.privateEnv,
         checks,
         env_sources: envSummary.map((source) => summarizeEnvSource(source, cwd)),
@@ -139,12 +141,11 @@ function buildChecks({ cwd, env, envSummary, service, base, validationError }) {
     const packageJson = readPackageJson(cwd);
     const packageLock = existsSync(join(cwd, 'package-lock.json'));
     const nodeModules = existsSync(join(cwd, 'node_modules'));
-    const currentToken = Boolean(env.GPT_IMAGE_AGENT_TOKEN || env.GPT_IMAGE_APP_PASSWORD_HASH);
-    const fileToken = envSummary.some((source) =>
-        ['GPT_IMAGE_AGENT_TOKEN', 'GPT_IMAGE_APP_PASSWORD_HASH'].some((name) => sourceHasSetVariable(source, name))
-    );
+    const agentAuthSchemes = readAgentAuthSchemes(service);
+    const currentAgentAuth = hasAnyConfiguredAgentAuth(env, agentAuthSchemes);
+    const fileAgentAuth = envSummary.some((source) => hasAnyConfiguredAgentAuthSource(source, agentAuthSchemes));
     return [
-        { name: 'node_version', ok: node.ok, current: node.current, required: '>=20.0.0' },
+        { name: 'node_version', ok: node.ok, current: node.current, required: MIN_NODE_VERSION },
         { name: 'package_lock', ok: packageLock },
         {
             name: 'dependencies_installed',
@@ -159,9 +160,10 @@ function buildChecks({ cwd, env, envSummary, service, base, validationError }) {
         },
         {
             name: 'agent_auth_available_to_process',
-            ok: currentToken,
+            ok: currentAgentAuth,
             skipped: !requiresAgentAuth(service),
-            auth_in_private_env_file: fileToken
+            auth_in_private_env_file: fileAgentAuth,
+            required_schemes: agentAuthSchemes
         },
         {
             name: 'page_sse_auth_available_to_process',
@@ -203,15 +205,25 @@ function buildChecks({ cwd, env, envSummary, service, base, validationError }) {
     ];
 }
 
-function readAgentAuthState(env, envSummary) {
+function readAgentAuthState(env, envSummary, service) {
     const hasToken = Boolean(env.GPT_IMAGE_AGENT_TOKEN);
     const hasPasswordHash = Boolean(env.GPT_IMAGE_APP_PASSWORD_HASH);
     const privateSource = envSummary.find((source) => source.path.endsWith('.env.agent.local'));
+    const requiredSchemes = readAgentAuthSchemes(service);
+    const serviceRequiresAuth = requiresAgentAuth(service);
     return {
         process: {
             has_token: hasToken,
             has_password_hash: hasPasswordHash,
             has_any_auth: hasToken || hasPasswordHash
+        },
+        service: {
+            required: serviceRequiresAuth,
+            required_schemes: requiredSchemes,
+            ready: serviceRequiresAuth ? hasAnyConfiguredAgentAuth(env, requiredSchemes) : false,
+            has_token: requiredSchemes.includes('bearer') ? hasToken : false,
+            has_password_hash: requiredSchemes.includes('x-app-password-hash') ? hasPasswordHash : false,
+            has_any_auth: serviceRequiresAuth ? hasAnyConfiguredAgentAuth(env, requiredSchemes) : false
         },
         privateEnv: {
             exists: privateSource?.exists === true,
@@ -223,11 +235,10 @@ function readAgentAuthState(env, envSummary) {
 
 function buildNextActions({ checks, base, service, env, envSummary, validationError }) {
     const actions = [];
-    const hasCurrentAuth = Boolean(env.GPT_IMAGE_AGENT_TOKEN || env.GPT_IMAGE_APP_PASSWORD_HASH);
-    const hasFileAuth = envSummary.some((source) =>
-        ['GPT_IMAGE_AGENT_TOKEN', 'GPT_IMAGE_APP_PASSWORD_HASH'].some((name) => sourceHasSetVariable(source, name))
-    );
-    if (!findCheck(checks, 'node_version').ok) actions.push('安装 Node.js 20 或更新版本。');
+    const agentAuthSchemes = readAgentAuthSchemes(service);
+    const hasCurrentAgentAuth = hasAnyConfiguredAgentAuth(env, agentAuthSchemes);
+    const hasFileAgentAuth = envSummary.some((source) => hasAnyConfiguredAgentAuthSource(source, agentAuthSchemes));
+    if (!findCheck(checks, 'node_version').ok) actions.push(`安装 Node.js ${MIN_NODE_VERSION} 或更新版本。`);
     if (!findCheck(checks, 'dependencies_installed').ok) actions.push('运行 npm install。');
     if (!findCheck(checks, 'env_files').ok) {
         actions.push('复制 .env.example 为 .env.local，或在页面设置里配置默认上游。');
@@ -236,10 +247,8 @@ function buildNextActions({ checks, base, service, env, envSummary, validationEr
         actions.push('把 GPT_IMAGE_PLAYGROUND_URL 或 --base-url 设为不含凭据、查询参数或片段的 http/https 地址。');
         return actions;
     }
-    if (!hasCurrentAuth && requiresAgentAuth(service) && !hasFileAuth) {
-        actions.push(
-            '在仓库外导出 GPT_IMAGE_AGENT_TOKEN 或 GPT_IMAGE_APP_PASSWORD_HASH，再运行受保护的 Agent 脚本。'
-        );
+    if (!hasCurrentAgentAuth && requiresAgentAuth(service) && !hasFileAgentAuth) {
+        actions.push(buildAgentAuthAction(agentAuthSchemes));
     }
     if (requiresPageSsePasswordHash(service) && !env.GPT_IMAGE_APP_PASSWORD_HASH) {
         actions.push(
@@ -252,10 +261,10 @@ function buildNextActions({ checks, base, service, env, envSummary, validationEr
     if (base.interactive_confirmation_required) {
         actions.push('在交互式 Agent 任务里，先和用户确认探测到的服务地址，再发真实请求。');
     }
-    if (!hasCurrentAuth && hasFileAuth) {
+    if (!hasCurrentAgentAuth && hasFileAgentAuth) {
         actions.push('Agent 脚本会自动读取 .env.agent.local；如果仍提示缺少鉴权，请确认文件位于当前仓库根目录且变量名正确。');
     }
-    if (service.ok && hasCurrentAuth) {
+    if (service.ok && hasCurrentAgentAuth) {
         actions.push('运行 npm run agent:doctor 做完整的非计费 Agent 合同检查。');
     }
     return actions;
@@ -269,6 +278,36 @@ function requiresAgentAuth(service) {
 
 function requiresPageSsePasswordHash(service) {
     return service.capabilities?.body?.agent_streaming?.page_sse?.auth?.required === true;
+}
+
+function readAgentAuthSchemes(service) {
+    const schemes = service.capabilities?.body?.auth?.schemes;
+    if (!Array.isArray(schemes)) return [];
+    return schemes.filter((scheme) => typeof scheme === 'string');
+}
+
+function hasAnyConfiguredAgentAuth(env, schemes) {
+    if (schemes.includes('bearer')) return Boolean(env.GPT_IMAGE_AGENT_TOKEN);
+    if (schemes.includes('x-app-password-hash')) return Boolean(env.GPT_IMAGE_APP_PASSWORD_HASH);
+    return Boolean(env.GPT_IMAGE_AGENT_TOKEN || env.GPT_IMAGE_APP_PASSWORD_HASH);
+}
+
+function hasAnyConfiguredAgentAuthSource(source, schemes) {
+    if (schemes.includes('bearer')) return sourceHasSetVariable(source, 'GPT_IMAGE_AGENT_TOKEN');
+    if (schemes.includes('x-app-password-hash')) return sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH');
+    return (
+        sourceHasSetVariable(source, 'GPT_IMAGE_AGENT_TOKEN') || sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH')
+    );
+}
+
+function buildAgentAuthAction(schemes) {
+    if (schemes.includes('bearer')) {
+        return '在仓库外导出 GPT_IMAGE_AGENT_TOKEN，再运行受保护的 Agent 脚本。';
+    }
+    if (schemes.includes('x-app-password-hash')) {
+        return '在仓库外导出 GPT_IMAGE_APP_PASSWORD_HASH，再运行受保护的 Agent 脚本。';
+    }
+    return '在仓库外导出 GPT_IMAGE_AGENT_TOKEN 或 GPT_IMAGE_APP_PASSWORD_HASH，再运行受保护的 Agent 脚本。';
 }
 
 function sourceHasSetVariable(source, name) {
@@ -355,9 +394,10 @@ function findCheck(checks, name) {
 }
 
 function readNodeCheck() {
-    const match = process.version.match(/^v(\d+)\./);
+    const match = process.version.match(/^v(\d+)\.(\d+)\./);
     const major = match ? Number(match[1]) : 0;
-    return { ok: major >= 20, current: process.version };
+    const minor = match ? Number(match[2]) : 0;
+    return { ok: major > 20 || (major === 20 && minor >= 9), current: process.version };
 }
 
 function readPackageJson(cwd) {
@@ -405,6 +445,7 @@ export function formatFirstRunText(report) {
     }
     lines.push(`交互式确认：${report.interactive_confirmation_required ? '需要' : '不需要'}`);
     lines.push(`当前进程鉴权：${formatAuthState(report.agent_auth_process)}`);
+    lines.push(`服务鉴权：${formatServiceAuthState(report.agent_auth_service)}`);
     lines.push(`私有 Agent env：${formatPrivateEnvState(report.private_agent_env)}`);
     lines.push('');
     lines.push('检查项：');
@@ -479,9 +520,16 @@ function buildNotRunSmokeStatus(reason) {
 
 function formatAuthState(auth) {
     if (!auth) return '未知';
+    if (auth.has_token && auth.has_password_hash) return '已加载 token + 访问码哈希';
     if (auth.has_token) return '已加载 token';
     if (auth.has_password_hash) return '已加载访问码哈希';
     return '未加载';
+}
+
+function formatServiceAuthState(auth) {
+    if (!auth) return '未知';
+    if (auth.required === true) return auth.ready ? '已满足当前服务鉴权要求' : '未满足当前服务鉴权要求';
+    return '不需要';
 }
 
 function formatPrivateEnvState(privateEnv) {

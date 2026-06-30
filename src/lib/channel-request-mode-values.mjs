@@ -6,7 +6,7 @@ export const CHANNEL_REQUEST_MODES = Object.freeze([
 ]);
 
 export const CHANNEL_REQUEST_MODE_SMOKE_CASES = Object.freeze({
-    'images-non-stream': Object.freeze(['generate_1k', 'edit_1k']),
+    'images-non-stream': Object.freeze(['orchestration_generate_1k', 'edit_1k']),
     'images-sse': Object.freeze(['page_sse_edit_2k']),
     'responses-non-stream': Object.freeze(['responses_agent_generate_1k']),
     'responses-sse': Object.freeze(['responses_page_sse_generate_1k'])
