@@ -24,4 +24,23 @@ describe('page state regressions', () => {
             /const allowResponsesImageBackend = isResponsesImageBackendRuntimeEnabled\(runtimeCapabilities \?\? \{\}\)/
         );
     });
+
+    it('requires request-level API key before treating a custom base URL as an override', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /const hasRequestApiKey = apiSettings\.apiKey\.trim\(\)\.length > 0;/);
+        assert.match(source, /const hasPairedRequestApiOverride = hasRequestApiKey && hasRequestApiBaseUrl;/);
+        assert.match(source, /const hasRequestApiOverride = hasRequestApiKey;/);
+        assert.match(source, /if \(settings\.baseUrl && !settings\.apiKey\) \{\s*throw new Error\(t\('api\.urlPairRequired'\)\);\s*\}/);
+        assert.match(source, /if \(apiSettings\.baseUrl && apiSettings\.apiKey\) \{/);
+    });
+
+    it('shows the current form route in the status strip instead of inferring from server capability modes', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /const activeWorkbenchBackend = usesEditControls \? editImageBackend : genImageBackend;/);
+        assert.match(source, /const activeRouteLabel = getWorkbenchRouteLabel\(activeWorkbenchBackend, t\);/);
+        assert.match(source, /routeLabel=\{activeRouteLabel\}/);
+        assert.doesNotMatch(source, /const activeRequestModeLabel = React\.useMemo/);
+    });
 });

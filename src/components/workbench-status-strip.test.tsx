@@ -6,21 +6,21 @@ import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 describe('WorkbenchStatusStrip', () => {
-    it('shows model, channel, streaming status, cost, and API state before generation', () => {
+    it('shows model, request route, streaming status, cost, and runtime state before generation', () => {
         const html = renderToStaticMarkup(
             <I18nProvider>
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
-                    channelLabel='默认线路'
+                    routeLabel='images-sse'
                     streamStatus='流式可用'
                     costLabel='预计 0.12 积分'
                 />
             </I18nProvider>
         );
 
-        assert.match(html, /API 连接正常/);
+        assert.match(html, /运行时已连接/);
         assert.match(html, /gpt-image-2/);
-        assert.match(html, /默认线路/);
+        assert.match(html, /images-sse/);
         assert.match(html, /流式可用/);
         assert.match(html, /预计 0\.12 积分/);
     });
@@ -30,7 +30,7 @@ describe('WorkbenchStatusStrip', () => {
             <I18nProvider>
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
-                    channelLabel='默认线路'
+                    routeLabel='默认线路'
                     streamStatus='流式可用'
                     parallelBatchEnabled
                     costLabel='预计 0.24 积分'
@@ -39,5 +39,33 @@ describe('WorkbenchStatusStrip', () => {
         );
 
         assert.match(html, /并发已启用/);
+    });
+
+    it('renders disconnected and custom override runtime states explicitly', () => {
+        const disconnectedHtml = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchStatusStrip
+                    model='gpt-image-2'
+                    routeLabel='服务器默认'
+                    streamStatus='普通生成'
+                    costLabel='预计 0.12 积分'
+                    runtimeHealthStatus='disconnected'
+                />
+            </I18nProvider>
+        );
+        const customOverrideHtml = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchStatusStrip
+                    model='gpt-image-2'
+                    routeLabel='使用自定义上游'
+                    streamStatus='普通生成'
+                    costLabel='预计 0.12 积分'
+                    runtimeHealthStatus='custom-override'
+                />
+            </I18nProvider>
+        );
+
+        assert.match(disconnectedHtml, /运行时未连接/);
+        assert.match(customOverrideHtml, /使用自定义上游/);
     });
 });

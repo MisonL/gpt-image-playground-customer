@@ -7,6 +7,7 @@ import {
 import type { HistoryMetadata } from '@/lib/history-metadata';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -126,6 +127,16 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /未标记/);
         assert.match(html, /aria-label="标记本次结果可用"/);
         assert.match(html, /aria-label="标记本次结果需要修改"/);
+    });
+
+    it('formats summary and token counters with the active locale', async () => {
+        const source = await readFile(new URL('./history-panel.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /totalImages\.toLocaleString\(locale\)/);
+        assert.match(source, /actualQuota\.toLocaleString\(\s*locale\s*\)/);
+        assert.match(source, /text_input_tokens\.toLocaleString\(\s*locale\s*\)/);
+        assert.match(source, /image_input_tokens\.toLocaleString\(\s*locale\s*\)/);
+        assert.match(source, /image_output_tokens\.toLocaleString\(\s*locale\s*\)/);
     });
 
     it('renders saved result feedback on completed history cards', () => {
