@@ -647,14 +647,12 @@ export default function HomePage() {
             : []
     });
     const hasRequestApiKey = apiSettings.apiKey.trim().length > 0;
-    const hasRequestApiBaseUrl = apiSettings.baseUrl.trim().length > 0;
-    const hasPairedRequestApiOverride = hasRequestApiKey && hasRequestApiBaseUrl;
     const hasRequestApiOverride = hasRequestApiKey;
-    const activeUpstreamProfile = hasPairedRequestApiOverride
+    const activeUpstreamProfile = hasRequestApiOverride
         ? activeUpstreamProfileSummary.activeConstraints
         : runtimeCapabilities?.upstreamProfile?.activeConstraints || IMAGE_UPSTREAM_PROFILES['openai-compatible'];
     const activeUpstreamProfileMixed =
-        !hasPairedRequestApiOverride && runtimeCapabilities?.upstreamProfile?.serverProfileMixed === true;
+        !hasRequestApiOverride && runtimeCapabilities?.upstreamProfile?.serverProfileMixed === true;
     const allowResponsesImageBackend = shouldAllowResponsesImageBackend({
         runtimeCapabilities,
         hasRequestApiOverride
@@ -705,7 +703,7 @@ export default function HomePage() {
     const activeRouteLabel = getWorkbenchRouteLabel(activeWorkbenchBackend, t);
     const activeRuntimeHealthStatus: RuntimeHealthStatus = resolveRuntimeHealthStatus({
         runtimeCapabilities,
-        hasPairedRequestApiOverride,
+        hasRequestApiOverride,
         imageBackend: activeWorkbenchBackend,
         streamingStrategy: activeEffectiveStreamingStrategy,
         streamMode

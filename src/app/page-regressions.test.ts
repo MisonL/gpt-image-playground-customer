@@ -25,14 +25,17 @@ describe('page state regressions', () => {
         );
     });
 
-    it('requires request-level API key before treating a custom base URL as an override', async () => {
+    it('treats request-level API key as an override while rejecting base URL-only settings', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+        const runtimeStatusCall = source.match(/resolveRuntimeHealthStatus\(\{([\s\S]*?)\n\s*\}\)/)?.[1] ?? '';
 
         assert.match(source, /const hasRequestApiKey = apiSettings\.apiKey\.trim\(\)\.length > 0;/);
-        assert.match(source, /const hasPairedRequestApiOverride = hasRequestApiKey && hasRequestApiBaseUrl;/);
         assert.match(source, /const hasRequestApiOverride = hasRequestApiKey;/);
+        assert.match(runtimeStatusCall, /hasRequestApiOverride/);
+        assert.match(runtimeStatusCall, /imageBackend: activeWorkbenchBackend/);
         assert.match(source, /if \(settings\.baseUrl && !settings\.apiKey\) \{\s*throw new Error\(t\('api\.urlPairRequired'\)\);\s*\}/);
         assert.match(source, /if \(apiSettings\.baseUrl && apiSettings\.apiKey\) \{/);
+        assert.doesNotMatch(source, /hasPairedRequestApiOverride/);
     });
 
     it('cleans stale local request API overrides that only persisted a base URL', async () => {
