@@ -22,7 +22,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         ]
                     }
                 },
-                hasPairedRequestApiOverride: false,
+                hasRequestApiOverride: false,
                 imageBackend: 'images-api',
                 streamingStrategy: 'auto',
                 streamMode: 'stream'
@@ -50,7 +50,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         ]
                     }
                 },
-                hasPairedRequestApiOverride: false,
+                hasRequestApiOverride: false,
                 imageBackend: 'server-default',
                 streamingStrategy: 'auto',
                 streamMode: 'auto'
@@ -63,7 +63,7 @@ describe('resolveRuntimeHealthStatus', () => {
         assert.equal(
             resolveRuntimeHealthStatus({
                 runtimeCapabilities: null,
-                hasPairedRequestApiOverride: true,
+                hasRequestApiOverride: true,
                 imageBackend: 'images-api',
                 streamingStrategy: 'auto',
                 streamMode: 'auto'
@@ -91,12 +91,32 @@ describe('resolveRuntimeHealthStatus', () => {
                         ]
                     }
                 },
-                hasPairedRequestApiOverride: false,
+                hasRequestApiOverride: false,
                 imageBackend: 'responses-image-generation',
                 streamingStrategy: 'auto',
                 streamMode: 'stream'
             }),
             'route-limited'
+        );
+    });
+
+    it('marks request API key-only overrides before server route health checks', () => {
+        assert.equal(
+            resolveRuntimeHealthStatus({
+                runtimeCapabilities: {
+                    streaming: { defaultBackend: 'images-api' },
+                    responsesImageBackend: { enabled: true },
+                    channelRouting: {
+                        effectiveRequestModes: [],
+                        requestModeHealth: []
+                    }
+                },
+                hasRequestApiOverride: true,
+                imageBackend: 'images-api',
+                streamingStrategy: 'auto',
+                streamMode: 'auto'
+            }),
+            'custom-override'
         );
     });
 });

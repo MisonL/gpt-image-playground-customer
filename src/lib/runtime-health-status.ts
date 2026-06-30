@@ -81,12 +81,12 @@ function hasHealthyRequestMode(
 
 export function resolveRuntimeHealthStatus(input: {
     runtimeCapabilities: RuntimeHealthCapabilities | null;
-    hasPairedRequestApiOverride: boolean;
+    hasRequestApiOverride: boolean;
     imageBackend: ImageUpstreamFormBackend;
     streamingStrategy: ImageStreamingStrategy;
     streamMode: ImageStreamMode;
 }): RuntimeHealthStatus {
-    if (input.hasPairedRequestApiOverride) return 'custom-override';
+    if (input.hasRequestApiOverride) return 'custom-override';
     if (input.runtimeCapabilities === null) return 'disconnected';
     const requestedBackend = resolveRequestedBackend({
         runtimeCapabilities: input.runtimeCapabilities,

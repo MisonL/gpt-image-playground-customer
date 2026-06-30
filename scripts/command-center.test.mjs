@@ -1188,27 +1188,27 @@ describe('Command center scripts', () => {
                     response.end(
                         JSON.stringify({
                             job: {
-                                id: 'doctor-orchestration-job',
+                                id: 'doctor-agent-job',
                                 state: 'running',
-                                result_url: '/api/agent/jobs/doctor-orchestration-job/result',
+                                result_url: '/api/agent/jobs/doctor-agent-job/result',
                                 retry_after_seconds: 1
                             }
                         })
                     );
                     return;
                 }
-                if (request.url === '/api/agent/jobs/doctor-orchestration-job/result') {
+                if (request.url === '/api/agent/jobs/doctor-agent-job/result') {
                     response.writeHead(200, { 'content-type': 'application/json' });
                     response.end(
                         JSON.stringify({
-                            request_id: 'doctor-orchestration-job',
-                            idempotency_key: 'agent-doctor-orchestration-generate',
+                            request_id: 'doctor-agent-job',
+                            idempotency_key: 'agent-doctor-agent-generate',
                             cached: false,
-                            images: [{ id: 'doctor-orchestration', filename: 'doctor-orchestration.png' }],
+                            images: [{ id: 'doctor-agent', filename: 'doctor-agent.png' }],
                             execution: {
-                                transport: 'server_orchestrated',
-                                endpoint: '/api/agent/image-requests',
-                                route_mode: 'auto',
+                                transport: 'agent_json',
+                                endpoint: '/api/agent/jobs/images/generate',
+                                route_mode: 'agent',
                                 image_backend: 'images-api',
                                 stream_mode: 'non_stream',
                                 streaming_strategy: 'off',
