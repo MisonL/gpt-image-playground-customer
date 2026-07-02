@@ -16,7 +16,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - 批量 generate/edit：优先运行 `scripts/batch-images.mjs`，用 JSONL 输入和 append-only manifest 管理续跑。
 - 转换本地图片格式：优先运行 `scripts/convert-image-format.mjs`。
 - 查询页面请求的结果反馈或日志诊断摘要：优先运行 `scripts/diagnose-request.mjs`。
-- 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。接入新上游渠道时，先确认 `/models` 和 `/images/generations` 能通，再用 `npm run smoke:image-upstream-real -- --allow-billable` 逐个验证 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`；如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，就把该渠道的 `responses-non-stream`、`responses-sse` 从 `OPENAI_CHANNEL_N_REQUEST_MODES` 移除。
+- 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。接入新上游渠道时，先确认 `/models` 和 `/images/generations` 能通，再用 `npm run smoke:image-upstream-real -- --allow-billable` 逐个验证 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。如果某一路径先返回 `object=image.task,status=pending`，说明该请求方式不是直接完成结果；应先确认同一业务键能否在同一渠道下重试拿到最终图片，再把可用的 `request_modes` 写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，就把该渠道的 `responses-non-stream`、`responses-sse` 从 `OPENAI_CHANNEL_N_REQUEST_MODES` 移除。
 - 不要临时编写 Node/Python/shell 脚本、curl 命令或手写 fetch/FormData 来重复实现这些脚本已经覆盖的 API 调用。
 - 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下 ad hoc 调用脚本。
 - 先用 dry-run、`--check-remote` 或 `--contract-check` 检查请求、路由、鉴权和服务声明的默认编排入口；只有用户明确允许真实计费时才加 `--allow-billable`。
