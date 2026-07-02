@@ -1,4 +1,5 @@
 import { appLogger } from './app-logger';
+import type { ChannelRequestMode } from './channel-request-mode';
 import type { ChannelCredential } from './channel-router';
 import {
     RequestValidationError,
@@ -22,6 +23,10 @@ import {
     type StorageMode,
     type ValidOutputFormat
 } from './image-request-utils';
+import {
+    resolveAcceptedImageTaskResponse,
+    type AcceptedImageTaskResponseError
+} from './image-service';
 import {
     appendAccessCookie,
     reportServerCredentialFailure,
@@ -61,9 +66,11 @@ type CommonModeInput = {
     apiBaseUrl?: string;
     apiKey: string;
     startedAtMs: number;
+    upstreamIdempotencyKey?: string;
     clientRequestId?: string;
     requestLogContext?: RequestLogContext;
     selectedCredential?: ChannelCredential;
+    channelRequestMode?: ChannelRequestMode;
     accessCookie?: AccessCookie;
     abortSignal?: AbortSignal;
     streamFallbackEnabled?: boolean;
@@ -214,8 +221,24 @@ function readResponsesImageExtensions(
 function openAiRequestOptions(input: CommonModeInput): OpenAI.RequestOptions {
     return buildOpenAIImageRequestOptions({
         abortSignal: input.abortSignal,
+        idempotencyKey: input.upstreamIdempotencyKey,
         headers: mergeUpstreamHeadersWithFixed(input.upstreamHeaders, {})
     });
+}
+
+function onAcceptedImageTask(input: CommonModeInput, modeLabel: string) {
+    return (details: AcceptedImageTaskResponseError, attempt: number, delayMs: number) => {
+        appLogger.warn(`上游 ${modeLabel} 返回异步图片任务，等待后重试同步结果。`, {
+            ...input.requestLogContext,
+            idempotencyKey: input.upstreamIdempotencyKey,
+            channelId: input.selectedCredential?.channelId,
+            requestMode: input.channelRequestMode,
+            attempt,
+            delayMs,
+            taskId: details.taskId,
+            hasPollUrl: Boolean(details.pollUrl)
+        });
+    };
 }
 
 async function createResponsesImageResult(input: CommonModeInput, options: GenerateOptions): Promise<ImageModeResult> {
@@ -235,6 +258,7 @@ async function createResponsesImageResult(input: CommonModeInput, options: Gener
             outputFormat: options.outputFormat,
             background: options.background,
             moderation: options.moderation,
+            idempotencyKey: input.upstreamIdempotencyKey,
             abortSignal: input.abortSignal,
             ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
             ...readResponsesImageExtensions(input.formData)
@@ -259,6 +283,7 @@ async function createResponsesImageResultOnly(
         outputFormat: options.outputFormat,
         background: options.background,
         moderation: options.moderation,
+        idempotencyKey: input.upstreamIdempotencyKey,
         abortSignal: input.abortSignal,
         ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
         ...readResponsesImageExtensions(input.formData)
@@ -282,6 +307,7 @@ async function createResponsesImageStreamResponse(
         outputFormat: options.outputFormat,
         background: options.background,
         moderation: options.moderation,
+        idempotencyKey: input.upstreamIdempotencyKey,
         partialImagesCount: toResponsesPartialImagesCount(input.partialImagesCount),
         abortSignal: input.abortSignal,
         ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
@@ -324,7 +350,10 @@ async function createImagesGenerateResultOnly(
     const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...options.baseParams, stream: false };
     appLogger.info('调用 OpenAI generate。', input.requestLogContext);
     appLogger.debug('调用 OpenAI generate，参数：', { ...params, ...input.requestLogContext });
-    return input.openai.images.generate(params, openAiRequestOptions(input));
+    return resolveAcceptedImageTaskResponse(
+        () => input.openai.images.generate(params, openAiRequestOptions(input)).withResponse(),
+        { abortSignal: input.abortSignal, onAcceptedTask: onAcceptedImageTask(input, 'generate') }
+    );
 }
 
 async function createGenerateStreamResponse(
@@ -342,6 +371,7 @@ async function createGenerateStreamResponse(
             apiBaseUrl: input.apiBaseUrl,
             apiKey: input.apiKey,
             upstreamHeaders: input.upstreamHeaders,
+            idempotencyKey: input.upstreamIdempotencyKey,
             abortSignal: input.abortSignal,
             params: streamParams
         });
@@ -461,7 +491,10 @@ async function createEditResultOnly(
     };
     appLogger.info('调用 OpenAI edit。', input.requestLogContext);
     logEditParams(input, options, params);
-    return input.openai.images.edit(params, openAiRequestOptions(input));
+    return resolveAcceptedImageTaskResponse(
+        () => input.openai.images.edit(params, openAiRequestOptions(input)).withResponse(),
+        { abortSignal: input.abortSignal, onAcceptedTask: onAcceptedImageTask(input, 'edit') }
+    );
 }
 
 async function createEditStreamResponse(input: CommonModeInput, options: EditOptions): Promise<ImageModeResult> {
@@ -531,6 +564,7 @@ export async function handleEditImageMode(
             outputFormat: options.outputFormat,
             background: 'auto' as const,
             moderation: options.moderation,
+            idempotencyKey: input.upstreamIdempotencyKey,
             abortSignal: input.abortSignal,
             ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
             ...readResponsesImageExtensions(input.formData)

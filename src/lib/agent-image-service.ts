@@ -68,6 +68,9 @@ import {
 import {
     InvalidOpenAiImagesResponseError,
     MissingOpenAiImageDataError,
+    readAcceptedImageTaskDetails,
+    resolveAcceptedImageTaskResponse,
+    type AcceptedImageTaskResponseError,
     persistOpenAiImages as persistSharedOpenAiImages
 } from './image-service';
 import { collectOpenAiImagesFromStream } from './image-stream-collector';
@@ -184,6 +187,8 @@ const AGENT_EDIT_UNSUPPORTED_FIELDS = [
     'moderation'
 ] as const;
 
+const HTTP_HEADER_VALUE_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/;
+
 export function readIdempotencyKey(headers: Headers): string {
     const value = headers.get('idempotency-key')?.trim();
     if (!value) {
@@ -201,6 +206,15 @@ export function readIdempotencyKey(headers: Headers): string {
             status: 422,
             retryable: false,
             details: { fields: { 'Idempotency-Key': '长度不能超过 200 个字符' } }
+        });
+    }
+    if (HTTP_HEADER_VALUE_CONTROL_CHAR_PATTERN.test(value)) {
+        throw new AgentApiError({
+            code: 'validation_error',
+            message: 'Idempotency-Key 不能包含控制字符。',
+            status: 422,
+            retryable: false,
+            details: { fields: { 'Idempotency-Key': '不能包含控制字符' } }
         });
     }
     return value;
@@ -315,11 +329,29 @@ export async function prepareAgentEdit(formData: FormData, headers: Headers): Pr
     return { credentialContext, prompt, model, n, size, quality, responseMode, streamRequest, imageFiles, maskFile };
 }
 
-function buildOpenAiRequestOptions(context: CredentialContext, abortSignal?: AbortSignal): OpenAI.RequestOptions {
+function buildOpenAiRequestOptions(
+    context: CredentialContext,
+    input: { abortSignal?: AbortSignal; idempotencyKey: string }
+): OpenAI.RequestOptions {
     return buildOpenAIImageRequestOptions({
-        abortSignal,
+        abortSignal: input.abortSignal,
+        idempotencyKey: input.idempotencyKey,
         headers: mergeUpstreamHeadersWithFixed(context.upstreamHeaders, {})
     });
+}
+
+function onAgentAcceptedImageTask(context: CredentialContext, modeLabel: string, idempotencyKey: string) {
+    return (details: AcceptedImageTaskResponseError, attempt: number, delayMs: number) => {
+        appLogger.warn(`Agent ${modeLabel} 上游返回异步图片任务，等待后重试同步结果。`, {
+            idempotencyKey,
+            channelId: context.selectedCredential?.channelId,
+            requestMode: context.channelRequestMode,
+            attempt,
+            delayMs,
+            taskId: details.taskId,
+            hasPollUrl: Boolean(details.pollUrl)
+        });
+    };
 }
 
 async function acquireAgentChannelCapacity(
@@ -395,7 +427,12 @@ export async function executeAgentGenerate(options: {
     let channelLease: ChannelCapacityLease | undefined;
     try {
         channelLease = await acquireAgentChannelCapacity(credentialContext, options.abortSignal);
-        const result = await executeAgentGenerateUpstream(options.request, credentialContext, options.abortSignal);
+        const result = await executeAgentGenerateUpstream(
+            options.request,
+            credentialContext,
+            options.idempotencyKey,
+            options.abortSignal
+        );
         channelLease?.release();
         channelLease = undefined;
         return await persistOpenAiImages({
@@ -445,6 +482,7 @@ export async function executeAgentGenerate(options: {
 async function executeAgentGenerateUpstream(
     request: AgentGenerateRequest,
     credentialContext: CredentialContext,
+    idempotencyKey: string,
     abortSignal?: AbortSignal
 ): Promise<OpenAI.Images.ImagesResponse> {
     const { openai } = credentialContext;
@@ -458,7 +496,7 @@ async function executeAgentGenerateUpstream(
         channelRequestMode: credentialContext.channelRequestMode
     };
     if (request.image_backend === 'responses-image-generation') {
-        return executeAgentResponsesGenerate(request, credentialContext, abortSignal);
+        return executeAgentResponsesGenerate(request, credentialContext, idempotencyKey, abortSignal);
     }
     const baseParams = {
         model: request.model,
@@ -473,21 +511,34 @@ async function executeAgentGenerateUpstream(
         ...(request.force_web !== undefined ? { force_web: request.force_web } : {})
     };
     if (!shouldUseAgentUpstreamStream(streamOptions)) {
-        return openai.images.generate(
-            { ...baseParams, stream: false },
-            buildOpenAiRequestOptions(credentialContext, abortSignal)
+        return resolveAcceptedImageTaskResponse(
+            () =>
+                openai.images
+                    .generate(
+                        { ...baseParams, stream: false },
+                        buildOpenAiRequestOptions(credentialContext, { abortSignal, idempotencyKey })
+                    )
+                    .withResponse(),
+            { abortSignal, onAcceptedTask: onAgentAcceptedImageTask(credentialContext, 'generate', idempotencyKey) }
         );
     }
     const fallback = () =>
-        openai.images.generate(
-            { ...baseParams, stream: false },
-            buildOpenAiRequestOptions(credentialContext, abortSignal)
+        resolveAcceptedImageTaskResponse(
+            () =>
+                openai.images
+                    .generate(
+                        { ...baseParams, stream: false },
+                        buildOpenAiRequestOptions(credentialContext, { abortSignal, idempotencyKey })
+                    )
+                    .withResponse(),
+            { abortSignal, onAcceptedTask: onAgentAcceptedImageTask(credentialContext, 'generate', idempotencyKey) }
         );
     try {
         const stream = await createImagesApiGenerateStream({
             apiBaseUrl: credentialContext.baseUrl,
             apiKey: credentialContext.apiKey,
             upstreamHeaders: credentialContext.upstreamHeaders,
+            idempotencyKey,
             abortSignal,
             params: {
                 ...baseParams,
@@ -544,6 +595,7 @@ function validateAgentGenerateAgainstUpstreamProfile(
 async function executeAgentResponsesGenerate(
     request: AgentGenerateRequest,
     credentialContext: CredentialContext,
+    idempotencyKey: string,
     abortSignal?: AbortSignal
 ): Promise<OpenAI.Images.ImagesResponse> {
     const { openai } = credentialContext;
@@ -566,6 +618,7 @@ async function executeAgentResponsesGenerate(
         outputFormat: request.output_format,
         background: request.background,
         moderation: request.moderation,
+        idempotencyKey,
         abortSignal,
         ...(request.output_compression !== undefined ? { outputCompression: request.output_compression } : {}),
         ...(request.promptOptimization !== undefined ? { promptOptimization: request.promptOptimization } : {}),
@@ -699,6 +752,8 @@ export async function executeAgentEdit(options: {
     try {
         const preparation = options.preparation ?? (await prepareAgentEdit(options.formData, options.headers));
         credentialContext = preparation.credentialContext;
+        // Keep a const alias so TypeScript preserves the narrowed credential context below.
+        const activeCredentialContext = credentialContext;
         const editParams: OpenAI.Images.ImageEditParamsNonStreaming = {
             model: preparation.model,
             prompt: preparation.prompt,
@@ -714,20 +769,37 @@ export async function executeAgentEdit(options: {
             streamMode: preparation.streamRequest.streamMode,
             streamingStrategy: preparation.streamRequest.streamingStrategy,
             partialImages: preparation.streamRequest.partialImages,
-            selectedCredential: credentialContext.selectedCredential,
-            channelRequestMode: credentialContext.channelRequestMode
+            selectedCredential: activeCredentialContext.selectedCredential,
+            channelRequestMode: activeCredentialContext.channelRequestMode
         };
-        channelLease = await acquireAgentChannelCapacity(credentialContext, options.abortSignal);
+        channelLease = await acquireAgentChannelCapacity(activeCredentialContext, options.abortSignal);
         const result = shouldUseAgentUpstreamStream(streamOptions)
             ? await executeAgentEditStream({
-                  credentialContext,
+                  credentialContext: activeCredentialContext,
                   params: editParams,
                   streamOptions,
+                  idempotencyKey: options.idempotencyKey,
                   abortSignal: options.abortSignal
               })
-            : await credentialContext.openai.images.edit(
-                  editParams,
-                  buildOpenAiRequestOptions(credentialContext, options.abortSignal)
+            : await resolveAcceptedImageTaskResponse(
+                  () =>
+                      activeCredentialContext.openai.images
+                          .edit(
+                              editParams,
+                              buildOpenAiRequestOptions(activeCredentialContext, {
+                                  abortSignal: options.abortSignal,
+                                  idempotencyKey: options.idempotencyKey
+                              })
+                          )
+                          .withResponse(),
+                  {
+                      abortSignal: options.abortSignal,
+                      onAcceptedTask: onAgentAcceptedImageTask(
+                          activeCredentialContext,
+                          'edit',
+                          options.idempotencyKey
+                      )
+                  }
               );
         channelLease?.release();
         channelLease = undefined;
@@ -742,9 +814,9 @@ export async function executeAgentEdit(options: {
             requestId: options.requestId,
             idempotencyKey: options.idempotencyKey,
             cached: options.cached,
-            apiBaseUrl: credentialContext.baseUrl,
-            apiKey: credentialContext.apiKey,
-            upstreamHeaders: credentialContext.upstreamHeaders,
+            apiBaseUrl: activeCredentialContext.baseUrl,
+            apiKey: activeCredentialContext.apiKey,
+            upstreamHeaders: activeCredentialContext.upstreamHeaders,
             execution: {
                 startedAtMs,
                 startedAt,
@@ -757,10 +829,10 @@ export async function executeAgentEdit(options: {
                 imageBackend: 'images-api',
                 streamMode: preparation.streamRequest.streamMode,
                 streamingStrategy: preparation.streamRequest.streamingStrategy,
-                channelRequestMode: credentialContext.channelRequestMode,
-                channelRequestModeFallbackApplied: credentialContext.channelRequestModeFallbackApplied,
-                channelRequestModeDecision: credentialContext.channelRequestModeDecision,
-                selectedCredential: credentialContext.selectedCredential
+                channelRequestMode: activeCredentialContext.channelRequestMode,
+                channelRequestModeFallbackApplied: activeCredentialContext.channelRequestModeFallbackApplied,
+                channelRequestModeDecision: activeCredentialContext.channelRequestModeDecision,
+                selectedCredential: activeCredentialContext.selectedCredential
             },
             abortSignal: options.abortSignal
         });
@@ -780,10 +852,21 @@ async function executeAgentEditStream(input: {
     credentialContext: CredentialContext;
     params: OpenAI.Images.ImageEditParamsNonStreaming;
     streamOptions: AgentStreamOptions;
+    idempotencyKey: string;
     abortSignal?: AbortSignal;
 }): Promise<OpenAI.Images.ImagesResponse> {
-    const requestOptions = buildOpenAiRequestOptions(input.credentialContext, input.abortSignal);
-    const fallback = () => input.credentialContext.openai.images.edit(input.params, requestOptions);
+    const requestOptions = buildOpenAiRequestOptions(input.credentialContext, {
+        abortSignal: input.abortSignal,
+        idempotencyKey: input.idempotencyKey
+    });
+    const fallback = () =>
+        resolveAcceptedImageTaskResponse(
+            () => input.credentialContext.openai.images.edit(input.params, requestOptions).withResponse(),
+            {
+                abortSignal: input.abortSignal,
+                onAcceptedTask: onAgentAcceptedImageTask(input.credentialContext, 'edit', input.idempotencyKey)
+            }
+        );
     try {
         const stream = await input.credentialContext.openai.images.edit(
             {
@@ -1145,16 +1228,20 @@ async function persistOpenAiImages(options: {
         if (!(error instanceof InvalidOpenAiImagesResponseError) && !(error instanceof MissingOpenAiImageDataError)) {
             throw error;
         }
+        const acceptedTask =
+            error instanceof InvalidOpenAiImagesResponseError ? readAcceptedImageTaskDetails(error.result) : undefined;
         throw new AgentApiError({
             code: 'upstream_unavailable',
             message:
                 error instanceof MissingOpenAiImageDataError
                     ? `索引 ${error.index} 的图片数据缺少 base64 数据。`
-                    : '上游返回了空的 Images 响应。',
+                    : acceptedTask
+                      ? '上游返回了异步图片任务元数据，而不是最终图片结果；当前渠道不兼容该请求方式。'
+                      : '上游返回了空的 Images 响应。',
             status: 502,
-            retryable: true,
+            retryable: !acceptedTask,
             upstreamStatus: 502,
-            retryAfterSeconds: 15
+            ...(acceptedTask ? {} : { retryAfterSeconds: 15 })
         });
     }
 

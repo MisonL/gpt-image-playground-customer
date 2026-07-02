@@ -205,6 +205,62 @@ export async function startImagesStreamFallbackUpstream(): Promise<{
     return { ...result, calls };
 }
 
+export async function startImagesAcceptedTaskStreamFallbackUpstream(): Promise<{
+    baseUrl: string;
+    calls: Array<{ stream?: boolean; partial_images?: number; idempotencyKey?: string | string[] }>;
+    close: () => Promise<void>;
+}> {
+    const calls: Array<{ stream?: boolean; partial_images?: number; idempotencyKey?: string | string[] }> = [];
+    let nonStreamAttempts = 0;
+    const server = http.createServer(async (request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/images/generations')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        await new Promise<void>((resolve) => request.on('end', resolve));
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+            stream?: boolean;
+            partial_images?: number;
+        };
+        calls.push({
+            stream: payload.stream,
+            partial_images: payload.partial_images,
+            idempotencyKey: request.headers['idempotency-key']
+        });
+        if (payload.stream) {
+            response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            response.write(
+                `event: image_generation.partial_image\ndata: ${JSON.stringify({
+                    type: 'image_generation.partial_image',
+                    b64_json: 'partial-before-accepted-task-fallback'
+                })}\n\n`
+            );
+            response.write('data: [DONE]\n\n');
+            response.end();
+            return;
+        }
+        nonStreamAttempts += 1;
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        if (nonStreamAttempts === 1) {
+            response.end(
+                JSON.stringify({
+                    object: 'image.task',
+                    status: 'pending',
+                    task_id: 'fallback-task',
+                    poll_url: '/api/image-tasks?ids=fallback-task'
+                })
+            );
+            return;
+        }
+        response.end(JSON.stringify({ data: [{ b64_json: PNG_BASE64 }] }));
+    });
+    const result = await listen(server);
+    return { ...result, calls };
+}
+
 export async function startHangingImagesStreamUpstream(): Promise<{
     baseUrl: string;
     calls: Array<{ stream?: boolean; partial_images?: number }>;
