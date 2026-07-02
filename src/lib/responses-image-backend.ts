@@ -35,6 +35,7 @@ export type ResponsesImageGenerateInput = {
     outputCompression?: number;
     promptOptimization?: boolean;
     thinking?: string;
+    idempotencyKey?: string;
     abortSignal?: AbortSignal;
 };
 
@@ -196,7 +197,7 @@ export async function generateImageWithResponsesBackend(
             tool_choice: { type: 'image_generation' },
             tools: [buildResponsesImageTool(input)]
         },
-        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal, idempotencyKey: input.idempotencyKey })
     );
     const imageResults = extractCompletedImageResults(response.output);
 
@@ -226,7 +227,7 @@ export async function editImageWithResponsesBackend(
             tool_choice: { type: 'image_generation' },
             tools: [await buildResponsesImageEditTool(input)]
         },
-        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal, idempotencyKey: input.idempotencyKey })
     );
     const imageResults = extractCompletedImageResults(response.output);
 
@@ -254,7 +255,7 @@ export async function createResponsesImageStream(input: ResponsesImageStreamInpu
             tool_choice: { type: 'image_generation' },
             tools: [buildResponsesImageTool(input, input.partialImagesCount)]
         },
-        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal, idempotencyKey: input.idempotencyKey })
     );
 }
 
@@ -269,6 +270,6 @@ export async function createResponsesImageEditStream(
             tool_choice: { type: 'image_generation' },
             tools: [await buildResponsesImageEditTool(input, input.partialImagesCount)]
         },
-        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal, idempotencyKey: input.idempotencyKey })
     );
 }

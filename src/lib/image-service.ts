@@ -1,4 +1,5 @@
 import { detectImageFormat, readImageDimensions, writeFileAtomic } from './agent-file-utils';
+import { readAcceptedImageTaskDetails } from './accepted-image-task';
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
 import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
@@ -6,6 +7,14 @@ import { createBatchId, createImageFilename, outputDir } from './server-runtime'
 import fs from 'fs/promises';
 import type OpenAI from 'openai';
 import path from 'path';
+
+export { readAcceptedImageTaskDetails } from './accepted-image-task';
+export type { AcceptedImageTaskDetails } from './accepted-image-task';
+
+const DEFAULT_ACCEPTED_IMAGE_TASK_MAX_ATTEMPTS = 3;
+const DEFAULT_ACCEPTED_IMAGE_TASK_RETRY_DELAY_MS = 5_000;
+const MAX_ACCEPTED_IMAGE_TASK_RETRY_DELAY_MS = 15_000;
+const MAX_ACCEPTED_IMAGE_TASK_RETRY_AFTER_SECONDS = 300;
 
 export type PersistedOpenAiImage = {
     filename: string;
@@ -45,11 +54,109 @@ export class MissingOpenAiImageDataError extends Error {
     }
 }
 
+export class AcceptedImageTaskResponseError extends Error {
+    readonly taskId?: string;
+    readonly pollUrl?: string;
+    readonly retryAfterSeconds?: number;
+    readonly status = 502;
+
+    constructor(input: { taskId?: string; pollUrl?: string; retryAfterSeconds?: number }) {
+        super('上游返回了异步图片任务，但没有拿到可直接消费的最终图片结果。');
+        this.name = 'AcceptedImageTaskResponseError';
+        this.taskId = input.taskId;
+        this.pollUrl = input.pollUrl;
+        this.retryAfterSeconds = input.retryAfterSeconds;
+    }
+}
+
 export function assertOpenAiImagesResponse(result: unknown): asserts result is ValidImagesResponse {
     const candidate = result as Partial<OpenAI.Images.ImagesResponse> | null | undefined;
     if (!candidate || typeof candidate !== 'object' || !Array.isArray(candidate.data) || candidate.data.length === 0) {
         throw new InvalidOpenAiImagesResponseError(result);
     }
+}
+
+export function readRetryAfterSecondsHeader(value: unknown): number | undefined {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    if (!/^[1-9]\d*$/.test(normalized)) return undefined;
+    const parsed = Number(normalized);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) return undefined;
+    return parsed;
+}
+
+export async function resolveAcceptedImageTaskResponse<T extends OpenAI.Images.ImagesResponse>(
+    operation: () => Promise<{ data: T; response?: Response }>,
+    options: {
+        abortSignal?: AbortSignal;
+        maxAttempts?: number;
+        retryDelayMs?: number;
+        sleep?: (ms: number, abortSignal?: AbortSignal) => Promise<void>;
+        onAcceptedTask?: (details: AcceptedImageTaskResponseError, attempt: number, delayMs: number) => void;
+    } = {}
+): Promise<T> {
+    const maxAttempts = Math.max(1, options.maxAttempts ?? DEFAULT_ACCEPTED_IMAGE_TASK_MAX_ATTEMPTS);
+    const sleep = options.sleep ?? delayAcceptedImageTaskResponse;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        throwIfAcceptedImageTaskRetryAborted(options.abortSignal);
+        const { data, response } = await operation();
+        const acceptedTask = readAcceptedImageTaskDetails(data);
+        if (!acceptedTask) return data;
+
+        const retryDelayMs = readAcceptedImageTaskRetryDelayMs(
+            response?.headers.get('retry-after'),
+            options.retryDelayMs ?? DEFAULT_ACCEPTED_IMAGE_TASK_RETRY_DELAY_MS
+        );
+        const error = new AcceptedImageTaskResponseError({
+            ...acceptedTask,
+            retryAfterSeconds: Math.ceil(retryDelayMs / 1000)
+        });
+        if (attempt >= maxAttempts) throw error;
+        options.onAcceptedTask?.(error, attempt, retryDelayMs);
+        await sleep(retryDelayMs, options.abortSignal);
+    }
+
+    throw new Error('UNREACHABLE: resolveAcceptedImageTaskResponse exhausted without return or throw.');
+}
+
+function delayAcceptedImageTaskResponse(ms: number, abortSignal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            abortSignal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+
+        const onAbort = () => {
+            clearTimeout(timeout);
+            reject(readAbortReason(abortSignal));
+        };
+
+        if (abortSignal?.aborted) {
+            onAbort();
+            return;
+        }
+        abortSignal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+function throwIfAcceptedImageTaskRetryAborted(abortSignal?: AbortSignal): void {
+    if (!abortSignal?.aborted) return;
+    throw readAbortReason(abortSignal);
+}
+
+function readAbortReason(abortSignal?: AbortSignal): Error {
+    if (abortSignal?.reason instanceof Error) return abortSignal.reason;
+    if (abortSignal?.reason !== undefined) {
+        return new DOMException(`The operation was aborted: ${String(abortSignal.reason)}`, 'AbortError');
+    }
+    return new DOMException('The operation was aborted.', 'AbortError');
+}
+
+function readAcceptedImageTaskRetryDelayMs(value: unknown, fallbackMs: number): number {
+    const retryAfterSeconds = readRetryAfterSecondsHeader(value);
+    if (retryAfterSeconds === undefined) return Math.min(fallbackMs, MAX_ACCEPTED_IMAGE_TASK_RETRY_DELAY_MS);
+    return Math.min(retryAfterSeconds, MAX_ACCEPTED_IMAGE_TASK_RETRY_AFTER_SECONDS) * 1000;
 }
 
 export async function persistOpenAiImages(options: {

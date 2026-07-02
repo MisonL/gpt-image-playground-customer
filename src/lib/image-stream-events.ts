@@ -1,3 +1,4 @@
+import { readAcceptedImageTaskDetails } from './accepted-image-task';
 import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
 import { asRecord, type JsonRecord } from './json-record';
 import { createHash } from 'node:crypto';
@@ -9,6 +10,7 @@ export type ImageStreamProviderDialect =
     | 'official_image_event'
     | 'responses_image_event'
     | 'otokapi_image_event'
+    | 'image_task_accepted'
     | 'sdk_parsed_fallback'
     | 'unknown_ignored_event';
 
@@ -417,8 +419,12 @@ function normalizeCompletedEvent(record: JsonRecord, eventType: string | undefin
 
 function classifyProviderDialect(
     eventType: string | undefined,
-    events: NormalizedImageStreamEvent[]
+    events: NormalizedImageStreamEvent[],
+    record: JsonRecord
 ): ImageStreamProviderDialect {
+    if (readAcceptedImageTaskDetails(record)) {
+        return 'image_task_accepted';
+    }
     if (eventType && OFFICIAL_EVENT_TYPES.has(eventType)) {
         return 'official_image_event';
     }
@@ -459,7 +465,7 @@ export function normalizeUpstreamImageStreamEventWithDiagnostics(event: unknown)
         events = [];
     }
 
-    const providerDialect = classifyProviderDialect(eventType, events);
+    const providerDialect = classifyProviderDialect(eventType, events, record);
     return {
         events,
         providerDialect,

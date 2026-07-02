@@ -8,6 +8,7 @@ import {
 } from './api-error-response';
 import { type ChannelRequestMode } from './channel-request-mode';
 import { RequestValidationError } from './image-request-utils';
+import { AcceptedImageTaskResponseError } from './image-service';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -114,6 +115,48 @@ describe('normalizeAgentError', () => {
             ).diagnostics?.transport_error_kind,
             'sse_final_missing'
         );
+        assert.equal(
+            normalizeAgentError(
+                Object.assign(new Error('上游返回了异步图片任务，但当前服务不支持该任务态的自动轮询。'), {
+                    name: 'AcceptedImageTaskStreamResultError',
+                    status: 502
+                })
+            ).diagnostics?.transport_error_kind,
+            'upstream_timeout'
+        );
+        assert.equal(
+            normalizeAgentError(new AcceptedImageTaskResponseError({ taskId: 'accepted-non-stream-task' }))
+                .diagnostics?.transport_error_kind,
+            'upstream_timeout'
+        );
+    });
+
+    it('maps accepted image task exhaustion to non-retryable upstream errors', () => {
+        const error = normalizeAgentError(new AcceptedImageTaskResponseError({ taskId: 'accepted-non-stream-task' }));
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, false);
+        assert.equal(error.retryAfterSeconds, undefined);
+        assert.equal(error.upstreamStatus, 502);
+        assert.equal(error.diagnostics?.transport_error_kind, 'upstream_timeout');
+        assert.equal(error.diagnostics?.retry_after_seconds, undefined);
+    });
+
+    it('keeps generic upstream failures mentioning async image tasks retryable', () => {
+        const error = normalizeAgentError(
+            Object.assign(new Error('代理层异步图片任务日志写入失败'), {
+                status: 502
+            })
+        );
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, true);
+        assert.equal(error.retryAfterSeconds, 15);
+        assert.equal(error.upstreamStatus, 502);
+        assert.equal(error.diagnostics?.transport_error_kind, undefined);
+        assert.equal(error.diagnostics?.retry_after_seconds, 15);
     });
 
     it('adds sanitized upstream diagnostics without inventing an HTTP status', () => {
