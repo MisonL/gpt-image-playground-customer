@@ -7,7 +7,6 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
     globalThis.fetch = originalFetch;
 });
-
 describe('createImagesApiGenerateStream', () => {
     it('keeps fixed protocol and authorization headers ahead of upstream extras', async () => {
         let observedAuthorization: string | null = null;
@@ -15,6 +14,7 @@ describe('createImagesApiGenerateStream', () => {
         let observedContentType: string | null = null;
         let observedUserAgent: string | null = null;
         let observedAppId: string | null = null;
+        let observedIdempotencyKey: string | null = null;
         globalThis.fetch = async (_url, init) => {
             const headers = new Headers(init?.headers);
             observedAuthorization = headers.get('authorization');
@@ -22,6 +22,7 @@ describe('createImagesApiGenerateStream', () => {
             observedContentType = headers.get('content-type');
             observedUserAgent = headers.get('user-agent');
             observedAppId = headers.get('x-app-id');
+            observedIdempotencyKey = headers.get('idempotency-key');
             return new Response(JSON.stringify({ data: [] }), {
                 status: 200,
                 headers: { 'content-type': 'application/json' }
@@ -37,10 +38,12 @@ describe('createImagesApiGenerateStream', () => {
                 stream: true,
                 partial_images: 2
             },
+            idempotencyKey: 'stream-idempotency-key',
             upstreamHeaders: {
                 Authorization: 'Bearer wrong-key',
                 Accept: 'application/json',
                 'Content-Type': 'text/plain',
+                'Idempotency-Key': 'wrong-key',
                 'X-App-ID': 'app-id'
             }
         });
@@ -50,6 +53,7 @@ describe('createImagesApiGenerateStream', () => {
         assert.equal(observedContentType, 'application/json');
         assert.equal(observedUserAgent, 'gpt-image-playground/2.1.0');
         assert.equal(observedAppId, 'app-id');
+        assert.equal(observedIdempotencyKey, 'stream-idempotency-key');
     });
 
     it('aborts hanging stream setup using the configured upstream timeout', async () => {

@@ -363,6 +363,9 @@ function classifyTransportErrorKind(error: unknown): AgentTransportErrorKind | u
     ) {
         return 'sse_final_missing';
     }
+    if (isAcceptedImageTaskError(error)) {
+        return 'upstream_timeout';
+    }
     if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'dns';
     if (
         code === 'CERT_HAS_EXPIRED' ||
@@ -477,6 +480,19 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
 
     const status = readNumberField(error, 'status') ?? readNumberField(error, 'statusCode');
     const message = error instanceof Error ? error.message : (readStringField(error, 'message') ?? '发生未知错误。');
+    if (isAcceptedImageTaskError(error)) {
+        return new AgentApiError({
+            code: 'upstream_unavailable',
+            message,
+            status: 502,
+            retryable: false,
+            upstreamStatus: status,
+            diagnostics: buildDiagnostics(error, {
+                ...diagnostics,
+                ...(status !== undefined ? { upstreamStatus: status } : {})
+            })
+        });
+    }
     if (isChannelRequestModeFailure(error, diagnostics.channel_request_mode)) {
         const retryAfterSeconds = readRetryAfterSeconds(error) ?? 15;
         return new AgentApiError({
@@ -595,4 +611,9 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
         retryable: false,
         diagnostics: buildDiagnostics(error, diagnostics)
     });
+}
+
+function isAcceptedImageTaskError(error: unknown): boolean {
+    const name = readStringField(error, 'name') || readConstructorName(error);
+    return name === 'AcceptedImageTaskResponseError' || name === 'AcceptedImageTaskStreamResultError';
 }

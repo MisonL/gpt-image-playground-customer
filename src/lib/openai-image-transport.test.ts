@@ -43,6 +43,18 @@ describe('openai image transport settings', () => {
         assert.equal(buildOpenAIImageRequestOptions({ env }).maxRetries, 1);
     });
 
+    it('sends the idempotency key as an explicit upstream header', () => {
+        const options = buildOpenAIImageRequestOptions({
+            headers: { 'Idempotency-Key': 'configured-wrong-key', 'X-App-ID': 'app-id' },
+            idempotencyKey: 'business-operation-key'
+        });
+        const headers = new Headers(options.headers as HeadersInit);
+
+        assert.equal(options.idempotencyKey, 'business-operation-key');
+        assert.equal(headers.get('idempotency-key'), 'business-operation-key');
+        assert.equal(headers.get('x-app-id'), 'app-id');
+    });
+
     it('rejects invalid transport env values explicitly', () => {
         assert.throws(() => readImageUpstreamTimeoutMs({ IMAGE_UPSTREAM_TIMEOUT_MS: '15s' }), /非负整数/);
         assert.throws(() => readImageUpstreamTimeoutMs({ IMAGE_UPSTREAM_TIMEOUT_MS: '0' }), /正整数/);
