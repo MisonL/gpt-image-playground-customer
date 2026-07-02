@@ -334,6 +334,7 @@ export async function POST(request: NextRequest) {
         }
         const formData = await request.formData();
         clientRequestId = readClientRequestId(formData);
+        const upstreamIdempotencyKey = clientRequestId || crypto.randomUUID();
         requestLogContext = clientRequestId ? { clientRequestId } : undefined;
         const requestApiKey = String(formData.get('apiKey') || '').trim();
         const requestApiBaseUrl = String(formData.get('apiBaseUrl') || '').trim();
@@ -513,9 +514,11 @@ export async function POST(request: NextRequest) {
                       apiBaseUrl: effectiveApiBaseUrl,
                       apiKey: effectiveApiKey,
                       startedAtMs: upstreamStartedAtMs,
+                      upstreamIdempotencyKey,
                       clientRequestId,
                       requestLogContext,
                       selectedCredential,
+                      channelRequestMode: channelSelection.requestMode,
                       accessCookie,
                       abortSignal: request.signal,
                       streamFallbackEnabled: streamResolution.streamFallbackEnabled,
@@ -542,9 +545,11 @@ export async function POST(request: NextRequest) {
                       apiBaseUrl: effectiveApiBaseUrl,
                       apiKey: effectiveApiKey,
                       startedAtMs: upstreamStartedAtMs,
+                      upstreamIdempotencyKey,
                       clientRequestId,
                       requestLogContext,
                       selectedCredential,
+                      channelRequestMode: channelSelection.requestMode,
                       accessCookie,
                       abortSignal: request.signal,
                       streamFallbackEnabled: streamResolution.streamFallbackEnabled,

@@ -322,6 +322,47 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('retries accepted async image tasks through Agent generate with the same upstream idempotency key', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        const upstreamIdempotencyKeys: Array<string | undefined> = [];
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream((_body, _url, request, response) => {
+            upstreamCalls += 1;
+            const idempotencyKey = request.headers['idempotency-key'];
+            upstreamIdempotencyKeys.push(Array.isArray(idempotencyKey) ? idempotencyKey.join(',') : idempotencyKey);
+            if (upstreamCalls === 1) {
+                response.setHeader('Retry-After', '1');
+                return {
+                    object: 'image.task',
+                    status: 'pending',
+                    task_id: 'agent-route-accepted-task',
+                    poll_url: '/v1/image-tasks?ids=agent-route-accepted-task'
+                };
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-route-accepted-task-key', {
+                    prompt: 'agent route accepted task',
+                    response_mode: 'base64'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.cached, false);
+            assert.equal(body.images[0].b64_json, PNG_BASE64);
+            assert.deepEqual(upstreamIdempotencyKeys, ['agent-route-accepted-task-key', 'agent-route-accepted-task-key']);
+            assert.equal(upstreamCalls, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('keeps Agent request diagnostics available when feedback lookup fails', async () => {
         const { generateImage, getAgentRequestDiagnostics } = await loadAgentRoutes();
         const upstream = await startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] }));
@@ -3504,7 +3545,12 @@ function createPngWithDimensions(width: number, height: number): Buffer {
 }
 
 async function startImageUpstream(
-    handler: (body: string, url: string) => unknown | Promise<unknown>
+    handler: (
+        body: string,
+        url: string,
+        request: http.IncomingMessage,
+        response: http.ServerResponse
+    ) => unknown | Promise<unknown>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         if (
@@ -3519,7 +3565,7 @@ async function startImageUpstream(
         request.on('data', (chunk: Buffer) => chunks.push(chunk));
         await new Promise<void>((resolve) => request.on('end', resolve));
         try {
-            const body = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
+            const body = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '', request, response);
             response.writeHead(200, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify(body));
         } catch (error) {
