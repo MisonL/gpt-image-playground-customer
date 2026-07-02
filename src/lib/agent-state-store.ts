@@ -1,6 +1,6 @@
-import crypto from 'crypto';
 import type { AgentImageResponse, AgentImageResponseItem } from './agent-api-contracts';
 import type { AgentErrorBody } from './api-error-response';
+import crypto from 'crypto';
 
 export type AgentRequestStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'orphaned';
 
@@ -146,7 +146,10 @@ function stableJsonStringify(value: unknown): string {
         .join(',')}}`;
 }
 
-export function artifactRecordToResponseItem(record: AgentArtifactRecord, includeBase64?: string): AgentImageResponseItem {
+export function artifactRecordToResponseItem(
+    record: AgentArtifactRecord,
+    includeBase64?: string
+): AgentImageResponseItem {
     return {
         id: record.id,
         filename: record.filename,
@@ -161,7 +164,10 @@ export function artifactRecordToResponseItem(record: AgentArtifactRecord, includ
     };
 }
 
-export function buildRecoveredResponse(record: AgentRequestRecord, artifacts: AgentArtifactRecord[]): AgentImageResponse {
+export function buildRecoveredResponse(
+    record: AgentRequestRecord,
+    artifacts: AgentArtifactRecord[]
+): AgentImageResponse {
     const sortedArtifacts = [...artifacts].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
     return {
         request_id: record.requestId,

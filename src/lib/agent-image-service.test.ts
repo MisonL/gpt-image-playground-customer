@@ -1,7 +1,12 @@
-import { buildEditRequestHash, completeAgentExecutionState, hydrateAgentReplayResponse } from './agent-image-service';
+import {
+    buildEditRequestHash,
+    completeAgentExecutionState,
+    hydrateAgentReplayResponse,
+    readIdempotencyKey
+} from './agent-image-service';
+import type { AgentArtifactRecord, AgentStateStore } from './agent-state-store';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { AgentArtifactRecord, AgentStateStore } from './agent-state-store';
 
 describe('buildEditRequestHash', () => {
     it('includes uploaded file bytes so same metadata with different content conflicts', async () => {
@@ -16,6 +21,21 @@ describe('buildEditRequestHash', () => {
         const second = await buildEditRequestHash(makeEditForm([1, 2, 3, 4]));
 
         assert.equal(first, second);
+    });
+});
+
+describe('readIdempotencyKey', () => {
+    it('rejects control characters before forwarding the value upstream', () => {
+        const headers = new Headers({ 'Idempotency-Key': `agent${String.fromCharCode(31)}key` });
+
+        assert.throws(
+            () => readIdempotencyKey(headers),
+            (error) => {
+                assert.ok(error instanceof Error);
+                assert.match(error.message, /控制字符/);
+                return true;
+            }
+        );
     });
 });
 

@@ -11,8 +11,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const originalLogLevel = process.env.APP_LOG_LEVEL;
 const originalMaxEntries = process.env.APP_LOG_MAX_ENTRIES;
@@ -91,13 +91,14 @@ it('keeps runtime log file operations out of Next standalone tracing', () => {
         'fs.readFileSync(/* turbopackIgnore: true */ logFile',
         'fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(logFile)',
         'fs.writeFileSync(/* turbopackIgnore: true */ logFile',
-        'fs.appendFileSync(/* turbopackIgnore: true */ logFile',
+        /fs\.appendFileSync\(\s*\/\* turbopackIgnore: true \*\/ logFile/,
         'fs.rmSync(/* turbopackIgnore: true */ logFile',
         'fs.promises.readFile(/* turbopackIgnore: true */ logFile'
     ];
 
     for (const operation of tracedRuntimeFileOperations) {
-        assert.ok(source.includes(operation), `missing standalone tracing guard: ${operation}`);
+        const hasOperation = typeof operation === 'string' ? source.includes(operation) : operation.test(source);
+        assert.ok(hasOperation, `missing standalone tracing guard: ${String(operation)}`);
     }
 });
 

@@ -1,3 +1,5 @@
+import { runAgentStateStartupRecovery } from '../instrumentation';
+import { MemoryAgentStateStore } from './agent-state-memory';
 import {
     ensureAgentStateStoreReady,
     getAgentStateStore,
@@ -6,12 +8,10 @@ import {
     resetAgentStateStoreForTests,
     setAgentStateStoreFactoryForTests
 } from './agent-state-runtime';
+import type { AgentStateStore } from './agent-state-store';
+import type { ImageShareStateStore } from './share-store';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import type { AgentStateStore } from './agent-state-store';
-import { MemoryAgentStateStore } from './agent-state-memory';
-import { runAgentStateStartupRecovery } from '../instrumentation';
-import type { ImageShareStateStore } from './share-store';
 
 afterEach(() => {
     setAgentStateStoreFactoryForTests(undefined);
@@ -77,7 +77,10 @@ describe('agent-state-runtime recovery scheduling', () => {
             AGENT_RECOVERY_INTERVAL_MS: '1000'
         };
 
-        await assert.rejects(() => ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.000Z')), /recovery failed/);
+        await assert.rejects(
+            () => ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.000Z')),
+            /recovery failed/
+        );
         await ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.100Z'));
 
         assert.equal(store.recoveryCalls, 2);
@@ -92,7 +95,10 @@ describe('agent-state-runtime recovery scheduling', () => {
             AGENT_SQLITE_PATH: 'agent.sqlite'
         };
 
-        await assert.rejects(() => ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.000Z')), /init failed/);
+        await assert.rejects(
+            () => ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.000Z')),
+            /init failed/
+        );
         shouldFailInit = false;
         await ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.100Z'));
 
@@ -120,7 +126,10 @@ describe('runAgentStateStartupRecovery', () => {
                 }),
             /startup recovery failed/
         );
-        assert.deepEqual(logs.map((entry) => entry.level), ['info', 'error']);
+        assert.deepEqual(
+            logs.map((entry) => entry.level),
+            ['info', 'error']
+        );
     });
 
     it('logs startup recovery completion', async () => {
@@ -203,10 +212,10 @@ describe('readAgentDatabaseUrl', () => {
 
 function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () => boolean } = {}): AgentStateStore &
     ImageShareStateStore & {
-    recoveryCalls: number;
-    initCalls: number;
-    shareCleanupCalls: number;
-} {
+        recoveryCalls: number;
+        initCalls: number;
+        shareCleanupCalls: number;
+    } {
     return {
         initCalls: 0,
         recoveryCalls: 0,

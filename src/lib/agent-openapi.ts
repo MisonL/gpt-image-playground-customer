@@ -5,6 +5,7 @@ import {
     AGENT_MODERATIONS,
     AGENT_MODELS,
     AGENT_OUTPUT_FORMATS,
+    AGENT_PAGE_SSE_AGENT_USAGE,
     AGENT_QUALITIES,
     AGENT_RESPONSE_MODES,
     AGENT_STREAM_MODES,
@@ -19,6 +20,7 @@ import {
     readAgentPublicBaseUrl
 } from './agent-api-contracts';
 import { AGENT_ENDPOINTS } from './agent-api-paths.mjs';
+import { CHANNEL_REQUEST_MODES } from './channel-request-mode';
 import { MAX_PROMPT_LENGTH } from './image-request-utils';
 
 type AgentOpenApiSecurityRequirement = { BearerAuth: [] } | { AppPasswordHash: [] };
@@ -145,6 +147,31 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
+            [AGENT_ENDPOINTS.create_image_request]: {
+                post: {
+                    summary: '提交服务端编排的 Agent 图片生成意图',
+                    security: agentSecurity,
+                    parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }],
+                    requestBody: {
+                        required: true,
+                        ...jsonContent('#/components/schemas/GenerateRequest')
+                    },
+                    responses: {
+                        '200': jsonContent('#/components/schemas/AgentJobStatusResponse'),
+                        '202': {
+                            ...jsonContent('#/components/schemas/AgentJobStatusResponse'),
+                            headers: {
+                                'Retry-After': { schema: { type: 'integer', minimum: 1 } }
+                            }
+                        },
+                        '400': jsonContent('#/components/schemas/AgentError'),
+                        '409': jsonContent('#/components/schemas/AgentError'),
+                        ...commonAgentErrors,
+                        '422': jsonContent('#/components/schemas/AgentError'),
+                        '500': jsonContent('#/components/schemas/AgentError')
+                    }
+                }
+            },
             [AGENT_ENDPOINTS.create_generate_job]: {
                 post: {
                     summary: '创建 Agent 图片生成 job',
@@ -246,6 +273,24 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         '401': jsonContent('#/components/schemas/AgentError'),
                         '404': jsonContent('#/components/schemas/AgentError')
+                    }
+                }
+            },
+            [AGENT_ENDPOINTS.artifact_share]: {
+                post: {
+                    summary: '为 Agent 产物创建浏览器可访问的分享链接',
+                    security: agentSecurity,
+                    parameters: [{ $ref: '#/components/parameters/ArtifactId' }],
+                    requestBody: {
+                        required: false,
+                        ...jsonContent('#/components/schemas/CreateArtifactShareRequest')
+                    },
+                    responses: {
+                        '201': jsonContent('#/components/schemas/ArtifactShareResponse'),
+                        '400': jsonContent('#/components/schemas/AgentError'),
+                        '401': jsonContent('#/components/schemas/AgentError'),
+                        '404': jsonContent('#/components/schemas/AgentError'),
+                        '500': jsonContent('#/components/schemas/AgentError')
                     }
                 }
             },
@@ -404,10 +449,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'image_transport',
                         'upstream_profile',
                         'upstream_request_headers',
+                        'request_mode_controls',
                         'defaults',
                         'limits',
                         'model_limits',
                         'agent_streaming',
+                        'orchestration',
                         'routing_rules',
                         'agent_jobs',
                         'supported',
@@ -442,10 +489,16 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     type: 'array',
                                     items: {
                                         type: 'object',
-                                        required: ['id', 'request_headers'],
+                                        required: ['id', 'request_modes', 'request_headers'],
                                         properties: {
                                             id: { type: 'string' },
-                                            request_headers: { $ref: '#/components/schemas/UpstreamRequestHeaderSummary' }
+                                            request_modes: {
+                                                type: 'array',
+                                                items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
+                                            },
+                                            request_headers: {
+                                                $ref: '#/components/schemas/UpstreamRequestHeaderSummary'
+                                            }
                                         },
                                         additionalProperties: false
                                     }
@@ -453,6 +506,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             },
                             additionalProperties: false
                         },
+                        request_mode_controls: { $ref: '#/components/schemas/AgentRequestModeControls' },
                         upstream_profile: {
                             type: 'object',
                             required: [
@@ -579,11 +633,13 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                             properties: {
                                                 min: {
                                                     type: 'integer',
-                                                    const: capabilities.limits.partial_images_by_backend['images-api'].min
+                                                    const: capabilities.limits.partial_images_by_backend['images-api']
+                                                        .min
                                                 },
                                                 max: {
                                                     type: 'integer',
-                                                    const: capabilities.limits.partial_images_by_backend['images-api'].max
+                                                    const: capabilities.limits.partial_images_by_backend['images-api']
+                                                        .max
                                                 }
                                             },
                                             additionalProperties: false
@@ -624,6 +680,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         model_limits: { $ref: '#/components/schemas/AgentModelLimits' },
                         agent_streaming: { $ref: '#/components/schemas/AgentStreamingCapabilities' },
+                        orchestration: { $ref: '#/components/schemas/AgentOrchestrationCapabilities' },
                         routing_rules: { $ref: '#/components/schemas/AgentRoutingRules' },
                         agent_jobs: { $ref: '#/components/schemas/AgentJobCapabilities' },
                         supported: {
@@ -639,6 +696,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'image_backends',
                                 'enabled_image_backends',
                                 'image_backend_requirements',
+                                'request_modes',
                                 'streaming_strategies',
                                 'stream_modes'
                             ],
@@ -667,6 +725,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 image_backend_requirements: {
                                     type: 'object',
                                     additionalProperties: { $ref: '#/components/schemas/ImageBackendRequirement' }
+                                },
+                                request_modes: {
+                                    type: 'array',
+                                    items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
                                 },
                                 streaming_strategies: {
                                     type: 'array',
@@ -1045,7 +1107,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 },
                                 agent_usage: {
                                     type: 'string',
-                                    enum: ['recommended_for_high_resolution_generate_edit_and_complex_batch']
+                                    enum: [AGENT_PAGE_SSE_AGENT_USAGE]
                                 }
                             }
                         }
@@ -1058,7 +1120,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'complex_ui_batch',
                         'long_image_recovery',
                         'agent_generate_small_smoke',
-                        'page_sse_large_generate',
+                        'page_sse_generate_diagnostics',
                         'retry_recovery'
                     ],
                     properties: {
@@ -1066,7 +1128,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         complex_ui_batch: { $ref: '#/components/schemas/AgentRoutingRule' },
                         long_image_recovery: { $ref: '#/components/schemas/AgentRoutingRule' },
                         agent_generate_small_smoke: { $ref: '#/components/schemas/AgentRoutingRule' },
-                        page_sse_large_generate: { $ref: '#/components/schemas/AgentRoutingRule' },
+                        page_sse_generate_diagnostics: { $ref: '#/components/schemas/AgentRoutingRule' },
                         retry_recovery: {
                             type: 'object',
                             required: ['reuse_failed_idempotency_key', 'new_attempt_guidance'],
@@ -1090,7 +1152,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         strength: {
                             type: 'string',
-                            enum: ['default', 'recommended'] satisfies AgentRoutingStrength[]
+                            enum: ['default', 'recommended', 'explicit'] satisfies AgentRoutingStrength[]
                         },
                         action: { $ref: '#/components/schemas/AgentRoutingAction' },
                         reason: { type: 'string' }
@@ -1114,6 +1176,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         batch: { type: 'boolean' },
                         single_request: { type: 'boolean' },
+                        explicit_page_sse: { type: 'boolean' },
                         complex_ui: { type: 'boolean' },
                         long_image: { type: 'boolean' },
                         resume_or_recover: { type: 'boolean' }
@@ -1137,7 +1200,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         strength: {
                             type: 'string',
-                            enum: ['default', 'recommended'] satisfies AgentRoutingStrength[]
+                            enum: ['default', 'recommended', 'explicit'] satisfies AgentRoutingStrength[]
                         },
                         fallback_endpoint: { type: 'string' },
                         fallback_mode: {
@@ -1178,6 +1241,46 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         current_guidance: { type: 'string' }
                     }
                 },
+                AgentOrchestrationCapabilities: {
+                    type: 'object',
+                    required: [
+                        'supported',
+                        'policy',
+                        'endpoint',
+                        'client_contract',
+                        'transport_selection',
+                        'result_mode',
+                        'hidden_controls',
+                        'diagnostics',
+                        'current_guidance'
+                    ],
+                    properties: {
+                        supported: { type: 'boolean', const: true },
+                        policy: {
+                            type: 'string',
+                            enum: ['server_orchestrated_generate_v1']
+                        },
+                        endpoint: { type: 'string', const: AGENT_ENDPOINTS.create_image_request },
+                        client_contract: { type: 'string', enum: ['intent_only'] },
+                        transport_selection: { type: 'string', enum: ['server_owned'] },
+                        result_mode: { type: 'string', enum: ['job_polling'] },
+                        hidden_controls: { type: 'array', items: { type: 'string' } },
+                        diagnostics: {
+                            type: 'object',
+                            required: ['job_result', 'request_lookup'],
+                            properties: {
+                                job_result: { type: 'string', const: AGENT_ENDPOINTS.job_result },
+                                request_lookup: {
+                                    type: 'string',
+                                    const: AGENT_ENDPOINTS.agent_request_diagnostics_lookup
+                                }
+                            },
+                            additionalProperties: false
+                        },
+                        current_guidance: { type: 'string' }
+                    },
+                    additionalProperties: false
+                },
                 GenerateRequest: {
                     type: 'object',
                     required: ['prompt'],
@@ -1193,12 +1296,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 properties: {
                                     partial_images: {
                                         type: 'integer',
-                                        minimum: capabilities.limits.partial_images_by_backend[
-                                            'responses-image-generation'
-                                        ].min,
-                                        maximum: capabilities.limits.partial_images_by_backend[
-                                            'responses-image-generation'
-                                        ].max,
+                                        minimum:
+                                            capabilities.limits.partial_images_by_backend['responses-image-generation']
+                                                .min,
+                                        maximum:
+                                            capabilities.limits.partial_images_by_backend['responses-image-generation']
+                                                .max,
                                         default: capabilities.defaults.partial_images
                                     }
                                 }
@@ -1225,6 +1328,18 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             enum: AGENT_IMAGE_BACKENDS,
                             default: 'images-api'
                         },
+                        responsesModel: {
+                            type: 'string',
+                            maxLength: 128,
+                            description:
+                                'Responses image_generation 顶层模型；仅适用于 image_backend=responses-image-generation。'
+                        },
+                        thinking: {
+                            type: 'string',
+                            enum: ['minimal', 'none', 'low', 'medium', 'high', 'xhigh']
+                        },
+                        promptOptimization: { type: 'boolean' },
+                        force_web: { type: 'boolean' },
                         streaming_strategy: {
                             type: 'string',
                             enum: AGENT_STREAMING_STRATEGIES,
@@ -1249,8 +1364,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     anyOf: Array.from({ length: maxSourceImageCount }, (_, index) => ({
                         required: [`image_${index}`]
                     })),
-                    description:
-                        `Agent edit 返回最终 JSON。请求必须至少提供一个 image_0..image_${maxSourceImageCount - 1} 源图字段。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。`,
+                    description: `Agent edit 返回最终 JSON。请求必须至少提供一个 image_0..image_${maxSourceImageCount - 1} 源图字段。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。`,
                     properties: {
                         prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
                         model: { type: 'string', enum: AGENT_MODELS, default: 'gpt-image-2' },
@@ -1337,6 +1451,21 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     },
                     additionalProperties: false
                 },
+                ChannelRequestModeDecision: {
+                    type: 'object',
+                    required: ['requested_backend', 'fallback_applied'],
+                    properties: {
+                        requested_backend: { type: 'string', enum: AGENT_IMAGE_BACKENDS },
+                        preferred_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        fallback_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        selected_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        fallback_applied: { type: 'boolean' },
+                        selected_channel_id: { type: 'string' },
+                        upstream_host: { type: 'string' },
+                        no_channel_reason: { type: 'string' }
+                    },
+                    additionalProperties: false
+                },
                 AgentImageResponseExecution: {
                     type: 'object',
                     required: [
@@ -1347,6 +1476,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'image_backend',
                         'stream_mode',
                         'streaming_strategy',
+                        'channel_request_mode_fallback_applied',
+                        'route_decision',
                         'request_headers'
                     ],
                     properties: {
@@ -1357,6 +1488,9 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         image_backend: { type: 'string', enum: AGENT_IMAGE_BACKENDS },
                         stream_mode: { type: 'string', enum: AGENT_STREAM_MODES },
                         streaming_strategy: { type: 'string', enum: AGENT_STREAMING_STRATEGIES },
+                        channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        channel_request_mode_fallback_applied: { type: 'boolean' },
+                        route_decision: { $ref: '#/components/schemas/ChannelRequestModeDecision' },
                         selected_channel_id: { type: 'string' },
                         upstream_host: { type: 'string' },
                         request_headers: { $ref: '#/components/schemas/UpstreamRequestHeaderSummary' }
@@ -1412,6 +1546,45 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     properties: {
                         artifact: { $ref: '#/components/schemas/AgentArtifact' }
                     }
+                },
+                CreateArtifactShareRequest: {
+                    type: 'object',
+                    properties: {
+                        expires_in_minutes: {
+                            oneOf: [{ type: 'integer', minimum: 1 }, { type: 'null' }],
+                            description: '分享有效期分钟数；null 表示不过期，省略时使用服务端默认值。'
+                        },
+                        access_code: {
+                            anyOf: [
+                                { type: 'string', pattern: '^\\s*$' },
+                                { type: 'string', minLength: 8, maxLength: 128 }
+                            ],
+                            description: '可选访问码；省略或空白字符串表示公开分享。'
+                        }
+                    },
+                    additionalProperties: false
+                },
+                ArtifactShareResponse: {
+                    type: 'object',
+                    required: [
+                        'artifact_id',
+                        'token',
+                        'share_url',
+                        'direct_content_url',
+                        'expires_at',
+                        'access_code_required'
+                    ],
+                    properties: {
+                        artifact_id: { type: 'string' },
+                        token: { type: 'string', pattern: '^[a-f0-9]{24}$' },
+                        share_url: { type: 'string' },
+                        direct_content_url: { type: 'string' },
+                        expires_at: {
+                            oneOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }]
+                        },
+                        access_code_required: { type: 'boolean' }
+                    },
+                    additionalProperties: false
                 },
                 DeleteArtifactResponse: {
                     type: 'object',
@@ -1510,7 +1683,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         diagnostics_retention: { $ref: '#/components/schemas/AgentRequestDiagnosticsRetention' },
                         diagnostics_boundary: {
                             type: 'object',
-                            required: ['source', 'not_page_request_log', 'raw_request_json_redacted', 'api_key_redacted'],
+                            required: [
+                                'source',
+                                'not_page_request_log',
+                                'raw_request_json_redacted',
+                                'api_key_redacted'
+                            ],
                             properties: {
                                 source: { type: 'string', enum: ['agent_state'] },
                                 not_page_request_log: { type: 'boolean', const: true },
@@ -1524,7 +1702,16 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 AgentRequestDiagnosticsRequest: {
                     type: 'object',
-                    required: ['request_id', 'idempotency_key', 'mode', 'status', 'cached', 'created_at', 'updated_at', 'expires_at'],
+                    required: [
+                        'request_id',
+                        'idempotency_key',
+                        'mode',
+                        'status',
+                        'cached',
+                        'created_at',
+                        'updated_at',
+                        'expires_at'
+                    ],
                     properties: {
                         request_id: { type: 'string' },
                         idempotency_key: { type: 'string' },
@@ -1579,7 +1766,15 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 AgentRequestDiagnosticsResponseSummary: {
                     type: 'object',
-                    required: ['request_id', 'idempotency_key', 'cached', 'image_count', 'artifact_ids', 'content_urls', 'created_at'],
+                    required: [
+                        'request_id',
+                        'idempotency_key',
+                        'cached',
+                        'image_count',
+                        'artifact_ids',
+                        'content_urls',
+                        'created_at'
+                    ],
                     properties: {
                         request_id: { type: 'string' },
                         idempotency_key: { type: 'string' },
@@ -1717,6 +1912,9 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     type: 'object',
                     properties: {
                         elapsed_ms: { type: 'integer', minimum: 0 },
+                        channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        channel_request_mode_fallback_applied: { type: 'boolean' },
+                        route_decision: { $ref: '#/components/schemas/ChannelRequestModeDecision' },
                         selected_channel_id: { type: 'string' },
                         upstream_host: { type: 'string' },
                         upstream_status: { type: 'integer' },
@@ -1745,7 +1943,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             required: ['channel_id'],
                             properties: {
                                 channel_id: { type: 'string' },
-                                credential_id: { type: 'string' }
+                                credential_id: { type: 'string' },
+                                request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES }
                             },
                             additionalProperties: false
                         },
@@ -1779,13 +1978,37 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     },
                     additionalProperties: false
                 },
-                ImageTransportCapabilities: {
+                AgentRequestModeControls: {
                     type: 'object',
                     required: [
-                        'upstream_timeout_ms',
-                        'stream_data_interval_timeout_ms',
-                        'upstream_max_retries'
+                        'source',
+                        'global_env',
+                        'channel_env_pattern',
+                        'mutable_at_runtime',
+                        'agent_client_policy',
+                        'final_gate_command',
+                        'smoke_gate_commands'
                     ],
+                    properties: {
+                        source: { type: 'string', const: 'admin_env_whitelist' },
+                        global_env: { type: 'string' },
+                        channel_env_pattern: { type: 'string' },
+                        mutable_at_runtime: { type: 'boolean', const: false },
+                        agent_client_policy: { type: 'string', const: 'diagnostics_only' },
+                        final_gate_command: { type: 'string' },
+                        smoke_gate_commands: {
+                            type: 'object',
+                            additionalProperties: {
+                                type: 'array',
+                                items: { type: 'string' }
+                            }
+                        }
+                    },
+                    additionalProperties: false
+                },
+                ImageTransportCapabilities: {
+                    type: 'object',
+                    required: ['upstream_timeout_ms', 'stream_data_interval_timeout_ms', 'upstream_max_retries'],
                     properties: {
                         upstream_timeout_ms: {
                             type: 'integer',

@@ -11,13 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue
-} from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useI18n } from '@/lib/i18n';
 import { Copy, Loader2 } from 'lucide-react';
 import * as React from 'react';
@@ -59,10 +53,7 @@ export function getShareExpiryMinutes(value: string): number | null {
     return option === undefined ? getDefaultShareExpiryMinutes() : option.minutes;
 }
 
-export function ShareExpiryField(props: {
-    expiry: string;
-    onExpiryChange: (value: string) => void;
-}) {
+export function ShareExpiryField(props: { expiry: string; onExpiryChange: (value: string) => void }) {
     const { t } = useI18n();
     return (
         <div className='grid gap-2'>
@@ -80,6 +71,30 @@ export function ShareExpiryField(props: {
                 </SelectContent>
             </Select>
         </div>
+    );
+}
+
+export function ShareDialogFooterActions(props: {
+    isCreating: boolean;
+    accessCodeError: string | null;
+    onClose: () => void;
+    onCreate: () => void;
+}) {
+    const { t } = useI18n();
+    return (
+        <DialogFooter className='gap-2'>
+            <Button type='button' variant='outline' className='min-h-11 sm:min-h-9' onClick={props.onClose}>
+                {t('common.close')}
+            </Button>
+            <Button
+                type='button'
+                className='min-h-11 sm:min-h-9'
+                onClick={props.onCreate}
+                disabled={props.isCreating || Boolean(props.accessCodeError)}>
+                {props.isCreating ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
+                {t('share.create')}
+            </Button>
+        </DialogFooter>
     );
 }
 
@@ -112,9 +127,13 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                         <Label htmlFor='share-access-code'>{t('share.accessCode')}</Label>
                         <Input
                             id='share-access-code'
+                            name='shareAccessCode'
                             value={accessCode}
                             onChange={(event) => setAccessCode(event.target.value)}
                             placeholder={t('share.accessCodeOptional')}
+                            type='password'
+                            autoComplete='new-password'
+                            spellCheck={false}
                         />
                         <p className='text-muted-foreground text-xs'>{t('share.publicRiskHint')}</p>
                     </div>
@@ -130,6 +149,7 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                                     type='button'
                                     variant='outline'
                                     size='icon'
+                                    className='min-h-11 min-w-11 sm:min-h-9 sm:min-w-9'
                                     onClick={async () => {
                                         setCopyStatus(null);
                                         try {
@@ -155,17 +175,14 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                         </div>
                     ) : null}
                 </div>
-                <DialogFooter>
-                    <Button
-                        type='button'
-                        onClick={() =>
-                            onCreate({ accessCode: trimmedAccessCode, expiresInMinutes: getShareExpiryMinutes(expiry) })
-                        }
-                        disabled={isCreating || Boolean(accessCodeError)}>
-                        {isCreating ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
-                        {t('share.create')}
-                    </Button>
-                </DialogFooter>
+                <ShareDialogFooterActions
+                    isCreating={isCreating}
+                    accessCodeError={accessCodeError}
+                    onClose={() => handleOpenChange(false)}
+                    onCreate={() =>
+                        onCreate({ accessCode: trimmedAccessCode, expiresInMinutes: getShareExpiryMinutes(expiry) })
+                    }
+                />
             </DialogContent>
         </Dialog>
     );

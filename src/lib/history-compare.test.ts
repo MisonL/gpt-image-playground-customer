@@ -21,7 +21,9 @@ describe('resolveHistoryCompareImage', () => {
 
     it('resolves indexeddb history images through the provided source lookup', () => {
         const image = resolveHistoryCompareImage({
-            history: [{ images: [{ filename: 'current.png' }, { filename: 'stored.png' }], storageModeUsed: 'indexeddb' }],
+            history: [
+                { images: [{ filename: 'current.png' }, { filename: 'stored.png' }], storageModeUsed: 'indexeddb' }
+            ],
             currentFilenames: ['current.png'],
             getIndexedDbImageSrc: (filename) => (filename === 'stored.png' ? 'blob:stored' : undefined)
         });

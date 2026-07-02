@@ -143,20 +143,14 @@ describe('readImageFiles', () => {
 
         const outOfRangeFormData = new FormData();
         outOfRangeFormData.append('image_8', makePngFile('rejected-8.png'));
-        assert.throws(
-            () => readImageFiles(outOfRangeFormData, IMAGE_UPSTREAM_PROFILES.matsca),
-            /image_0 到 image_7/
-        );
+        assert.throws(() => readImageFiles(outOfRangeFormData, IMAGE_UPSTREAM_PROFILES.matsca), /image_0 到 image_7/);
 
         const oversizedFormData = new FormData();
         oversizedFormData.append(
             'image_0',
             new File([Buffer.alloc(10 * 1024 * 1024 + 1)], 'oversized.png', { type: 'image/png' })
         );
-        assert.throws(
-            () => readImageFiles(oversizedFormData, IMAGE_UPSTREAM_PROFILES.matsca),
-            /10 MB/
-        );
+        assert.throws(() => readImageFiles(oversizedFormData, IMAGE_UPSTREAM_PROFILES.matsca), /10 MB/);
     });
 });
 
@@ -174,10 +168,7 @@ describe('Matsca upstream image parameter compatibility', () => {
         formData.append('size', '123x456');
 
         assert.throws(() => readSize(formData, 'size', '1024x1024', 'gpt-image-2'), /无效/);
-        assert.equal(
-            readSize(formData, 'size', '1024x1024', 'gpt-image-2', IMAGE_UPSTREAM_PROFILES.matsca),
-            '123x456'
-        );
+        assert.equal(readSize(formData, 'size', '1024x1024', 'gpt-image-2', IMAGE_UPSTREAM_PROFILES.matsca), '123x456');
     });
 
     it('uses the Matsca single upload limit for masks too', () => {
@@ -241,7 +232,9 @@ function makeRgbaPng(input: { width?: number; height?: number; alpha: number; co
         makePngChunk('IHDR', Buffer.from([0, 0, 0, width, 0, 0, 0, height, 8, 6, 0, 0, 0])),
         makePngChunk(
             'IDAT',
-            input.corruptIdat ? Buffer.from('not-zlib-data') : deflateSync(Buffer.concat(Array.from({ length: height }, () => row)))
+            input.corruptIdat
+                ? Buffer.from('not-zlib-data')
+                : deflateSync(Buffer.concat(Array.from({ length: height }, () => row)))
         ),
         makePngChunk('IEND', Buffer.alloc(0))
     ]);
@@ -253,5 +246,4 @@ function makePngChunk(type: string, data: Buffer): Buffer {
     return Buffer.concat([length, Buffer.from(type, 'ascii'), data, Buffer.alloc(4)]);
 }
 
-const PNG_BASE64 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAC0lEQVR4nGNk+A8AAwMBASp7pYQAAAAASUVORK5CYII=';
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAC0lEQVR4nGNk+A8AAwMBASp7pYQAAAAASUVORK5CYII=';

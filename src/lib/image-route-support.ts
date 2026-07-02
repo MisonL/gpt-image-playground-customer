@@ -1,12 +1,15 @@
 import { PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH } from './agent-api-contracts';
 import { appLogger } from './app-logger';
+import type { ChannelRequestMode } from './channel-request-mode';
 import {
     type ChannelCredential,
     describeChannelFailure,
     isChannelFailure,
+    isChannelRequestModeFailure,
     isCredentialFailure
 } from './channel-router';
 import { RequestValidationError } from './image-request-utils';
+import { readAcceptedImageTaskDetails } from './accepted-image-task';
 import type { ImageGenerationBackend } from './image-upstream-strategy';
 import { getServerChannelState } from './server-channel-router';
 import { buildAccessCookie, outputDir, readBooleanEnv, serializeAccessCookie } from './server-runtime';
@@ -18,6 +21,8 @@ export type AccessCookie = ReturnType<typeof buildAccessCookie>;
 export type ImageBackend = ImageGenerationBackend;
 export type RequestLogContext = { clientRequestId: string };
 
+const HTTP_HEADER_VALUE_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/;
+
 export function readClientRequestId(formData: FormData): string | undefined {
     const value = formData.get('clientRequestId');
     if (typeof value !== 'string') return undefined;
@@ -27,6 +32,9 @@ export function readClientRequestId(formData: FormData): string | undefined {
         throw new RequestValidationError(
             `clientRequestId 长度不能超过 ${PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH} 个字符。`
         );
+    }
+    if (HTTP_HEADER_VALUE_CONTROL_CHAR_PATTERN.test(normalized)) {
+        throw new RequestValidationError('clientRequestId 不能包含控制字符。');
     }
     return normalized;
 }
@@ -44,12 +52,33 @@ export function assertResponsesImageBackendAllowed(input: { imageBackend: ImageB
     }
 }
 
-export function reportServerCredentialFailure(credential: ChannelCredential | undefined, error: unknown) {
+export function reportServerCredentialFailure(
+    credential: ChannelCredential | undefined,
+    error: unknown,
+    requestMode?: ChannelRequestMode
+) {
     const serverChannelRouter = getServerChannelState().router;
     if (!credential || !serverChannelRouter) return;
+    if (isChannelRequestModeFailure(error, requestMode)) {
+        const reason = {
+            ...describeChannelFailure(error, 'channel'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
+        appLogger.warn(
+            report.cooldownApplied
+                ? `暂时冷却 API 渠道请求方式：${credential.channelId}/${requestMode}`
+                : `记录 API 渠道请求方式失败，未启用冷却：${credential.channelId}/${requestMode}`,
+            reason
+        );
+        return;
+    }
     if (isChannelFailure(error)) {
-        const reason = describeChannelFailure(error, 'channel');
-        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', reason });
+        const reason = {
+            ...describeChannelFailure(error, 'channel'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
         appLogger.warn(
             report.cooldownApplied
                 ? `暂时冷却 API 渠道：${credential.channelId}`
@@ -59,8 +88,11 @@ export function reportServerCredentialFailure(credential: ChannelCredential | un
         return;
     }
     if (isCredentialFailure(error)) {
-        const reason = describeChannelFailure(error, 'credential');
-        const report = serverChannelRouter.reportFailure(credential, { reason });
+        const reason = {
+            ...describeChannelFailure(error, 'credential'),
+            ...(requestMode ? { requestMode } : {})
+        };
+        const report = serverChannelRouter.reportFailure(credential, { requestMode, reason });
         appLogger.warn(
             report.cooldownApplied
                 ? `暂时冷却 API 渠道凭证：${credential.channelId}/${credential.id}`
@@ -76,6 +108,12 @@ export function describeInvalidImagesResponse(result: unknown): string {
         if (normalized.includes('<!doctype html') || normalized.includes('<html')) {
             return 'API 返回的是 HTML 页面，不是 OpenAI Images JSON 响应。请确认 API URL 填的是兼容接口根地址，通常需要以 /v1 结尾，例如 https://api.openai.com/v1；不要填写管理后台或网页首页地址。';
         }
+    }
+    const acceptedTask = readAcceptedImageTaskDetails(result);
+    if (acceptedTask) {
+        const taskSuffix = acceptedTask.taskId ? ` task_id=${acceptedTask.taskId}` : '';
+        const pollSuffix = acceptedTask.pollUrl ? ' poll_url=present' : '';
+        return `上游返回了异步图片任务${taskSuffix}${pollSuffix}，不是可直接消费的 OpenAI Images 完成结果。如果同一业务幂等键有界重试后仍拿不到最终图片，就不能把该渠道配置为 images-non-stream；只有同键重试可返回最终图片，或上游轮询接口真实可用且服务端已接入任务轮询后，才能配置该请求方式。`;
     }
     return 'API 返回的数据不是 OpenAI Images 格式。请确认 API URL 是 OpenAI 兼容接口，并且该接口支持 Images generate/edit。';
 }

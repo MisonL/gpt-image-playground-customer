@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import { cn } from '@/lib/utils';
 import type {
     ImageUpstreamFormBackend,
     ImageUpstreamFormPromptOptimization,
@@ -28,17 +29,17 @@ import {
     resolveImageUpstreamEffectiveStreamingStrategy
 } from '@/lib/image-upstream-form';
 import {
-    shouldRecommendImageStreaming,
-    type ImageStreamMode,
-    type ImageStreamingStrategy
-} from '@/lib/image-upstream-strategy';
-import {
     buildIntegerRangeOptions,
     clampIntegerToRange,
     getPartialImagesRangeForBackend,
     type ImageUpstreamProfile,
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
+import {
+    shouldRecommendImageStreaming,
+    type ImageStreamMode,
+    type ImageStreamingStrategy
+} from '@/lib/image-upstream-strategy';
 import {
     getPresetDimensions,
     getPresetTooltip,
@@ -262,7 +263,7 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-7 lg:flex-row lg:px-1 lg:text-[11px] 2xl:px-1.5 2xl:text-xs [&_[data-slot=radio-group-indicator]]:hidden [&_[data-slot=radio-group-item-content]]:gap-1 lg:[&_[data-slot=radio-group-item-content]]:gap-0.5 2xl:[&_[data-slot=radio-group-item-content]]:gap-1'>
+            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-8 lg:flex-row lg:px-1 lg:text-[11px] 2xl:px-1.5 2xl:text-xs [&_[data-slot=radio-group-indicator]]:hidden [&_[data-slot=radio-group-item-content]]:gap-1 lg:[&_[data-slot=radio-group-item-content]]:gap-0.5 2xl:[&_[data-slot=radio-group-item-content]]:gap-1'>
             <Icon className='h-3 w-3 shrink-0 text-current opacity-50 lg:hidden 2xl:block' />
             <span className='max-w-full min-w-0 truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
@@ -589,11 +590,7 @@ export function GenerationForm({
                                 onClick={onOpenPasswordDialog}
                                 className='text-muted-foreground hover:text-foreground ml-auto min-h-11 min-w-11 px-2 lg:min-h-7 lg:min-w-0'
                                 aria-label={t('password.configure')}>
-                                {clientPasswordHash ? (
-                                    <Lock className='h-4 w-4' />
-                                ) : (
-                                    <LockOpen className='h-4 w-4' />
-                                )}
+                                {clientPasswordHash ? <Lock className='h-4 w-4' /> : <LockOpen className='h-4 w-4' />}
                             </Button>
                         )}
                     </div>
@@ -625,7 +622,7 @@ export function GenerationForm({
                                         disabled={isLoading}
                                         className='min-h-[104px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-8 leading-6 shadow-inner lg:min-h-[92px]'
                                     />
-                                    <span className='text-muted-foreground pointer-events-none absolute bottom-3 left-4 text-xs'>
+                                    <span className='text-muted-foreground ui-stat pointer-events-none absolute bottom-3 left-4 text-xs'>
                                         {prompt.trim().length} / 1000
                                     </span>
                                 </div>
@@ -677,7 +674,7 @@ export function GenerationForm({
                             <div className='border-border/75 bg-background/65 space-y-2 rounded-md border p-3 shadow-sm'>
                                 <div className='flex items-center justify-between gap-3'>
                                     <Label htmlFor='batch-prompt-list'>{t('batch.promptList')}</Label>
-                                    <span className='text-muted-foreground shrink-0 text-xs'>
+                                    <span className='text-muted-foreground ui-stat shrink-0 text-xs'>
                                         {t('batch.promptCount', { count: batchPrompts.length })}
                                     </span>
                                 </div>
@@ -799,7 +796,7 @@ export function GenerationForm({
                                         />
                                     </div>
                                 </div>
-                                <p className='text-muted-foreground text-xs'>
+                                <p className='text-muted-foreground ui-stat text-xs'>
                                     {t('form.pixelsMeta', {
                                         pixels: customPixels.toLocaleString(locale),
                                         percent: ((customPixels / 8_294_400) * 100).toFixed(1),
@@ -812,7 +809,7 @@ export function GenerationForm({
                         )}
 
                         <div className={compactSettingRowClass}>
-                            <div className={compactSettingLabelClass}>
+                            <div className={cn(compactSettingLabelClass, 'ui-stat')}>
                                 {isBatchMode
                                     ? t('form.batchNumberOfImages', { count: batchPrompts.length })
                                     : t('form.numberOfImages', { count: n[0] })}
@@ -985,7 +982,9 @@ export function GenerationForm({
                                                     }
                                                     disabled={isLoading}
                                                     name='image_backend'>
-                                                    <SelectTrigger id='image-backend-select' className='min-h-11 lg:min-h-9'>
+                                                    <SelectTrigger
+                                                        id='image-backend-select'
+                                                        className='min-h-11 lg:min-h-9'>
                                                         <SelectValue />
                                                     </SelectTrigger>
                                                     <SelectContent>
@@ -1123,7 +1122,9 @@ export function GenerationForm({
                                                             }
                                                             disabled={isLoading}
                                                             name='thinking'>
-                                                            <SelectTrigger id='thinking-select' className='min-h-11 lg:min-h-9'>
+                                                            <SelectTrigger
+                                                                id='thinking-select'
+                                                                className='min-h-11 lg:min-h-9'>
                                                                 <SelectValue />
                                                             </SelectTrigger>
                                                             <SelectContent>
@@ -1522,7 +1523,7 @@ export function GenerationForm({
                                 {streamStatusLabel}
                             </span>
                             {parallelBatchChecked && (
-                                <span className='border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] text-[oklch(0.38_0.075_148)] rounded-full border px-2 py-1'>
+                                <span className='rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-[oklch(0.38_0.075_148)]'>
                                     {t('streaming.parallelBatchEnabled')}
                                 </span>
                             )}

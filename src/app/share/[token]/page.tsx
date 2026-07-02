@@ -2,7 +2,9 @@
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { useI18n } from '@/lib/i18n';
+import { buildShareApiPath } from '@/lib/share-route-paths';
 import Image from 'next/image';
 import * as React from 'react';
 
@@ -35,7 +37,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
             setIsLoading(true);
             setError(null);
             try {
-                const response = await fetch(`/api/shares/${token}`);
+                const response = await fetch(buildShareApiPath({ pathname: window.location.pathname, token }));
                 const body = await response.json();
                 if (!response.ok) {
                     throw new Error(body.error || t('share.loadFailed'));
@@ -44,11 +46,14 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                     const nextMetadata = body as ShareMetadata;
                     setMetadata(nextMetadata);
                     if (!nextMetadata.expired && !nextMetadata.accessCodeRequired) {
-                        const imageResponse = await fetch(`/api/shares/${token}/content`, {
-                            method: 'POST',
-                            headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({})
-                        });
+                        const imageResponse = await fetch(
+                            buildShareApiPath({ pathname: window.location.pathname, token, suffix: 'content' }),
+                            {
+                                method: 'POST',
+                                headers: { 'content-type': 'application/json' },
+                                body: JSON.stringify({})
+                            }
+                        );
                         if (!imageResponse.ok) {
                             const imageBody = await imageResponse.json().catch(() => ({}));
                             throw new Error(imageBody.error || t('share.unlockFailed'));
@@ -86,11 +91,14 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
         setIsUnlocking(true);
         setError(null);
         try {
-            const response = await fetch(`/api/shares/${token}/content`, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(accessCode.trim() ? { accessCode: accessCode.trim() } : {})
-            });
+            const response = await fetch(
+                buildShareApiPath({ pathname: window.location.pathname, token, suffix: 'content' }),
+                {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(accessCode.trim() ? { accessCode: accessCode.trim() } : {})
+                }
+            );
             if (!response.ok) {
                 const body = await response.json().catch(() => ({}));
                 throw new Error(body.error || t('share.unlockFailed'));
@@ -122,25 +130,50 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                 {metadata?.expired ? <p className='text-destructive text-sm'>{t('share.expired')}</p> : null}
                 {metadata && metadata.accessCodeRequired && !imageUrl && !metadata.expired ? (
                     <form
-                        className='flex max-w-sm gap-2'
+                        className='max-w-sm space-y-2'
                         onSubmit={(event) => {
                             event.preventDefault();
+                            if (accessCode.trim().length === 0) {
+                                return;
+                            }
                             void loadImage();
                         }}>
-                        <Input
-                            value={accessCode}
-                            onChange={(event) => setAccessCode(event.target.value)}
-                            placeholder={t('share.accessCodePlaceholder')}
-                            type='password'
-                        />
-                        <Button type='submit' disabled={isUnlocking || accessCode.trim().length === 0}>
-                            {t('share.unlock')}
-                        </Button>
+                        <Label htmlFor='share-page-access-code'>{t('share.accessCode')}</Label>
+                        <div className='flex flex-col gap-2 sm:flex-row'>
+                            <Input
+                                id='share-page-access-code'
+                                name='accessCode'
+                                aria-describedby={accessCode.trim().length === 0 ? 'share-page-access-code-hint' : undefined}
+                                value={accessCode}
+                                onChange={(event) => setAccessCode(event.target.value)}
+                                placeholder={t('share.accessCodePlaceholder')}
+                                type='password'
+                                autoComplete='current-password'
+                                spellCheck={false}
+                            />
+                            <Button
+                                type='submit'
+                                className='min-h-11 sm:min-h-9'
+                                disabled={isUnlocking || accessCode.trim().length === 0}>
+                                {t('share.unlock')}
+                            </Button>
+                        </div>
+                        {accessCode.trim().length === 0 ? (
+                            <p id='share-page-access-code-hint' className='text-muted-foreground text-xs'>
+                                {t('share.accessCodeRequiredHint')}
+                            </p>
+                        ) : null}
                     </form>
                 ) : null}
                 {imageUrl ? (
-                    <div className='relative aspect-square w-full overflow-hidden rounded-md border border-border bg-muted'>
-                        <Image src={imageUrl} alt={metadata?.sourceFilename || t('share.imageAlt')} fill className='object-contain' unoptimized />
+                    <div className='border-border bg-muted relative aspect-square w-full overflow-hidden rounded-md border'>
+                        <Image
+                            src={imageUrl}
+                            alt={metadata?.sourceFilename || t('share.imageAlt')}
+                            fill
+                            className='object-contain'
+                            unoptimized
+                        />
                     </div>
                 ) : null}
             </section>

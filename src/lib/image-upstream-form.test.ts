@@ -2,10 +2,12 @@ import {
     IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
     appendImageUpstreamOverrideFields,
     getImageUpstreamRouteImpactKeys,
+    hasResponsesChannelRequestMode,
     isImageUpstreamStreamingStrategySelectable,
     isResponsesImageBackendRuntimeEnabled,
     normalizeImageUpstreamRuntimeFields,
     resolveImageUpstreamEffectiveStreamingStrategy,
+    shouldAllowResponsesImageBackend,
     shouldAllowResponsesHistoryRoute,
     shouldBlockResponsesRequestWithoutModel,
     shouldBlockExplicitResponsesRequest
@@ -14,9 +16,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 function readFormEntries(formData: FormData): Record<string, string> {
-    return Object.fromEntries(
-        Array.from(formData.entries()).map(([key, value]) => [key, String(value)])
-    );
+    return Object.fromEntries(Array.from(formData.entries()).map(([key, value]) => [key, String(value)]));
 }
 
 describe('appendImageUpstreamOverrideFields', () => {
@@ -141,6 +141,71 @@ describe('isResponsesImageBackendRuntimeEnabled', () => {
         assert.equal(isResponsesImageBackendRuntimeEnabled({ responsesImageBackend: {} }), false);
         assert.equal(isResponsesImageBackendRuntimeEnabled({ responsesImageBackend: { enabled: false } }), false);
         assert.equal(isResponsesImageBackendRuntimeEnabled({ responsesImageBackend: { enabled: true } }), true);
+    });
+});
+
+describe('hasResponsesChannelRequestMode', () => {
+    it('requires a currently effective Responses request mode on server channels', () => {
+        assert.equal(hasResponsesChannelRequestMode({}), false);
+        assert.equal(
+            hasResponsesChannelRequestMode({
+                channelRouting: { effectiveRequestModes: ['images-non-stream', 'images-sse'] }
+            }),
+            false
+        );
+        assert.equal(
+            hasResponsesChannelRequestMode({
+                channelRouting: { effectiveRequestModes: ['responses-non-stream'] }
+            }),
+            true
+        );
+        assert.equal(
+            hasResponsesChannelRequestMode({
+                channelRouting: { effectiveRequestModes: ['responses-sse'] }
+            }),
+            true
+        );
+    });
+});
+
+describe('shouldAllowResponsesImageBackend', () => {
+    it('keeps server-default Responses disabled when no healthy server channel supports it', () => {
+        assert.equal(
+            shouldAllowResponsesImageBackend({
+                runtimeCapabilities: {
+                    responsesImageBackend: { enabled: true },
+                    channelRouting: { effectiveRequestModes: ['images-non-stream', 'images-sse'] }
+                },
+                hasRequestApiOverride: false
+            }),
+            false
+        );
+    });
+
+    it('allows explicit user-provided upstream credentials to try Responses when the runtime supports the backend', () => {
+        assert.equal(
+            shouldAllowResponsesImageBackend({
+                runtimeCapabilities: {
+                    responsesImageBackend: { enabled: true },
+                    channelRouting: { effectiveRequestModes: ['images-non-stream', 'images-sse'] }
+                },
+                hasRequestApiOverride: true
+            }),
+            true
+        );
+    });
+
+    it('allows Responses for server channels that advertise a healthy Responses request mode', () => {
+        assert.equal(
+            shouldAllowResponsesImageBackend({
+                runtimeCapabilities: {
+                    responsesImageBackend: { enabled: true },
+                    channelRouting: { effectiveRequestModes: ['responses-sse'] }
+                },
+                hasRequestApiOverride: false
+            }),
+            true
+        );
     });
 });
 
@@ -295,11 +360,7 @@ describe('getImageUpstreamRouteImpactKeys', () => {
                 defaultStreamingStrategy: 'off',
                 allowResponsesImageBackend: true
             }),
-            [
-                'upstream.backendImpactServerDefault',
-                'upstream.strategyImpactOff',
-                'upstream.routeImpactCost'
-            ]
+            ['upstream.backendImpactServerDefault', 'upstream.strategyImpactOff', 'upstream.routeImpactCost']
         );
         assert.deepEqual(
             getImageUpstreamRouteImpactKeys({
@@ -308,11 +369,7 @@ describe('getImageUpstreamRouteImpactKeys', () => {
                 defaultStreamingStrategy: 'force-sse',
                 allowResponsesImageBackend: true
             }),
-            [
-                'upstream.backendImpactServerDefault',
-                'upstream.strategyImpactForceSse',
-                'upstream.routeImpactCost'
-            ]
+            ['upstream.backendImpactServerDefault', 'upstream.strategyImpactForceSse', 'upstream.routeImpactCost']
         );
     });
 
@@ -362,10 +419,7 @@ describe('normalizeImageUpstreamRuntimeFields', () => {
             promptOptimization: 'on' as const
         };
 
-        assert.deepEqual(
-            normalizeImageUpstreamRuntimeFields(fields, { allowResponsesImageBackend: true }),
-            fields
-        );
+        assert.deepEqual(normalizeImageUpstreamRuntimeFields(fields, { allowResponsesImageBackend: true }), fields);
     });
 
     it('keeps explicit Responses backend fields while runtime capability is still unknown', () => {
@@ -377,10 +431,7 @@ describe('normalizeImageUpstreamRuntimeFields', () => {
             promptOptimization: 'off' as const
         };
 
-        assert.deepEqual(
-            normalizeImageUpstreamRuntimeFields(fields, { allowResponsesImageBackend: true }),
-            fields
-        );
+        assert.deepEqual(normalizeImageUpstreamRuntimeFields(fields, { allowResponsesImageBackend: true }), fields);
     });
 
     it('normalizes disabled Responses backend fields back to safe page defaults', () => {

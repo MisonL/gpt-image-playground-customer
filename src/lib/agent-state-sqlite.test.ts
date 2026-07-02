@@ -1,9 +1,9 @@
-import { SQLITE_SCHEMA, SqliteAgentStateStore } from './agent-state-sqlite';
 import type { AgentImageResponse } from './agent-api-contracts';
+import { SQLITE_SCHEMA, SqliteAgentStateStore } from './agent-state-sqlite';
 import { hashAgentPayload, type AgentArtifactRecord } from './agent-state-store';
+import Database from 'better-sqlite3';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import Database from 'better-sqlite3';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -141,7 +141,10 @@ describe('SqliteAgentStateStore', () => {
             0
         );
         assert.deepEqual(await store.readFeedback('page_request', 'web-sqlite-feedback'), second);
-        assert.equal(await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-sqlite-feedback' }]), 1);
+        assert.equal(
+            await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-sqlite-feedback' }]),
+            1
+        );
         assert.equal(await store.readFeedback('page_request', 'web-sqlite-feedback'), undefined);
     });
 
@@ -540,7 +543,10 @@ describe('SqliteAgentStateStore', () => {
             await assert.rejects(() => access(artifactPath));
             assert.equal(await store.getArtifact('artifact-purge-directory-artifact'), undefined);
             const entries = await readdir(artifactParentPath);
-            assert.deepEqual(entries.filter((entry) => entry.startsWith(`${artifactBaseName}.purge-`)), []);
+            assert.deepEqual(
+                entries.filter((entry) => entry.startsWith(`${artifactBaseName}.purge-`)),
+                []
+            );
         } finally {
             await rm(artifactParentPath, { recursive: true, force: true });
         }
@@ -616,7 +622,12 @@ describe('SqliteAgentStateStore', () => {
     it('restores moved artifact files when purge fails after file relocation', async () => {
         const requestJson = { prompt: 'purge restore on failure' };
         const requestHash = hashAgentPayload(requestJson);
-        const artifactPath = path.join(process.cwd(), 'generated-images', '.sqlite-purge-test', `${crypto.randomUUID()}.png`);
+        const artifactPath = path.join(
+            process.cwd(),
+            'generated-images',
+            '.sqlite-purge-test',
+            `${crypto.randomUUID()}.png`
+        );
         await mkdir(path.dirname(artifactPath), { recursive: true });
         await writeFile(artifactPath, 'stale image');
         const begin = await store.beginRequest({
@@ -661,11 +672,18 @@ describe('SqliteAgentStateStore', () => {
             now: new Date('2026-05-12T00:00:00.500Z')
         });
         try {
-            const db = (store as unknown as { db: { exec(sql: string): void; prepare(sql: string): { run(...args: unknown[]): void } } }).db;
+            const db = (
+                store as unknown as {
+                    db: { exec(sql: string): void; prepare(sql: string): { run(...args: unknown[]): void } };
+                }
+            ).db;
             db.exec(
                 "CREATE TRIGGER purge_fail_guard BEFORE DELETE ON agent_requests BEGIN SELECT RAISE(ABORT, 'purge failed'); END;"
             );
-            await assert.rejects(() => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')), /purge failed/);
+            await assert.rejects(
+                () => store.purgeExpiredRequests(new Date('2026-05-12T00:00:02.000Z')),
+                /purge failed/
+            );
             await assert.doesNotReject(() => access(artifactPath));
             assert.ok(await store.getArtifact('artifact-purge-restore-file'));
         } finally {
@@ -733,11 +751,21 @@ describe('SqliteAgentStateStore', () => {
         try {
             assert.throws(
                 () =>
-                    db.prepare(
-                        `INSERT INTO image_shares
+                    db
+                        .prepare(
+                            `INSERT INTO image_shares
                             (token, source_filename, content_filename, mime_type, size_bytes, created_at, access_code_required)
                          VALUES (?, ?, ?, ?, ?, ?, ?)`
-                    ).run('f'.repeat(24), 'source.png', `${'f'.repeat(24)}.png`, 'image/png', 12, '2026-05-14T08:00:00.000Z', 1),
+                        )
+                        .run(
+                            'f'.repeat(24),
+                            'source.png',
+                            `${'f'.repeat(24)}.png`,
+                            'image/png',
+                            12,
+                            '2026-05-14T08:00:00.000Z',
+                            1
+                        ),
                 /CHECK/
             );
         } finally {
@@ -827,8 +855,14 @@ describe('SqliteAgentStateStore', () => {
         const expired = await store.deleteExpiredImageShareRecords('2026-05-14T09:00:01.000Z');
         const active = await store.listImageShareRecords();
 
-        assert.equal(expired.some((record) => record.token === 'd'.repeat(24)), true);
-        assert.equal(active.some((record) => record.token === 'e'.repeat(24)), true);
+        assert.equal(
+            expired.some((record) => record.token === 'd'.repeat(24)),
+            true
+        );
+        assert.equal(
+            active.some((record) => record.token === 'e'.repeat(24)),
+            true
+        );
     });
 
     it('records schema migrations and keeps repeated init idempotent', async () => {
@@ -840,9 +874,9 @@ describe('SqliteAgentStateStore', () => {
         const db = new Database(dbPath, { readonly: true });
 
         try {
-            const rows = db
-                .prepare('SELECT id FROM state_schema_migrations ORDER BY id ASC')
-                .all() as Array<{ id: string }>;
+            const rows = db.prepare('SELECT id FROM state_schema_migrations ORDER BY id ASC').all() as Array<{
+                id: string;
+            }>;
             assert.deepEqual(
                 rows.map((row) => row.id),
                 ['001_agent_state_core', '002_image_shares', '003_result_feedback']
@@ -853,11 +887,7 @@ describe('SqliteAgentStateStore', () => {
     });
 });
 
-function buildArtifact(input: {
-    id: string;
-    requestId: string;
-    filename: string;
-}): AgentArtifactRecord {
+function buildArtifact(input: { id: string; requestId: string; filename: string }): AgentArtifactRecord {
     return {
         id: input.id,
         requestId: input.requestId,

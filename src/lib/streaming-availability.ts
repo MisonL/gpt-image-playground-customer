@@ -66,7 +66,9 @@ export function createStreamingAvailabilityRegistry(options: RegistryOptions = {
             resetIfNewDay();
             return marks.has(buildMarkKey(input));
         },
-        markUnavailable(input: StreamingAvailabilityKey & { reason: string; status?: number; code?: string }): StreamingAvailabilityMark {
+        markUnavailable(
+            input: StreamingAvailabilityKey & { reason: string; status?: number; code?: string }
+        ): StreamingAvailabilityMark {
             resetIfNewDay();
             const mark: StreamingAvailabilityMark = {
                 channelId: input.channelId,

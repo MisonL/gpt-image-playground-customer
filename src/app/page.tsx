@@ -20,6 +20,7 @@ import {
 } from '@/lib/api-error-guidance';
 import { formatBatchPromptHistory, readBatchPromptLines } from '@/lib/batch-prompts';
 import { db, type ImageRecord } from '@/lib/db';
+import { hasReachedEditSourceImageLimit } from '@/lib/edit-source-limits';
 import {
     advanceGenerationBatchProgress,
     buildGenerationActivityItems,
@@ -70,14 +71,13 @@ import { useI18n } from '@/lib/i18n';
 import {
     IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
     appendImageUpstreamOverrideFields,
-    isResponsesImageBackendRuntimeEnabled,
     normalizeImageUpstreamRuntimeFields,
+    shouldAllowResponsesImageBackend,
     shouldAllowResponsesHistoryRoute,
     shouldBlockResponsesRequestWithoutModel,
     shouldBlockExplicitResponsesRequest,
     type ImageUpstreamFormBackend
 } from '@/lib/image-upstream-form';
-import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import {
     IMAGE_UPSTREAM_PROFILES,
     summarizeImageUpstreamProfile,
@@ -85,13 +85,13 @@ import {
     type ImageUpstreamProfileId,
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
+import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
 import { resolveMobilePrimaryDisabledReason } from '@/lib/mobile-primary-action-state';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
+import { resolveRuntimeHealthStatus, type RuntimeHealthStatus } from '@/lib/runtime-health-status';
 import { sha256Hex } from '@/lib/sha256';
 import { createImageShareFromBlob } from '@/lib/share-client';
-import { createZipBlob } from '@/lib/zip-export';
-import { hasReachedEditSourceImageLimit } from '@/lib/edit-source-limits';
 import { getPresetDimensions, validateGptImage2Size, validatePositiveIntegerImageSize } from '@/lib/size-utils';
 import {
     applyStreamingClientEvent,
@@ -110,6 +110,7 @@ import {
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { formatEstimatedCredits } from '@/lib/workbench-cost-label';
+import { createZipBlob } from '@/lib/zip-export';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ArrowUp, Flower2, HelpCircle, Loader2, Lock, Pause, PenLine, Settings2, Activity, X } from 'lucide-react';
 import * as React from 'react';
@@ -141,12 +142,23 @@ const resultFeedbackDeleteMaxAttempts = 3;
 const resultFeedbackDeleteRetryDelaysMs = [1000, 3000] as const;
 const resultFeedbackRequestTimeoutMs = 10_000;
 
-type ApiCallRetryArgs = [GenerationFormData | EditingFormData, RequestMode, ImageStreamMode, PartialImagesCount, boolean];
+type ApiCallRetryArgs = [
+    GenerationFormData | EditingFormData,
+    RequestMode,
+    ImageStreamMode,
+    PartialImagesCount,
+    boolean
+];
 type PasswordVerificationResult = 'valid' | 'invalid' | 'unavailable';
 type FeedbackSyncInput = HistoryFeedbackSyncInput;
 type FeedbackSyncPayload = HistoryFeedbackSyncPayload;
 type FeedbackSyncScheduleOptions = {
     pruneQueuedTargets?: boolean;
+};
+type StoredApiSettingsReadResult = {
+    settings: ApiSettings;
+    shouldPersist: boolean;
+    shouldRemove: boolean;
 };
 
 function createFeedbackRequestSignal(signal: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
@@ -167,7 +179,7 @@ function createFeedbackRequestSignal(signal: AbortSignal): { signal: AbortSignal
     };
 }
 
-function getImageBackendLabel(backend: ImageUpstreamFormBackend, t: (key: string) => string): string {
+function getWorkbenchRouteLabel(backend: ImageUpstreamFormBackend, t: (key: string) => string): string {
     if (backend === 'images-api') return t('upstream.backendImages');
     if (backend === 'responses-image-generation') return t('upstream.backendResponses');
     return t('upstream.workbenchDefaultRoute');
@@ -215,19 +227,35 @@ function readStoredHistory(): HistoryMetadata[] {
     return [];
 }
 
-function readStoredApiSettings(): ApiSettings {
+function normalizeStoredApiSettings(settings: Partial<ApiSettings>): StoredApiSettingsReadResult {
+    const apiKey = typeof settings.apiKey === 'string' ? settings.apiKey.trim() : '';
+    const baseUrl = typeof settings.baseUrl === 'string' ? settings.baseUrl.trim() : '';
+    if (!apiKey && !baseUrl) {
+        return { settings: emptyApiSettings, shouldPersist: false, shouldRemove: true };
+    }
+    if (!apiKey && baseUrl) {
+        return { settings: emptyApiSettings, shouldPersist: false, shouldRemove: true };
+    }
+    const normalizedSettings: ApiSettings = { apiKey, baseUrl };
+    return {
+        settings: normalizedSettings,
+        shouldPersist: normalizedSettings.apiKey !== settings.apiKey || normalizedSettings.baseUrl !== settings.baseUrl,
+        shouldRemove: false
+    };
+}
+
+function readStoredApiSettings(): StoredApiSettingsReadResult {
     const storedApiSettings = readLocalStorageValue(apiSettingsLocalStorageKey);
-    if (!storedApiSettings) return emptyApiSettings;
+    if (!storedApiSettings) {
+        return { settings: emptyApiSettings, shouldPersist: false, shouldRemove: false };
+    }
     try {
         const parsedSettings = JSON.parse(storedApiSettings) as Partial<ApiSettings>;
-        return {
-            apiKey: typeof parsedSettings.apiKey === 'string' ? parsedSettings.apiKey : '',
-            baseUrl: typeof parsedSettings.baseUrl === 'string' ? parsedSettings.baseUrl : ''
-        };
+        return normalizeStoredApiSettings(parsedSettings);
     } catch (error) {
         console.error('从 localStorage 加载 API 设置失败：', error);
         window.localStorage.removeItem(apiSettingsLocalStorageKey);
-        return emptyApiSettings;
+        return { settings: emptyApiSettings, shouldPersist: false, shouldRemove: false };
     }
 }
 
@@ -314,6 +342,7 @@ type ApiUsage = {
 
 type RuntimeCapabilities = {
     streaming?: {
+        defaultBackend?: 'images-api' | 'responses-image-generation';
         defaultMode?: ImageStreamMode;
         defaultStrategy?: ImageStreamingStrategy;
     };
@@ -339,6 +368,20 @@ type RuntimeCapabilities = {
         optionalEnv?: string[];
         hasDefaultModel?: boolean;
         missingEnv?: string[];
+    };
+    channelRouting?: {
+        effectiveRequestModes?: string[];
+        requestModeHealth?: Array<{
+            mode: string;
+            configuredCredentialCount: number;
+            healthyCredentialCount: number;
+            configuredChannelCount: number;
+            healthyChannelCount: number;
+        }>;
+        effectiveRequestModesByChannel?: Array<{
+            channelId: string;
+            requestModes: string[];
+        }>;
     };
     upstreamProfile?: {
         activeProfile: ImageUpstreamProfileId;
@@ -479,8 +522,9 @@ export default function HomePage() {
     const completedResultFeedbackSyncKeysRef = React.useRef<Set<string>>(new Set());
     const scheduledResultFeedbackDeleteKeysRef = React.useRef<Set<string>>(new Set());
     const scheduledResultFeedbackDeletePayloadsRef = React.useRef<Map<string, HistoryFeedbackDeletePayload>>(new Map());
-    const scheduleResultFeedbackDeletePayloadRef =
-        React.useRef<((payload: HistoryFeedbackDeletePayload) => void) | null>(null);
+    const scheduleResultFeedbackDeletePayloadRef = React.useRef<
+        ((payload: HistoryFeedbackDeletePayload) => void) | null
+    >(null);
     const resultFeedbackRetryTimersRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
     const resultFeedbackSyncAbortControllersRef = React.useRef<Map<string, AbortController>>(new Map());
     const resultFeedbackDeleteAbortControllersRef = React.useRef<Map<string, AbortController>>(new Map());
@@ -598,15 +642,21 @@ export default function HomePage() {
     const defaultStreamingStrategy = runtimeCapabilities?.streaming?.defaultStrategy ?? 'auto';
     const activeUpstreamProfileSummary = summarizeImageUpstreamProfile({
         requestApiBaseUrl: apiSettings.baseUrl,
-        serverProfileIds: runtimeCapabilities?.upstreamProfile ? [runtimeCapabilities.upstreamProfile.serverProfile] : []
+        serverProfileIds: runtimeCapabilities?.upstreamProfile
+            ? [runtimeCapabilities.upstreamProfile.serverProfile]
+            : []
     });
-    const hasRequestApiBaseUrl = apiSettings.baseUrl.trim().length > 0;
-    const activeUpstreamProfile = hasRequestApiBaseUrl
+    const hasRequestApiKey = apiSettings.apiKey.trim().length > 0;
+    const hasRequestApiOverride = hasRequestApiKey;
+    const activeUpstreamProfile = hasRequestApiOverride
         ? activeUpstreamProfileSummary.activeConstraints
         : runtimeCapabilities?.upstreamProfile?.activeConstraints || IMAGE_UPSTREAM_PROFILES['openai-compatible'];
     const activeUpstreamProfileMixed =
-        !hasRequestApiBaseUrl && runtimeCapabilities?.upstreamProfile?.serverProfileMixed === true;
-    const allowResponsesImageBackend = isResponsesImageBackendRuntimeEnabled(runtimeCapabilities ?? {});
+        !hasRequestApiOverride && runtimeCapabilities?.upstreamProfile?.serverProfileMixed === true;
+    const allowResponsesImageBackend = shouldAllowResponsesImageBackend({
+        runtimeCapabilities,
+        hasRequestApiOverride
+    });
     const allowResponsesHistoryRoute = shouldAllowResponsesHistoryRoute({
         runtimeCapabilitiesAvailable: runtimeCapabilities !== null,
         allowResponsesImageBackend
@@ -650,7 +700,14 @@ export default function HomePage() {
         activeWorkbenchStreamingStrategy === IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
             ? defaultStreamingStrategy
             : activeWorkbenchStreamingStrategy;
-    const activeWorkbenchBackendLabel = getImageBackendLabel(activeWorkbenchBackend, t);
+    const activeRouteLabel = getWorkbenchRouteLabel(activeWorkbenchBackend, t);
+    const activeRuntimeHealthStatus: RuntimeHealthStatus = resolveRuntimeHealthStatus({
+        runtimeCapabilities,
+        hasRequestApiOverride,
+        imageBackend: activeWorkbenchBackend,
+        streamingStrategy: activeEffectiveStreamingStrategy,
+        streamMode
+    });
     const activeTaskCount =
         mode === 'generate' && workbenchMode === 'batch'
             ? readBatchPromptLines(genBatchPromptText).length
@@ -723,7 +780,8 @@ export default function HomePage() {
                 setGenBackground('auto');
             }
             setGenN((current) =>
-                current[0] < activeUpstreamProfile.generateCount.min || current[0] > activeUpstreamProfile.generateCount.max
+                current[0] < activeUpstreamProfile.generateCount.min ||
+                current[0] > activeUpstreamProfile.generateCount.max
                     ? [
                           Math.min(
                               activeUpstreamProfile.generateCount.max,
@@ -1126,7 +1184,13 @@ export default function HomePage() {
 
         fetchAuthStatus();
         queueMicrotask(() => {
-            setApiSettings(readStoredApiSettings());
+            const storedApiSettings = readStoredApiSettings();
+            setApiSettings(storedApiSettings.settings);
+            if (storedApiSettings.shouldRemove) {
+                window.localStorage.removeItem(apiSettingsLocalStorageKey);
+            } else if (storedApiSettings.shouldPersist) {
+                window.localStorage.setItem(apiSettingsLocalStorageKey, JSON.stringify(storedApiSettings.settings));
+            }
         });
     }, [createErrorNotice, t, verifyEntryPasswordHash]);
 
@@ -1137,6 +1201,9 @@ export default function HomePage() {
                 throw new Error('获取运行时能力失败');
             }
             const data = (await response.json()) as RuntimeCapabilities;
+            if (data === null || typeof data !== 'object') {
+                throw new Error('获取运行时能力失败');
+            }
             setRuntimeCapabilities(data);
             return data;
         } catch (error) {
@@ -1273,6 +1340,9 @@ export default function HomePage() {
     };
 
     const handleSaveApiSettings = (settings: ApiSettings) => {
+        if (settings.baseUrl && !settings.apiKey) {
+            throw new Error(t('api.urlPairRequired'));
+        }
         setApiSettings(settings);
         if (settings.apiKey || settings.baseUrl) {
             localStorage.setItem(apiSettingsLocalStorageKey, JSON.stringify(settings));
@@ -1394,7 +1464,7 @@ export default function HomePage() {
             if (apiSettings.apiKey) {
                 apiFormData.append('apiKey', apiSettings.apiKey);
             }
-            if (apiSettings.baseUrl) {
+            if (apiSettings.baseUrl && apiSettings.apiKey) {
                 apiFormData.append('apiBaseUrl', apiSettings.baseUrl);
             }
 
@@ -1684,8 +1754,10 @@ export default function HomePage() {
                     return;
                 }
             }
-            const allowRuntimeResponsesImageBackend =
-                isResponsesImageBackendRuntimeEnabled(latestRuntimeCapabilities ?? {});
+            const allowRuntimeResponsesImageBackend = shouldAllowResponsesImageBackend({
+                runtimeCapabilities: latestRuntimeCapabilities,
+                hasRequestApiOverride
+            });
             if (
                 shouldBlockExplicitResponsesRequest({
                     imageBackend: formData.image_backend,
@@ -1705,8 +1777,7 @@ export default function HomePage() {
                 shouldBlockResponsesRequestWithoutModel({
                     imageBackend: runtimeFormData.image_backend,
                     responsesModel: runtimeFormData.responsesModel,
-                    hasDefaultResponsesModel:
-                        latestRuntimeCapabilities?.responsesImageBackend?.hasDefaultModel === true
+                    hasDefaultResponsesModel: latestRuntimeCapabilities?.responsesImageBackend?.hasDefaultModel === true
                 })
             ) {
                 throw new ApiRequestError(t('upstream.responsesModelRequired'));
@@ -2293,7 +2364,10 @@ export default function HomePage() {
                 window.localStorage.removeItem(resultFeedbackSyncQueueLocalStorageKey);
                 return;
             }
-            window.localStorage.setItem(resultFeedbackSyncQueueLocalStorageKey, serializeHistoryFeedbackSyncQueue(queue));
+            window.localStorage.setItem(
+                resultFeedbackSyncQueueLocalStorageKey,
+                serializeHistoryFeedbackSyncQueue(queue)
+            );
         } catch (error) {
             console.error('写入结果反馈补偿队列失败。', error);
         }
@@ -2334,12 +2408,15 @@ export default function HomePage() {
         scheduledResultFeedbackSyncPayloadsRef.current.delete(key);
     }, []);
 
-    const clearOverlappingResultFeedbackSyncs = React.useCallback((targets: HistoryFeedbackTarget[]) => {
-        scheduledResultFeedbackSyncPayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
-            if (!haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, targets)) return;
-            clearScheduledResultFeedbackSync(scheduledKey);
-        });
-    }, [clearScheduledResultFeedbackSync]);
+    const clearOverlappingResultFeedbackSyncs = React.useCallback(
+        (targets: HistoryFeedbackTarget[]) => {
+            scheduledResultFeedbackSyncPayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
+                if (!haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, targets)) return;
+                clearScheduledResultFeedbackSync(scheduledKey);
+            });
+        },
+        [clearScheduledResultFeedbackSync]
+    );
 
     const clearResultFeedbackSyncsForDelete = React.useCallback(
         (payload: HistoryFeedbackDeletePayload) => {
@@ -2367,19 +2444,23 @@ export default function HomePage() {
         scheduledResultFeedbackDeletePayloadsRef.current.delete(deleteKey);
     }, []);
 
-    const clearResultFeedbackDeletesForSync = React.useCallback((payload: FeedbackSyncPayload, clearLegacyDeletes: boolean) => {
-        const remainingPayloads: HistoryFeedbackDeletePayload[] = [];
-        scheduledResultFeedbackDeletePayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
-            const shouldClear =
-                scheduledPayload.deletedAt === undefined
-                    ? clearLegacyDeletes && haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, payload.targets)
-                    : shouldFeedbackSyncClearDelete(payload, scheduledPayload);
-            if (!shouldClear) return;
-            remainingPayloads.push(...removeHistoryFeedbackDeleteQueueTargets([scheduledPayload], payload.targets));
-            clearScheduledResultFeedbackDelete(scheduledKey);
-        });
-        return remainingPayloads;
-    }, [clearScheduledResultFeedbackDelete]);
+    const clearResultFeedbackDeletesForSync = React.useCallback(
+        (payload: FeedbackSyncPayload, clearLegacyDeletes: boolean) => {
+            const remainingPayloads: HistoryFeedbackDeletePayload[] = [];
+            scheduledResultFeedbackDeletePayloadsRef.current.forEach((scheduledPayload, scheduledKey) => {
+                const shouldClear =
+                    scheduledPayload.deletedAt === undefined
+                        ? clearLegacyDeletes &&
+                          haveHistoryFeedbackTargetOverlap(scheduledPayload.targets, payload.targets)
+                        : shouldFeedbackSyncClearDelete(payload, scheduledPayload);
+                if (!shouldClear) return;
+                remainingPayloads.push(...removeHistoryFeedbackDeleteQueueTargets([scheduledPayload], payload.targets));
+                clearScheduledResultFeedbackDelete(scheduledKey);
+            });
+            return remainingPayloads;
+        },
+        [clearScheduledResultFeedbackDelete]
+    );
 
     const readQueuedResultFeedbackDeletes = React.useCallback((): HistoryFeedbackDeletePayload[] => {
         try {
@@ -2396,7 +2477,10 @@ export default function HomePage() {
                 window.localStorage.removeItem(resultFeedbackDeleteQueueLocalStorageKey);
                 return;
             }
-            window.localStorage.setItem(resultFeedbackDeleteQueueLocalStorageKey, serializeHistoryFeedbackDeleteQueue(queue));
+            window.localStorage.setItem(
+                resultFeedbackDeleteQueueLocalStorageKey,
+                serializeHistoryFeedbackDeleteQueue(queue)
+            );
         } catch (error) {
             console.error('写入结果反馈删除补偿队列失败。', error);
         }
@@ -2424,32 +2508,29 @@ export default function HomePage() {
         [readQueuedResultFeedbackDeletes, writeQueuedResultFeedbackDeletes]
     );
 
-    const syncResultFeedback = React.useCallback(
-        async (payload: FeedbackSyncPayload, signal: AbortSignal) => {
-            const hasNoteInput = Object.prototype.hasOwnProperty.call(payload, 'note');
-            const requestSignal = createFeedbackRequestSignal(signal);
-            try {
-                const response = await fetch('/api/feedback', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal: requestSignal.signal,
-                    body: JSON.stringify({
-                        targets: payload.targets,
-                        value: payload.value,
-                        updatedAt: new Date(payload.updatedAt).toISOString(),
-                        ...(hasNoteInput ? { note: payload.note ?? '' } : {})
-                    })
-                });
-                if (!response.ok) {
-                    const text = await response.text().catch(() => '');
-                    throw new Error(text || `反馈同步失败，状态码 ${response.status}`);
-                }
-            } finally {
-                requestSignal.cleanup();
+    const syncResultFeedback = React.useCallback(async (payload: FeedbackSyncPayload, signal: AbortSignal) => {
+        const hasNoteInput = Object.prototype.hasOwnProperty.call(payload, 'note');
+        const requestSignal = createFeedbackRequestSignal(signal);
+        try {
+            const response = await fetch('/api/feedback', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                signal: requestSignal.signal,
+                body: JSON.stringify({
+                    targets: payload.targets,
+                    value: payload.value,
+                    updatedAt: new Date(payload.updatedAt).toISOString(),
+                    ...(hasNoteInput ? { note: payload.note ?? '' } : {})
+                })
+            });
+            if (!response.ok) {
+                const text = await response.text().catch(() => '');
+                throw new Error(text || `反馈同步失败，状态码 ${response.status}`);
             }
-        },
-        []
-    );
+        } finally {
+            requestSignal.cleanup();
+        }
+    }, []);
 
     const scheduleResultFeedbackSyncPayload = React.useCallback(
         (payload: FeedbackSyncPayload, options: FeedbackSyncScheduleOptions = {}) => {
@@ -2460,7 +2541,9 @@ export default function HomePage() {
             const clearLegacyDeletes = options.pruneQueuedTargets === true;
             const isBlockedByDelete = (deletePayload: HistoryFeedbackDeletePayload) => {
                 if (deletePayload.deletedAt === undefined) {
-                    return !clearLegacyDeletes && haveHistoryFeedbackTargetOverlap(deletePayload.targets, payload.targets);
+                    return (
+                        !clearLegacyDeletes && haveHistoryFeedbackTargetOverlap(deletePayload.targets, payload.targets)
+                    );
                 }
                 return shouldFeedbackDeleteClearSync(deletePayload, payload);
             };
@@ -2512,7 +2595,9 @@ export default function HomePage() {
                     upsertQueuedResultFeedbackSync(payload);
                     if (attempt < resultFeedbackSyncMaxAttempts) {
                         const delayMs =
-                            resultFeedbackSyncRetryDelaysMs[Math.min(attempt - 1, resultFeedbackSyncRetryDelaysMs.length - 1)];
+                            resultFeedbackSyncRetryDelaysMs[
+                                Math.min(attempt - 1, resultFeedbackSyncRetryDelaysMs.length - 1)
+                            ];
                         console.warn('结果反馈同步到服务端失败，将重试。', {
                             attempt,
                             nextAttempt: attempt + 1,
@@ -2564,30 +2649,35 @@ export default function HomePage() {
         [scheduleResultFeedbackSyncPayload]
     );
 
-    const deleteResultFeedbackPayload = React.useCallback(async (payload: HistoryFeedbackDeletePayload, signal: AbortSignal) => {
-        for (let index = 0; index < payload.targets.length; index += feedbackApiTargetBatchSize) {
-            const chunk = payload.targets.slice(index, index + feedbackApiTargetBatchSize);
-            if (chunk.length === 0) continue;
-            const requestSignal = createFeedbackRequestSignal(signal);
-            try {
-                const response = await fetch('/api/feedback', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal: requestSignal.signal,
-                    body: JSON.stringify({
-                        targets: chunk,
-                        ...(payload.deletedAt !== undefined ? { deletedAt: new Date(payload.deletedAt).toISOString() } : {})
-                    })
-                });
-                if (!response.ok) {
-                    const text = await response.text().catch(() => '');
-                    throw new Error(text || `反馈删除同步失败，状态码 ${response.status}`);
+    const deleteResultFeedbackPayload = React.useCallback(
+        async (payload: HistoryFeedbackDeletePayload, signal: AbortSignal) => {
+            for (let index = 0; index < payload.targets.length; index += feedbackApiTargetBatchSize) {
+                const chunk = payload.targets.slice(index, index + feedbackApiTargetBatchSize);
+                if (chunk.length === 0) continue;
+                const requestSignal = createFeedbackRequestSignal(signal);
+                try {
+                    const response = await fetch('/api/feedback', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        signal: requestSignal.signal,
+                        body: JSON.stringify({
+                            targets: chunk,
+                            ...(payload.deletedAt !== undefined
+                                ? { deletedAt: new Date(payload.deletedAt).toISOString() }
+                                : {})
+                        })
+                    });
+                    if (!response.ok) {
+                        const text = await response.text().catch(() => '');
+                        throw new Error(text || `反馈删除同步失败，状态码 ${response.status}`);
+                    }
+                } finally {
+                    requestSignal.cleanup();
                 }
-            } finally {
-                requestSignal.cleanup();
             }
-        }
-    }, []);
+        },
+        []
+    );
 
     const scheduleResultFeedbackDeletePayload = React.useCallback(
         (payload: HistoryFeedbackDeletePayload) => {
@@ -2774,33 +2864,36 @@ export default function HomePage() {
         [history, scheduleResultFeedbackSync]
     );
 
-    const handleUpdateResultFeedbackNote = React.useCallback((item: HistoryMetadata, note: string) => {
-        if (!item.resultFeedback) return;
-        const resultFeedbackValue = item.resultFeedback.value;
-        const updatedAt = Date.now();
-        setHistory((current) =>
-            updateHistoryResultFeedback({
-                history: current,
-                timestamp: item.timestamp,
-                value: resultFeedbackValue,
-                updatedAt,
-                note
-            })
-        );
-        setActiveResultSource((current) =>
-            current?.timestamp === item.timestamp
-                ? {
-                      ...current,
-                      resultFeedback: {
-                          value: resultFeedbackValue,
-                          updatedAt,
-                          ...(note ? { note } : {})
+    const handleUpdateResultFeedbackNote = React.useCallback(
+        (item: HistoryMetadata, note: string) => {
+            if (!item.resultFeedback) return;
+            const resultFeedbackValue = item.resultFeedback.value;
+            const updatedAt = Date.now();
+            setHistory((current) =>
+                updateHistoryResultFeedback({
+                    history: current,
+                    timestamp: item.timestamp,
+                    value: resultFeedbackValue,
+                    updatedAt,
+                    note
+                })
+            );
+            setActiveResultSource((current) =>
+                current?.timestamp === item.timestamp
+                    ? {
+                          ...current,
+                          resultFeedback: {
+                              value: resultFeedbackValue,
+                              updatedAt,
+                              ...(note ? { note } : {})
+                          }
                       }
-                  }
-                : current
-        );
-        scheduleResultFeedbackSync({ item, value: resultFeedbackValue, updatedAt, ...(note ? { note } : {}) });
-    }, [scheduleResultFeedbackSync]);
+                    : current
+            );
+            scheduleResultFeedbackSync({ item, value: resultFeedbackValue, updatedAt, ...(note ? { note } : {}) });
+        },
+        [scheduleResultFeedbackSync]
+    );
 
     const handleDeleteInspiration = React.useCallback((id: number) => {
         setInspirations((current) => current.filter((item) => item.id !== id));
@@ -2913,14 +3006,17 @@ export default function HomePage() {
         [createErrorNotice, resolveImageBlob, t]
     );
 
-    const handleOpenShareImage = React.useCallback((filename: string, storageMode?: HistoryMetadata['storageModeUsed']) => {
-        setShareTargetFilename(filename);
-        setShareTargetStorageMode(storageMode);
-        setShareUrl(null);
-        setShareError(null);
-        setShareDialogSessionId((current) => current + 1);
-        setShareDialogOpen(true);
-    }, []);
+    const handleOpenShareImage = React.useCallback(
+        (filename: string, storageMode?: HistoryMetadata['storageModeUsed']) => {
+            setShareTargetFilename(filename);
+            setShareTargetStorageMode(storageMode);
+            setShareUrl(null);
+            setShareError(null);
+            setShareDialogSessionId((current) => current + 1);
+            setShareDialogOpen(true);
+        },
+        []
+    );
 
     const handleCreateShare = React.useCallback(
         async (values: ShareDialogValues) => {
@@ -3084,7 +3180,12 @@ export default function HomePage() {
             setEditN([imageCount]);
             restoredFields.push(t('reuse.fieldCount'));
         }
-        restoredFields.push(t('reuse.fieldModel'), t('reuse.fieldQuality'), t('reuse.fieldModeration'), t('reuse.fieldRoute'));
+        restoredFields.push(
+            t('reuse.fieldModel'),
+            t('reuse.fieldQuality'),
+            t('reuse.fieldModeration'),
+            t('reuse.fieldRoute')
+        );
         if (sizeSelection.restored) {
             restoredFields.push(t('reuse.fieldSize'));
         }
@@ -3190,7 +3291,7 @@ export default function HomePage() {
     }
 
     return (
-        <main className='studio-paper text-foreground min-h-screen pb-[calc(10.5rem+env(safe-area-inset-bottom))] xl:h-dvh xl:overflow-hidden xl:pb-0'>
+        <main className='studio-paper text-foreground min-h-screen pb-[calc(6.5rem+env(safe-area-inset-bottom))] xl:h-dvh xl:overflow-hidden xl:pb-0'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -3284,10 +3385,11 @@ export default function HomePage() {
                             <div className='flex flex-wrap items-center gap-4 sm:justify-end'>
                                 <WorkbenchStatusStrip
                                     model={activeWorkbenchModel}
-                                    channelLabel={activeWorkbenchBackendLabel}
+                                    routeLabel={activeRouteLabel}
                                     streamStatus={getStreamingStatusLabel(streamMode, t)}
                                     parallelBatchEnabled={activeParallelBatchVisible}
                                     costLabel={activeEstimatedCostLabel}
+                                    runtimeHealthStatus={activeRuntimeHealthStatus}
                                 />
                                 <div className='text-muted-foreground hidden items-center gap-4 sm:flex'>
                                     <HelpCircle className='h-4 w-4' aria-hidden='true' />
@@ -3301,7 +3403,7 @@ export default function HomePage() {
                                 </div>
                             </div>
                         </header>
-                        <div className='grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(330px,370px)_minmax(560px,1fr)_minmax(320px,360px)] 2xl:grid-cols-[minmax(360px,410px)_minmax(620px,1fr)_minmax(360px,430px)]'>
+                        <div className='grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(300px,340px)_minmax(620px,1fr)_minmax(280px,330px)] 2xl:grid-cols-[minmax(330px,370px)_minmax(760px,1fr)_minmax(330px,380px)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
@@ -3626,41 +3728,17 @@ export default function HomePage() {
                         </div>
                     </div>
                     {!isMobileCreationDrawerOpen && (
-                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden'>
-                            <button
-                                type='button'
-                                className='mx-auto mb-2 flex h-11 w-24 touch-none items-center justify-center rounded-full select-none'
+                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 border-t px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden'>
+                            <div
+                                className='mx-auto mb-2 flex h-3 w-24 touch-none items-center justify-center rounded-full select-none'
                                 onPointerDown={beginMobileCreationDrawerGesture}
                                 onPointerUp={finishMobileCreationDrawerGesture}
                                 onPointerCancel={cancelMobileCreationDrawerGesture}
                                 onClick={handleMobileCreationDrawerHandleClick}
-                                aria-label={t('ux.openCreationSheet')}
-                                aria-controls='mobile-creation-sheet'
-                                aria-expanded={false}>
+                                aria-hidden='true'>
                                 <span className='bg-border h-1 w-10 rounded-full' aria-hidden='true' />
-                            </button>
-                            <div className='mx-auto max-w-screen-sm space-y-2'>
-                                <div className='flex flex-wrap items-center justify-center gap-1.5 text-[11px]'>
-                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                        {activeWorkbenchModel}
-                                    </span>
-                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                        {activeWorkbenchBackendLabel}
-                                    </span>
-                                    <span className='border-border bg-card/80 text-muted-foreground rounded-full border px-2 py-1'>
-                                        {getStreamingStatusLabel(streamMode, t)}
-                                    </span>
-                                    {activeParallelBatchVisible && (
-                                        <span className='border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] text-[oklch(0.38_0.075_148)] rounded-full border px-2 py-1'>
-                                            {t('streaming.parallelBatchEnabled')}
-                                        </span>
-                                    )}
-                                    <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
-                                        {activeEstimatedCostLabel}
-                                    </span>
-                                </div>
                             </div>
-                            <div className='mx-auto mt-2 flex max-w-screen-sm items-stretch gap-2'>
+                            <div className='mx-auto flex max-w-screen-sm items-stretch gap-2'>
                                 <Button
                                     type='button'
                                     variant='outline'

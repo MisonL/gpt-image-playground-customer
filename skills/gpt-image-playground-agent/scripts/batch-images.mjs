@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { AGENT_ENDPOINTS } from './lib/agent-api-paths.mjs';
+import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
 import { enrichFailureWithAgentDiagnostics } from './lib/agent-diagnostics-summary.mjs';
 import {
   errorMessage,
@@ -173,7 +173,7 @@ try {
   process.exit(2);
 }
 
-const manifestPath = options.manifest || `${options.input}.manifest.jsonl`;
+const manifestPath = resolveManifestPath(options);
 let planned;
 try {
   planned = tasks.map((task, index) => normalizeTask(task, index, options));
@@ -218,6 +218,11 @@ if (!options.allowBillable || options.dryRun) {
     )
   );
   process.exit(0);
+}
+
+if (!manifestPath) {
+  console.error('--input - 真实执行必须显式设置 --manifest，避免无法续跑或审计。');
+  process.exit(2);
 }
 
 try {
@@ -275,7 +280,7 @@ function parseArgs(argv) {
     else if (arg === '--resume') parsed.resume = true;
     else if (arg === '--dimension-check') parsed.dimensionCheck = true;
     else if (arg === '--help' || arg === '-h') parsed.help = true;
-    else if (arg === '--input') parsed.input = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--input') parsed.input = normalizeInputPath(readOptionValue(argv, (index += 1), arg));
     else if (arg === '--manifest') parsed.manifest = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--ordered-prefix') parsed.orderedPrefix = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
@@ -286,10 +291,20 @@ function parseArgs(argv) {
     }
     else if (arg === '--concurrency') parsed.concurrency = readOptionValue(argv, (index += 1), arg);
     else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
-    else if (!parsed.input) parsed.input = arg;
+    else if (!parsed.input) parsed.input = normalizeInputPath(arg);
     else throw new Error(`未知位置参数：${arg}`);
   }
   return parsed;
+}
+
+function normalizeInputPath(value) {
+  return value === '-' ? '/dev/stdin' : value;
+}
+
+function resolveManifestPath(parsed) {
+  if (parsed.manifest) return parsed.manifest;
+  if (parsed.input === '/dev/stdin') return null;
+  return `${parsed.input}.manifest.jsonl`;
 }
 
 function buildDryRunVerificationScope() {
@@ -531,9 +546,6 @@ function readOutputFormatField(raw, id) {
 function validateTaskRoutingFields(raw, id, mode) {
   if ((raw.page_sse === true || raw.transport === 'page_sse') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
     throw new Error(`${id} stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。`);
-  }
-  if (readResponsesModel(raw, id) && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
-    throw new Error(`${id}.responsesModel 需要页面 SSE 路径，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`);
   }
   if (hasOwn(raw, 'sse_log_path') && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
     throw new Error(`${id}.sse_log_path 需要页面 SSE 路径，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`);
@@ -879,7 +891,11 @@ function buildTaskFailureOutput(error, routing) {
 }
 
 function shouldEnrichAgentFailure(failure) {
-  return failure.billable !== false && failure.routing?.transport === 'agent_json';
+  return (
+    failure.billable !== false &&
+    failure.routing?.transport !== 'page_sse' &&
+    failure.validation_failure_kind !== FAILURE_KIND_DIMENSION_CHECK
+  );
 }
 
 function buildCircuitBreakerSkippedTask(task, consecutiveFailures) {
@@ -945,7 +961,7 @@ function normalizeFailureError(error) {
 
 function buildFailureNextStep(error) {
   if (error.code === 'page_sse_request_rejected') return '修正请求参数或鉴权后，使用新的 Idempotency-Key 重试失败任务。';
-  if (error.code === 'page_sse_unavailable') return '补齐 page_sse capability 或显式改用 Agent JSON，再重试失败任务。';
+  if (error.code === 'page_sse_unavailable') return '补齐 page_sse capability，或用新的 Idempotency-Key 改走服务端编排或显式诊断路径。';
   return '诊断失败原因后，用新的 Idempotency-Key 重试失败任务；不要复用终态失败 key。';
 }
 
@@ -977,16 +993,26 @@ function buildTaskRouting(task) {
       endpoint: PAGE_SSE_ENDPOINT,
       transport: 'page_sse',
       strength: task.mode === 'edit' && readTaskMaxEdge(task) > 2048 ? 'default' : 'recommended',
-      fallback_endpoint: task.mode === 'edit' ? AGENT_ENDPOINTS.edit : AGENT_ENDPOINTS.generate,
+      fallback_endpoint: task.mode === 'edit' ? AGENT_ENDPOINTS.edit : AGENT_ENDPOINTS.create_image_request,
       fallback_mode: 'manual_after_diagnosis',
       reason
     };
   }
+  if (task.mode === 'generate') {
+    return {
+      endpoint: AGENT_ENDPOINTS.create_image_request,
+      transport: 'server_orchestrated',
+      strength: 'default',
+      route_mode: 'job',
+      result_mode: 'job_polling',
+      reason: 'Batch generate tasks submit intent to the server orchestration endpoint; the service owns internal route selection.'
+    };
+  }
   return {
-    endpoint: task.mode === 'edit' ? AGENT_ENDPOINTS.edit : AGENT_ENDPOINTS.generate,
+    endpoint: AGENT_ENDPOINTS.edit,
     transport: 'agent_json',
     strength: 'default',
-    reason: 'Agent JSON-compatible batch tasks use the Agent response contract.'
+    reason: 'Agent JSON-compatible batch edit tasks use the Agent response contract.'
   };
 }
 
@@ -1070,14 +1096,10 @@ function shouldUsePageSseForTask(task) {
   }
   if (!pageSseAllowed) return false;
   if (task.raw.complex_ui === true || task.raw.long_image === true || task.raw.resume_or_recover === true) return true;
-  if (readResponsesModel(task.raw, task.id)) return true;
   if (task.raw.sse_log_path) return true;
   if (task.mode === 'edit' && hasPageAdvancedFields(task.raw)) return true;
   if (task.mode === 'edit') return true;
   if (task.mode === 'edit' && readTaskMaxEdge(task) > 2048) return true;
-  if (task.mode === 'generate' && readTaskMaxEdge(task) > 2048) {
-    return true;
-  }
   return false;
 }
 
@@ -1099,13 +1121,52 @@ async function postGenerateTask(task) {
         taskCapabilities
       )
   );
-  const { response, result, text } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.generate}`, {
+  const { response, result, text } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.create_image_request}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': task.idempotencyKey, ...authHeaders() },
     body: JSON.stringify(body)
   });
   if (!response.ok) throw new Error(readErrorMessage(result) || `generate 请求失败，状态码 ${response.status}：${text}`);
-  return enrichImageUrls(result);
+  if (!result?.job) return enrichImageUrls(result);
+  return pollJobResult(result.job);
+}
+
+async function pollJobResult(job) {
+  if (!job || typeof job.id !== 'string') {
+    throw new Error('创建 job 的响应缺少 job.id。');
+  }
+  const resultUrl = resolveSameOriginUrl(baseUrl, job.result_url || buildAgentJobResultPath(job.id), 'job.result_url');
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastResult;
+
+  while (Date.now() < deadlineMs) {
+    const { response, result, text } = await fetchJson(resultUrl, {
+      headers: authHeaders()
+    });
+    if (response.ok) return enrichImageUrls(result);
+    lastResult = result;
+    if (result?.error?.code !== 'request_in_progress' || result?.error?.retryable !== true) {
+      throw new Error(readErrorMessage(result) || `job result 请求失败，状态码 ${response.status}：${text}`);
+    }
+    await sleep(readJobRetryAfterSeconds(result, job));
+  }
+
+  throw new Error(readErrorMessage(lastResult) || '等待 job result 超时。');
+}
+
+function readJobRetryAfterSeconds(result, job) {
+  const value = result?.retry_after ?? result?.error?.retry_after_seconds ?? job?.retry_after_seconds;
+  return readRetryAfterSeconds(value);
+}
+
+function readRetryAfterSeconds(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return Math.min(value, 30);
+  if (typeof value === 'string' && /^\d+(\.\d+)?$/.test(value)) return Math.min(Number(value), 30);
+  return 1;
+}
+
+async function sleep(seconds) {
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, seconds) * 1000));
 }
 
 async function postEditTask(task) {
@@ -1223,6 +1284,10 @@ function buildGenerateBody(raw) {
     ? normalizeOutputFormat(raw.output_format ?? raw.format)
     : DEFAULT_OUTPUT_FORMAT;
   const outputCompression = readOutputCompression(raw, String(raw.id || 'generate'));
+  const responsesModel = readResponsesModel(raw, String(raw.id || 'generate'));
+  const thinking = hasOwn(raw, 'thinking') ? normalizeEnumValue(raw.thinking, THINKING_VALUES, 'thinking') : undefined;
+  const promptOptimization = readPromptOptimization(raw, String(raw.id || 'generate'));
+  const forceWeb = readForceWeb(raw, String(raw.id || 'generate'));
   const body = {
     prompt: raw.prompt,
     model: raw.model || 'gpt-image-2',
@@ -1235,6 +1300,10 @@ function buildGenerateBody(raw) {
     ...(raw.background ? { background: raw.background } : {}),
     ...(raw.moderation ? { moderation: raw.moderation } : {}),
     ...(hasOwn(raw, 'image_backend') ? { image_backend: normalizeEnumValue(raw.image_backend, IMAGE_BACKENDS, 'image_backend') } : {}),
+    ...(responsesModel ? { responsesModel } : {}),
+    ...(thinking ? { thinking } : {}),
+    ...(promptOptimization !== undefined ? { promptOptimization } : {}),
+    ...(forceWeb !== undefined ? { force_web: forceWeb } : {}),
     ...(hasOwn(raw, 'stream_mode') ? { stream_mode: normalizeEnumValue(raw.stream_mode, STREAM_MODES, 'stream_mode') } : {}),
     ...(hasOwn(raw, 'streaming_strategy')
       ? { streaming_strategy: normalizeEnumValue(raw.streaming_strategy, STREAMING_STRATEGIES, 'streaming_strategy') }

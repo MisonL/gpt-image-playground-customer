@@ -1,7 +1,7 @@
 import { EditingForm, type EditingFormData } from './editing-form';
 import { I18nProvider } from '@/lib/i18n';
-import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from '@/lib/image-upstream-profile';
+import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
@@ -345,7 +345,10 @@ describe('EditingForm advanced upstream controls', () => {
             defaultStreamingStrategy: 'off'
         });
 
-        assert.match(html, /<button[^>]*(?:disabled=""[^>]*id="edit-stream-mode-select"|id="edit-stream-mode-select"[^>]*disabled="")/);
+        assert.match(
+            html,
+            /<button[^>]*(?:disabled=""[^>]*id="edit-stream-mode-select"|id="edit-stream-mode-select"[^>]*disabled="")/
+        );
     });
 
     it('renders Responses-specific edit controls when the Responses backend is selected', () => {
@@ -388,7 +391,7 @@ describe('EditingForm advanced upstream controls', () => {
             allowResponsesImageBackend: false
         });
 
-        assert.match(html, /当前运行时未启用 Responses image_generation/);
+        assert.match(html, /当前运行时或默认服务器渠道未开放 Responses image_generation/);
         assert.doesNotMatch(html, /GPT 顶层模型/);
     });
 

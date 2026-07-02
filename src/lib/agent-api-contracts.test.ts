@@ -1,5 +1,6 @@
 import {
     AGENT_PAGE_REQUEST_DIAGNOSTICS_NO_MATCH_HINT,
+    AGENT_PAGE_SSE_AGENT_USAGE,
     AGENT_SCHEMA_VERSION,
     PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH,
     buildAgentAuthCapabilities,
@@ -69,6 +70,39 @@ describe('validateAgentGenerateRequest', () => {
                 stream_mode: 'auto',
                 streaming_strategy: 'newapi-keepalive-sse',
                 partial_images: 3
+            }
+        );
+    });
+
+    it('accepts Agent generate response controls as service-owned intent fields', () => {
+        assert.deepEqual(
+            validateAgentGenerateRequest({
+                prompt: 'draw a stable generate request',
+                image_backend: 'responses-image-generation',
+                responsesModel: 'gpt-5.4-mini',
+                thinking: 'medium',
+                promptOptimization: false,
+                force_web: true
+            }),
+            {
+                model: 'gpt-image-2',
+                prompt: 'draw a stable generate request',
+                n: 1,
+                size: '1024x1024',
+                quality: 'high',
+                output_format: 'webp',
+                output_compression: 100,
+                background: 'auto',
+                moderation: 'auto',
+                response_mode: 'path',
+                image_backend: 'responses-image-generation',
+                stream_mode: 'auto',
+                streaming_strategy: 'auto',
+                partial_images: 2,
+                responsesModel: 'gpt-5.4-mini',
+                thinking: 'medium',
+                promptOptimization: false,
+                force_web: true
             }
         );
     });
@@ -437,10 +471,7 @@ describe('buildAgentCapabilities', () => {
             source_header: 'Idempotency-Key',
             max_length: PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
         });
-        assert.equal(
-            capabilities.agent_streaming.page_sse.agent_usage,
-            'recommended_for_high_resolution_generate_edit_and_complex_batch'
-        );
+        assert.equal(capabilities.agent_streaming.page_sse.agent_usage, AGENT_PAGE_SSE_AGENT_USAGE);
         assert.deepEqual(capabilities.upstream_request_headers.default, {
             user_agent_effective: 'gpt-image-playground/2.1.0',
             has_extra_headers: false,
@@ -480,23 +511,40 @@ describe('buildAgentCapabilities', () => {
             resume_or_recover: true
         });
         assert.equal(capabilities.routing_rules.agent_generate_small_smoke.endpoint, AGENT_ENDPOINTS.generate);
+        assert.equal(capabilities.routing_rules.agent_generate_small_smoke.strength, 'explicit');
         assert.deepEqual(capabilities.routing_rules.agent_generate_small_smoke.action, {
             endpoint: AGENT_ENDPOINTS.generate,
             transport: 'agent_json',
-            strength: 'default',
+            strength: 'explicit',
             requires_new_idempotency_key_on_retry: true,
             no_automatic_fallback: true
         });
-        assert.equal(capabilities.routing_rules.page_sse_large_generate.endpoint, '/api/images');
-        assert.equal(capabilities.routing_rules.page_sse_large_generate.transport, 'page_sse');
-        assert.equal(capabilities.routing_rules.page_sse_large_generate.strength, 'recommended');
-        assert.deepEqual(capabilities.routing_rules.page_sse_large_generate.conditions, {
+        assert.equal(capabilities.routing_rules.page_sse_generate_diagnostics.endpoint, '/api/images');
+        assert.equal(capabilities.routing_rules.page_sse_generate_diagnostics.transport, 'page_sse');
+        assert.equal(capabilities.routing_rules.page_sse_generate_diagnostics.strength, 'explicit');
+        assert.equal(capabilities.routing_rules.page_sse_generate_diagnostics.action.strength, 'explicit');
+        assert.equal(
+            capabilities.routing_rules.page_sse_generate_diagnostics.action.fallback_endpoint,
+            AGENT_ENDPOINTS.create_image_request
+        );
+        assert.deepEqual(capabilities.routing_rules.page_sse_generate_diagnostics.conditions, {
             operation: 'generate',
-            max_edge: { operator: 'gt', value: 2048 },
+            explicit_page_sse: true,
             single_request: true
         });
         assert.equal(capabilities.routing_rules.retry_recovery.reuse_failed_idempotency_key, false);
         assert.match(capabilities.routing_rules.retry_recovery.new_attempt_guidance, /new Idempotency-Key/);
+        assert.equal(capabilities.orchestration.supported, true);
+        assert.equal(capabilities.orchestration.policy, 'server_orchestrated_generate_v1');
+        assert.equal(capabilities.orchestration.endpoint, AGENT_ENDPOINTS.create_image_request);
+        assert.equal(capabilities.orchestration.client_contract, 'intent_only');
+        assert.equal(capabilities.orchestration.transport_selection, 'server_owned');
+        assert.equal(capabilities.orchestration.result_mode, 'job_polling');
+        assert.deepEqual(capabilities.orchestration.diagnostics, {
+            job_result: AGENT_ENDPOINTS.job_result,
+            request_lookup: AGENT_ENDPOINTS.agent_request_diagnostics_lookup
+        });
+        assert.match(capabilities.orchestration.current_guidance, /只提交生成意图/);
         assert.deepEqual(capabilities.supported.image_backends, ['images-api', 'responses-image-generation']);
         assert.deepEqual(capabilities.supported.enabled_image_backends, ['images-api']);
         assert.deepEqual(capabilities.supported.image_backend_requirements['images-api'], {
@@ -511,6 +559,35 @@ describe('buildAgentCapabilities', () => {
             required_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL'],
             missing_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL']
         });
+        assert.deepEqual(capabilities.supported.request_modes, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.deepEqual(capabilities.request_mode_controls, {
+            source: 'admin_env_whitelist',
+            global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
+            channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+            mutable_at_runtime: false,
+            agent_client_policy: 'diagnostics_only',
+            final_gate_command:
+                'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable',
+            smoke_gate_commands: {
+                'images-non-stream': [
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case original-images-json --allow-billable'
+                ],
+                'images-sse': [
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-images-sse --allow-billable'
+                ],
+                'responses-non-stream': [
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-responses-json --allow-billable'
+                ],
+                'responses-sse': [
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable'
+                ]
+            }
+        });
         assert.deepEqual(capabilities.supported.streaming_strategies, [
             'off',
             'auto',
@@ -521,6 +598,7 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.deepEqual(capabilities.supported.stream_modes, ['auto', 'stream', 'non_stream']);
         assert.equal(capabilities.endpoints.create_generate_job, AGENT_ENDPOINTS.create_generate_job);
+        assert.equal(capabilities.endpoints.create_image_request, AGENT_ENDPOINTS.create_image_request);
         assert.equal(capabilities.endpoints.page_request_feedback_batch, AGENT_ENDPOINTS.page_request_feedback_batch);
         assert.equal(capabilities.endpoints.page_request_feedback, AGENT_ENDPOINTS.page_request_feedback);
         assert.equal(
@@ -542,9 +620,30 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.equal(capabilities.agent_jobs.endpoints.create_generate_job, AGENT_JOB_ENDPOINTS.create_generate_job);
         assert.deepEqual(capabilities.agent_jobs.states, ['queued', 'running', 'succeeded', 'failed', 'expired']);
-        assert.match(capabilities.agent_jobs.current_guidance, /\/api\/images SSE/);
-        assert.match(capabilities.agent_jobs.current_guidance, /不自动回退/);
+        assert.match(capabilities.agent_jobs.current_guidance, /orchestration\.endpoint/);
         assert.match(capabilities.agent_jobs.current_guidance, /job/);
+    });
+
+    it('reports configured server-channel request modes in Agent capabilities', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_CHANNEL_1_ID: 'images',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-json,images-sse'
+        });
+
+        assert.deepEqual(capabilities.upstream_request_headers.channels, [
+            {
+                id: 'images',
+                request_modes: ['images-non-stream', 'images-sse'],
+                request_headers: {
+                    user_agent_effective: 'gpt-image-playground/2.1.0',
+                    has_extra_headers: false,
+                    allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
+                    configured_header_names: []
+                }
+            }
+        ]);
     });
 
     it('reports Matsca server-channel upload and image-count limits in Agent capabilities', () => {
@@ -767,10 +866,12 @@ describe('buildAgentCapabilities', () => {
         assert.equal(document.openapi, '3.1.0');
         assert.deepEqual(document.servers, [{ url: 'https://images.example.test' }]);
         assert.ok(AGENT_ENDPOINTS.openapi in document.paths);
+        assert.ok(AGENT_ENDPOINTS.create_image_request in document.paths);
         assert.ok(AGENT_ENDPOINTS.generate in document.paths);
         assert.ok(AGENT_ENDPOINTS.create_generate_job in document.paths);
         assert.ok(AGENT_ENDPOINTS.job in document.paths);
         assert.ok(AGENT_ENDPOINTS.job_result in document.paths);
+        assert.ok(AGENT_ENDPOINTS.artifact_share in document.paths);
         assert.ok(AGENT_ENDPOINTS.page_request_feedback_batch in document.paths);
         assert.ok(AGENT_ENDPOINTS.page_request_feedback in document.paths);
         assert.ok(AGENT_ENDPOINTS.page_request_diagnostics_batch in document.paths);
@@ -781,6 +882,8 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentImageResponse' in document.components.schemas);
         assert.ok('AgentJobStatusResponse' in document.components.schemas);
         assert.ok('AgentArtifact' in document.components.schemas);
+        assert.ok('CreateArtifactShareRequest' in document.components.schemas);
+        assert.ok('ArtifactShareResponse' in document.components.schemas);
         assert.ok('ResultFeedback' in document.components.schemas);
         assert.ok('FeedbackTarget' in document.components.schemas);
         assert.ok('PageRequestFeedbackBatchRequest' in document.components.schemas);
@@ -800,26 +903,57 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentPageRequestDiagnosticsCapabilities' in document.components.schemas);
         assert.ok('AppLogRetentionMetadata' in document.components.schemas);
         assert.ok('AgentJobCapabilities' in document.components.schemas);
+        assert.ok('AgentOrchestrationCapabilities' in document.components.schemas);
         assert.ok('AgentRoutingRules' in document.components.schemas);
         assert.ok('AgentRoutingRule' in document.components.schemas);
         assert.ok('AgentErrorDiagnostics' in document.components.schemas);
         assert.ok('AgentImageResponseTiming' in document.components.schemas);
         assert.ok('AgentImageResponseExecution' in document.components.schemas);
+        assert.ok('ChannelRequestModeDecision' in document.components.schemas);
+        assert.deepEqual(document.components.schemas.AgentImageResponseExecution.properties.channel_request_mode.enum, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.equal(
+            document.components.schemas.AgentImageResponseExecution.properties.channel_request_mode_fallback_applied
+                .type,
+            'boolean'
+        );
+        assert.equal(
+            document.components.schemas.AgentImageResponseExecution.properties.route_decision.$ref,
+            '#/components/schemas/ChannelRequestModeDecision'
+        );
+        assert.equal(
+            document.components.schemas.ChannelRequestModeDecision.properties.requested_backend.enum.includes(
+                'images-api'
+            ),
+            true
+        );
         assert.ok('UpstreamRequestHeaderSummary' in document.components.schemas);
         assert.ok('AgentRequestDiagnosticsCapabilities' in document.components.schemas);
         assert.ok('AgentRequestDiagnosticsRetention' in document.components.schemas);
         assert.ok('AgentRequestDiagnosticsLookupResponse' in document.components.schemas);
         assert.ok('AgentRequestDiagnostics' in document.components.schemas);
+        assert.deepEqual(document.components.schemas.CreateArtifactShareRequest.properties.access_code.anyOf, [
+            { type: 'string', pattern: '^\\s*$' },
+            { type: 'string', minLength: 8, maxLength: 128 }
+        ]);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['403']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['429']);
         assert.ok(document.paths[AGENT_ENDPOINTS.generate].post.responses['422']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.create_image_request].post.responses['202']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.create_image_request].post.responses['409']);
         assert.ok(document.paths[AGENT_ENDPOINTS.create_generate_job].post.responses['202']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['409']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['422']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['429']);
         assert.ok(document.paths[AGENT_ENDPOINTS.job_result].get.responses['502']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.artifact_share].post.responses['201']);
+        assert.ok(document.paths[AGENT_ENDPOINTS.artifact_share].post.responses['400']);
         assert.ok(document.paths[AGENT_ENDPOINTS.page_request_feedback_batch].post.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.page_request_feedback].get.responses['200']);
         assert.ok(document.paths[AGENT_ENDPOINTS.page_request_diagnostics_batch].post.responses['200']);
@@ -839,6 +973,10 @@ describe('buildAgentCapabilities', () => {
             'force-sse'
         ]);
         assert.deepEqual(generateProperties.stream_mode.enum, ['auto', 'stream', 'non_stream']);
+        assert.deepEqual(generateProperties.thinking.enum, ['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
+        assert.equal(generateProperties.responsesModel.maxLength, 128);
+        assert.equal(generateProperties.promptOptimization.type, 'boolean');
+        assert.equal(generateProperties.force_web.type, 'boolean');
         assert.deepEqual(generateProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
         assert.deepEqual(generateProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
         assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.partial_images, {
@@ -959,10 +1097,11 @@ describe('buildAgentCapabilities', () => {
             'edit',
             'generate_or_edit'
         ]);
-        assert.deepEqual(document.components.schemas.AgentRoutingCondition.properties.max_edge.properties.operator.enum, [
-            'gt',
-            'lte'
-        ]);
+        assert.deepEqual(
+            document.components.schemas.AgentRoutingCondition.properties.max_edge.properties.operator.enum,
+            ['gt', 'lte']
+        );
+        assert.equal(document.components.schemas.AgentRoutingCondition.properties.explicit_page_sse.type, 'boolean');
         assert.equal(
             document.components.schemas.AgentRoutingAction.properties.requires_new_idempotency_key_on_retry.type,
             'boolean'
@@ -981,6 +1120,20 @@ describe('buildAgentCapabilities', () => {
             'responses-image-generation'
         ]);
         assert.ok(capabilityProperties.supported.properties.image_backend_requirements);
+        assert.deepEqual(capabilityProperties.supported.properties.request_modes.items.enum, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.equal(
+            document.components.schemas.AgentRequestModeControls.properties.agent_client_policy.const,
+            'diagnostics_only'
+        );
+        assert.equal(
+            document.components.schemas.AgentRequestModeControls.properties.channel_env_pattern.type,
+            'string'
+        );
         assert.deepEqual(
             document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.request_fields
                 .const,
@@ -1012,8 +1165,8 @@ describe('buildAgentCapabilities', () => {
             ['auto', 'openai-sse', 'newapi-keepalive-sse', 'responses-sse', 'force-sse']
         );
         assert.deepEqual(
-            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties
-                .stream_modes.items.enum,
+            document.components.schemas.AgentStreamingCapabilities.properties.upstream_sse.properties.stream_modes.items
+                .enum,
             ['auto', 'stream', 'non_stream']
         );
         assert.equal(
@@ -1044,11 +1197,29 @@ describe('buildAgentCapabilities', () => {
         assert.equal(document.components.schemas.AgentRoutingRules.required.includes('long_image_recovery'), true);
         assert.match(document.components.schemas.EditRequest.description, /\/api\/images/);
         assert.ok('upstream_event_type' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.deepEqual(document.components.schemas.AgentErrorDiagnostics.properties.channel_request_mode.enum, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.equal(
+            document.components.schemas.AgentErrorDiagnostics.properties.channel_request_mode_fallback_applied.type,
+            'boolean'
+        );
+        assert.equal(
+            document.components.schemas.AgentErrorDiagnostics.properties.route_decision.$ref,
+            '#/components/schemas/ChannelRequestModeDecision'
+        );
         assert.ok('partial_image_count' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('transport_error_kind' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('retry_after_ms' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('cooldown_until' in document.components.schemas.AgentErrorDiagnostics.properties);
         assert.ok('cooldown_target' in document.components.schemas.AgentErrorDiagnostics.properties);
+        assert.deepEqual(
+            document.components.schemas.AgentErrorDiagnostics.properties.cooldown_target.properties.request_mode.enum,
+            ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse']
+        );
         assert.equal(document.components.schemas.ResultFeedback.properties.note.maxLength, 500);
     });
 
@@ -1158,6 +1329,7 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}'].get.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}'].delete.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/artifacts/{id}/content'].get.security, expectedSecurity);
+        assert.deepEqual(document.paths['/api/agent/artifacts/{id}/share'].post.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/page-requests/{id}/feedback'].get.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/diagnostics/requests'].get.security, expectedSecurity);
         assert.deepEqual(document.paths['/api/agent/diagnostics/requests/{id}'].get.security, expectedSecurity);

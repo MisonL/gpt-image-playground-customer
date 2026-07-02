@@ -37,8 +37,16 @@ beforeEach(async () => {
     process.env.AGENT_STATE_BACKEND = 'sqlite';
     process.env.AGENT_SQLITE_PATH = path.join(tempDir, 'agent.sqlite');
     process.env.NEXT_PUBLIC_IMAGE_STORAGE_MODE = 'fs';
+    for (const key of Object.keys(process.env)) {
+        if (/^OPENAI_CHANNEL_\d+_/.test(key)) {
+            delete process.env[key];
+        }
+    }
     delete process.env.APP_PASSWORD;
     delete process.env.AGENT_API_TOKEN;
+    delete process.env.AGENT_PUBLIC_BASE_URL;
+    delete process.env.AGENT_ARTIFACT_SHARE_DEFAULT_EXPIRES_MINUTES;
+    delete process.env.AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
     delete process.env.OPENAI_UPSTREAM_USER_AGENT;
@@ -47,6 +55,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_1_USER_AGENT;
@@ -55,6 +64,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_CHANNEL_2_API_KEYS;
     delete process.env.OPENAI_CHANNEL_2_BASE_URL;
     delete process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_2_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_2_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_2_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_2_USER_AGENT;
@@ -135,6 +145,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
+                request_modes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -203,6 +214,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
+                request_modes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -249,6 +261,16 @@ describe('Agent route integration', () => {
             assert.equal(firstBody.execution.image_backend, 'images-api');
             assert.equal(firstBody.execution.stream_mode, 'non_stream');
             assert.equal(firstBody.execution.streaming_strategy, 'auto');
+            assert.equal(firstBody.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(firstBody.execution.channel_request_mode_fallback_applied, false);
+            assert.deepEqual(firstBody.execution.route_decision, {
+                requested_backend: 'images-api',
+                preferred_channel_request_mode: 'images-non-stream',
+                selected_channel_request_mode: 'images-non-stream',
+                fallback_applied: false,
+                selected_channel_id: 'default',
+                upstream_host: new URL(upstream.baseUrl).host
+            });
             assert.equal(firstBody.execution.upstream_host, new URL(upstream.baseUrl).host);
             assert.equal(firstBody.execution.request_headers.user_agent_effective, 'gpt-image-playground/2.1.0');
             assert.equal(firstBody.execution.request_headers.has_extra_headers, false);
@@ -300,6 +322,47 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('retries accepted async image tasks through Agent generate with the same upstream idempotency key', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        const upstreamIdempotencyKeys: Array<string | undefined> = [];
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream((_body, _url, request, response) => {
+            upstreamCalls += 1;
+            const idempotencyKey = request.headers['idempotency-key'];
+            upstreamIdempotencyKeys.push(Array.isArray(idempotencyKey) ? idempotencyKey.join(',') : idempotencyKey);
+            if (upstreamCalls === 1) {
+                response.setHeader('Retry-After', '1');
+                return {
+                    object: 'image.task',
+                    status: 'pending',
+                    task_id: 'agent-route-accepted-task',
+                    poll_url: '/v1/image-tasks?ids=agent-route-accepted-task'
+                };
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-route-accepted-task-key', {
+                    prompt: 'agent route accepted task',
+                    response_mode: 'base64'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.cached, false);
+            assert.equal(body.images[0].b64_json, PNG_BASE64);
+            assert.deepEqual(upstreamIdempotencyKeys, ['agent-route-accepted-task-key', 'agent-route-accepted-task-key']);
+            assert.equal(upstreamCalls, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('keeps Agent request diagnostics available when feedback lookup fails', async () => {
         const { generateImage, getAgentRequestDiagnostics } = await loadAgentRoutes();
         const upstream = await startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] }));
@@ -307,7 +370,9 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const first = await generateImage(agentJsonRequest('route-feedback-diagnostics-key', { prompt: 'agent route success' }));
+            const first = await generateImage(
+                agentJsonRequest('route-feedback-diagnostics-key', { prompt: 'agent route success' })
+            );
             assert.equal(first.status, 200);
             const firstBody = await first.json();
             const { ensureAgentStateStoreReady } = await import('@/lib/agent-state-runtime');
@@ -390,6 +455,9 @@ describe('Agent route integration', () => {
             );
 
             assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(body.execution.channel_request_mode_fallback_applied, false);
             const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
             assert.equal(upstreamJson.stream, false);
             assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
@@ -425,6 +493,88 @@ describe('Agent route integration', () => {
             assert.equal(upstreamJson.stream, true);
             assert.equal(upstreamJson.partial_images, 2);
             assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 1);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('uses a non-streaming channel request mode when Agent auto streaming has no SSE channel', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startImageUpstream((body) => {
+            upstreamBody = body;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-only';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-auto-json-channel-key', {
+                    prompt: 'agent auto json channel',
+                    stream_mode: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(body.execution.channel_request_mode_fallback_applied, true);
+            assert.deepEqual(body.execution.route_decision, {
+                requested_backend: 'images-api',
+                preferred_channel_request_mode: 'images-sse',
+                fallback_channel_request_mode: 'images-non-stream',
+                selected_channel_request_mode: 'images-non-stream',
+                fallback_applied: true,
+                selected_channel_id: 'json-only',
+                upstream_host: new URL(upstream.baseUrl).host
+            });
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, false);
+            assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails explicit Agent stream requests instead of falling back to non-streaming request modes', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-only';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-explicit-stream-no-sse-key', {
+                    prompt: 'agent explicit stream no sse',
+                    stream_mode: 'stream',
+                    streaming_strategy: 'openai-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 503);
+            const body = await response.json();
+            assert.equal(body.error.code, 'configuration_error');
+            assert.equal(body.error.diagnostics.channel_request_mode, 'images-sse');
+            assert.equal(body.error.diagnostics.channel_request_mode_fallback_applied, false);
+            assert.deepEqual(body.error.diagnostics.route_decision, {
+                requested_backend: 'images-api',
+                preferred_channel_request_mode: 'images-sse',
+                selected_channel_request_mode: 'images-sse',
+                fallback_applied: false,
+                no_channel_reason:
+                    '当前没有支持 images-sse 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。'
+            });
+            assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();
         }
@@ -667,6 +817,42 @@ describe('Agent route integration', () => {
             const tools = upstreamJson.tools as Array<Record<string, unknown>>;
             assert.equal(tools[0].type, 'image_generation');
             assert.equal(tools[0].partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('marks Responses image_generation-disabled 403s as unavailable request modes', async () => {
+        process.env.AGENT_STATE_BACKEND = 'memory';
+        delete process.env.AGENT_SQLITE_PATH;
+        const { generateImage } = await loadAgentRoutes();
+        const upstream = await startResponsesImageJsonUpstream(403, {
+            error: { message: 'Image generation is not enabled for this group' }
+        });
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-responses-image-disabled-key', {
+                    prompt: 'agent responses disabled',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 502);
+            const body = await response.json();
+            assert.equal(body.error.code, 'upstream_unavailable');
+            assert.equal(body.error.upstream_status, 403);
+            assert.equal(body.error.diagnostics.channel_request_mode, 'responses-sse');
+            assert.equal(body.error.diagnostics.channel_cooldown_scope, 'channel');
+            assert.equal(body.error.diagnostics.cooldown_target.channel_id, 'default');
+            assert.equal(body.error.diagnostics.cooldown_target.request_mode, 'responses-sse');
+            assert.equal(JSON.stringify(body).includes('test-key'), false);
         } finally {
             await upstream.close();
         }
@@ -1027,6 +1213,7 @@ describe('Agent route integration', () => {
             assert.match(body.error.diagnostics.upstream_host, /^127\.0\.0\.1:\d+$/);
             assert.equal(body.error.diagnostics.channel_cooldown_scope, 'channel');
             assert.equal(body.error.diagnostics.cooldown_target.channel_id, 'default');
+            assert.equal(body.error.diagnostics.cooldown_target.request_mode, 'images-non-stream');
             assert.equal(typeof body.error.diagnostics.retry_after_ms, 'number');
             assert.equal(typeof body.error.diagnostics.cooldown_until, 'string');
             assert.equal(typeof body.error.diagnostics.elapsed_ms, 'number');
@@ -1056,6 +1243,10 @@ describe('Agent route integration', () => {
             assert.equal(diagnosticsBody.diagnostics.error.diagnostics.selected_channel_id, 'default');
             assert.match(diagnosticsBody.diagnostics.error.diagnostics.upstream_host, /^127\.0\.0\.1:\d+$/);
             assert.equal(diagnosticsBody.diagnostics.error.diagnostics.cooldown_target.channel_id, 'default');
+            assert.equal(
+                diagnosticsBody.diagnostics.error.diagnostics.cooldown_target.request_mode,
+                'images-non-stream'
+            );
             assert.equal(typeof diagnosticsBody.diagnostics.error.diagnostics.retry_after_ms, 'number');
             assert.equal(JSON.stringify(diagnosticsBody).includes('test-key'), false);
         } finally {
@@ -1105,10 +1296,48 @@ describe('Agent route integration', () => {
             assert.equal(resultBody.execution.transport, 'agent_job_polling');
             assert.equal(resultBody.execution.endpoint, '/api/agent/jobs/images/generate');
             assert.equal(resultBody.execution.route_mode, 'job');
+            assert.equal(resultBody.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(resultBody.execution.channel_request_mode_fallback_applied, false);
             assert.equal(typeof resultBody.timing.elapsed_ms, 'number');
             assert.equal(resultBody.timing.elapsed_ms >= 0, true);
         } finally {
             releaseUpstream?.();
+            await upstream.close();
+        }
+    });
+
+    it('creates a server-orchestrated image request job and records the orchestration endpoint', async () => {
+        const { createImageRequest, getJobResult } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+
+        try {
+            const created = await createImageRequest(
+                agentImageRequest('route-orchestrated-key', { prompt: 'server orchestrated generate' })
+            );
+            assert.equal(created.status, 202);
+            const createdBody = await created.json();
+            assert.equal(createdBody.job.state, 'running');
+            assert.equal(createdBody.job.idempotency_key, 'route-orchestrated-key');
+
+            const result = await waitForJobResult(getJobResult, createdBody.job.id);
+            assert.equal(result.status, 200);
+            const resultBody = await result.json();
+            assert.equal(resultBody.request_id, createdBody.job.id);
+            assert.equal(resultBody.cached, false);
+            assert.equal(resultBody.images.length, 1);
+            assert.equal(resultBody.execution.transport, 'agent_job_polling');
+            assert.equal(resultBody.execution.endpoint, '/api/agent/image-requests');
+            assert.equal(resultBody.execution.route_mode, 'job');
+            assert.equal(resultBody.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(resultBody.execution.channel_request_mode_fallback_applied, false);
+            assert.equal(upstreamCalls, 1);
+        } finally {
             await upstream.close();
         }
     });
@@ -1833,11 +2062,16 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-upstream-sse-key', 'agent edit stream', {}, {
-                    stream_mode: 'stream',
-                    streaming_strategy: 'openai-sse',
-                    partial_images: '2'
-                })
+                agentEditRequest(
+                    'route-edit-upstream-sse-key',
+                    'agent edit stream',
+                    {},
+                    {
+                        stream_mode: 'stream',
+                        streaming_strategy: 'openai-sse',
+                        partial_images: '2'
+                    }
+                )
             );
 
             assert.equal(response.status, 200);
@@ -1917,9 +2151,14 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-mask-alpha-key', 'agent edit mask alpha', {}, {
-                    mask: Buffer.from(PNG_BASE64, 'base64')
-                })
+                agentEditRequest(
+                    'route-edit-mask-alpha-key',
+                    'agent edit mask alpha',
+                    {},
+                    {
+                        mask: Buffer.from(PNG_BASE64, 'base64')
+                    }
+                )
             );
 
             assert.equal(response.status, 422);
@@ -1943,19 +2182,24 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-generate-only-fields-key', 'agent edit invalid fields', {}, {
-                    imageBackend: 'responses-image-generation',
-                    image_backend: 'responses-image-generation',
-                    format: 'webp',
-                    outputFormat: 'jpeg',
-                    output_format: 'jpeg',
-                    outputCompression: '80',
-                    output_compression: '80',
-                    responsesModel: 'gpt-4.1',
-                    responses_model: 'gpt-4.1',
-                    background: 'opaque',
-                    moderation: 'auto'
-                })
+                agentEditRequest(
+                    'route-edit-generate-only-fields-key',
+                    'agent edit invalid fields',
+                    {},
+                    {
+                        imageBackend: 'responses-image-generation',
+                        image_backend: 'responses-image-generation',
+                        format: 'webp',
+                        outputFormat: 'jpeg',
+                        output_format: 'jpeg',
+                        outputCompression: '80',
+                        output_compression: '80',
+                        responsesModel: 'gpt-4.1',
+                        responses_model: 'gpt-4.1',
+                        background: 'opaque',
+                        moderation: 'auto'
+                    }
+                )
             );
 
             assert.equal(response.status, 422);
@@ -1990,10 +2234,15 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-page-streaming-field-key', 'agent edit invalid page streaming field', {}, {
-                    image_streaming_strategy: 'force-sse',
-                    imageStreamingStrategy: 'force-sse'
-                })
+                agentEditRequest(
+                    'route-edit-page-streaming-field-key',
+                    'agent edit invalid page streaming field',
+                    {},
+                    {
+                        image_streaming_strategy: 'force-sse',
+                        imageStreamingStrategy: 'force-sse'
+                    }
+                )
             );
 
             assert.equal(response.status, 422);
@@ -2020,11 +2269,16 @@ describe('Agent route integration', () => {
 
         try {
             const response = await editImage(
-                agentEditRequest('route-edit-profile-partial-key', 'agent edit invalid profile partial', {}, {
-                    stream_mode: 'stream',
-                    streaming_strategy: 'force-sse',
-                    partial_images: '0'
-                })
+                agentEditRequest(
+                    'route-edit-profile-partial-key',
+                    'agent edit invalid profile partial',
+                    {},
+                    {
+                        stream_mode: 'stream',
+                        streaming_strategy: 'force-sse',
+                        partial_images: '0'
+                    }
+                )
             );
 
             assert.equal(response.status, 422);
@@ -2288,7 +2542,8 @@ describe('Agent route integration', () => {
     });
 
     it('requires artifact content authorization and returns image bytes when authorized', async () => {
-        const { generateImage, getArtifact, getArtifactContent, deleteArtifact } = await loadAgentRoutes();
+        const { generateImage, getArtifact, getArtifactContent, createArtifactShare, getShareContent, deleteArtifact } =
+            await loadAgentRoutes();
         const upstream = await startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] }));
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2320,8 +2575,123 @@ describe('Agent route integration', () => {
             { params: Promise.resolve({ id: artifactId }) }
         );
         assert.equal(allowed.status, 200);
-        assert.equal(allowed.headers.get('content-type'), 'image/webp');
+        assert.equal(allowed.headers.get('content-type'), 'image/png');
         assert.ok((await allowed.arrayBuffer()).byteLength > 0);
+
+        const invalidContentTypeShare = await createArtifactShare(
+            new Request(`http://internal.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token' },
+                body: JSON.stringify({ access_code: '12345678' })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(invalidContentTypeShare.status, 400);
+        assert.equal((await invalidContentTypeShare.json()).error.code, 'validation_error');
+
+        const deniedShare = await createArtifactShare(
+            new Request(`http://localhost/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ expires_in_minutes: 60 })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(deniedShare.status, 401);
+        assert.equal((await deniedShare.json()).error.code, 'unauthorized');
+
+        const relativeShare = await createArtifactShare(
+            new Request(`http://spoofed.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ expires_in_minutes: 60 })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(relativeShare.status, 201);
+        const relativeShareBody = await relativeShare.json();
+        assert.equal(relativeShareBody.share_url, `/share/${relativeShareBody.token}`);
+        assert.equal(relativeShareBody.direct_content_url, `/api/shares/${relativeShareBody.token}/content`);
+
+        process.env.AGENT_PUBLIC_BASE_URL = 'https://public.example.test';
+        const publicShare = await createArtifactShare(
+            new Request(`http://internal.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ expires_in_minutes: 60 })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(publicShare.status, 201);
+        const publicShareBody = await publicShare.json();
+        assert.equal(publicShareBody.artifact_id, artifactId);
+        assert.match(publicShareBody.token, /^[a-f0-9]{24}$/);
+        assert.equal(publicShareBody.share_url, `https://public.example.test/share/${publicShareBody.token}`);
+        assert.equal(
+            publicShareBody.direct_content_url,
+            `https://public.example.test/api/shares/${publicShareBody.token}/content`
+        );
+        assert.equal(publicShareBody.access_code_required, false);
+        assert.equal(typeof publicShareBody.expires_at, 'string');
+
+        process.env.AGENT_PUBLIC_BASE_URL = 'https://public.example.test/playground';
+        const publicShareWithPath = await createArtifactShare(
+            new Request(`http://internal.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ expires_in_minutes: 60 })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(publicShareWithPath.status, 201);
+        const publicShareWithPathBody = await publicShareWithPath.json();
+        assert.equal(
+            publicShareWithPathBody.share_url,
+            `https://public.example.test/playground/share/${publicShareWithPathBody.token}`
+        );
+        assert.equal(
+            publicShareWithPathBody.direct_content_url,
+            `https://public.example.test/playground/api/shares/${publicShareWithPathBody.token}/content`
+        );
+
+        const publicShareContent = await getShareContent(new Request(publicShareBody.direct_content_url), {
+            params: Promise.resolve({ token: publicShareBody.token })
+        });
+        assert.equal(publicShareContent.status, 200);
+        assert.equal(publicShareContent.headers.get('content-type'), 'image/png');
+        assert.ok((await publicShareContent.arrayBuffer()).byteLength > 0);
+
+        const protectedShare = await createArtifactShare(
+            new Request(`http://localhost/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ access_code: '12345678', expires_in_minutes: null })
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(protectedShare.status, 201);
+        const protectedShareBody = await protectedShare.json();
+        assert.equal(protectedShareBody.access_code_required, true);
+        assert.equal(protectedShareBody.expires_at, null);
+        const protectedGet = await getShareContent(new Request(protectedShareBody.direct_content_url), {
+            params: Promise.resolve({ token: protectedShareBody.token })
+        });
+        assert.equal(protectedGet.status, 401);
+        assert.equal((await protectedGet.json()).code, 'share_access_code_required');
+
+        process.env.AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES = '30';
+        const defaultExpiryShare = await createArtifactShare(
+            new Request(`http://internal.local/api/agent/artifacts/${artifactId}/share`, {
+                method: 'POST',
+                headers: { Authorization: 'Bearer artifact-token' }
+            }),
+            { params: Promise.resolve({ id: artifactId }) }
+        );
+        assert.equal(defaultExpiryShare.status, 201);
+        const defaultExpiryShareBody = await defaultExpiryShare.json();
+        const defaultExpiryMs = new Date(defaultExpiryShareBody.expires_at).getTime() - Date.now();
+        assert.ok(defaultExpiryMs > 0);
+        assert.ok(defaultExpiryMs <= 30 * 60 * 1000);
 
         const metadata = await getArtifact(
             new Request(`http://localhost/api/agent/artifacts/${artifactId}`, {
@@ -2332,6 +2702,8 @@ describe('Agent route integration', () => {
         assert.equal(metadata.status, 200);
         const metadataBody = await metadata.json();
         assert.equal(metadataBody.artifact.id, artifactId);
+        assert.equal(metadataBody.artifact.output_format, 'png');
+        assert.equal(metadataBody.artifact.mime_type, 'image/png');
         assert.equal('filepath' in metadataBody.artifact, false);
 
         const deleted = await deleteArtifact(
@@ -2747,7 +3119,10 @@ describe('Agent route integration', () => {
         assert.deepEqual(batchBody.diagnostics[0].scope.filename_matched_request_ids, ['web-diagnostics-request-2']);
         assert.equal(batchBody.diagnostics[1].matched_log_count, 1);
         assert.equal(batchBody.diagnostics_retention.storage, 'bounded_local_jsonl');
-        assert.equal(batchBody.diagnostics[0].diagnostics_retention.max_entries, batchBody.diagnostics_retention.max_entries);
+        assert.equal(
+            batchBody.diagnostics[0].diagnostics_retention.max_entries,
+            batchBody.diagnostics_retention.max_entries
+        );
     });
 
     it('returns validation errors for malformed page diagnostics batch JSON requests', async () => {
@@ -3011,7 +3386,9 @@ async function loadAgentRoutes() {
     const editRoute = await import('./images/edit/route');
     const artifactRoute = await import('./artifacts/[id]/route');
     const artifactContentRoute = await import('./artifacts/[id]/content/route');
+    const artifactShareRoute = await import('./artifacts/[id]/share/route');
     const capabilitiesRoute = await import('./capabilities/route');
+    const imageRequestRoute = await import('./image-requests/route');
     const createGenerateJobRoute = await import('./jobs/images/generate/route');
     const jobRoute = await import('./jobs/[id]/route');
     const jobResultRoute = await import('./jobs/[id]/result/route');
@@ -3022,10 +3399,12 @@ async function loadAgentRoutes() {
     const agentRequestDiagnosticsRoute = await import('./diagnostics/requests/[id]/route');
     const pageRequestDiagnosticsBatchRoute = await import('./diagnostics/page-requests/route');
     const pageRequestDiagnosticsRoute = await import('./diagnostics/page-requests/[id]/route');
+    const shareContentRoute = await import('../shares/[token]/content/route');
     return {
         getCapabilities: () => capabilitiesRoute.GET(),
         generateImage: (request: Request) => generateRoute.POST(asNextRequest(request)),
         editImage: (request: Request) => editRoute.POST(asNextRequest(request)),
+        createImageRequest: (request: Request) => imageRequestRoute.POST(asNextRequest(request)),
         createGenerateJob: (request: Request) => createGenerateJobRoute.POST(asNextRequest(request)),
         getJob: (request: Request, context: AgentRouteContext) => jobRoute.GET(asNextRequest(request), context),
         getJobResult: (request: Request, context: AgentRouteContext) =>
@@ -3036,6 +3415,10 @@ async function loadAgentRoutes() {
             artifactRoute.DELETE(asNextRequest(request), context),
         getArtifactContent: (request: Request, context: AgentRouteContext) =>
             artifactContentRoute.GET(asNextRequest(request), context),
+        createArtifactShare: (request: Request, context: AgentRouteContext) =>
+            artifactShareRoute.POST(asNextRequest(request), context),
+        getShareContent: (request: Request, context: { params: Promise<{ token: string }> }) =>
+            shareContentRoute.GET(asNextRequest(request), context),
         putFeedback: (request: Request) => feedbackRoute.PUT(asNextRequest(request)),
         deleteFeedback: (request: Request) => feedbackRoute.DELETE(asNextRequest(request)),
         getPageRequestFeedbackBatch: (request: Request) => pageRequestFeedbackBatchRoute.POST(asNextRequest(request)),
@@ -3080,6 +3463,24 @@ function agentJobJsonRequest(
     const requestBody =
         'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
     return new Request('http://localhost/api/agent/jobs/images/generate', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': idempotencyKey,
+            ...headers
+        },
+        body: JSON.stringify(requestBody)
+    });
+}
+
+function agentImageRequest(
+    idempotencyKey: string,
+    body: Record<string, unknown>,
+    headers: Record<string, string> = {}
+) {
+    const requestBody =
+        'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
+    return new Request('http://localhost/api/agent/image-requests', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -3144,7 +3545,12 @@ function createPngWithDimensions(width: number, height: number): Buffer {
 }
 
 async function startImageUpstream(
-    handler: (body: string, url: string) => unknown | Promise<unknown>
+    handler: (
+        body: string,
+        url: string,
+        request: http.IncomingMessage,
+        response: http.ServerResponse
+    ) => unknown | Promise<unknown>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     const server = http.createServer(async (request, response) => {
         if (
@@ -3159,7 +3565,7 @@ async function startImageUpstream(
         request.on('data', (chunk: Buffer) => chunks.push(chunk));
         await new Promise<void>((resolve) => request.on('end', resolve));
         try {
-            const body = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '');
+            const body = await handler(Buffer.concat(chunks).toString('utf8'), request.url || '', request, response);
             response.writeHead(200, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify(body));
         } catch (error) {
@@ -3274,6 +3680,29 @@ async function startStreamingResponsesImageUpstream(
         }
         response.write('data: [DONE]\n\n');
         response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+    };
+}
+
+async function startResponsesImageJsonUpstream(
+    status: number,
+    body: unknown
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer((request, response) => {
+        if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
+            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+            return;
+        }
+        request.resume();
+        response.writeHead(status, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(body));
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();

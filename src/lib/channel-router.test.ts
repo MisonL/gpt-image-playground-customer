@@ -1,16 +1,18 @@
+import { ChannelCapacityQueueError } from './channel-capacity-queue';
+import { CHANNEL_REQUEST_MODES } from './channel-request-mode';
 import {
     createChannelRouter,
     describeChannelFailure,
     getChannelPoolSummary,
     isChannelFailure,
+    isChannelRequestModeFailure,
     isCredentialFailure,
     parseChannelPoolConfig,
     resolveEffectiveCredential,
     toPublicChannelFailure
 } from './channel-router';
-import { ChannelCapacityQueueError } from './channel-capacity-queue';
-import { IMAGE_UPSTREAM_PROFILES } from './image-upstream-profile';
 import { RequestValidationError } from './image-request-utils';
+import { IMAGE_UPSTREAM_PROFILES } from './image-upstream-profile';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -154,6 +156,30 @@ describe('parseChannelPoolConfig', () => {
             /OPENAI_CHANNEL_N/
         );
     });
+
+    it('parses explicit per-channel request modes', () => {
+        const config = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'images-only',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sk-one',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-json, images-sse'
+        });
+
+        assert.deepEqual(config.credentials[0]?.requestModes, ['images-non-stream', 'images-sse']);
+    });
+
+    it('rejects invalid per-channel request modes', () => {
+        assert.throws(
+            () =>
+                parseChannelPoolConfig({
+                    OPENAI_CHANNEL_1_ID: 'bad',
+                    OPENAI_CHANNEL_1_BASE_URL: 'https://bad.example.com/v1',
+                    OPENAI_CHANNEL_1_API_KEYS: 'sk-one',
+                    OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-websocket'
+                }),
+            /请求方式/
+        );
+    });
 });
 
 describe('getChannelPoolSummary', () => {
@@ -180,6 +206,7 @@ describe('getChannelPoolSummary', () => {
                     effectiveProfile: IMAGE_UPSTREAM_PROFILES['openai-compatible'],
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
+                    requestModes: CHANNEL_REQUEST_MODES,
                     credentialCount: 2
                 },
                 {
@@ -189,6 +216,7 @@ describe('getChannelPoolSummary', () => {
                     effectiveProfile: IMAGE_UPSTREAM_PROFILES['openai-compatible'],
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
+                    requestModes: CHANNEL_REQUEST_MODES,
                     credentialCount: 1
                 }
             ]
@@ -221,6 +249,7 @@ describe('getChannelPoolSummary', () => {
                         has_extra_headers: true,
                         configured_header_names: ['x-app-id', 'x-app-secret']
                     },
+                    requestModes: CHANNEL_REQUEST_MODES,
                     credentialCount: 1
                 }
             ]
@@ -328,6 +357,7 @@ describe('getChannelPoolSummary', () => {
                     effectiveProfile: config.credentials[0]?.providerProfile,
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
+                    requestModes: CHANNEL_REQUEST_MODES,
                     providerManifest: {
                         id: 'custom_provider',
                         name: 'Custom Provider',
@@ -412,6 +442,25 @@ describe('createChannelRouter', () => {
         });
 
         assert.equal(router.select().id, 'b#0');
+    });
+
+    it('selects only channels that support the requested mode', () => {
+        const modeConfig = parseChannelPoolConfig({
+            OPENAI_ROUTING_STRATEGY: 'round_robin',
+            OPENAI_CHANNEL_1_ID: 'images',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sk-images',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream',
+            OPENAI_CHANNEL_2_ID: 'responses',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://responses.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'sk-responses',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'responses-sse'
+        });
+        const router = createChannelRouter(modeConfig);
+
+        assert.equal(router.select({ requestMode: 'responses-sse' }).channelId, 'responses');
+        assert.equal(router.select({ requestMode: 'images-non-stream' }).channelId, 'images');
+        assert.throws(() => router.select({ requestMode: 'images-sse' }), /支持 images-sse/);
     });
 
     it('skips a failed credential until the cooldown expires', () => {
@@ -602,6 +651,221 @@ describe('createChannelRouter', () => {
         });
     });
 
+    it('reports configured and effective request modes separately', () => {
+        let now = 1000;
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'images',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'images-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse',
+            OPENAI_CHANNEL_2_ID: 'responses',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://responses.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'responses-key',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'responses-sse'
+        });
+        const router = createChannelRouter({
+            ...requestModeConfig,
+            failureCooldownMs: 100,
+            now: () => now
+        });
+
+        assert.deepEqual(router.getRequestModeHealthSummary(), {
+            configuredRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
+            effectiveRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
+            modes: [
+                {
+                    mode: 'images-non-stream',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'images-sse',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'responses-non-stream',
+                    configuredCredentialCount: 0,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 0,
+                    healthyChannelCount: 0
+                },
+                {
+                    mode: 'responses-sse',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                }
+            ],
+            effectiveRequestModesByChannel: [
+                {
+                    channelId: 'images',
+                    requestModes: ['images-non-stream', 'images-sse']
+                },
+                {
+                    channelId: 'responses',
+                    requestModes: ['responses-sse']
+                }
+            ]
+        });
+
+        router.reportFailure(requestModeConfig.credentials[1], { scope: 'channel' });
+        assert.deepEqual(router.getRequestModeHealthSummary(), {
+            configuredRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
+            effectiveRequestModes: ['images-non-stream', 'images-sse'],
+            modes: [
+                {
+                    mode: 'images-non-stream',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'images-sse',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'responses-non-stream',
+                    configuredCredentialCount: 0,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 0,
+                    healthyChannelCount: 0
+                },
+                {
+                    mode: 'responses-sse',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 0
+                }
+            ],
+            effectiveRequestModesByChannel: [
+                {
+                    channelId: 'images',
+                    requestModes: ['images-non-stream', 'images-sse']
+                }
+            ]
+        });
+
+        now = 1100;
+        assert.deepEqual(router.getRequestModeHealthSummary().effectiveRequestModes, [
+            'images-non-stream',
+            'images-sse',
+            'responses-sse'
+        ]);
+    });
+
+    it('cools only the failed request mode when failure reports include a request mode', () => {
+        let now = 1000;
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://mixed.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'mixed-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse'
+        });
+        const router = createChannelRouter({
+            ...requestModeConfig,
+            failureCooldownMs: 100,
+            now: () => now
+        });
+        const credential = requestModeConfig.credentials[0];
+
+        const report = router.reportFailure(credential, {
+            scope: 'channel',
+            requestMode: 'images-sse',
+            reason: {
+                at: now,
+                scope: 'channel',
+                status: 524
+            }
+        });
+
+        assert.deepEqual(report.target, {
+            channelId: 'mixed',
+            requestMode: 'images-sse'
+        });
+        assert.deepEqual(report.reason, {
+            at: 1000,
+            scope: 'channel',
+            status: 524,
+            requestMode: 'images-sse'
+        });
+        assert.throws(() => router.select({ requestMode: 'images-sse' }), /支持 images-sse/);
+        assert.equal(router.select({ requestMode: 'images-non-stream' }).id, credential.id);
+        assert.deepEqual(router.getHealthSummary(), {
+            credentialCount: 1,
+            healthyCredentialCount: 1,
+            unhealthyCredentialCount: 0,
+            channelCount: 1,
+            healthyChannelCount: 1,
+            unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 0,
+            lastFailure: {
+                at: 1000,
+                scope: 'channel',
+                status: 524,
+                requestMode: 'images-sse'
+            }
+        });
+        assert.deepEqual(router.getRequestModeHealthSummary(), {
+            configuredRequestModes: ['images-non-stream', 'images-sse'],
+            effectiveRequestModes: ['images-non-stream'],
+            modes: [
+                {
+                    mode: 'images-non-stream',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'images-sse',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 0
+                },
+                {
+                    mode: 'responses-non-stream',
+                    configuredCredentialCount: 0,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 0,
+                    healthyChannelCount: 0
+                },
+                {
+                    mode: 'responses-sse',
+                    configuredCredentialCount: 0,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 0,
+                    healthyChannelCount: 0
+                }
+            ],
+            effectiveRequestModesByChannel: [
+                {
+                    channelId: 'mixed',
+                    requestModes: ['images-non-stream']
+                }
+            ]
+        });
+
+        now = 1100;
+        assert.equal(router.select({ requestMode: 'images-sse' }).id, credential.id);
+        assert.deepEqual(router.getRequestModeHealthSummary().effectiveRequestModes, [
+            'images-non-stream',
+            'images-sse'
+        ]);
+    });
+
     it('uses per-channel cooldown when a channel defines a longer window', () => {
         let now = 1000;
         const channelConfig = parseChannelPoolConfig({
@@ -725,10 +989,7 @@ describe('createChannelRouter', () => {
         router.reportFailure(failed);
 
         now = 1100;
-        assert.deepEqual(
-            [router.select().id, router.select().id, router.select().id],
-            ['a#1', 'b#0', 'a#1']
-        );
+        assert.deepEqual([router.select().id, router.select().id, router.select().id], ['a#1', 'b#0', 'a#1']);
 
         const candidates = router.getRecoveryProbeCandidates();
         assert.deepEqual(
@@ -830,6 +1091,177 @@ describe('createChannelRouter', () => {
         });
     });
 
+    it('requires recovery probes for request-mode cooldowns', () => {
+        let now = 1000;
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://mixed.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'mixed-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse'
+        });
+        const router = createChannelRouter({
+            ...requestModeConfig,
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+        const failed = requestModeConfig.credentials[0];
+
+        router.reportFailure(failed, { scope: 'channel', requestMode: 'images-sse' });
+
+        now = 1100;
+        assert.equal(router.select({ requestMode: 'images-non-stream' }).id, failed.id);
+        assert.throws(() => router.select({ requestMode: 'images-sse' }), /支持 images-sse/);
+        assert.deepEqual(
+            router.getRecoveryProbeCandidates().map((candidate) => ({
+                scope: candidate.scope,
+                credentialId: candidate.credential.id,
+                requestMode: candidate.requestMode
+            })),
+            [{ scope: 'channel', credentialId: 'mixed#0', requestMode: 'images-sse' }]
+        );
+        assert.deepEqual(router.getHealthSummary(), {
+            credentialCount: 1,
+            healthyCredentialCount: 1,
+            unhealthyCredentialCount: 0,
+            channelCount: 1,
+            healthyChannelCount: 1,
+            unhealthyChannelCount: 0,
+            pendingRecoveryProbeCredentialCount: 0,
+            pendingRecoveryProbeChannelCount: 1,
+            lastFailure: {
+                at: 1000,
+                scope: 'channel',
+                requestMode: 'images-sse'
+            }
+        });
+
+        const candidate = router.getRecoveryProbeCandidates()[0];
+        assert.equal(router.reportRecoveryProbeSuccess(candidate), true);
+        assert.equal(router.select({ requestMode: 'images-sse' }).id, failed.id);
+    });
+
+    it('uses a request-mode-capable sibling credential for channel request-mode recovery probes', () => {
+        let now = 1000;
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://mixed.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'mixed-a,mixed-b',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse'
+        });
+        const router = createChannelRouter({
+            ...requestModeConfig,
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+        const [first, second] = requestModeConfig.credentials;
+
+        router.reportFailure(first, { scope: 'channel', requestMode: 'images-sse' });
+        now = 1010;
+        router.reportFailure(first, { requestMode: 'images-sse' });
+
+        now = 1100;
+        assert.deepEqual(
+            router.getRecoveryProbeCandidates().map((candidate) => ({
+                scope: candidate.scope,
+                credentialId: candidate.credential.id,
+                requestMode: candidate.requestMode
+            })),
+            [{ scope: 'channel', credentialId: second.id, requestMode: 'images-sse' }]
+        );
+        assert.equal(router.reportRecoveryProbeSuccess(router.getRecoveryProbeCandidates()[0]), true);
+        assert.equal(router.getHealthSummary().pendingRecoveryProbeCredentialCount, 1);
+    });
+
+    it('queues the channel recovery probe before request-mode probes for the same channel', () => {
+        let now = 1000;
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://mixed.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'mixed-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse'
+        });
+        const router = createChannelRouter({
+            ...requestModeConfig,
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+        const failed = requestModeConfig.credentials[0];
+
+        router.reportFailure(failed, { scope: 'channel' });
+        router.reportFailure(failed, { scope: 'channel', requestMode: 'images-sse' });
+
+        now = 1100;
+        assert.deepEqual(
+            router.getRecoveryProbeCandidates().map((candidate) => ({
+                scope: candidate.scope,
+                credentialId: candidate.credential.id,
+                requestMode: candidate.requestMode
+            })),
+            [{ scope: 'channel', credentialId: failed.id, requestMode: undefined }]
+        );
+    });
+
+    it('queues the credential recovery probe before request-mode probes for the same credential', () => {
+        let now = 1000;
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://mixed.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'mixed-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse'
+        });
+        const router = createChannelRouter({
+            ...requestModeConfig,
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+        const failed = requestModeConfig.credentials[0];
+
+        router.reportFailure(failed);
+        router.reportFailure(failed, { requestMode: 'images-sse' });
+
+        now = 1100;
+        assert.deepEqual(
+            router.getRecoveryProbeCandidates().map((candidate) => ({
+                scope: candidate.scope,
+                credentialId: candidate.credential.id,
+                requestMode: candidate.requestMode
+            })),
+            [{ scope: 'credential', credentialId: failed.id, requestMode: undefined }]
+        );
+    });
+
+    it('clears older credential request-mode probes when a channel request-mode probe recovers', () => {
+        let now = 1000;
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://mixed.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'mixed-a,mixed-b',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse'
+        });
+        const router = createChannelRouter({
+            ...requestModeConfig,
+            failureCooldownMs: 100,
+            now: () => now,
+            requireProbeForRecovery: true
+        });
+        const [first, second] = requestModeConfig.credentials;
+
+        router.reportFailure(first, { requestMode: 'images-sse' });
+        router.reportFailure(second, { requestMode: 'images-sse' });
+        now = 1010;
+        router.reportFailure(first, { scope: 'channel', requestMode: 'images-sse' });
+
+        now = 1110;
+        const candidate = router.getRecoveryProbeCandidates()[0];
+        assert.equal(router.reportRecoveryProbeSuccess(candidate), true);
+        assert.equal(router.getHealthSummary().pendingRecoveryProbeCredentialCount, 0);
+        assert.equal(router.select({ requestMode: 'images-sse' }).channelId, 'mixed');
+    });
+
     it('ignores stale recovery probe success after the credential fails again', () => {
         let now = 1000;
         const router = createChannelRouter({
@@ -879,14 +1311,20 @@ describe('createChannelRouter', () => {
         router.reportRecoveryProbeSuccess(staleCandidate);
 
         assert.equal(router.getHealthSummary().pendingRecoveryProbeChannelCount, 1);
-        assert.deepEqual(config.credentials.filter((credential) => credential.channelId === 'a').filter(canSelect(router)), []);
+        assert.deepEqual(
+            config.credentials.filter((credential) => credential.channelId === 'a').filter(canSelect(router)),
+            []
+        );
 
         now = 1210;
         const freshCandidate = router.getRecoveryProbeCandidates()[0];
         assert.equal(freshCandidate.scope, 'channel');
         router.reportRecoveryProbeSuccess(freshCandidate);
         assert.deepEqual(
-            config.credentials.filter((credential) => credential.channelId === 'a').filter(canSelect(router)).map((credential) => credential.id),
+            config.credentials
+                .filter((credential) => credential.channelId === 'a')
+                .filter(canSelect(router))
+                .map((credential) => credential.id),
             ['a#0', 'a#1']
         );
     });
@@ -1122,6 +1560,35 @@ describe('isCredentialFailure', () => {
 
     it('does not treat local channel capacity queue errors as credential failures', () => {
         assert.equal(isCredentialFailure(createCapacityQueueError()), false);
+    });
+});
+
+describe('isChannelRequestModeFailure', () => {
+    it('treats Responses image_generation-disabled 403 as a request-mode failure', () => {
+        assert.equal(
+            isChannelRequestModeFailure(
+                new Error('status_code=403, Image generation is not enabled for this group'),
+                'responses-sse'
+            ),
+            true
+        );
+        assert.equal(
+            isChannelRequestModeFailure(
+                { status: 403, error: { message: 'Image generation is not enabled for this group' } },
+                'responses-non-stream'
+            ),
+            true
+        );
+    });
+
+    it('does not apply the Responses image_generation-disabled rule to Images API modes', () => {
+        assert.equal(
+            isChannelRequestModeFailure(
+                { status: 403, message: 'Image generation is not enabled for this group' },
+                'images-sse'
+            ),
+            false
+        );
     });
 });
 

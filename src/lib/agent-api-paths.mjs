@@ -1,6 +1,7 @@
 export const AGENT_ENDPOINTS = Object.freeze({
     capabilities: '/api/agent/capabilities',
     openapi: '/api/agent/openapi.json',
+    create_image_request: '/api/agent/image-requests',
     generate: '/api/agent/images/generate',
     edit: '/api/agent/images/edit',
     create_generate_job: '/api/agent/jobs/images/generate',
@@ -8,6 +9,7 @@ export const AGENT_ENDPOINTS = Object.freeze({
     job_result: '/api/agent/jobs/{id}/result',
     artifact_metadata: '/api/agent/artifacts/{id}',
     artifact_content: '/api/agent/artifacts/{id}/content',
+    artifact_share: '/api/agent/artifacts/{id}/share',
     artifact_delete: '/api/agent/artifacts/{id}',
     page_request_feedback_batch: '/api/agent/page-requests/feedback',
     page_request_feedback: '/api/agent/page-requests/{id}/feedback',
@@ -41,6 +43,10 @@ export function buildAgentPageRequestDiagnosticsPath(pageRequestId) {
 
 export function buildAgentRequestDiagnosticsPath(requestId) {
     return AGENT_ENDPOINTS.agent_request_diagnostics.replace('{id}', encodePathValue(requestId));
+}
+
+export function buildAgentArtifactSharePath(artifactId) {
+    return AGENT_ENDPOINTS.artifact_share.replace('{id}', encodePathValue(artifactId));
 }
 
 function encodePathValue(value) {

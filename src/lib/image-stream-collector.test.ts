@@ -1,4 +1,8 @@
-import { collectOpenAiImagesFromStream, MissingFinalImageStreamResultError } from './image-stream-collector';
+import {
+    AcceptedImageTaskStreamResultError,
+    collectOpenAiImagesFromStream,
+    MissingFinalImageStreamResultError
+} from './image-stream-collector';
 import { upstreamEvents } from './sse-test-utils';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -201,6 +205,58 @@ describe('collectOpenAiImagesFromStream', () => {
                 assert.equal(error.upstreamEventType, 'image_generation.partial_image');
                 assert.equal(error.partialImageCount, 2);
                 assert.equal(JSON.stringify(error).includes('partial-one'), false);
+                return true;
+            }
+        );
+    });
+
+    it('reports accepted image tasks explicitly when the upstream only returns task metadata', async () => {
+        await assert.rejects(
+            () =>
+                collectOpenAiImagesFromStream(
+                    upstreamEvents([
+                        {
+                            id: 'sync-gen-task',
+                            object: 'image.task',
+                            status: 'pending',
+                            task_id: 'sync-gen-task',
+                            poll_url: '/api/image-tasks?ids=sync-gen-task',
+                            message: 'Image task accepted. Poll poll_url with the same Authorization header.'
+                        }
+                    ])
+                ),
+            (error) => {
+                assert.ok(error instanceof AcceptedImageTaskStreamResultError);
+                assert.equal(error.taskId, 'sync-gen-task');
+                assert.equal(error.pollUrl, '/api/image-tasks?ids=sync-gen-task');
+                return true;
+            }
+        );
+    });
+
+    it('does not return partial image data after an accepted task event', async () => {
+        await assert.rejects(
+            () =>
+                collectOpenAiImagesFromStream(
+                    upstreamEvents([
+                        {
+                            type: 'image_generation.partial_image',
+                            partial_image_index: 0,
+                            b64_json: 'partial-before-task'
+                        },
+                        {
+                            id: 'partial-before-task-id',
+                            object: 'image.task',
+                            status: 'pending',
+                            task_id: 'partial-before-task-id',
+                            poll_url: '/api/image-tasks?ids=partial-before-task-id'
+                        }
+                    ])
+                ),
+            (error) => {
+                assert.ok(error instanceof AcceptedImageTaskStreamResultError);
+                assert.equal(error.taskId, 'partial-before-task-id');
+                assert.equal(error.pollUrl, '/api/image-tasks?ids=partial-before-task-id');
                 return true;
             }
         );

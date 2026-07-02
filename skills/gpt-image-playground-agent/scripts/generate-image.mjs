@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
+import { AGENT_ENDPOINTS, buildAgentArtifactSharePath, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
 import { enrichFailureWithAgentDiagnostics } from './lib/agent-diagnostics-summary.mjs';
 import {
     errorMessage,
@@ -45,6 +45,9 @@ const DEFAULT_OUTPUT_FORMAT = 'webp';
 const DEFAULT_OUTPUT_COMPRESSION = 100;
 const DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
 const PAGE_SSE_ENDPOINT = '/api/images';
+const SERVER_ORCHESTRATED_TRANSPORT = 'server_orchestrated';
+const MIN_SHARE_ACCESS_CODE_LENGTH = 8;
+const MAX_SHARE_ACCESS_CODE_LENGTH = 128;
 const GENERATE_PRESETS = {
     '1k-smoke-agent': ['--agent', '--size', '1024x1024', '--quality', 'low', '--stream-mode', 'non_stream'],
     '4k-agent-nonstream': ['--agent', '--size', '3840x2160', '--quality', 'high', '--stream-mode', 'non_stream'],
@@ -133,13 +136,20 @@ try {
 }
 
 if (isNonBillableDryRun(options, contractCheck)) {
+    let remoteCheck;
+    try {
+        remoteCheck = options.checkRemote ? await runRemotePlanningCheck() : buildSkippedRemotePlanningCheck();
+    } catch (error) {
+        console.error(errorMessage(error));
+        process.exit(1);
+    }
     console.log(
         JSON.stringify(
             {
                 ok: true,
                 billable: false,
                 dry_run: true,
-                verification_scope: buildDryRunVerificationScope(),
+                verification_scope: buildDryRunVerificationScope(remoteCheck),
                 endpoint: dryRunEndpoint(requestBody, options.routeMode),
                 route_mode: options.routeMode,
                 routing_guidance: buildGenerateRoutingGuidance(requestBody, options.routeMode),
@@ -182,16 +192,30 @@ try {
 }
 
 try {
-    if (shouldUseJobPolling(capabilities, options.routeMode)) {
-        await runGenerateJob();
+    if (shouldUseServerOrchestration(capabilities, requestBody, options.routeMode)) {
+        await runGenerateJob({
+            createEndpoint: AGENT_ENDPOINTS.create_image_request,
+            routing: {
+                transport: SERVER_ORCHESTRATED_TRANSPORT,
+                endpoint: AGENT_ENDPOINTS.create_image_request
+            }
+        });
+    } else if (shouldUseJobPolling(capabilities, options.routeMode)) {
+        await runGenerateJob({
+            createEndpoint: AGENT_ENDPOINTS.create_generate_job,
+            routing: {
+                transport: 'agent_job_polling',
+                endpoint: AGENT_ENDPOINTS.create_generate_job
+            }
+        });
     } else if (shouldUsePageSse(capabilities, requestBody, options.routeMode)) {
         try {
             const result = await runPageSseRequest();
             console.log(
                 JSON.stringify(
-                    buildSuccessOutput(formatPageSseOutput(result), {
+                    await buildSuccessOutput(formatPageSseOutput(result), {
                         ...buildPageSseSummaryRouting(),
-                        fallback_endpoint: AGENT_ENDPOINTS.generate,
+                        fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
                         fallback_mode: 'manual_after_diagnosis'
                     }, completeScriptTiming(scriptTiming)),
                     null,
@@ -230,6 +254,8 @@ function parseArgs(argv) {
         thinking: undefined,
         promptOptimization: undefined,
         forceWeb: undefined,
+        share: false,
+        shareExpiresMinutes: undefined,
         streamMode: undefined,
         streamingStrategy: undefined,
         partialImages: undefined,
@@ -241,6 +267,7 @@ function parseArgs(argv) {
         routeMode: 'auto',
         dryRun: false,
         allowBillable: false,
+        checkRemote: false,
         help: false,
         promptParts: []
     };
@@ -266,6 +293,8 @@ function parseArgs(argv) {
         else if (arg === '--thinking') parsed.thinking = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--prompt-optimization') parsed.promptOptimization = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--force-web') parsed.forceWeb = true;
+        else if (arg === '--share') parsed.share = true;
+        else if (arg === '--share-expires-minutes') parsed.shareExpiresMinutes = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--stream-mode') parsed.streamMode = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--streaming-strategy') parsed.streamingStrategy = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--partial-images') parsed.partialImages = readOptionValue(expandedArgv, (index += 1), arg);
@@ -274,6 +303,7 @@ function parseArgs(argv) {
         else if (arg === '--base-url') parsed.baseUrl = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--prompt-file') parsed.promptFile = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--idempotency-key') parsed.idempotencyKey = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--check-remote') parsed.checkRemote = true;
         else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`);
         else parsed.promptParts.push(arg);
     }
@@ -380,6 +410,15 @@ function validateUpstreamStrategyOptions(parsed) {
     if (parsed.streamMode && !STREAM_MODES.has(parsed.streamMode)) {
         throw new Error('--stream-mode 必须是 auto、stream 或 non_stream。');
     }
+    if (!parsed.share && parsed.shareExpiresMinutes !== undefined) {
+        throw new Error('--share-expires-minutes 需要和 --share 一起使用。');
+    }
+    if (parsed.shareExpiresMinutes !== undefined) {
+        readConfiguredPositiveInteger(parsed.shareExpiresMinutes, '--share-expires-minutes', 1);
+    }
+    if (parsed.share && process.env.GPT_IMAGE_SHARE_ACCESS_CODE !== undefined) {
+        readShareAccessCodeFromEnv();
+    }
     if (parsed.streamingStrategy && !STREAMING_STRATEGIES.has(parsed.streamingStrategy)) {
         throw new Error(
             '--streaming-strategy 必须是 off、auto、openai-sse、newapi-keepalive-sse、responses-sse 或 force-sse。'
@@ -388,19 +427,10 @@ function validateUpstreamStrategyOptions(parsed) {
     if (parsed.routeMode === 'page_sse' && (parsed.streamingStrategy === 'off' || parsed.streamMode === 'non_stream')) {
         throw new Error('stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。');
     }
-    if (hasPageOnlyGenerateOptions(parsed) && !isPageSseAllowed(parsed)) {
-        throw new Error('文生图高级页面参数需要页面 SSE，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。');
-    }
-    if (parsed.routeMode === 'agent') {
-        assertNoPageOnlyGenerateOptions(parsed, 'Agent generate');
-    }
     if (!OUTPUT_FORMATS.has(normalizeOutputFormat(parsed.format))) {
         throw new Error('--format 必须是 png、jpeg 或 webp。');
     }
     if (parsed.outputCompression !== undefined) readOutputCompression(parsed);
-    if (parsed.routeMode === 'job') {
-        assertNoPageOnlyGenerateOptions(parsed, 'Agent generate job');
-    }
 }
 
 function validateResponsesModelBackend(parsed) {
@@ -423,21 +453,6 @@ function readOutputCompression(parsed) {
         throw new Error('--output-compression 必须是 0 到 100 之间的整数。');
     }
     return parsedValue;
-}
-
-function hasPageOnlyGenerateOptions(value) {
-    return Boolean(
-        value.responsesModel ||
-            value.thinking ||
-            value.promptOptimization !== undefined ||
-            value.forceWeb !== undefined ||
-            value.force_web !== undefined
-    );
-}
-
-function assertNoPageOnlyGenerateOptions(parsed, context) {
-    if (!hasPageOnlyGenerateOptions(parsed)) return;
-    throw new Error(`${context} 不接受文生图高级页面字段；请去掉这些字段或使用 --page-sse。`);
 }
 
 function readBooleanOption(value, name) {
@@ -482,30 +497,95 @@ function enrichImageUrls(result) {
     };
 }
 
-function buildDryRunVerificationScope() {
+function buildDryRunVerificationScope(remoteCheck = buildSkippedRemotePlanningCheck()) {
     return {
-        mode: 'local_planning_only',
+        mode: remoteCheck.remote_capabilities_verified ? 'remote_contract_and_local_planning' : 'local_planning_only',
         service_base_url: baseUrl,
         service_base_url_source: baseUrlInfo.source,
         interactive_confirmation_required: baseUrlInfo.interactive_confirmation_required,
-        remote_capabilities_verified: false,
-        runtime_capacity_verified: false,
-        auth_verified: false,
+        remote_capabilities_verified: remoteCheck.remote_capabilities_verified,
+        runtime_capacity_verified: remoteCheck.runtime_capacity_verified,
+        auth_verified: remoteCheck.auth_verified,
         billable_request_sent: false,
-        note: 'Dry-run validates local request construction and routing guidance only; run --contract-check or --allow-billable to verify the remote service.'
+        remote_check: {
+            capabilities: remoteCheck.capabilities,
+            runtime: remoteCheck.runtime
+        },
+        note: remoteCheck.remote_capabilities_verified
+            ? 'Dry-run validated local request construction and read non-billable remote capabilities/runtime state; it did not send a billable image request.'
+            : 'Dry-run validates local request construction and routing guidance only; run --check-remote, --contract-check or --allow-billable to verify the remote service.'
     };
 }
 
+async function runRemotePlanningCheck() {
+    const capabilities = await readCapabilities();
+    const runtime = await readRuntimeCapabilities();
+    return {
+        remote_capabilities_verified: true,
+        runtime_capacity_verified: true,
+        auth_verified: true,
+        capabilities: {
+            endpoint: AGENT_ENDPOINTS.capabilities,
+            orchestration_supported: capabilities?.orchestration?.supported === true,
+            orchestration_endpoint: capabilities?.orchestration?.endpoint || null,
+            page_sse_supported: capabilities?.agent_streaming?.page_sse?.supported === true,
+            request_modes: readRequestModeList(capabilities?.supported?.request_modes)
+        },
+        runtime: {
+            endpoint: '/api/runtime-capabilities',
+            streaming_batch_enabled: runtime?.streamingBatch?.enabled === true,
+            recommended_concurrency: runtime?.streamingBatch?.recommendedConcurrency ?? null,
+            effective_request_modes: readRequestModeList(runtime?.channelRouting?.effectiveRequestModes)
+        }
+    };
+}
+
+async function readRuntimeCapabilities() {
+    const { response, result, text } = await fetchJson(`${baseUrl}/api/runtime-capabilities`, {
+        headers: authHeaders(),
+        timeoutMs
+    });
+    if (!response.ok) {
+        throw new Error(`runtime-capabilities 请求失败，状态码 ${response.status}：${text}`);
+    }
+    return result;
+}
+
+function buildSkippedRemotePlanningCheck() {
+    return {
+        remote_capabilities_verified: false,
+        runtime_capacity_verified: false,
+        auth_verified: false,
+        capabilities: null,
+        runtime: null
+    };
+}
+
+function readRequestModeList(value) {
+    if (!Array.isArray(value)) return [];
+    return value.filter((item) => typeof item === 'string');
+}
+
 function dryRunEndpoint(body, routeMode) {
+    if (routeMode === 'auto' && shouldPreferServerOrchestration(body)) {
+        return `${baseUrl}${AGENT_ENDPOINTS.create_image_request}`;
+    }
     if (routeMode === 'job') return `${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`;
     if (routeMode === 'agent') return `${baseUrl}${AGENT_ENDPOINTS.generate}`;
     if (routeMode === 'page_sse') return `${baseUrl}${PAGE_SSE_ENDPOINT}`;
-    return (hasPageOnlyGenerateOptions(body) || isLargeGenerate(body)) && isPageSseAllowed(body)
-        ? `${baseUrl}${PAGE_SSE_ENDPOINT}`
-        : `${baseUrl}${AGENT_ENDPOINTS.generate}`;
+    return `${baseUrl}${AGENT_ENDPOINTS.generate}`;
 }
 
 function buildGenerateRoutingGuidance(body, routeMode) {
+    if (routeMode === 'auto' && shouldPreferServerOrchestration(body)) {
+        return {
+            recommended_endpoint: AGENT_ENDPOINTS.create_image_request,
+            transport: SERVER_ORCHESTRATED_TRANSPORT,
+            strength: 'recommended',
+            result_mode: 'job_polling',
+            reason: 'Agent 客户端只提交生成意图；服务端负责选择内部执行路径和轮询结果。'
+        };
+    }
     if (routeMode === 'job') {
         return {
             recommended_endpoint: AGENT_ENDPOINTS.create_generate_job,
@@ -517,21 +597,14 @@ function buildGenerateRoutingGuidance(body, routeMode) {
     if (routeMode === 'page_sse' && !isPageSseAllowed(body)) {
         throw new Error('stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。');
     }
-    if (
-        (routeMode === 'page_sse' ||
-            (routeMode !== 'agent' && (hasPageOnlyGenerateOptions(body) || isLargeGenerate(body)))) &&
-        isPageSseAllowed(body)
-    ) {
-        const reason = hasPageOnlyGenerateOptions(body)
-            ? 'Responses/GPT2Image-compatible generate options require the page form-data SSE endpoint; Agent JSON generate does not accept those fields.'
-            : 'Generate requests with max_edge>2048 should use page form-data SSE first; if the stream fails, diagnose first and rerun manually with Agent JSON.';
+    if (routeMode === 'page_sse' && isPageSseAllowed(body)) {
         return {
             recommended_endpoint: PAGE_SSE_ENDPOINT,
             transport: 'page_sse',
             strength: 'recommended',
-            fallback_endpoint: AGENT_ENDPOINTS.generate,
+            fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
             fallback_mode: 'manual_after_diagnosis',
-            reason
+            reason: 'Explicit --page-sse requests use the page form-data SSE endpoint.'
         };
     }
     return {
@@ -599,7 +672,7 @@ async function runGenerateRequest(options = {}) {
         if (response.ok) {
             console.log(
                 JSON.stringify(
-                    buildSuccessOutput(enrichImageUrls(result), options.routing, completeScriptTiming(scriptTiming)),
+                    await buildSuccessOutput(enrichImageUrls(result), options.routing, completeScriptTiming(scriptTiming)),
                     null,
                     2
                 )
@@ -697,7 +770,7 @@ function assertPageSseReady(capabilitiesValue) {
     if (!supportsPageSse(capabilitiesValue)) {
         throw createScriptError(
             'page_sse_unavailable',
-            '大图默认路由需要 agent_streaming.page_sse.supported=true；capabilities 未声明时不能静默降级到 Agent JSON。'
+            '显式页面 SSE 或页面专属字段需要 agent_streaming.page_sse.supported=true；capabilities 未声明时不能静默降级到 Agent JSON。'
         );
     }
     if (pageSse?.auth?.required === true && !passwordHash) {
@@ -981,8 +1054,8 @@ function parsePageSseEvent(rawEvent) {
     }
 }
 
-function buildSuccessOutput(result, routing, timing) {
-    return attachSummary(
+async function buildSuccessOutput(result, routing, timing) {
+    const output = attachSummary(
         routing ? { ...result, routing } : result,
         buildSuccessSummary({
             result,
@@ -992,6 +1065,74 @@ function buildSuccessOutput(result, routing, timing) {
             billable: true
         })
     );
+    if (!options.share) {
+        return output;
+    }
+    const shareSummary = await maybeCreateShares(output);
+    return shareSummary ? attachSummary({ ...output, shares: shareSummary.share_results }, { ...output.summary, ...shareSummary }) : output;
+}
+
+async function maybeCreateShares(output) {
+    const images = Array.isArray(output?.images) ? output.images : [];
+    const shareResults = [];
+    for (const image of images) {
+        if (typeof image?.id !== 'string' || !image.id) continue;
+        shareResults.push(await createShareForArtifact(image.id));
+    }
+    if (shareResults.length === 0) {
+        throw new Error('--share 需要服务端返回可分享的 Agent artifact。');
+    }
+    return {
+        share_results: shareResults,
+        share_urls: shareResults.map((item) => item.share_url).filter(Boolean),
+        direct_content_urls: shareResults.map((item) => item.direct_content_url).filter(Boolean)
+    };
+}
+
+async function createShareForArtifact(artifactId) {
+    const body = {};
+    if (options.shareExpiresMinutes !== undefined) {
+        body.expires_in_minutes = readConfiguredPositiveInteger(options.shareExpiresMinutes, '--share-expires-minutes', 1);
+    }
+    if (process.env.GPT_IMAGE_SHARE_ACCESS_CODE !== undefined) {
+        body.access_code = readShareAccessCodeFromEnv();
+    }
+    const { response, result, text } = await fetchJson(`${baseUrl}${buildAgentArtifactSharePath(artifactId)}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders()
+        },
+        body: JSON.stringify(body),
+        timeoutMs
+    });
+    if (!response.ok) {
+        throw new Error(`创建分享链接失败，状态码 ${response.status}：${text || JSON.stringify(result)}`);
+    }
+    return {
+        artifact_id: result?.artifact_id || artifactId,
+        token: result?.token || null,
+        share_url: resolveShareOutputUrl(result?.share_url),
+        direct_content_url: resolveShareOutputUrl(result?.direct_content_url),
+        expires_at: result?.expires_at ?? null,
+        access_code_required: result?.access_code_required === true
+    };
+}
+
+function readShareAccessCodeFromEnv() {
+    const rawValue = process.env.GPT_IMAGE_SHARE_ACCESS_CODE;
+    if (rawValue === undefined) return undefined;
+    const accessCode = rawValue.trim();
+    if (!accessCode) return undefined;
+    if (accessCode.length < MIN_SHARE_ACCESS_CODE_LENGTH || accessCode.length > MAX_SHARE_ACCESS_CODE_LENGTH) {
+        throw new Error('GPT_IMAGE_SHARE_ACCESS_CODE 长度必须在 8 到 128 个字符之间。');
+    }
+    return accessCode;
+}
+
+function resolveShareOutputUrl(value) {
+    if (typeof value !== 'string' || !value) return null;
+    return new URL(value, `${baseUrl}/`).toString();
 }
 
 function buildPageSseFailureOutput(error, timing = completeScriptTiming(scriptTiming)) {
@@ -1008,7 +1149,7 @@ function buildPageSseFailureOutput(error, timing = completeScriptTiming(scriptTi
 function buildPageSseRouting(fallbackMode) {
     return {
         ...buildPageSseSummaryRouting(),
-        fallback_endpoint: AGENT_ENDPOINTS.generate,
+        fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
         fallback_mode: fallbackMode
     };
 }
@@ -1034,7 +1175,7 @@ function buildPageSseScriptFailure(error, diagnostics, timing) {
             ...(diagnostics ? { diagnostics } : {})
         },
         routing: buildPageSseRouting('manual_after_diagnosis'),
-        next_step: '先补齐页面流式 capability 或访问码哈希，再重新执行；不要静默切换到 Agent JSON。'
+        next_step: '先补齐页面流式 capability 或访问码哈希，再重新执行；不要静默切换到其他端点。'
     };
     return attachSummary(output, buildFailureSummary({
         errorBody: output,
@@ -1081,7 +1222,7 @@ function buildBillablePageSseFailure(error, diagnostics, timing) {
         },
         routing: buildPageSseRouting('manual_after_diagnosis'),
         next_step:
-            '先用 diagnose-request 诊断页面流式失败原因，再用新的 Idempotency-Key 显式选择备用路径；若改用 Agent JSON 对照，必须重新校验输出尺寸和格式。'
+            '先用 diagnose-request 诊断页面流式失败原因，再用新的 Idempotency-Key 显式选择服务端编排入口或其他诊断路径。'
     };
     return attachSummary(output, buildFailureSummary({
         errorBody: output,
@@ -1147,12 +1288,14 @@ function buildPageSseDiagnostics(state) {
     };
 }
 
-async function runGenerateJob() {
+async function runGenerateJob(options = {}) {
+    const createEndpoint = options.createEndpoint || AGENT_ENDPOINTS.create_generate_job;
+    const routing = options.routing || { transport: 'agent_job_polling', endpoint: createEndpoint };
     let lastResult;
     let lastRetryAfter = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const { response, result } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`, {
+        const { response, result } = await fetchJson(`${baseUrl}${createEndpoint}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1167,10 +1310,7 @@ async function runGenerateJob() {
             const jobResult = await pollJobResult(result?.job);
             console.log(
                 JSON.stringify(
-                    buildSuccessOutput(enrichImageUrls(jobResult), {
-                        transport: 'agent_job_polling',
-                        endpoint: AGENT_ENDPOINTS.create_generate_job
-                    }, completeScriptTiming(scriptTiming)),
+                    await buildSuccessOutput(enrichImageUrls(jobResult), routing, completeScriptTiming(scriptTiming)),
                     null,
                     2
                 )
@@ -1189,7 +1329,7 @@ async function runGenerateJob() {
         JSON.stringify(
             buildFailureOutput(
                 { ...lastResult, retry_after: lastRetryAfter },
-                { transport: 'agent_job_polling', endpoint: AGENT_ENDPOINTS.create_generate_job }
+                routing
             ),
             null,
             2
@@ -1240,7 +1380,36 @@ async function pollJobResult(job) {
 
 async function runContractCheck(capabilitiesValue) {
     const checks = [];
-    const { response, result } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.generate}`, {
+    checks.push(await checkContractEndpoint(AGENT_ENDPOINTS.generate));
+
+    if (shouldRequireServerOrchestrationContract()) {
+        checks.push(await checkContractEndpoint(readRequiredOrchestrationEndpoint(capabilitiesValue)));
+    } else if (supportsServerOrchestration(capabilitiesValue)) {
+        checks.push(await checkContractEndpoint(readOrchestrationEndpoint(capabilitiesValue)));
+    }
+
+    if (supportsJobPolling(capabilitiesValue)) {
+        checks.push(await checkContractEndpoint(AGENT_ENDPOINTS.create_generate_job));
+    }
+
+    if (supportsPageSse(capabilitiesValue)) {
+        const pageSse = capabilitiesValue?.agent_streaming?.page_sse;
+        if (pageSse?.auth?.required === true && !passwordHash) {
+            checks.push({
+                endpoint: PAGE_SSE_ENDPOINT,
+                skipped: true,
+                reason: '页面 SSE 需要 passwordHash；contract-check 在未提供 GPT_IMAGE_APP_PASSWORD_HASH 时跳过。'
+            });
+        } else {
+            checks.push(await checkPageSseContract());
+        }
+    }
+
+    console.log(JSON.stringify({ ok: true, billable: false, checks }, null, 2));
+}
+
+async function checkContractEndpoint(endpoint) {
+    const { response, result } = await fetchJson(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1249,41 +1418,90 @@ async function runContractCheck(capabilitiesValue) {
         body: JSON.stringify(requestBody),
         timeoutMs
     });
-    if (response.status === 400 && result?.error?.code === 'idempotency_key_required') {
-        checks.push({ endpoint: AGENT_ENDPOINTS.generate, status: response.status, error_code: result.error.code });
-    } else {
-        console.error(JSON.stringify({ ok: false, billable: false, status: response.status, result }, null, 2));
+    if (response.status !== 400 || result?.error?.code !== 'idempotency_key_required') {
+        console.error(JSON.stringify({ ok: false, billable: false, endpoint, status: response.status, result }, null, 2));
         process.exit(1);
     }
+    return { endpoint, status: response.status, error_code: result.error.code };
+}
 
-    if (supportsJobPolling(capabilitiesValue)) {
-        const jobCheck = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.create_generate_job}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                ...authHeaders()
-            },
-            body: JSON.stringify(requestBody),
-            timeoutMs
-        });
-        if (jobCheck.response.status !== 400 || jobCheck.result?.error?.code !== 'idempotency_key_required') {
-            console.error(
-                JSON.stringify(
-                    { ok: false, billable: false, status: jobCheck.response.status, result: jobCheck.result },
-                    null,
-                    2
-                )
-            );
-            process.exit(1);
-        }
-        checks.push({
-            endpoint: AGENT_ENDPOINTS.create_generate_job,
-            status: jobCheck.response.status,
-            error_code: jobCheck.result.error.code
-        });
+async function checkPageSseContract() {
+    const formData = new FormData();
+    formData.append('mode', 'generate');
+    formData.append('prompt', 'contract check');
+    formData.append('model', requestBody.model);
+    formData.append('n', String(requestBody.n));
+    formData.append('size', requestBody.size);
+    formData.append('quality', requestBody.quality);
+    formData.append('output_format', requestBody.output_format);
+    formData.append('response_mode', requestBody.response_mode);
+    formData.append('stream', 'true');
+    formData.append('clientRequestId', 'x'.repeat(pageSseClientRequestIdMaxLength + 1));
+    if (passwordHash) formData.append('passwordHash', passwordHash);
+    const { response, text } = await fetchJson(`${baseUrl}${PAGE_SSE_ENDPOINT}`, {
+        method: 'POST',
+        body: formData,
+        timeoutMs
+    });
+    if (response.status !== 400 || !text.includes('clientRequestId')) {
+        console.error(JSON.stringify({ ok: false, billable: false, endpoint: PAGE_SSE_ENDPOINT, status: response.status, text }, null, 2));
+        process.exit(1);
     }
+    return {
+        endpoint: PAGE_SSE_ENDPOINT,
+        status: response.status,
+        error_code: 'page_sse_client_request_id_too_long'
+    };
+}
 
-    console.log(JSON.stringify({ ok: true, billable: false, checks }, null, 2));
+function readOrchestrationEndpoint(capabilitiesValue) {
+    const endpoint = capabilitiesValue?.orchestration?.endpoint;
+    if (typeof endpoint !== 'string' || !endpoint.startsWith('/')) {
+        console.error(
+            JSON.stringify(
+                {
+                    ok: false,
+                    billable: false,
+                    error: {
+                        code: 'invalid_orchestration_endpoint',
+                        message: 'capabilities.orchestration.endpoint 必须是以 / 开头的路径。'
+                    },
+                    orchestration: capabilitiesValue?.orchestration ?? null
+                },
+                null,
+                2
+            )
+        );
+        process.exit(1);
+    }
+    return endpoint;
+}
+
+function shouldRequireServerOrchestrationContract() {
+    return options.routeMode === 'auto' && shouldPreferServerOrchestration(requestBody);
+}
+
+function readRequiredOrchestrationEndpoint(capabilitiesValue) {
+    if (!supportsServerOrchestration(capabilitiesValue)) {
+        console.error(
+            JSON.stringify(
+                {
+                    ok: false,
+                    billable: false,
+                    error: {
+                        code: 'orchestration_required',
+                        message:
+                            '默认 generate 需要 capabilities.orchestration.supported=true 且 transport_selection=server_owned。'
+                    },
+                    orchestration: capabilitiesValue?.orchestration ?? null
+                },
+                null,
+                2
+            )
+        );
+        process.exit(1);
+    }
+    return readOrchestrationEndpoint(capabilitiesValue);
 }
 
 async function fetchJson(url, init) {
@@ -1349,8 +1567,23 @@ function supportsJobPolling(capabilitiesValue) {
     );
 }
 
+function supportsServerOrchestration(capabilitiesValue) {
+    return Boolean(
+        capabilitiesValue?.orchestration?.supported === true &&
+            capabilitiesValue.orchestration.transport_selection === 'server_owned'
+    );
+}
+
 function supportsPageSse(capabilitiesValue) {
     return Boolean(capabilitiesValue?.agent_streaming?.page_sse?.supported === true);
+}
+
+function shouldUseServerOrchestration(capabilitiesValue, request, routeMode) {
+    if (routeMode !== 'auto' || !shouldPreferServerOrchestration(request)) return false;
+    if (!supportsServerOrchestration(capabilitiesValue)) {
+        throw new Error('服务 capabilities 未声明 orchestration.supported=true，不能调用统一生成入口。');
+    }
+    return true;
 }
 
 function shouldUseJobPolling(capabilitiesValue, routeMode) {
@@ -1369,15 +1602,15 @@ function shouldUsePageSse(capabilitiesValue, request, routeMode) {
         }
         return false;
     }
-    if (routeMode === 'page_sse' || hasPageOnlyGenerateOptions(request) || isLargeGenerate(request)) {
+    if (routeMode === 'page_sse') {
         assertPageSseReady(capabilitiesValue);
         return true;
     }
     return false;
 }
 
-function isLargeGenerate(request) {
-    return readMaxImageEdge(request.size) > 2048;
+function shouldPreferServerOrchestration(request) {
+    return true;
 }
 
 function isPageSseAllowed(request) {
@@ -1417,7 +1650,7 @@ function printUsage() {
     console.error('用法：generate-image.mjs [options] <prompt>');
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
     console.error(
-        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --page-sse --agent --job --no-job(兼容别名)'
+        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --share --share-expires-minutes --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --check-remote --page-sse --agent --job --no-job(兼容别名)'
     );
     console.error(
         '契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check'

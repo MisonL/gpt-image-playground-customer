@@ -1,5 +1,5 @@
-import type { SizeValidation } from './size-utils';
 import type { ImageUpstreamFormBackend } from './image-upstream-form';
+import type { SizeValidation } from './size-utils';
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 

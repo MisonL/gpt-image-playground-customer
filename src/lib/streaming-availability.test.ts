@@ -58,12 +58,12 @@ describe('streaming availability registry', () => {
             reset_date: '2026-05-26',
             mark_count: 1,
             active_marks: [
-                    {
-                        channel_id: 'request-override',
-                        source_id: 'upstream-a',
-                        image_backend: 'responses-image-generation',
-                        streaming_strategy: 'responses-sse',
-                        operation: 'generate',
+                {
+                    channel_id: 'request-override',
+                    source_id: 'upstream-a',
+                    image_backend: 'responses-image-generation',
+                    streaming_strategy: 'responses-sse',
+                    operation: 'generate',
                     reason: 'stream_error_without_final_image',
                     at: new Date('2026-05-26T10:00:00').getTime(),
                     code: 'upstream_unavailable'

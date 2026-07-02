@@ -1,4 +1,5 @@
 import { appLogger } from './app-logger';
+import type { ChannelRequestMode } from './channel-request-mode';
 import type { ChannelCredential } from './channel-router';
 import {
     RequestValidationError,
@@ -22,14 +23,10 @@ import {
     type StorageMode,
     type ValidOutputFormat
 } from './image-request-utils';
-import { createImageStreamResponse } from './image-stream-service';
-import { createImagesApiGenerateStream } from './images-api-stream';
 import {
-    mergeUpstreamHeadersWithFixed,
-    type ImageUpstreamProfile,
-    type PartialImagesCount,
-    type UpstreamRequestHeaders
-} from './image-upstream-profile';
+    resolveAcceptedImageTaskResponse,
+    type AcceptedImageTaskResponseError
+} from './image-service';
 import {
     appendAccessCookie,
     reportServerCredentialFailure,
@@ -38,6 +35,15 @@ import {
     type ImageBackend,
     type RequestLogContext
 } from './image-route-support';
+import { createImageStreamResponse } from './image-stream-service';
+import {
+    mergeUpstreamHeadersWithFixed,
+    type ImageUpstreamProfile,
+    type PartialImagesCount,
+    type UpstreamRequestHeaders
+} from './image-upstream-profile';
+import { createImagesApiGenerateStream } from './images-api-stream';
+import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import {
     createResponsesImageEditStream,
     createResponsesImageStream,
@@ -45,7 +51,6 @@ import {
     generateImageWithResponsesBackend,
     type ResponsesImageGenerateInput
 } from './responses-image-backend';
-import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import type OpenAI from 'openai';
 
 type CommonModeInput = {
@@ -61,9 +66,11 @@ type CommonModeInput = {
     apiBaseUrl?: string;
     apiKey: string;
     startedAtMs: number;
+    upstreamIdempotencyKey?: string;
     clientRequestId?: string;
     requestLogContext?: RequestLogContext;
     selectedCredential?: ChannelCredential;
+    channelRequestMode?: ChannelRequestMode;
     accessCookie?: AccessCookie;
     abortSignal?: AbortSignal;
     streamFallbackEnabled?: boolean;
@@ -120,7 +127,13 @@ function toResponsesPartialImagesCount(value: PartialImagesCount): 1 | 2 | 3 {
 }
 
 function readGenerateOptions(input: CommonModeInput): GenerateOptions {
-    const n = readCount(input.formData, 'n', 1, input.upstreamProfile.generateCount.min, input.upstreamProfile.generateCount.max);
+    const n = readCount(
+        input.formData,
+        'n',
+        1,
+        input.upstreamProfile.generateCount.min,
+        input.upstreamProfile.generateCount.max
+    );
     const size = readSize(input.formData, 'size', '1024x1024', input.model, input.upstreamProfile);
     const quality = readGenerateQuality(input.formData);
     const outputFormat = readOutputFormat(input.formData);
@@ -208,8 +221,24 @@ function readResponsesImageExtensions(
 function openAiRequestOptions(input: CommonModeInput): OpenAI.RequestOptions {
     return buildOpenAIImageRequestOptions({
         abortSignal: input.abortSignal,
+        idempotencyKey: input.upstreamIdempotencyKey,
         headers: mergeUpstreamHeadersWithFixed(input.upstreamHeaders, {})
     });
+}
+
+function onAcceptedImageTask(input: CommonModeInput, modeLabel: string) {
+    return (details: AcceptedImageTaskResponseError, attempt: number, delayMs: number) => {
+        appLogger.warn(`上游 ${modeLabel} 返回异步图片任务，等待后重试同步结果。`, {
+            ...input.requestLogContext,
+            idempotencyKey: input.upstreamIdempotencyKey,
+            channelId: input.selectedCredential?.channelId,
+            requestMode: input.channelRequestMode,
+            attempt,
+            delayMs,
+            taskId: details.taskId,
+            hasPollUrl: Boolean(details.pollUrl)
+        });
+    };
 }
 
 async function createResponsesImageResult(input: CommonModeInput, options: GenerateOptions): Promise<ImageModeResult> {
@@ -229,6 +258,7 @@ async function createResponsesImageResult(input: CommonModeInput, options: Gener
             outputFormat: options.outputFormat,
             background: options.background,
             moderation: options.moderation,
+            idempotencyKey: input.upstreamIdempotencyKey,
             abortSignal: input.abortSignal,
             ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
             ...readResponsesImageExtensions(input.formData)
@@ -253,6 +283,7 @@ async function createResponsesImageResultOnly(
         outputFormat: options.outputFormat,
         background: options.background,
         moderation: options.moderation,
+        idempotencyKey: input.upstreamIdempotencyKey,
         abortSignal: input.abortSignal,
         ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
         ...readResponsesImageExtensions(input.formData)
@@ -276,6 +307,7 @@ async function createResponsesImageStreamResponse(
         outputFormat: options.outputFormat,
         background: options.background,
         moderation: options.moderation,
+        idempotencyKey: input.upstreamIdempotencyKey,
         partialImagesCount: toResponsesPartialImagesCount(input.partialImagesCount),
         abortSignal: input.abortSignal,
         ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
@@ -306,9 +338,7 @@ async function createResponsesImageStreamResponse(
         onError: (error) => reportServerCredentialFailure(input.selectedCredential, error),
         onStreamUnavailable: input.onStreamUnavailable,
         onStreamingDegraded: input.onStreamingDegraded,
-        fallbackOnError: input.streamFallbackEnabled
-            ? () => createResponsesImageResultOnly(input, options)
-            : undefined
+        fallbackOnError: input.streamFallbackEnabled ? () => createResponsesImageResultOnly(input, options) : undefined
     });
     return appendAccessCookie(response, input.accessCookie);
 }
@@ -320,10 +350,16 @@ async function createImagesGenerateResultOnly(
     const params: OpenAI.Images.ImageGenerateParamsNonStreaming = { ...options.baseParams, stream: false };
     appLogger.info('调用 OpenAI generate。', input.requestLogContext);
     appLogger.debug('调用 OpenAI generate，参数：', { ...params, ...input.requestLogContext });
-    return input.openai.images.generate(params, openAiRequestOptions(input));
+    return resolveAcceptedImageTaskResponse(
+        () => input.openai.images.generate(params, openAiRequestOptions(input)).withResponse(),
+        { abortSignal: input.abortSignal, onAcceptedTask: onAcceptedImageTask(input, 'generate') }
+    );
 }
 
-async function createGenerateStreamResponse(input: CommonModeInput, options: GenerateOptions): Promise<ImageModeResult> {
+async function createGenerateStreamResponse(
+    input: CommonModeInput,
+    options: GenerateOptions
+): Promise<ImageModeResult> {
     const streamParams = {
         ...options.baseParams,
         stream: true as const,
@@ -335,6 +371,7 @@ async function createGenerateStreamResponse(input: CommonModeInput, options: Gen
             apiBaseUrl: input.apiBaseUrl,
             apiKey: input.apiKey,
             upstreamHeaders: input.upstreamHeaders,
+            idempotencyKey: input.upstreamIdempotencyKey,
             abortSignal: input.abortSignal,
             params: streamParams
         });
@@ -360,9 +397,7 @@ async function createGenerateStreamResponse(input: CommonModeInput, options: Gen
         onError: (error) => reportServerCredentialFailure(input.selectedCredential, error),
         onStreamUnavailable: input.onStreamUnavailable,
         onStreamingDegraded: input.onStreamingDegraded,
-        fallbackOnError: input.streamFallbackEnabled
-            ? () => createImagesGenerateResultOnly(input, options)
-            : undefined
+        fallbackOnError: input.streamFallbackEnabled ? () => createImagesGenerateResultOnly(input, options) : undefined
     });
     return appendAccessCookie(response, input.accessCookie);
 }
@@ -387,7 +422,13 @@ export async function handleGenerateImageMode(
 }
 
 function readEditOptions(input: CommonModeInput): EditOptions {
-    const n = readCount(input.formData, 'n', 1, input.upstreamProfile.editCount.min, input.upstreamProfile.editCount.max);
+    const n = readCount(
+        input.formData,
+        'n',
+        1,
+        input.upstreamProfile.editCount.min,
+        input.upstreamProfile.editCount.max
+    );
     const size = readSize(input.formData, 'size', 'auto', input.model, input.upstreamProfile);
     const quality = readEditQuality(input.formData);
     const outputFormat = readOutputFormat(input.formData);
@@ -450,7 +491,10 @@ async function createEditResultOnly(
     };
     appLogger.info('调用 OpenAI edit。', input.requestLogContext);
     logEditParams(input, options, params);
-    return input.openai.images.edit(params, openAiRequestOptions(input));
+    return resolveAcceptedImageTaskResponse(
+        () => input.openai.images.edit(params, openAiRequestOptions(input)).withResponse(),
+        { abortSignal: input.abortSignal, onAcceptedTask: onAcceptedImageTask(input, 'edit') }
+    );
 }
 
 async function createEditStreamResponse(input: CommonModeInput, options: EditOptions): Promise<ImageModeResult> {
@@ -520,6 +564,7 @@ export async function handleEditImageMode(
             outputFormat: options.outputFormat,
             background: 'auto' as const,
             moderation: options.moderation,
+            idempotencyKey: input.upstreamIdempotencyKey,
             abortSignal: input.abortSignal,
             ...(options.outputCompression !== undefined ? { outputCompression: options.outputCompression } : {}),
             ...readResponsesImageExtensions(input.formData)
@@ -535,7 +580,10 @@ export async function handleEditImageMode(
                 if (!input.streamFallbackEnabled) throw error;
                 reportServerCredentialFailure(input.selectedCredential, error);
                 input.onStreamUnavailable?.(error, 'stream_request_failed');
-                return { outputFormat: options.outputFormat, result: await editImageWithResponsesBackend(responseInput) };
+                return {
+                    outputFormat: options.outputFormat,
+                    result: await editImageWithResponsesBackend(responseInput)
+                };
             }
             const response = createImageStreamResponse({
                 stream,

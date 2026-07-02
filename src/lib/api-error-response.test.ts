@@ -1,11 +1,14 @@
 import {
     AgentApiError,
+    type AgentErrorDiagnostics,
     agentErrorResponse,
     createAgentErrorBody,
     normalizeAgentError,
     toTerminalAgentErrorBody
 } from './api-error-response';
+import { type ChannelRequestMode } from './channel-request-mode';
 import { RequestValidationError } from './image-request-utils';
+import { AcceptedImageTaskResponseError } from './image-service';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -75,6 +78,23 @@ describe('normalizeAgentError', () => {
         assert.equal(error.diagnostics?.channel_cooldown_scope, 'channel');
     });
 
+    it('maps Responses image generation disabled 403s to unavailable channel failures', () => {
+        const error = normalizeAgentError(
+            Object.assign(new Error('status_code=403, Image generation is not enabled for this group'), {
+                status: 403
+            }),
+            {
+                channel_request_mode: 'responses-sse' as ChannelRequestMode
+            }
+        );
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, true);
+        assert.equal(error.upstreamStatus, 403);
+        assert.equal(error.diagnostics?.channel_cooldown_scope, 'channel');
+    });
+
     it('classifies transport failures into machine-readable kinds', () => {
         assert.equal(
             normalizeAgentError(Object.assign(new Error('fetch failed'), { code: 'ENOTFOUND' })).diagnostics
@@ -87,15 +107,65 @@ describe('normalizeAgentError', () => {
             'socket_closed'
         );
         assert.equal(
-            normalizeAgentError(Object.assign(new Error('流式图片响应未返回最终图片 b64_json。'), {
-                name: 'MissingFinalImageStreamResultError',
-                status: 502
-            })).diagnostics?.transport_error_kind,
+            normalizeAgentError(
+                Object.assign(new Error('流式图片响应未返回最终图片 b64_json。'), {
+                    name: 'MissingFinalImageStreamResultError',
+                    status: 502
+                })
+            ).diagnostics?.transport_error_kind,
             'sse_final_missing'
+        );
+        assert.equal(
+            normalizeAgentError(
+                Object.assign(new Error('上游返回了异步图片任务，但当前服务不支持该任务态的自动轮询。'), {
+                    name: 'AcceptedImageTaskStreamResultError',
+                    status: 502
+                })
+            ).diagnostics?.transport_error_kind,
+            'upstream_timeout'
+        );
+        assert.equal(
+            normalizeAgentError(new AcceptedImageTaskResponseError({ taskId: 'accepted-non-stream-task' }))
+                .diagnostics?.transport_error_kind,
+            'upstream_timeout'
         );
     });
 
+    it('maps accepted image task exhaustion to non-retryable upstream errors', () => {
+        const error = normalizeAgentError(new AcceptedImageTaskResponseError({ taskId: 'accepted-non-stream-task' }));
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, false);
+        assert.equal(error.retryAfterSeconds, undefined);
+        assert.equal(error.upstreamStatus, 502);
+        assert.equal(error.diagnostics?.transport_error_kind, 'upstream_timeout');
+        assert.equal(error.diagnostics?.retry_after_seconds, undefined);
+    });
+
+    it('keeps generic upstream failures mentioning async image tasks retryable', () => {
+        const error = normalizeAgentError(
+            Object.assign(new Error('代理层异步图片任务日志写入失败'), {
+                status: 502
+            })
+        );
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, true);
+        assert.equal(error.retryAfterSeconds, 15);
+        assert.equal(error.upstreamStatus, 502);
+        assert.equal(error.diagnostics?.transport_error_kind, undefined);
+        assert.equal(error.diagnostics?.retry_after_seconds, 15);
+    });
+
     it('adds sanitized upstream diagnostics without inventing an HTTP status', () => {
+        const unsafeCooldownTarget = {
+            channel_id: ' channel-a ',
+            credential_id: ' credential-a ',
+            request_mode: 'images-non-stream',
+            api_key: 'secret'
+        } as unknown as NonNullable<AgentErrorDiagnostics['cooldown_target']>;
         const error = normalizeAgentError(
             Object.assign(new Error('Connection error.'), {
                 name: 'APIConnectionError',
@@ -110,9 +180,7 @@ describe('normalizeAgentError', () => {
                 upstream_host: 'api.example.test',
                 retry_after_ms: 15000,
                 cooldown_until: '2026-06-11T00:00:15.000Z',
-                cooldown_target: {
-                    channel_id: 'channel-a'
-                }
+                cooldown_target: unsafeCooldownTarget
             }
         );
         const body = createAgentErrorBody(error, 'request-2');
@@ -124,9 +192,52 @@ describe('normalizeAgentError', () => {
         assert.equal(body.error.diagnostics?.transport_error, true);
         assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
         assert.equal(body.error.diagnostics?.cooldown_until, '2026-06-11T00:00:15.000Z');
-        assert.deepEqual(body.error.diagnostics?.cooldown_target, { channel_id: 'channel-a' });
+        assert.deepEqual(body.error.diagnostics?.cooldown_target, {
+            channel_id: 'channel-a',
+            credential_id: 'credential-a',
+            request_mode: 'images-non-stream'
+        });
         assert.deepEqual(body.error.diagnostics?.response_headers, { 'cf-ray': 'abc-SJC' });
         assert.equal(JSON.stringify(body).includes('secret'), false);
+    });
+
+    it('drops invalid cooldown target diagnostics', () => {
+        const error = normalizeAgentError(new Error('diagnostics'), {
+            retry_after_ms: 15000,
+            cooldown_target: {
+                channel_id: 'channel-a',
+                request_mode: 'invalid-mode'
+            } as unknown as NonNullable<AgentErrorDiagnostics['cooldown_target']>
+        });
+        const body = createAgentErrorBody(error, 'request-invalid-cooldown-target');
+
+        assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
+        assert.deepEqual(body.error.diagnostics?.cooldown_target, { channel_id: 'channel-a' });
+    });
+
+    it('drops cooldown targets without a valid channel id', () => {
+        const error = normalizeAgentError(new Error('diagnostics'), {
+            retry_after_ms: 15000,
+            cooldown_target: {
+                channel_id: ' ',
+                request_mode: 'images-non-stream'
+            } as unknown as NonNullable<AgentErrorDiagnostics['cooldown_target']>
+        });
+        const body = createAgentErrorBody(error, 'request-blank-cooldown-target');
+
+        assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
+        assert.equal(body.error.diagnostics?.cooldown_target, undefined);
+    });
+
+    it('drops cooldown target diagnostics that are not objects', () => {
+        const error = normalizeAgentError(new Error('diagnostics'), {
+            retry_after_ms: 15000,
+            cooldown_target: 'channel-a' as unknown as NonNullable<AgentErrorDiagnostics['cooldown_target']>
+        });
+        const body = createAgentErrorBody(error, 'request-string-cooldown-target');
+
+        assert.equal(body.error.diagnostics?.retry_after_ms, 15000);
+        assert.equal(body.error.diagnostics?.cooldown_target, undefined);
     });
 
     it('filters caller-provided diagnostic response headers through the allowlist', () => {

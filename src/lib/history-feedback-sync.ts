@@ -1,8 +1,4 @@
-import {
-    RESULT_FEEDBACK_NOTE_MAX_LENGTH,
-    type HistoryMetadata,
-    type ResultFeedbackValue
-} from './history-metadata';
+import { RESULT_FEEDBACK_NOTE_MAX_LENGTH, type HistoryMetadata, type ResultFeedbackValue } from './history-metadata';
 
 const HISTORY_FEEDBACK_TARGET_ID_MAX_LENGTH = 200;
 
@@ -45,7 +41,9 @@ export function buildHistoryFeedbackTargets(item: HistoryMetadata): HistoryFeedb
     return Array.from(targets.values());
 }
 
-export function buildHistoryFeedbackSyncPayload(input: HistoryFeedbackSyncInput): HistoryFeedbackSyncPayload | undefined {
+export function buildHistoryFeedbackSyncPayload(
+    input: HistoryFeedbackSyncInput
+): HistoryFeedbackSyncPayload | undefined {
     const targets = buildHistoryFeedbackTargets(input.item);
     if (targets.length === 0 || !isSerializableDateMillis(input.updatedAt)) return undefined;
     const note = normalizeHistoryFeedbackSyncNote(input.note);
@@ -68,7 +66,11 @@ export function buildHistoryFeedbackSyncPayload(input: HistoryFeedbackSyncInput)
 export function buildHistoryFeedbackSyncInputs(history: HistoryMetadata[]): HistoryFeedbackSyncInput[] {
     return history.flatMap((item) => {
         const feedback = item.resultFeedback;
-        if (!feedback || !isSerializableDateMillis(feedback.updatedAt) || buildHistoryFeedbackTargets(item).length === 0) {
+        if (
+            !feedback ||
+            !isSerializableDateMillis(feedback.updatedAt) ||
+            buildHistoryFeedbackTargets(item).length === 0
+        ) {
             return [];
         }
         return [
@@ -321,7 +323,11 @@ export function shouldFeedbackSyncClearDelete(
     return deletePayload.deletedAt !== undefined && syncPayload.updatedAt > deletePayload.deletedAt;
 }
 
-function addTarget(targets: Map<string, HistoryFeedbackTarget>, clientRequestId: string | undefined, filename?: string): void {
+function addTarget(
+    targets: Map<string, HistoryFeedbackTarget>,
+    clientRequestId: string | undefined,
+    filename?: string
+): void {
     const targetId = normalizeHistoryFeedbackTargetId(clientRequestId);
     if (!targetId) return;
     const existing = targets.get(targetId);

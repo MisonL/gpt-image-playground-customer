@@ -1,6 +1,6 @@
-import type OpenAI from 'openai';
 import { mergeUpstreamHeadersWithFixed, type UpstreamRequestHeaders } from './image-upstream-profile';
 import { readImageUpstreamTimeoutMs } from './openai-image-transport';
+import type OpenAI from 'openai';
 
 export class ImagesApiStreamError extends Error {
     readonly status: number;
@@ -16,6 +16,7 @@ type ImagesApiStreamInput = {
     apiBaseUrl?: string;
     apiKey: string;
     upstreamHeaders?: UpstreamRequestHeaders;
+    idempotencyKey?: string;
     abortSignal?: AbortSignal;
     timeoutMs?: number;
     params: OpenAI.Images.ImageGenerateParamsStreaming;
@@ -33,7 +34,9 @@ function buildImagesGenerateUrl(apiBaseUrl: string | undefined): string {
     return `${normalizedBase}/images/generations`;
 }
 
-function createAbortContext(input: Pick<ImagesApiStreamInput, 'abortSignal' | 'timeoutMs'>): ImagesApiStreamAbortContext {
+function createAbortContext(
+    input: Pick<ImagesApiStreamInput, 'abortSignal' | 'timeoutMs'>
+): ImagesApiStreamAbortContext {
     const { abortSignal } = input;
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -130,7 +133,7 @@ function readSseChunk(chunk: string): unknown | undefined {
 }
 
 export async function createImagesApiGenerateStream(input: ImagesApiStreamInput): Promise<AsyncIterable<unknown>> {
-    const { abortSignal, apiBaseUrl, apiKey, params, upstreamHeaders } = input;
+    const { abortSignal, apiBaseUrl, apiKey, idempotencyKey, params, upstreamHeaders } = input;
     const abortContext = createAbortContext({ abortSignal, timeoutMs: input.timeoutMs });
     let response: Response;
     try {
@@ -139,7 +142,8 @@ export async function createImagesApiGenerateStream(input: ImagesApiStreamInput)
             headers: mergeUpstreamHeadersWithFixed(upstreamHeaders, {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
-                Accept: 'text/event-stream, application/json'
+                Accept: 'text/event-stream, application/json',
+                ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {})
             }),
             signal: abortContext.signal,
             body: JSON.stringify(params)

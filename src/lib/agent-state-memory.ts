@@ -4,7 +4,6 @@ import {
     moveArtifactFilesForDeletion,
     restoreArtifactFiles
 } from './agent-file-utils';
-import crypto from 'crypto';
 import {
     addMilliseconds,
     addSeconds,
@@ -28,6 +27,7 @@ import type {
     FeedbackTargetType
 } from './feedback-store';
 import type { ImageShareRecord, ImageShareStateStore } from './share-store';
+import crypto from 'crypto';
 
 type RecoveryEvent = {
     id: string;
@@ -153,8 +153,16 @@ export class MemoryAgentStateStore implements AgentStateStore, ImageShareStateSt
         if (existing.status === 'failed' && existing.errorJson) {
             return { type: 'failed', record: existing, error: existing.errorJson };
         }
-        if ((existing.status === 'running' || existing.status === 'pending') && existing.lockedUntil && existing.lockedUntil > nowIso) {
-            return { type: 'in_progress', record: existing, retryAfterSeconds: computeRetryAfterSeconds(existing.lockedUntil, now) };
+        if (
+            (existing.status === 'running' || existing.status === 'pending') &&
+            existing.lockedUntil &&
+            existing.lockedUntil > nowIso
+        ) {
+            return {
+                type: 'in_progress',
+                record: existing,
+                retryAfterSeconds: computeRetryAfterSeconds(existing.lockedUntil, now)
+            };
         }
 
         const reacquired = {
@@ -338,10 +346,7 @@ export class MemoryAgentStateStore implements AgentStateStore, ImageShareStateSt
         return [...this.requestsByIdempotencyKey.values()].some((record) => record.requestId === requestId);
     }
 
-    private updateRequestById(
-        requestId: string,
-        update: (record: AgentRequestRecord) => AgentRequestRecord
-    ): void {
+    private updateRequestById(requestId: string, update: (record: AgentRequestRecord) => AgentRequestRecord): void {
         const record = [...this.requestsByIdempotencyKey.values()].find((item) => item.requestId === requestId);
         if (!record) return;
         this.replaceRequest(record.idempotencyKey, update(record));

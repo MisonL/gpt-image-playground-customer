@@ -38,14 +38,19 @@ export function createOpenAIImageClientOptions(input: {
     };
 }
 
-export function buildOpenAIImageRequestOptions(input: {
-    abortSignal?: AbortSignal;
-    headers?: OpenAI.RequestOptions['headers'];
-    env?: ImageTransportEnv;
-} = {}): OpenAI.RequestOptions {
+export function buildOpenAIImageRequestOptions(
+    input: {
+        abortSignal?: AbortSignal;
+        headers?: OpenAI.RequestOptions['headers'];
+        idempotencyKey?: string;
+        env?: ImageTransportEnv;
+    } = {}
+): OpenAI.RequestOptions {
+    const headers = mergeRequestHeaders(input.headers, readIdempotencyHeader(input.idempotencyKey));
     return {
         ...(input.abortSignal ? { signal: input.abortSignal } : {}),
-        ...(input.headers ? { headers: input.headers } : {}),
+        ...(headers ? { headers } : {}),
+        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
         timeout: readImageUpstreamTimeoutMs(input.env),
         maxRetries: readImageUpstreamMaxRetries(input.env)
     };
@@ -78,4 +83,21 @@ function readPositiveIntegerEnv(env: ImageTransportEnv, fieldName: string, fallb
         throw new Error(`${fieldName} 必须是正整数。`);
     }
     return value;
+}
+
+function readIdempotencyHeader(idempotencyKey: string | undefined): Record<string, string> | undefined {
+    const value = idempotencyKey?.trim();
+    return value ? { 'Idempotency-Key': value } : undefined;
+}
+
+function mergeRequestHeaders(
+    headers: OpenAI.RequestOptions['headers'] | undefined,
+    fixedHeaders: Record<string, string> | undefined
+): OpenAI.RequestOptions['headers'] | undefined {
+    if (!fixedHeaders) return headers;
+    const normalizedHeaders = new Headers(headers as HeadersInit | undefined);
+    for (const [name, value] of Object.entries(fixedHeaders)) {
+        normalizedHeaders.set(name, value);
+    }
+    return normalizedHeaders;
 }

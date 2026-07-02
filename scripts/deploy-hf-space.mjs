@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -13,6 +14,9 @@ const STATUS_POLL_ATTEMPTS = 40;
 const STATUS_POLL_INTERVAL_MS = 10_000;
 const PUBLIC_ENDPOINT_TIMEOUT_MS = 10_000;
 const HF_CLI_TIMEOUT_MS = 120_000;
+const DEPLOY_MARKER_REPO_PATH = 'public/hf-space-deploy-marker.json';
+const DEPLOY_MARKER_API_ROUTE_PATH = 'src/app/api/deploy-marker/route.ts';
+const DEPLOY_MARKER_SERVICE_PATH = '/api/deploy-marker';
 export const GIT_ARCHIVE_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
 function parseArgs(argv) {
@@ -138,9 +142,72 @@ export function findRemoteDeletePaths(localFiles, remoteFiles) {
     return [...remoteFiles].filter((filename) => !localFiles.has(filename)).sort();
 }
 
-function uploadSourceTree(sourceDir, localSha) {
-    const deletePaths = findRemoteDeletePaths(readLocalGitFiles(), readRemoteFilePaths());
-    const output = runText('hf', buildUploadArgs({ sourceDir, localSha, repoSlug: readRepositorySlug(), deletePaths }));
+export function buildDeployMarker(localSha, createdAt = new Date(), deployId = randomUUID()) {
+    if (!/^[0-9a-f]{40}$/.test(String(localSha || ''))) throw new Error('localSha must be a full git commit SHA.');
+    if (typeof deployId !== 'string' || !deployId.trim() || /[\r\n]/.test(deployId)) {
+        throw new Error('deployId must be a non-empty single-line string.');
+    }
+    return {
+        schema_version: 1,
+        local_sha: localSha,
+        created_at: createdAt.toISOString(),
+        deploy_id: deployId
+    };
+}
+
+export function assertDeployMarkerMatches(marker, expectedMarker) {
+    if (!marker || typeof marker !== 'object') throw new Error('deploy marker response was not an object.');
+    if (marker?.schema_version !== expectedMarker.schema_version) throw new Error('deploy marker schema_version mismatch.');
+    if (marker.local_sha !== expectedMarker.local_sha) {
+        throw new Error(`deploy marker local_sha mismatch: expected ${expectedMarker.local_sha}, received ${marker.local_sha || 'missing'}.`);
+    }
+    if (marker.created_at !== expectedMarker.created_at) {
+        throw new Error(`deploy marker created_at mismatch: expected ${expectedMarker.created_at}, received ${marker.created_at || 'missing'}.`);
+    }
+    if (marker.deploy_id !== expectedMarker.deploy_id) {
+        throw new Error(`deploy marker deploy_id mismatch: expected ${expectedMarker.deploy_id}, received ${marker.deploy_id || 'missing'}.`);
+    }
+    return marker;
+}
+
+export function buildDeployMarkerRouteSource(marker) {
+    const markerJson = JSON.stringify(marker);
+    return `import { NextResponse } from 'next/server';
+
+const deployMarker = ${markerJson} as const;
+
+export const dynamic = 'force-dynamic';
+
+export function GET() {
+    return NextResponse.json(deployMarker, {
+        headers: {
+            'Cache-Control': 'no-store'
+        }
+    });
+}
+`;
+}
+
+function writeDeployMarker(sourceDir, marker) {
+    const markerPath = join(sourceDir, DEPLOY_MARKER_REPO_PATH);
+    const routePath = join(sourceDir, DEPLOY_MARKER_API_ROUTE_PATH);
+    mkdirSync(join(sourceDir, 'public'), { recursive: true });
+    mkdirSync(join(sourceDir, 'src', 'app', 'api', 'deploy-marker'), { recursive: true });
+    writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+    writeFileSync(routePath, buildDeployMarkerRouteSource(marker), 'utf8');
+}
+
+function readLocalGitFilesWithDeployMarker() {
+    const files = readLocalGitFiles();
+    files.add(DEPLOY_MARKER_REPO_PATH);
+    files.add(DEPLOY_MARKER_API_ROUTE_PATH);
+    return files;
+}
+
+function uploadSourceTree(sourceDir, deployMarker) {
+    writeDeployMarker(sourceDir, deployMarker);
+    const deletePaths = findRemoteDeletePaths(readLocalGitFilesWithDeployMarker(), readRemoteFilePaths());
+    const output = runText('hf', buildUploadArgs({ sourceDir, localSha: deployMarker.local_sha, repoSlug: readRepositorySlug(), deletePaths }));
     return extractUploadCommitSha(output);
 }
 
@@ -149,24 +216,50 @@ function readSpaceInfo() {
     return parseJsonPayload(output, 'hf spaces info');
 }
 
-async function waitForRunning(spaceCommitSha) {
+export async function waitForRunning(spaceCommitSha, deployMarker, options = {}) {
+    const attempts = options.attempts || STATUS_POLL_ATTEMPTS;
+    const intervalMs = options.intervalMs ?? STATUS_POLL_INTERVAL_MS;
+    const readInfo = options.readInfo || readSpaceInfo;
+    const verifyMarker = options.verifyMarker || verifyDeployMarker;
+    const sleep = options.sleep || delay;
+    const log = options.log || console.log;
     let lastStage = 'unknown';
     let lastSha = 'unknown';
-    for (let attempt = 1; attempt <= STATUS_POLL_ATTEMPTS; attempt += 1) {
-        const info = readSpaceInfo();
+    let lastMarkerError = 'unknown';
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        const info = readInfo();
         lastStage = info.runtime?.stage || 'unknown';
         lastSha = info.sha || info.runtime?.raw?.sha || 'unknown';
-        console.log(`attempt=${attempt} stage=${lastStage} sha=${lastSha}`);
+        log(`attempt=${attempt} stage=${lastStage} sha=${lastSha}`);
         if (lastStage === 'RUNNING' && lastSha === spaceCommitSha) {
-            return { stage: lastStage, sha: lastSha };
+            try {
+                const marker = await verifyMarker(deployMarker);
+                return { stage: lastStage, sha: lastSha, service_marker_verified: true, marker };
+            } catch (error) {
+                lastMarkerError = error instanceof Error ? error.message : String(error);
+                log(`attempt=${attempt} marker_status=not_ready error=${lastMarkerError}`);
+            }
         }
-        await delay(STATUS_POLL_INTERVAL_MS);
+        await sleep(intervalMs);
     }
-    throw new Error(`Space did not reach RUNNING for ${spaceCommitSha}; last stage=${lastStage} sha=${lastSha}`);
+    const marker = await verifyMarker(deployMarker);
+    return {
+        stage: lastStage,
+        sha: lastSha,
+        management_status: 'runtime_stage_not_running',
+        service_marker_verified: true,
+        warning: `Space did not reach RUNNING with a matching service marker for ${spaceCommitSha}; last stage=${lastStage} sha=${lastSha} marker_error=${lastMarkerError}`,
+        marker
+    };
 }
 
 async function fetchJson(path) {
     return fetchJsonWithTimeout(new URL(path, HF_SPACE_URL), { timeoutMs: PUBLIC_ENDPOINT_TIMEOUT_MS });
+}
+
+async function verifyDeployMarker(expectedMarker) {
+    const marker = await fetchJson(`${DEPLOY_MARKER_SERVICE_PATH}?t=${Date.now()}`);
+    return assertDeployMarkerMatches(marker, expectedMarker);
 }
 
 async function verifyPublicEndpoints() {
@@ -196,10 +289,11 @@ async function deploy() {
     assertCleanGitWorktree();
     runText('hf', ['auth', 'whoami']);
     const localSha = runText('git', ['rev-parse', 'HEAD']);
+    const deployMarker = buildDeployMarker(localSha);
     const sourceDir = prepareSourceTree();
     try {
-        const spaceCommitSha = uploadSourceTree(sourceDir, localSha);
-        const runtime = await waitForRunning(spaceCommitSha);
+        const spaceCommitSha = uploadSourceTree(sourceDir, deployMarker);
+        const runtime = await waitForRunning(spaceCommitSha, deployMarker);
         const verification = await verifyPublicEndpoints();
         console.log(
             JSON.stringify(

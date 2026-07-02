@@ -3,10 +3,15 @@ import type { ImageGenerationBackend, ImageStreamingStrategy } from './image-ups
 export const IMAGE_UPSTREAM_FORM_SERVER_DEFAULT = 'server-default';
 
 export type ImageUpstreamFormBackend = ImageGenerationBackend | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
-export type ImageUpstreamFormStreamingStrategy =
-    | ImageStreamingStrategy
+export type ImageUpstreamFormStreamingStrategy = ImageStreamingStrategy | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
+export type ImageUpstreamFormThinking =
+    | 'none'
+    | 'minimal'
+    | 'low'
+    | 'medium'
+    | 'high'
+    | 'xhigh'
     | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
-export type ImageUpstreamFormThinking = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
 export type ImageUpstreamFormPromptOptimization = 'on' | 'off' | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
 export type ImageUpstreamRouteImpactKey =
     | 'upstream.backendImpactImages'
@@ -28,10 +33,29 @@ export type ImageUpstreamRuntimeFields = {
     promptOptimization: ImageUpstreamFormPromptOptimization;
 };
 
+export function hasResponsesChannelRequestMode(input: {
+    channelRouting?: { effectiveRequestModes?: readonly string[] } | null;
+}): boolean {
+    const modes = input.channelRouting?.effectiveRequestModes;
+    return Array.isArray(modes) && modes.some((mode) => mode === 'responses-non-stream' || mode === 'responses-sse');
+}
+
 export function isResponsesImageBackendRuntimeEnabled(input: {
     responsesImageBackend?: { enabled?: boolean } | null;
 }): boolean {
     return input.responsesImageBackend?.enabled === true;
+}
+
+export function shouldAllowResponsesImageBackend(input: {
+    runtimeCapabilities?: {
+        responsesImageBackend?: { enabled?: boolean } | null;
+        channelRouting?: { effectiveRequestModes?: readonly string[] } | null;
+    } | null;
+    hasRequestApiOverride: boolean;
+}): boolean {
+    if (!isResponsesImageBackendRuntimeEnabled(input.runtimeCapabilities ?? {})) return false;
+    if (input.hasRequestApiOverride) return true;
+    return hasResponsesChannelRequestMode(input.runtimeCapabilities ?? {});
 }
 
 export function shouldBlockExplicitResponsesRequest(input: {
@@ -127,12 +151,11 @@ export function normalizeImageUpstreamRuntimeFields<T extends ImageUpstreamRunti
     const resetResponsesBackend =
         !input.allowResponsesImageBackend && fields.image_backend === 'responses-image-generation';
     const nextImageBackend = resetResponsesBackend ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : fields.image_backend;
-    const resetResponsesStreaming =
-        !isImageUpstreamStreamingStrategySelectable({
-            imageBackend: nextImageBackend,
-            streamingStrategy: fields.streaming_strategy,
-            allowResponsesImageBackend: input.allowResponsesImageBackend
-        });
+    const resetResponsesStreaming = !isImageUpstreamStreamingStrategySelectable({
+        imageBackend: nextImageBackend,
+        streamingStrategy: fields.streaming_strategy,
+        allowResponsesImageBackend: input.allowResponsesImageBackend
+    });
 
     if (!resetResponsesBackend && !resetResponsesStreaming) {
         return fields;
@@ -141,14 +164,10 @@ export function normalizeImageUpstreamRuntimeFields<T extends ImageUpstreamRunti
     return {
         ...fields,
         image_backend: nextImageBackend,
-        streaming_strategy: resetResponsesStreaming
-            ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
-            : fields.streaming_strategy,
+        streaming_strategy: resetResponsesStreaming ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : fields.streaming_strategy,
         responsesModel: resetResponsesOptions ? '' : fields.responsesModel,
         thinking: resetResponsesOptions ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : fields.thinking,
-        promptOptimization: resetResponsesOptions
-            ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT
-            : fields.promptOptimization
+        promptOptimization: resetResponsesOptions ? IMAGE_UPSTREAM_FORM_SERVER_DEFAULT : fields.promptOptimization
     };
 }
 

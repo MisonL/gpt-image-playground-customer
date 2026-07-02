@@ -46,12 +46,28 @@ describe('upstream request headers', () => {
 
     it('rejects unsafe configurable protocol headers', () => {
         assert.throws(
-            () => normalizeConfiguredUpstreamHeaders({ Authorization: 'Bearer secret' }, 'OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON'),
+            () =>
+                normalizeConfiguredUpstreamHeaders(
+                    { Authorization: 'Bearer secret' },
+                    'OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON'
+                ),
             /不能配置 Authorization/
         );
         assert.throws(
-            () => normalizeConfiguredUpstreamHeaders({ 'Content-Type': 'text/plain' }, 'OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON'),
+            () =>
+                normalizeConfiguredUpstreamHeaders(
+                    { 'Content-Type': 'text/plain' },
+                    'OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON'
+                ),
             /不能配置 Content-Type/
+        );
+        assert.throws(
+            () =>
+                normalizeConfiguredUpstreamHeaders(
+                    { 'Idempotency-Key': 'same-key-for-every-request' },
+                    'OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON'
+                ),
+            /不能配置 Idempotency-Key/
         );
     });
 

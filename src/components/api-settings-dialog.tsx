@@ -30,6 +30,7 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
     const { t } = useI18n();
     const [draft, setDraft] = React.useState<ApiSettings>(settings);
     const [saveStatus, setSaveStatus] = React.useState<'idle' | 'saved' | 'error'>('idle');
+    const [validationMessage, setValidationMessage] = React.useState<string | null>(null);
     const closeTimerRef = React.useRef<number | null>(null);
 
     const clearCloseTimer = React.useCallback(() => {
@@ -44,6 +45,7 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
         if (open) {
             clearCloseTimer();
             setSaveStatus('idle');
+            setValidationMessage(null);
             setDraft(settings);
         }
         onOpenChange(open);
@@ -58,16 +60,25 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
     };
 
     const handleSave = () => {
+        const trimmedApiKey = draft.apiKey.trim();
+        const trimmedBaseUrl = draft.baseUrl.trim();
+        if (trimmedBaseUrl.length > 0 && trimmedApiKey.length === 0) {
+            setSaveStatus('error');
+            setValidationMessage(t('api.urlPairRequired'));
+            return;
+        }
         try {
             onSave({
-                apiKey: draft.apiKey.trim(),
-                baseUrl: draft.baseUrl.trim()
+                apiKey: trimmedApiKey,
+                baseUrl: trimmedBaseUrl
             });
+            setValidationMessage(null);
             setSaveStatus('saved');
             closeAfterSaved();
         } catch (error) {
             console.error('Failed to save API settings.', error);
             setSaveStatus('error');
+            setValidationMessage(null);
         }
     };
 
@@ -81,11 +92,13 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
         try {
             setDraft(emptySettings);
             onSave(emptySettings);
+            setValidationMessage(null);
             setSaveStatus('saved');
             closeAfterSaved();
         } catch (error) {
             console.error('Failed to clear API settings.', error);
             setSaveStatus('error');
+            setValidationMessage(null);
         }
     };
 
@@ -109,9 +122,10 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
                                 placeholder='sk-...'
                                 value={draft.apiKey}
                                 className='min-h-11 sm:min-h-9'
-                                onChange={(event) =>
-                                    setDraft((current) => ({ ...current, apiKey: event.target.value }))
-                                }
+                                onChange={(event) => {
+                                    setValidationMessage(null);
+                                    setDraft((current) => ({ ...current, apiKey: event.target.value }));
+                                }}
                             />
                         </div>
                         <div className='grid gap-2'>
@@ -126,11 +140,13 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
                                 placeholder='https://api.openai.com/v1'
                                 value={draft.baseUrl}
                                 className='min-h-11 sm:min-h-9'
-                                onChange={(event) =>
-                                    setDraft((current) => ({ ...current, baseUrl: event.target.value }))
-                                }
+                                onChange={(event) => {
+                                    setValidationMessage(null);
+                                    setDraft((current) => ({ ...current, baseUrl: event.target.value }));
+                                }}
                             />
                             <p className='text-muted-foreground text-xs leading-5'>{t('api.urlHint')}</p>
+                            <p className='text-muted-foreground text-xs leading-5'>{t('api.urlPairHint')}</p>
                         </div>
                     </div>
                     <DialogFooter>
@@ -143,7 +159,7 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
                         )}
                         {saveStatus === 'error' && (
                             <p className='text-destructive mr-auto self-center text-sm' aria-live='polite'>
-                                {t('api.saveFailed')}
+                                {validationMessage ?? t('api.saveFailed')}
                             </p>
                         )}
                         <Button

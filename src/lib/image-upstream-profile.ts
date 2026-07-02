@@ -1,5 +1,6 @@
 import type { ImageProviderManifestSummary } from './image-upstream-provider-manifest';
 import type { ImageGenerationBackend } from './image-upstream-strategy';
+
 export {
     buildMatscaAppHeaders,
     mergeUpstreamHeaders,
@@ -107,11 +108,13 @@ export function normalizeImageUpstreamProfileId(value: string | undefined): Imag
     return undefined;
 }
 
-export function readImageUpstreamProfile(input: {
-    explicitProfile?: string;
-    channelId?: string;
-    baseUrl?: string;
-} = {}): ImageUpstreamProfile {
+export function readImageUpstreamProfile(
+    input: {
+        explicitProfile?: string;
+        channelId?: string;
+        baseUrl?: string;
+    } = {}
+): ImageUpstreamProfile {
     const explicit = normalizeImageUpstreamProfileId(input.explicitProfile);
     if (input.explicitProfile?.trim() && !explicit) {
         throw new Error(
@@ -131,8 +134,7 @@ export function summarizeImageUpstreamProfile(input: {
     const requestConstraints = readImageUpstreamProfile({ baseUrl: input.requestApiBaseUrl });
     const requestProfile = requestConstraints.id;
     const serverProfileIds = input.serverProfileIds ?? input.serverProfiles?.map((profile) => profile.id) ?? [];
-    const serverProfiles =
-        input.serverProfiles ?? serverProfileIds.map((id) => IMAGE_UPSTREAM_PROFILES[id]);
+    const serverProfiles = input.serverProfiles ?? serverProfileIds.map((id) => IMAGE_UPSTREAM_PROFILES[id]);
     const serverProfileMixed = hasMixedServerProfiles(serverProfiles);
     const uniqueServerProfiles = Array.from(new Set(serverProfiles.map((profile) => profile.id)));
     const serverProfile =

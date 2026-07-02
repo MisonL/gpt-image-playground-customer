@@ -1,6 +1,12 @@
 import { AGENT_ENDPOINTS, AGENT_JOB_ENDPOINTS } from './agent-api-paths.mjs';
 import type { AgentErrorDiagnostics } from './api-error-response';
 import { readAppLogRetentionMetadata, type AppLogRetentionMetadata } from './app-log-retention';
+import {
+    CHANNEL_REQUEST_MODES,
+    CHANNEL_REQUEST_MODE_ADMIN_CONTROL,
+    type ChannelRequestMode,
+    type ChannelRequestModeDecision
+} from './channel-request-mode';
 import { getChannelPoolSummary, parseChannelPoolConfig } from './channel-router';
 import {
     MAX_IMAGE_COUNT,
@@ -10,15 +16,6 @@ import {
     type GptImageModel,
     type ValidOutputFormat
 } from './image-request-utils';
-import {
-    parseImageGenerationBackendValue,
-    parseImageStreamModeValue,
-    parseImageStreamingStrategyValue,
-    resolveImageStreamEnabled,
-    type ImageGenerationBackend,
-    type ImageStreamMode,
-    type ImageStreamingStrategy
-} from './image-upstream-strategy';
 import {
     summarizeImageUpstreamProfile,
     summarizeUpstreamRequestHeaders,
@@ -30,8 +27,17 @@ import {
     type PartialImagesCount,
     type UpstreamRequestHeaderSummary
 } from './image-upstream-profile';
-import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
+import {
+    parseImageGenerationBackendValue,
+    parseImageStreamModeValue,
+    parseImageStreamingStrategyValue,
+    resolveImageStreamEnabled,
+    type ImageGenerationBackend,
+    type ImageStreamMode,
+    type ImageStreamingStrategy
+} from './image-upstream-strategy';
 import { summarizeOpenAIImageTransport } from './openai-image-transport';
+import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
 import { readBooleanEnv } from './server-runtime';
 import {
     GPT_IMAGE_2_EDGE_MULTIPLE,
@@ -86,11 +92,9 @@ export const AGENT_UPSTREAM_SSE_GENERATE_REQUEST_FIELDS = [
     'streaming_strategy',
     'partial_images'
 ] as const;
-export const AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS = [
-    'stream_mode',
-    'streaming_strategy',
-    'partial_images'
-] as const;
+export const AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS = ['stream_mode', 'streaming_strategy', 'partial_images'] as const;
+export const AGENT_PAGE_SSE_AGENT_USAGE =
+    'explicit_diagnostics_for_generate_recommended_for_default_webp_edit_high_resolution_edit_long_image_recovery_and_complex_batch' as const;
 const AGENT_DEFAULT_PARTIAL_IMAGES = 2;
 
 export type AgentStateBackend = 'memory' | 'sqlite' | 'postgres';
@@ -102,7 +106,8 @@ export type AgentBackground = (typeof AGENT_BACKGROUNDS)[number];
 export type AgentModeration = (typeof AGENT_MODERATIONS)[number];
 export type AgentJobState = (typeof AGENT_JOB_STATES)[number];
 export type AgentRoutingTransport = 'agent_json' | 'agent_job_polling' | 'page_sse';
-export type AgentRoutingStrength = 'default' | 'recommended';
+export type AgentRoutingStrength = 'default' | 'recommended' | 'explicit';
+export type AgentOrchestrationPolicy = 'server_orchestrated_generate_v1';
 export type ImageBackendRuntimeRequirement = {
     supported: true;
     enabled: boolean;
@@ -143,6 +148,10 @@ export type AgentGenerateRequest = {
     stream_mode: ImageStreamMode;
     streaming_strategy: ImageStreamingStrategy;
     partial_images: 0 | 1 | 2 | 3 | 4;
+    responsesModel?: string;
+    thinking?: 'minimal' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+    promptOptimization?: boolean;
+    force_web?: boolean;
 };
 
 export type AgentImageResponseItem = {
@@ -173,6 +182,9 @@ export type AgentImageResponseExecution = {
     image_backend: ImageGenerationBackend;
     stream_mode: ImageStreamMode;
     streaming_strategy: ImageStreamingStrategy;
+    channel_request_mode?: ChannelRequestMode;
+    channel_request_mode_fallback_applied?: boolean;
+    route_decision?: ChannelRequestModeDecision;
     selected_channel_id?: string;
     upstream_host?: string;
     request_headers: UpstreamRequestHeaderSummary;
@@ -230,8 +242,18 @@ export type AgentCapabilities = {
         default: UpstreamRequestHeaderSummary;
         channels: Array<{
             id: string;
+            request_modes: readonly ChannelRequestMode[];
             request_headers: UpstreamRequestHeaderSummary;
         }>;
+    };
+    request_mode_controls: {
+        source: 'admin_env_whitelist';
+        global_env: string;
+        channel_env_pattern: string;
+        mutable_at_runtime: false;
+        agent_client_policy: 'diagnostics_only';
+        final_gate_command: string;
+        smoke_gate_commands: Record<ChannelRequestMode, readonly string[]>;
     };
     defaults: {
         model: GptImageModel;
@@ -314,15 +336,29 @@ export type AgentCapabilities = {
                 source_header: 'Idempotency-Key';
                 max_length: number;
             };
-            agent_usage: 'recommended_for_high_resolution_generate_edit_and_complex_batch';
+            agent_usage: typeof AGENT_PAGE_SSE_AGENT_USAGE;
         };
+    };
+    orchestration: {
+        supported: true;
+        policy: AgentOrchestrationPolicy;
+        endpoint: string;
+        client_contract: 'intent_only';
+        transport_selection: 'server_owned';
+        result_mode: 'job_polling';
+        hidden_controls: readonly string[];
+        diagnostics: {
+            job_result: string;
+            request_lookup: string;
+        };
+        current_guidance: string;
     };
     routing_rules: {
         high_resolution_edit: AgentRoutingRule;
         complex_ui_batch: AgentRoutingRule;
         long_image_recovery: AgentRoutingRule;
         agent_generate_small_smoke: AgentRoutingRule;
-        page_sse_large_generate: AgentRoutingRule;
+        page_sse_generate_diagnostics: AgentRoutingRule;
         retry_recovery: {
             reuse_failed_idempotency_key: false;
             new_attempt_guidance: string;
@@ -351,6 +387,7 @@ export type AgentCapabilities = {
         image_backends: readonly ImageGenerationBackend[];
         enabled_image_backends: readonly ImageGenerationBackend[];
         image_backend_requirements: Record<ImageGenerationBackend, ImageBackendRuntimeRequirement>;
+        request_modes: readonly ChannelRequestMode[];
         streaming_strategies: readonly ImageStreamingStrategy[];
         stream_modes: readonly ImageStreamMode[];
     };
@@ -400,6 +437,7 @@ export type AgentRoutingRule = {
 
 export type AgentRoutingCondition = {
     operation: 'generate' | 'edit' | 'generate_or_edit';
+    explicit_page_sse?: boolean;
     max_edge?: {
         operator: 'gt' | 'lte';
         value: number;
@@ -632,6 +670,64 @@ function readModeration(body: Record<string, unknown>, fields: FieldErrors): Age
     return value;
 }
 
+function readOptionalStringField(
+    body: Record<string, unknown>,
+    field: string,
+    fields: FieldErrors,
+    options: { maxLength?: number } = {}
+): string | undefined {
+    const value = body[field];
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string') {
+        fields[field] = '必须是字符串';
+        return undefined;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        fields[field] = '必须是非空字符串';
+        return undefined;
+    }
+    if (options.maxLength !== undefined && trimmed.length > options.maxLength) {
+        fields[field] = `长度不能超过 ${options.maxLength} 个字符`;
+        return undefined;
+    }
+    return trimmed;
+}
+
+function readOptionalBooleanField(
+    body: Record<string, unknown>,
+    field: string,
+    fields: FieldErrors
+): boolean | undefined {
+    const value = body[field];
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value === 'boolean') return value;
+    fields[field] = '必须是布尔值';
+    return undefined;
+}
+
+function readAgentResponsesModel(
+    body: Record<string, unknown>,
+    imageBackend: ImageGenerationBackend,
+    fields: FieldErrors
+): string | undefined {
+    const value = readOptionalStringField(body, 'responsesModel', fields, { maxLength: 128 });
+    if (value && imageBackend !== 'responses-image-generation') {
+        fields.responsesModel = '仅适用于 image_backend=responses-image-generation';
+    }
+    return value;
+}
+
+function readAgentThinking(body: Record<string, unknown>, fields: FieldErrors): AgentGenerateRequest['thinking'] {
+    const value = readOptionalStringField(body, 'thinking', fields);
+    if (value === undefined) return undefined;
+    if (['minimal', 'none', 'low', 'medium', 'high', 'xhigh'].includes(value)) {
+        return value as AgentGenerateRequest['thinking'];
+    }
+    fields.thinking = '必须是 minimal、none、low、medium、high 或 xhigh';
+    return undefined;
+}
+
 function readOutputCompression(
     body: Record<string, unknown>,
     outputFormat: ValidOutputFormat,
@@ -675,6 +771,10 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const streamMode = readAgentStreamMode(objectBody, fields);
     const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
     const partialImages = readPartialImagesForBackend(objectBody, imageBackend, fields, upstreamLimits.profile);
+    const responsesModel = readAgentResponsesModel(objectBody, imageBackend, fields);
+    const thinking = readAgentThinking(objectBody, fields);
+    const promptOptimization = readOptionalBooleanField(objectBody, 'promptOptimization', fields);
+    const forceWeb = readOptionalBooleanField(objectBody, 'force_web', fields);
     validateAgentImageUpstreamStrategy({ imageBackend, streamMode, streamingStrategy, fields });
 
     if (Object.keys(fields).length > 0) {
@@ -695,7 +795,11 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
         image_backend: imageBackend,
         stream_mode: streamMode,
         streaming_strategy: streamingStrategy,
-        partial_images: partialImages
+        partial_images: partialImages,
+        ...(responsesModel ? { responsesModel } : {}),
+        ...(thinking ? { thinking } : {}),
+        ...(promptOptimization !== undefined ? { promptOptimization } : {}),
+        ...(forceWeb !== undefined ? { force_web: forceWeb } : {})
     };
 }
 
@@ -894,6 +998,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         image_transport: summarizeOpenAIImageTransport(env),
         upstream_profile: upstreamLimits.summary,
         upstream_request_headers: buildAgentUpstreamRequestHeadersCapabilities(env),
+        request_mode_controls: buildAgentRequestModeControlsCapabilities(),
         defaults: {
             model: 'gpt-image-2',
             response_mode: 'path',
@@ -977,8 +1082,23 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     source_header: 'Idempotency-Key',
                     max_length: PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH
                 },
-                agent_usage: 'recommended_for_high_resolution_generate_edit_and_complex_batch'
+                agent_usage: AGENT_PAGE_SSE_AGENT_USAGE
             }
+        },
+        orchestration: {
+            supported: true,
+            policy: 'server_orchestrated_generate_v1',
+            endpoint: AGENT_ENDPOINTS.create_image_request,
+            client_contract: 'intent_only',
+            transport_selection: 'server_owned',
+            result_mode: 'job_polling',
+            hidden_controls: ['transport', 'route_mode', 'client_endpoint_selection'],
+            diagnostics: {
+                job_result: AGENT_ENDPOINTS.job_result,
+                request_lookup: AGENT_ENDPOINTS.agent_request_diagnostics_lookup
+            },
+            current_guidance:
+                'Agent 客户端默认只提交生成意图到 /api/agent/image-requests；服务端负责选择内部执行路径、上游策略和轮询结果。显式 /api/images、Agent JSON 或 job endpoint 仅作为诊断/兼容入口。'
         },
         routing_rules: {
             high_resolution_edit: {
@@ -999,7 +1119,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     requires_new_idempotency_key_on_retry: true,
                     no_automatic_fallback: true
                 },
-                reason: 'High-resolution edit defaults to the page form-data SSE endpoint; if streaming has issues, diagnose first and explicitly fall back to Agent edit.'
+                reason: 'High-resolution edit uses the page form-data SSE endpoint because Agent edit has a fixed output contract; if streaming has issues, diagnose first and explicitly fall back to Agent edit.'
             },
             complex_ui_batch: {
                 when: ['operation=generate_or_edit', 'complex_ui=true', 'batch=true'],
@@ -1050,36 +1170,36 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                 },
                 endpoint: AGENT_ENDPOINTS.generate,
                 transport: 'agent_json',
-                strength: 'default',
+                strength: 'explicit',
                 action: {
                     endpoint: AGENT_ENDPOINTS.generate,
                     transport: 'agent_json',
-                    strength: 'default',
+                    strength: 'explicit',
                     requires_new_idempotency_key_on_retry: true,
                     no_automatic_fallback: true
                 },
-                reason: 'Agent JSON generate remains the stable contract and smoke path for normal single-image requests.'
+                reason: 'Agent JSON generate remains available for compatibility and explicit diagnostics; ordinary generate clients should use orchestration.endpoint.'
             },
-            page_sse_large_generate: {
-                when: ['operation=generate', 'max_edge>2048', 'single_request=true'],
+            page_sse_generate_diagnostics: {
+                when: ['operation=generate', 'explicit_page_sse=true'],
                 conditions: {
                     operation: 'generate',
-                    max_edge: { operator: 'gt', value: 2048 },
+                    explicit_page_sse: true,
                     single_request: true
                 },
                 endpoint: '/api/images',
                 transport: 'page_sse',
-                strength: 'recommended',
+                strength: 'explicit',
                 action: {
                     endpoint: '/api/images',
                     transport: 'page_sse',
-                    strength: 'recommended',
-                    fallback_endpoint: AGENT_ENDPOINTS.generate,
+                    strength: 'explicit',
+                    fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
                     fallback_mode: 'manual_after_diagnosis',
                     requires_new_idempotency_key_on_retry: true,
                     no_automatic_fallback: true
                 },
-                reason: 'Page form-data SSE keeps large generate requests observable; if the stream fails, diagnose first and choose any Agent JSON retry explicitly.'
+                reason: 'Page form-data SSE is available for explicit page-workbench or diagnostic generate runs; ordinary generate clients should use orchestration.endpoint.'
             },
             retry_recovery: {
                 reuse_failed_idempotency_key: false,
@@ -1098,7 +1218,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             endpoints: { ...AGENT_JOB_ENDPOINTS },
             states: AGENT_JOB_STATES,
             current_guidance:
-                '对 max_edge>2048 的单次文生图请求优先使用页面端 /api/images SSE；如果页面流式失败，先诊断再显式选择 Agent JSON 或 job 路径，不自动回退。job polling 仅用于显式 job 路径。当前执行模型为同实例后台任务，不是跨实例持久队列。'
+                'Agent 客户端默认使用 orchestration.endpoint；直接创建 job 是兼容和诊断入口。当前执行模型为同实例后台任务，不是跨实例持久队列。'
         },
         supported: {
             models: AGENT_MODELS,
@@ -1111,6 +1231,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             image_backends: AGENT_IMAGE_BACKENDS,
             enabled_image_backends: enabledImageBackends,
             image_backend_requirements: imageBackendRequirements,
+            request_modes: CHANNEL_REQUEST_MODES,
             streaming_strategies: AGENT_STREAMING_STRATEGIES,
             stream_modes: AGENT_STREAM_MODES
         },
@@ -1128,12 +1249,27 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
     };
 }
 
-function buildAgentUpstreamRequestHeadersCapabilities(env: Record<string, string | undefined>): AgentCapabilities['upstream_request_headers'] {
+function buildAgentRequestModeControlsCapabilities(): AgentCapabilities['request_mode_controls'] {
+    return {
+        source: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.source,
+        global_env: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.globalEnv,
+        channel_env_pattern: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.channelEnvPattern,
+        mutable_at_runtime: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.mutableAtRuntime,
+        agent_client_policy: 'diagnostics_only',
+        final_gate_command: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.finalGateCommand,
+        smoke_gate_commands: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.smokeGateCommands
+    };
+}
+
+function buildAgentUpstreamRequestHeadersCapabilities(
+    env: Record<string, string | undefined>
+): AgentCapabilities['upstream_request_headers'] {
     const channelSummary = getChannelPoolSummary(parseChannelPoolConfig(env));
     return {
         default: summarizeUpstreamRequestHeaders(undefined, env),
         channels: channelSummary.channels.map((channel) => ({
             id: channel.id,
+            request_modes: channel.requestModes,
             request_headers: channel.requestHeaders
         }))
     };

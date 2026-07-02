@@ -52,6 +52,8 @@ try {
     service_base_url: baseUrl,
     service_base_url_source: baseUrlInfo.source,
     interactive_confirmation_required: baseUrlInfo.interactive_confirmation_required,
+    page_request_query_count: clientRequestIds.length,
+    page_request_found_count: requests.filter((request) => request.found).length,
     page_request_count: requests.length,
     agent_request_count: agentRequests.length,
     request_count: requests.length,
@@ -62,6 +64,7 @@ try {
   if (requests.length === 1) {
     Object.assign(body, {
       client_request_id: requests[0].client_request_id,
+      found: requests[0].found,
       feedback: requests[0].feedback,
       diagnostics: requests[0].diagnostics,
       ...(requests[0].diagnostics_note ? { diagnostics_note: requests[0].diagnostics_note } : {})
@@ -354,8 +357,10 @@ function readDiagnosticsClientRequestId(value) {
 
 function buildDiagnosedRequest({ clientRequestId, feedback, diagnostics, diagnosticsCapabilities, diagnosticsRetention }) {
   const diagnosticsNote = buildDiagnosticsNoMatchNote(diagnostics, diagnosticsCapabilities, diagnosticsRetention);
+  const found = Boolean(feedback || (diagnostics && diagnostics.matched_log_count > 0));
   return {
     client_request_id: clientRequestId,
+    found,
     feedback,
     diagnostics,
     ...(diagnosticsNote ? { diagnostics_note: diagnosticsNote } : {})

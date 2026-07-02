@@ -1,7 +1,8 @@
+import { readAppLogRetentionMetadata as readRetentionMetadata } from './app-log-retention';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readAppLogRetentionMetadata as readRetentionMetadata } from './app-log-retention';
+
 export {
     APP_LOG_DEFAULT_MAX_ENTRIES,
     APP_LOG_MAX_CONFIGURED_ENTRIES,
@@ -14,11 +15,7 @@ export {
 } from './app-log-retention';
 
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
-const LOG_DIR = path.join(
-    /* turbopackIgnore: true */ process.cwd(),
-    'generated-images',
-    '.app-logs'
-);
+const LOG_DIR = path.join(/* turbopackIgnore: true */ process.cwd(), 'generated-images', '.app-logs');
 const DEFAULT_LOG_FILE_NAME = 'app.log.jsonl';
 const TEST_LOG_DIR = path.join(os.tmpdir(), 'gpt-image-playground-app-logs');
 const TEST_LOG_FILE_NAME = 'app-test.log.jsonl';
@@ -214,7 +211,11 @@ function persistEntries(rewrite: boolean) {
             fs.writeFileSync(/* turbopackIgnore: true */ logFile, serializePersistedEntries(logEntries), 'utf8');
             return;
         }
-        fs.appendFileSync(/* turbopackIgnore: true */ logFile, JSON.stringify(logEntries[logEntries.length - 1]) + '\n', 'utf8');
+        fs.appendFileSync(
+            /* turbopackIgnore: true */ logFile,
+            JSON.stringify(logEntries[logEntries.length - 1]) + '\n',
+            'utf8'
+        );
     } catch (error) {
         console.error('写入持久化日志失败。', error);
     }
