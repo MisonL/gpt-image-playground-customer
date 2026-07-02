@@ -42,11 +42,11 @@ hf auth whoami
 
 要求：
 
-- Node.js 20 或更高版本。
+- Node.js >=20.9.0。
 - npm 随 Node.js 一起可用。
 - Hugging Face CLI 使用当前官方 `hf` 命令。
 - `hf auth login` 使用 Hugging Face Access Token，不是账号密码。
-- Docker 只对 `npm run smoke:hf-space` 和本地容器验证必需；部署到远端 Space 使用 `hf` CLI。
+- Docker 只对本地 Space-like 容器 smoke（推荐 `npm run smoke:hf-space-local`，兼容别名 `npm run smoke:hf-space`）和本地容器验证必需；部署到远端 Space 使用 `hf` CLI。
 
 安装 Hugging Face CLI 时，以官方文档为准。不要把远程安装脚本直接管道到 shell；如需使用官方脚本，先下载、核对来源和内容后再执行。
 
@@ -141,7 +141,7 @@ AGENT_DB_PASSWORD_FILE=/path/to/password-file
 AGENT_PUBLIC_BASE_URL=https://<user>-<space>.hf.space
 ```
 
-`AGENT_PUBLIC_BASE_URL` 只影响 OpenAPI `servers[0].url`，必须填写绝对 `http`/`https` URL，不能包含凭据、查询参数或片段；Agent skill 仍应以 `GPT_IMAGE_PLAYGROUND_URL` 指向实际 Space 地址。
+`AGENT_PUBLIC_BASE_URL` 影响 OpenAPI `servers[0].url`，也用于 `POST /api/agent/artifacts/{id}/share` 返回用户可打开的分享外链。必须填写绝对 `http`/`https` URL，不能包含凭据、查询参数或片段；Agent skill 仍应以 `GPT_IMAGE_PLAYGROUND_URL` 指向实际 Space 地址。
 
 ## Space Secrets
 
@@ -199,7 +199,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 
 脚本会先读取 `GET /api/agent/capabilities`，再调用 Agent API。成功响应会保留相对 `content_url`，同时补充 `absolute_content_url` 和 `absolute_metadata_url`，便于在桌面环境直接下载产物。
 
-远端 Agent 调用不要硬编码路径。脚本会按 capabilities 中的 `routing_rules`、`agent_streaming` 和 `agent_jobs` 判断默认路径：普通小图走 Agent JSON，`max_edge>2048` 的单次文生图和高分辨率 edit 默认优先走页面端 `/api/images` SSE；页面流式失败或不可用时，先诊断结构化错误，再显式回退到 Agent JSON、Agent edit 或 job 路径。job polling 只在显式选择时使用。需要诊断对照时可用 `--agent` 或 `--streaming-strategy off` 强制 Agent JSON，也可用 `--page-sse` 或 `--job` 显式选择路径。
+远端 Agent 调用不要硬编码路径。普通文生图默认提交业务意图到 capabilities 声明的 `orchestration.endpoint`，由服务端选择内部执行路径、上游 request mode 和轮询方式；Agent 客户端不按尺寸、远端 HTTPS 或流式参数自行选择 Images、Responses、SSE 或非流式路径。显式 page_sse 诊断、默认 WebP edit、高分辨率 edit 和复杂批量仍按 Skill 规则使用页面端 `/api/images` SSE；页面流式失败或不可用时，先诊断结构化错误，再用新的 `Idempotency-Key` 显式选择 Agent JSON、Agent edit 或 job 路径对照。job polling 只在显式选择时使用。需要诊断对照时可用 `--agent` 或 `--streaming-strategy off` 强制 Agent JSON，也可用 `--page-sse` 或 `--job` 显式选择路径。
 
 如果 Space 同时配置了 `APP_PASSWORD` 和 `AGENT_API_TOKEN`，Agent JSON 端点用 `GPT_IMAGE_AGENT_TOKEN` 发送 Bearer token；页面端 `/api/images` SSE 仍按 capabilities 的 `agent_streaming.page_sse.auth` 判断，可能需要额外设置 `GPT_IMAGE_APP_PASSWORD_HASH`，并通过 form-data `passwordHash` 发送页面访问码哈希。页面 SSE 会把业务 key 写入 `clientRequestId`，长度上限以 capabilities 中的 `agent_streaming.page_sse.client_request_id.max_length` 为准。
 
@@ -208,7 +208,7 @@ node skills/gpt-image-playground-agent/scripts/generate-image.mjs \
 提交前运行：
 
 ```bash
-npm run smoke:hf-space
+npm run smoke:hf-space-local
 ```
 
 该命令会：
@@ -278,7 +278,7 @@ npm run lint
 npm run lint:scripts
 npm run build
 npm run keepalive:hf-space
-npm run smoke:hf-space
+npm run smoke:hf-space-local
 git diff --check
 ```
 

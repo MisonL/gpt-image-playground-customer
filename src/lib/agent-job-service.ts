@@ -1,4 +1,5 @@
 import type { AgentGenerateRequest, AgentJobState, AgentJobStatusResponse } from './agent-api-contracts';
+import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './agent-api-paths.mjs';
 import {
     completeAgentExecutionState,
     createArtifactPersistenceError,
@@ -10,9 +11,8 @@ import {
     saveAgentExecutionArtifacts,
     type AgentGeneratePreparation
 } from './agent-image-service';
-import { AgentApiError, toTerminalAgentErrorBody, type AgentErrorBody } from './api-error-response';
 import type { AgentRequestRecord, AgentStateStore } from './agent-state-store';
-import { AGENT_ENDPOINTS, buildAgentJobResultPath } from './agent-api-paths.mjs';
+import { AgentApiError, toTerminalAgentErrorBody, type AgentErrorBody } from './api-error-response';
 import { appLogger } from './app-logger';
 
 const DEFAULT_JOB_RETRY_AFTER_SECONDS = 5;
@@ -73,10 +73,7 @@ export function assertReadableJobRecord(record: AgentRequestRecord | undefined, 
     return record;
 }
 
-export async function readJobResult(
-    store: AgentStateStore,
-    record: AgentRequestRecord
-): Promise<ResponseReadyResult> {
+export async function readJobResult(store: AgentStateStore, record: AgentRequestRecord): Promise<ResponseReadyResult> {
     if (record.status === 'succeeded' && record.responseJson) {
         return {
             type: 'response',
@@ -97,6 +94,7 @@ export function startAgentGenerateJob(options: {
     idempotencyKey: string;
     leaseMs: number;
     preparation?: AgentGeneratePreparation;
+    transportEndpoint?: string;
 }): void {
     void runAgentGenerateJob(options).catch((error) => {
         appLogger.error('Agent generate job 后台执行失败。', error);
@@ -116,6 +114,7 @@ async function runAgentGenerateJob(options: {
     idempotencyKey: string;
     leaseMs: number;
     preparation?: AgentGeneratePreparation;
+    transportEndpoint?: string;
 }): Promise<void> {
     let heartbeat: { stop: () => void } | undefined;
     try {
@@ -129,7 +128,7 @@ async function runAgentGenerateJob(options: {
             preparation: options.preparation,
             transport: {
                 transport: 'agent_job_polling',
-                endpoint: AGENT_ENDPOINTS.create_generate_job,
+                endpoint: options.transportEndpoint ?? AGENT_ENDPOINTS.create_generate_job,
                 route_mode: 'job'
             }
         });

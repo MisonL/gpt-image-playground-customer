@@ -245,7 +245,7 @@ describe('WorkbenchProDock', () => {
             </I18nProvider>
         );
 
-        assert.match(html, /当前运行时未启用 Responses image_generation/);
+        assert.match(html, /当前运行时或默认服务器渠道未开放 Responses image_generation/);
         assert.doesNotMatch(html, /GPT 顶层模型/);
     });
 
@@ -428,7 +428,10 @@ describe('WorkbenchProDock', () => {
             </I18nProvider>
         );
 
-        assert.match(html, /<button[^>]*(?:disabled=""[^>]*id="pro-stream-mode-select"|id="pro-stream-mode-select"[^>]*disabled="")/);
+        assert.match(
+            html,
+            /<button[^>]*(?:disabled=""[^>]*id="pro-stream-mode-select"|id="pro-stream-mode-select"[^>]*disabled="")/
+        );
     });
 
     it('renders a desktop Responses top-level model input when the Responses backend is selected', () => {

@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = fileURLToPath(new URL('./smoke-image-upstream-local-final-gate.mjs', import.meta.url));
-const LOCAL_GATE_CASE_TIMEOUT_MS = '60000';
+// The fixture gate covers several independent upstream modes; leave room for bounded accepted-task retry paths.
+const LOCAL_GATE_CASE_TIMEOUT_MS = '120000';
 
 describe('local image upstream final gate smoke launcher', () => {
     it('runs all independent upstream cases against the local fixture', () => {

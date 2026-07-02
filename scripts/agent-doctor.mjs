@@ -7,10 +7,15 @@ import {
     loadPrivateAgentEnvFile,
     resolvePlaygroundBaseUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_SMOKE_CASES } from '../src/lib/channel-request-mode-values.mjs';
 
 const GENERATE_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url));
 const EDIT_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/edit-image.mjs', import.meta.url));
 const AGENT_DOCTOR_TIMEOUT_MS = 75_000;
+const ORCHESTRATION_GENERATE_SMOKE_NAME = 'orchestration_generate_1k';
+const AGENT_GENERATE_SMOKE_NAME = 'agent_generate_1k';
+const PAGE_SSE_GENERATE_SMOKE_NAME = 'responses_page_sse_generate_1k';
+const RESPONSES_AGENT_GENERATE_SMOKE_NAME = 'responses_agent_generate_1k';
 
 export function buildAgentDoctorArgs() {
     return [GENERATE_SCRIPT, '--contract-check', '--timeout-ms', '60000', 'contract check'];
@@ -128,7 +133,10 @@ function buildSkippedSmoke(options) {
         skipped: true,
         reason: 'requires --allow-billable',
         checks: [
-            { name: 'generate_1k', skipped: true, reason: 'requires --allow-billable' },
+            { name: ORCHESTRATION_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
+            { name: AGENT_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
+            { name: PAGE_SSE_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
+            { name: RESPONSES_AGENT_GENERATE_SMOKE_NAME, skipped: true, reason: 'requires --allow-billable' },
             {
                 name: 'edit_1k',
                 skipped: true,
@@ -145,7 +153,26 @@ function buildSkippedSmoke(options) {
 
 function runBillableSmoke(options, baseUrl) {
     const checks = [
-        runSmokeCommand('generate_1k', [
+        runSmokeCommand(ORCHESTRATION_GENERATE_SMOKE_NAME, [
+            GENERATE_SCRIPT,
+            '--base-url',
+            baseUrl,
+            '--allow-billable',
+            '--timeout-ms',
+            String(options.timeoutMs),
+            '--size',
+            '1024x1024',
+            '--quality',
+            'low',
+            '--image-backend',
+            'images-api',
+            '--stream-mode',
+            'non_stream',
+            '--idempotency-key',
+            `agent-doctor-orchestration-generate-${Date.now()}`,
+            'agent doctor orchestration 1k generate smoke'
+        ]),
+        runSmokeCommand(AGENT_GENERATE_SMOKE_NAME, [
             GENERATE_SCRIPT,
             '--base-url',
             baseUrl,
@@ -157,9 +184,55 @@ function runBillableSmoke(options, baseUrl) {
             '1024x1024',
             '--quality',
             'low',
+            '--image-backend',
+            'images-api',
+            '--stream-mode',
+            'non_stream',
             '--idempotency-key',
-            `agent-doctor-generate-${Date.now()}`,
-            'agent doctor 1k generate smoke'
+            `agent-doctor-agent-generate-${Date.now()}`,
+            'agent doctor agent JSON 1k generate smoke'
+        ]),
+        runSmokeCommand(PAGE_SSE_GENERATE_SMOKE_NAME, [
+            GENERATE_SCRIPT,
+            '--base-url',
+            baseUrl,
+            '--allow-billable',
+            '--page-sse',
+            '--timeout-ms',
+            String(options.timeoutMs),
+            '--size',
+            '1024x1024',
+            '--quality',
+            'low',
+            '--image-backend',
+            'responses-image-generation',
+            '--stream-mode',
+            'stream',
+            '--streaming-strategy',
+            'responses-sse',
+            '--idempotency-key',
+            `agent-doctor-responses-page-sse-generate-${Date.now()}`,
+            'agent doctor responses page SSE generate smoke'
+        ]),
+        runSmokeCommand(RESPONSES_AGENT_GENERATE_SMOKE_NAME, [
+            GENERATE_SCRIPT,
+            '--base-url',
+            baseUrl,
+            '--allow-billable',
+            '--agent',
+            '--timeout-ms',
+            String(options.timeoutMs),
+            '--size',
+            '1024x1024',
+            '--quality',
+            'low',
+            '--image-backend',
+            'responses-image-generation',
+            '--stream-mode',
+            'non_stream',
+            '--idempotency-key',
+            `agent-doctor-responses-agent-generate-${Date.now()}`,
+            'agent doctor responses non-stream generate smoke'
         ])
     ];
     if (options.editImage) {
@@ -266,6 +339,7 @@ function buildLayers({ capabilities, runtime, contract, smoke }) {
 function summarizeCapabilities(body) {
     return {
         page_sse: body?.agent_streaming?.page_sse?.supported === true,
+        page_sse_declared_supported: body?.agent_streaming?.page_sse?.supported === true,
         page_sse_auth_required: body?.agent_streaming?.page_sse?.auth?.required === true,
         page_sse_auth_ready:
             body?.agent_streaming?.page_sse?.auth?.required === true
@@ -277,7 +351,9 @@ function summarizeCapabilities(body) {
                 : undefined,
         agent_jobs: body?.agent_jobs?.supported === true,
         routing_rules: Boolean(body?.routing_rules),
-        executable_routing_rules: Boolean(body?.routing_rules?.high_resolution_edit?.conditions)
+        executable_routing_rules: Boolean(body?.routing_rules?.high_resolution_edit?.conditions),
+        request_modes_supported: readRequestModeList(body?.supported?.request_modes),
+        request_modes_by_channel: readCapabilitiesRequestModesByChannel(body)
     };
 }
 
@@ -286,7 +362,10 @@ function summarizeRuntime(body) {
         default_stream_mode: body?.streaming?.defaultMode,
         streaming_unavailable_scope: body?.streaming?.unavailableMarkScope,
         responses_image_backend: body?.responsesImageBackend?.enabled === true,
-        streaming_batch_enabled: body?.streamingBatch?.enabled === true
+        streaming_batch_enabled: body?.streamingBatch?.enabled === true,
+        configured_request_modes: readRequestModeList(body?.channelRouting?.configuredRequestModes),
+        effective_request_modes: readRequestModeList(body?.channelRouting?.effectiveRequestModes),
+        effective_request_modes_by_channel: readRuntimeRequestModesByChannel(body)
     };
 }
 
@@ -301,13 +380,18 @@ function summarizeStateBackend(body) {
 function summarizeResponsesReadiness(capabilities, runtime) {
     const requirements = capabilities?.supported?.image_backend_requirements?.['responses-image-generation'];
     return {
+        declared_supported: requirements?.supported === true,
         backend_supported: requirements?.supported === true,
         backend_enabled: requirements?.enabled === true,
         runtime_enabled: runtime?.responsesImageBackend?.enabled === true,
         missing_env: requirements?.missing_env || [],
         gpt2image_real_smoke_case: 'gpt2image-responses-sse',
         real_smoke_gate:
+            'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable',
+        real_smoke_gates: [
+            'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-responses-json --allow-billable',
             'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable'
+        ]
     };
 }
 
@@ -317,17 +401,140 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
         contract_check: contract.ok ? 'ok' : 'failed',
         runtime: runtime.ok ? 'ok' : 'failed',
         state_backend: capabilities.ok ? capabilities.body?.defaults?.state_backend : 'unknown',
+        page_sse_declared_supported: capabilities.ok
+            ? capabilities.body?.agent_streaming?.page_sse?.supported === true
+            : false,
         page_sse_auth_ready:
             capabilities.ok && capabilities.body?.agent_streaming?.page_sse?.auth?.required === true
                 ? Boolean(process.env.GPT_IMAGE_APP_PASSWORD_HASH)
                 : capabilities.ok,
+        page_sse_real_smoke: summarizePageSseSmoke(smoke),
+        orchestration_generate_smoke: summarizeSmokeCheck(smoke, ORCHESTRATION_GENERATE_SMOKE_NAME),
+        agent_generate_smoke: summarizeSmokeCheck(smoke, AGENT_GENERATE_SMOKE_NAME),
+        responses_page_sse_generate_smoke: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
+        responses_agent_generate_smoke: summarizeSmokeCheck(smoke, RESPONSES_AGENT_GENERATE_SMOKE_NAME),
+        real_smoke_checks: summarizeSmokeChecks(smoke),
+        request_modes: buildRequestModeSummary({
+            capabilities: capabilities.ok ? capabilities.body : undefined,
+            runtime: runtime.ok ? runtime.body : undefined,
+            smoke
+        }),
+        runtime_environment: buildRuntimeEnvironmentSummary({
+            capabilities: capabilities.ok ? capabilities.body : undefined,
+            runtime: runtime.ok ? runtime.body : undefined
+        }),
         responses_gpt2image_ready:
             capabilities.ok && runtime.ok
                 ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true &&
                   runtime.body?.responsesImageBackend?.enabled === true
                 : false,
+        responses_image_backend_declared_supported: capabilities.ok
+            ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.supported === true
+            : false,
         billable_smoke: smoke.skipped ? 'skipped' : smoke.ok ? 'ok' : 'failed'
     };
+}
+
+function buildRuntimeEnvironmentSummary({ capabilities, runtime }) {
+    return {
+        state_backend: capabilities?.defaults?.state_backend || 'unknown',
+        image_storage_mode: capabilities?.storage?.image_storage_mode || 'unknown',
+        postgres_configured: capabilities?.storage?.postgres_configured === true,
+        page_sse_auth_required: capabilities?.agent_streaming?.page_sse?.auth?.required === true,
+        agent_auth_schemes: Array.isArray(capabilities?.auth?.schemes) ? capabilities.auth.schemes : [],
+        orchestration_endpoint: capabilities?.orchestration?.endpoint || null,
+        orchestration_transport_selection: capabilities?.orchestration?.transport_selection || null,
+        request_mode_control_policy: capabilities?.request_mode_controls?.agent_client_policy || null,
+        request_mode_controls: runtime?.channelRouting?.requestModeControls || capabilities?.request_mode_controls || null,
+        runtime_strategy: runtime?.channelRouting?.strategy || null,
+        effective_request_modes: readRequestModeList(runtime?.channelRouting?.effectiveRequestModes),
+        streaming_batch_enabled: runtime?.streamingBatch?.enabled === true,
+        recommended_concurrency: runtime?.streamingBatch?.recommendedConcurrency ?? null,
+        channel_queue_enabled: runtime?.channelQueue?.enabled === true,
+        channel_queue_capacity_per_credential: runtime?.channelQueue?.capacityPerCredential ?? null
+    };
+}
+
+function summarizeSmokeCheck(smoke, name) {
+    const check = smoke.checks?.find((item) => item.name === name);
+    if (!check || check.skipped) return 'skipped';
+    return check.ok ? 'passed' : 'failed';
+}
+
+function summarizePageSseSmoke(smoke) {
+    const states = [PAGE_SSE_GENERATE_SMOKE_NAME, 'page_sse_edit_2k'].map((name) => summarizeSmokeCheck(smoke, name));
+    if (states.includes('failed')) return 'failed';
+    if (states.includes('passed')) return 'passed';
+    return 'skipped';
+}
+
+function summarizeSmokeChecks(smoke) {
+    return {
+        orchestration_generate_1k: summarizeSmokeCheck(smoke, ORCHESTRATION_GENERATE_SMOKE_NAME),
+        agent_generate_1k: summarizeSmokeCheck(smoke, AGENT_GENERATE_SMOKE_NAME),
+        responses_page_sse_generate_1k: summarizeSmokeCheck(smoke, PAGE_SSE_GENERATE_SMOKE_NAME),
+        responses_agent_generate_1k: summarizeSmokeCheck(smoke, RESPONSES_AGENT_GENERATE_SMOKE_NAME),
+        agent_edit_1k: summarizeSmokeCheck(smoke, 'edit_1k'),
+        page_sse_edit_2k: summarizeSmokeCheck(smoke, 'page_sse_edit_2k')
+    };
+}
+
+function buildRequestModeSummary({ capabilities, runtime, smoke }) {
+    const supported = readRequestModeList(capabilities?.supported?.request_modes);
+    const configured = readRequestModeList(runtime?.channelRouting?.configuredRequestModes);
+    const effective = readRequestModeList(runtime?.channelRouting?.effectiveRequestModes);
+    return {
+        supported,
+        configured,
+        effective,
+        admin_whitelist_by_channel: readCapabilitiesRequestModesByChannel(capabilities),
+        effective_by_channel: readRuntimeRequestModesByChannel(runtime),
+        smoke: Object.fromEntries(
+            CHANNEL_REQUEST_MODES.map((mode) => [mode, summarizeRequestModeSmoke(smoke, mode)])
+        )
+    };
+}
+
+function summarizeRequestModeSmoke(smoke, mode) {
+    const checks = CHANNEL_REQUEST_MODE_SMOKE_CASES[mode] || [];
+    if (checks.length === 0) {
+        return {
+            state: 'skipped',
+            checks: [],
+            billable: false
+        };
+    }
+    const states = checks.map((name) => summarizeSmokeCheck(smoke, name));
+    return {
+        state: states.includes('failed') ? 'failed' : states.includes('passed') ? 'passed' : 'skipped',
+        checks,
+        billable: smoke.skipped !== true
+    };
+}
+
+function readCapabilitiesRequestModesByChannel(body) {
+    const channels = Array.isArray(body?.upstream_request_headers?.channels)
+        ? body.upstream_request_headers.channels
+        : [];
+    return channels.map((channel) => ({
+        channel_id: String(channel?.id || ''),
+        request_modes: readRequestModeList(channel?.request_modes)
+    })).filter((channel) => channel.channel_id);
+}
+
+function readRuntimeRequestModesByChannel(body) {
+    const channels = Array.isArray(body?.channelRouting?.effectiveRequestModesByChannel)
+        ? body.channelRouting.effectiveRequestModesByChannel
+        : [];
+    return channels.map((channel) => ({
+        channel_id: String(channel?.channelId || ''),
+        request_modes: readRequestModeList(channel?.requestModes)
+    })).filter((channel) => channel.channel_id);
+}
+
+function readRequestModeList(value) {
+    if (!Array.isArray(value)) return [];
+    return CHANNEL_REQUEST_MODES.filter((mode) => value.includes(mode));
 }
 
 function authHeaders() {

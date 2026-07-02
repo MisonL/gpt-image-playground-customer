@@ -51,7 +51,7 @@ function DockModeButton({ active, children, onClick }: DockModeButtonProps) {
     return (
         <button
             type='button'
-            className={`border-b-2 px-3 pb-2 font-medium transition-colors ${
+            className={`focus-visible:ring-ring rounded-t-md border-b-2 px-3 pb-2 font-medium transition-[border-color,color,box-shadow] focus-visible:ring-2 focus-visible:outline-none ${
                 active
                     ? 'border-primary text-primary'
                     : 'text-muted-foreground hover:text-foreground border-transparent'
@@ -69,8 +69,8 @@ export function WorkbenchProDock({ defaultMode = 'easy', defaultProTab = 'output
     const isProMode = dockMode === 'pro';
 
     return (
-        <div className='workbench-panel mt-4 hidden shrink-0 overflow-hidden rounded-lg border border-border/70 lg:block'>
-            <div className='flex items-center gap-4 border-b border-border/60 px-5 pt-3 text-sm'>
+        <div className='workbench-panel border-border/70 mt-4 hidden shrink-0 overflow-hidden rounded-lg border lg:block'>
+            <div className='border-border/60 flex items-center gap-4 border-b px-5 pt-3 text-sm'>
                 <DockModeButton active={!isProMode} onClick={() => setDockMode('easy')}>
                     {t('ux.easyMode')}
                 </DockModeButton>

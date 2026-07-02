@@ -1,6 +1,6 @@
-import { asRecord } from './json-record';
-import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
 import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
+import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
+import { asRecord } from './json-record';
 import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import type OpenAI from 'openai';
 
@@ -35,6 +35,7 @@ export type ResponsesImageGenerateInput = {
     outputCompression?: number;
     promptOptimization?: boolean;
     thinking?: string;
+    idempotencyKey?: string;
     abortSignal?: AbortSignal;
 };
 
@@ -196,7 +197,7 @@ export async function generateImageWithResponsesBackend(
             tool_choice: { type: 'image_generation' },
             tools: [buildResponsesImageTool(input)]
         },
-        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal, idempotencyKey: input.idempotencyKey })
     );
     const imageResults = extractCompletedImageResults(response.output);
 
@@ -215,7 +216,9 @@ export async function generateImageWithResponsesBackend(
     };
 }
 
-export async function editImageWithResponsesBackend(input: ResponsesImageEditInput): Promise<OpenAI.Images.ImagesResponse> {
+export async function editImageWithResponsesBackend(
+    input: ResponsesImageEditInput
+): Promise<OpenAI.Images.ImagesResponse> {
     const response = await input.responses.create(
         {
             model: input.responsesModel,
@@ -224,7 +227,7 @@ export async function editImageWithResponsesBackend(input: ResponsesImageEditInp
             tool_choice: { type: 'image_generation' },
             tools: [await buildResponsesImageEditTool(input)]
         },
-        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal, idempotencyKey: input.idempotencyKey })
     );
     const imageResults = extractCompletedImageResults(response.output);
 
@@ -252,11 +255,13 @@ export async function createResponsesImageStream(input: ResponsesImageStreamInpu
             tool_choice: { type: 'image_generation' },
             tools: [buildResponsesImageTool(input, input.partialImagesCount)]
         },
-        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal, idempotencyKey: input.idempotencyKey })
     );
 }
 
-export async function createResponsesImageEditStream(input: ResponsesImageEditStreamInput): Promise<AsyncIterable<unknown>> {
+export async function createResponsesImageEditStream(
+    input: ResponsesImageEditStreamInput
+): Promise<AsyncIterable<unknown>> {
     return input.responses.create(
         {
             model: input.responsesModel,
@@ -265,6 +270,6 @@ export async function createResponsesImageEditStream(input: ResponsesImageEditSt
             tool_choice: { type: 'image_generation' },
             tools: [await buildResponsesImageEditTool(input, input.partialImagesCount)]
         },
-        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal })
+        buildOpenAIImageRequestOptions({ abortSignal: input.abortSignal, idempotencyKey: input.idempotencyKey })
     );
 }

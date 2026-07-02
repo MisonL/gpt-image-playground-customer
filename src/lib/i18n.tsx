@@ -19,7 +19,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'app.studioSubtitle': '今天想做什么画面？',
         'app.creationControls': '创作参数',
         'app.canvasPreview': '画布预览',
-        'app.apiConnected': 'API 连接正常',
+        'app.apiRuntimeReady': '运行时可用',
+        'app.apiRouteLimited': '运行态受限',
+        'app.apiDisconnected': '运行时未连接',
+        'app.apiCustomOverride': '使用自定义上游',
         'mode.generate': '文生图',
         'mode.edit': '图生图',
         'mode.batch': '批量',
@@ -169,8 +172,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'upstream.routeImpactTitle': '影响说明',
         'upstream.backendImpactServerDefault': '服务端默认会沿用当前部署配置，适合多数创作，稳定性由服务器渠道决定。',
         'upstream.backendImpactImages': 'Images API 路径更贴近图片接口能力，适合常规生成与编辑。',
-        'upstream.backendImpactResponses': 'Responses image_generation 需要实验开关和顶层模型，适合兼容测试，不建议作为默认路径。',
-        'upstream.backendResponsesUnavailable': '当前运行时未启用 Responses image_generation，页面会保持服务端默认或 Images API 路径。',
+        'upstream.backendImpactResponses':
+            'Responses image_generation 需要实验开关和顶层模型，适合兼容测试，不建议作为默认路径。',
+        'upstream.backendResponsesUnavailable':
+            '当前运行时或默认服务器渠道未开放 Responses image_generation，页面会保持服务端默认或 Images API 路径。',
         'upstream.routeImpactMixedProfile':
             '当前服务端渠道包含不同上游模式，页面会按交集收窄数量、上传和预览能力，避免某个渠道收到不支持的参数。',
         'upstream.responsesRuntimeUnavailable':
@@ -298,6 +303,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'share.expired': '这个分享已过期。',
         'share.unlock': '打开',
         'share.accessCodePlaceholder': '输入访问码',
+        'share.accessCodeRequiredHint': '请输入访问码后再打开图片。',
         'share.imageAlt': '分享图片',
         'share.dialogTitle': '分享图片',
         'share.dialogDescription': '创建一个可访问的图片链接，可以设置访问码和有效期。',
@@ -460,6 +466,8 @@ const messages: Record<Locale, Record<string, string>> = {
         'api.key': 'API Key',
         'api.url': 'API URL',
         'api.urlHint': '填 OpenAI 兼容接口根地址，通常以 /v1 结尾；不要填管理后台网页地址。',
+        'api.urlPairHint': '自定义 API URL 必须和自定义 API Key 一起填写，避免把服务端密钥发送到未知上游。',
+        'api.urlPairRequired': '自定义 API URL 必须同时填写自定义 API Key。',
         'api.saved': '已保存',
         'api.saveFailed': '保存失败',
         'password.configure': '配置访问码',
@@ -494,8 +502,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'error.historyImageLoad': '图片 {filename} 无法加载。',
         'error.historySomeMissing': '这条历史记录中的部分图片无法加载，可能已被清理或丢失。',
         'error.historyMissingImage': '这条历史记录没有可编辑的图片。',
-        'error.resultFeedbackSync': '结果反馈已写入本地历史，但同步到服务端失败；已加入补偿队列，本页会重试，刷新或重开后也会继续尝试。',
-        'error.resultFeedbackDeleteSync': '本地历史已删除，但服务端反馈清理失败；已加入清理补偿队列，本页会重试，刷新或重开后也会继续尝试。',
+        'error.resultFeedbackSync':
+            '结果反馈已写入本地历史，但同步到服务端失败；已加入补偿队列，本页会重试，刷新或重开后也会继续尝试。',
+        'error.resultFeedbackDeleteSync':
+            '本地历史已删除，但服务端反馈清理失败；已加入清理补偿队列，本页会重试，刷新或重开后也会继续尝试。',
         'error.clearHistory': '清空历史失败：{message}',
         'error.maxEditImages': '编辑表单最多只能添加 {count} 张图片。',
         'error.imageNotFoundDb': '本地数据库中找不到图片 {filename}。',
@@ -532,7 +542,10 @@ const messages: Record<Locale, Record<string, string>> = {
         'app.studioSubtitle': 'What image are we making today?',
         'app.creationControls': 'Creation controls',
         'app.canvasPreview': 'Canvas preview',
-        'app.apiConnected': 'API connected',
+        'app.apiRuntimeReady': 'Runtime ready',
+        'app.apiRouteLimited': 'Route limited',
+        'app.apiDisconnected': 'Runtime disconnected',
+        'app.apiCustomOverride': 'Custom upstream',
         'mode.generate': 'Text to image',
         'mode.edit': 'Image edit',
         'mode.batch': 'Batch',
@@ -689,11 +702,12 @@ const messages: Record<Locale, Record<string, string>> = {
         'upstream.routeImpactTitle': 'Impact notes',
         'upstream.backendImpactServerDefault':
             'Server default follows the current deployment configuration. It fits most work, with stability decided by the server channel.',
-        'upstream.backendImpactImages': 'Images API uses the image endpoint path and fits normal generation and editing.',
+        'upstream.backendImpactImages':
+            'Images API uses the image endpoint path and fits normal generation and editing.',
         'upstream.backendImpactResponses':
             'Responses image_generation requires the experimental flag and a top-level model. Use it for compatibility tests, not as the default path.',
         'upstream.backendResponsesUnavailable':
-            'Responses image_generation is not enabled in the current runtime, so the page stays on the server default or Images API path.',
+            'Responses image_generation is not enabled for the current runtime or default server channel, so the page stays on the server default or Images API path.',
         'upstream.routeImpactMixedProfile':
             'The server pool mixes upstream modes, so the page narrows count, upload, and preview capabilities to their shared safe range.',
         'upstream.responsesRuntimeUnavailable':
@@ -704,7 +718,8 @@ const messages: Record<Locale, Record<string, string>> = {
             'Auto or server default uses the currently recommended streaming strategy for availability and diagnostics.',
         'upstream.strategyImpactOff':
             'Turning streaming off reduces long-connection instability, but no preview appears during generation.',
-        'upstream.strategyImpactSse': 'A specified SSE strategy pins the upstream connection path for channel diagnostics.',
+        'upstream.strategyImpactSse':
+            'A specified SSE strategy pins the upstream connection path for channel diagnostics.',
         'upstream.strategyImpactForceSse':
             'Force SSE skips automatic checks. Use it for diagnosis, not as the default for unexplained failures.',
         'upstream.routeImpactCost':
@@ -831,13 +846,15 @@ const messages: Record<Locale, Record<string, string>> = {
         'share.expired': 'This share has expired.',
         'share.unlock': 'Open',
         'share.accessCodePlaceholder': 'Enter access code',
+        'share.accessCodeRequiredHint': 'Enter the access code to open the image.',
         'share.imageAlt': 'Shared image',
         'share.dialogTitle': 'Share Image',
         'share.dialogDescription': 'Create an image link with an optional access code and expiry.',
         'share.accessCode': 'Access Code',
         'share.accessCodeOptional': 'Leave blank for no access code',
         'share.accessCodeTooShort': 'Access code must be at least 8 characters.',
-        'share.publicRiskHint': 'Without an access code, anyone with the link can view the image. Keep an expiry enabled.',
+        'share.publicRiskHint':
+            'Without an access code, anyone with the link can view the image. Keep an expiry enabled.',
         'share.expiry': 'Expiry',
         'share.expiryNone': 'Never expires',
         'share.expiryOneHour': '1 hour',
@@ -997,6 +1014,9 @@ const messages: Record<Locale, Record<string, string>> = {
         'api.url': 'API URL',
         'api.urlHint':
             'Use the OpenAI-compatible API root, usually ending with /v1. Do not enter an admin dashboard URL.',
+        'api.urlPairHint':
+            'A custom API URL must be paired with a custom API key so the server never forwards its own credentials to an unknown upstream.',
+        'api.urlPairRequired': 'A custom API URL requires a custom API key.',
         'api.saved': 'Saved',
         'api.saveFailed': 'Save failed',
         'password.configure': 'Configure Access Code',

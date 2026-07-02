@@ -1,8 +1,8 @@
+import { deleteFileIfExists, writeFileAtomic } from './agent-file-utils';
+import { ensureAgentStateStoreReady } from './agent-state-runtime';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { deleteFileIfExists, writeFileAtomic } from './agent-file-utils';
-import { ensureAgentStateStoreReady } from './agent-state-runtime';
 
 const SHARE_TOKEN_BYTES = 12;
 
@@ -146,7 +146,9 @@ export async function purgeExpiredImageSharesForStore(
     if (!isImageShareCleanupStore(store)) return 0;
     await fs.mkdir(shareDir(), { recursive: true });
     const expiredRecords = await store.deleteExpiredImageShareRecords(now.toISOString());
-    await Promise.allSettled(expiredRecords.map((record) => deleteFileIfExists(assertShareContentPathAllowed(record.contentFilename))));
+    await Promise.allSettled(
+        expiredRecords.map((record) => deleteFileIfExists(assertShareContentPathAllowed(record.contentFilename)))
+    );
     if (options.purgeOrphanFiles ?? true) {
         await purgeOrphanedShareFiles(await store.listImageShareRecords());
     }

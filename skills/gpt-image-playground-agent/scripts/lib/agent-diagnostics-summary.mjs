@@ -130,9 +130,18 @@ function buildAgentFailureDiagnostics(result, diagnostics) {
     status: readString(request?.status),
     error_code: readString(error?.code),
     retryable: typeof error?.retryable === 'boolean' ? error.retryable : undefined,
+    channel_request_mode:
+      readString(errorDiagnostics?.channel_request_mode) || readString(execution?.channel_request_mode),
+    channel_request_mode_fallback_applied:
+      readBoolean(errorDiagnostics?.channel_request_mode_fallback_applied) ??
+      readBoolean(execution?.channel_request_mode_fallback_applied),
+    route_decision: readObject(errorDiagnostics?.route_decision) || readObject(execution?.route_decision),
     selected_channel_id: readString(errorDiagnostics?.selected_channel_id) || readString(execution?.selected_channel_id),
     upstream_host: readString(errorDiagnostics?.upstream_host) || readString(execution?.upstream_host),
-    transport_error_kind: readString(errorDiagnostics?.transport_error_kind)
+    transport_error_kind: readString(errorDiagnostics?.transport_error_kind),
+    retry_after_ms: readNonNegativeNumber(errorDiagnostics?.retry_after_ms),
+    cooldown_until: readString(errorDiagnostics?.cooldown_until),
+    cooldown_target: readObject(errorDiagnostics?.cooldown_target)
   };
 }
 
@@ -147,11 +156,27 @@ function mergeDiagnosticsIntoSummary(summary, diagnosticsResult, diagnostics) {
   return {
     ...summary,
     request_id: preferExistingString(summary.request_id, request?.request_id) || null,
+    channel_request_mode:
+      preferExistingString(summary.channel_request_mode, errorDiagnostics?.channel_request_mode, execution?.channel_request_mode) ||
+      null,
+    channel_request_mode_fallback_applied:
+      readBoolean(summary.channel_request_mode_fallback_applied) ??
+      readBoolean(errorDiagnostics?.channel_request_mode_fallback_applied) ??
+      readBoolean(execution?.channel_request_mode_fallback_applied) ??
+      null,
+    route_decision:
+      readObject(summary.route_decision) ||
+      readObject(errorDiagnostics?.route_decision) ||
+      readObject(execution?.route_decision) ||
+      null,
     selected_channel_id:
       preferExistingString(summary.selected_channel_id, errorDiagnostics?.selected_channel_id, execution?.selected_channel_id) ||
       null,
     upstream_host: preferExistingString(summary.upstream_host, errorDiagnostics?.upstream_host, execution?.upstream_host) || null,
     transport_error_kind: preferExistingString(summary.transport_error_kind, errorDiagnostics?.transport_error_kind) || null,
+    retry_after_ms: readNonNegativeNumber(summary.retry_after_ms) ?? readNonNegativeNumber(errorDiagnostics?.retry_after_ms),
+    cooldown_until: preferExistingString(summary.cooldown_until, errorDiagnostics?.cooldown_until),
+    cooldown_target: readObject(summary.cooldown_target) || readObject(errorDiagnostics?.cooldown_target) || null,
     retryable: diagnosticsRetryable ?? summary.retryable,
     agent_diagnostics_checked: true,
     agent_diagnostics_found: diagnosticsResult.found === true,
@@ -195,8 +220,20 @@ function isObject(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+function readObject(value) {
+  return isObject(value) ? value : undefined;
+}
+
 function readString(value) {
   return typeof value === 'string' && value ? value : undefined;
+}
+
+function readBoolean(value) {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function readNonNegativeNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function readPositiveInteger(value) {

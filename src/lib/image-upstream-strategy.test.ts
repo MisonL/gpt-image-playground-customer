@@ -60,7 +60,10 @@ describe('image upstream strategy', () => {
         assert.throws(() => readImageStreamMode(formData({ stream_mode: 'sometimes' }), {}), /stream_mode/);
         assert.throws(
             () => readImageStreamMode(formData(), { IMAGE_DEFAULT_STREAM_MODE: 'sometimes' }),
-            (error) => error instanceof Error && readErrorStatus(error) === 500 && /IMAGE_DEFAULT_STREAM_MODE/.test(error.message)
+            (error) =>
+                error instanceof Error &&
+                readErrorStatus(error) === 500 &&
+                /IMAGE_DEFAULT_STREAM_MODE/.test(error.message)
         );
     });
 
@@ -103,11 +106,17 @@ describe('image upstream strategy', () => {
     it('reports invalid env defaults as server configuration errors', () => {
         assert.throws(
             () => readImageGenerationBackend(formData(), { IMAGE_GENERATION_BACKEND: 'not-a-backend' }),
-            (error) => error instanceof Error && readErrorStatus(error) === 500 && /IMAGE_GENERATION_BACKEND/.test(error.message)
+            (error) =>
+                error instanceof Error &&
+                readErrorStatus(error) === 500 &&
+                /IMAGE_GENERATION_BACKEND/.test(error.message)
         );
         assert.throws(
             () => readImageStreamingStrategy(formData(), { IMAGE_STREAMING_STRATEGY: 'not-a-strategy' }),
-            (error) => error instanceof Error && readErrorStatus(error) === 500 && /IMAGE_STREAMING_STRATEGY/.test(error.message)
+            (error) =>
+                error instanceof Error &&
+                readErrorStatus(error) === 500 &&
+                /IMAGE_STREAMING_STRATEGY/.test(error.message)
         );
     });
 

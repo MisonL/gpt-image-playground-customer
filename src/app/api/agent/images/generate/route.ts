@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
             requestHash
         );
         if (existingResult) {
-            return agentBeginResultResponse(existingResult, store);
+            return await agentBeginResultResponse(existingResult, store);
         }
         const preparation = prepareAgentGenerate(imageRequest, request.headers);
         const beginResult = await store.beginRequest({

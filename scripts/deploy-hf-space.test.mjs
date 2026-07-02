@@ -3,10 +3,14 @@ import { describe, it } from 'node:test';
 
 import {
     GIT_ARCHIVE_MAX_BUFFER_BYTES,
+    assertDeployMarkerMatches,
+    buildDeployMarker,
+    buildDeployMarkerRouteSource,
     buildUploadArgs,
     extractUploadCommitSha,
     findRemoteDeletePaths,
-    parseRepositorySlug
+    parseRepositorySlug,
+    waitForRunning
 } from './deploy-hf-space.mjs';
 
 describe('HF Space deploy script', () => {
@@ -122,6 +126,137 @@ describe('HF Space deploy script', () => {
     it('finds stale remote files deterministically', () => {
         assert.deepEqual(
             findRemoteDeletePaths(new Set(['README.md', 'src/app.ts']), ['old.md', 'src/app.ts', 'README.md']),
+            ['old.md']
+        );
+    });
+
+    it('builds a non-secret deploy marker for service-side deployment verification', () => {
+        const marker = buildDeployMarker(
+            '3333333333333333333333333333333333333333',
+            new Date('2026-06-20T10:00:00.000Z'),
+            'deploy-333'
+        );
+
+        assert.deepEqual(marker, {
+            schema_version: 1,
+            local_sha: '3333333333333333333333333333333333333333',
+            created_at: '2026-06-20T10:00:00.000Z',
+            deploy_id: 'deploy-333'
+        });
+        assert.doesNotMatch(JSON.stringify(marker), /key|token|secret|password/i);
+    });
+
+    it('builds a unique deploy marker id when none is provided', () => {
+        const first = buildDeployMarker('3333333333333333333333333333333333333333', new Date('2026-06-20T10:00:00.000Z'));
+        const second = buildDeployMarker('3333333333333333333333333333333333333333', new Date('2026-06-20T10:00:00.000Z'));
+
+        assert.match(first.deploy_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+        assert.notEqual(first.deploy_id, second.deploy_id);
+    });
+
+    it('rejects short deploy marker commit shas before upload', () => {
+        assert.throws(() => buildDeployMarker('3333333'), /full git commit SHA/);
+    });
+
+    it('rejects unsafe deploy marker ids before upload', () => {
+        assert.throws(
+            () =>
+                buildDeployMarker(
+                    '3333333333333333333333333333333333333333',
+                    new Date('2026-06-20T10:00:00.000Z'),
+                    'deploy\n333'
+                ),
+            /deployId must be/
+        );
+    });
+
+    it('rejects stale deploy markers from an older same-commit deployment', () => {
+        const expected = buildDeployMarker(
+            '3333333333333333333333333333333333333333',
+            new Date('2026-06-20T10:00:00.000Z'),
+            'deploy-current'
+        );
+        const stale = buildDeployMarker(
+            '3333333333333333333333333333333333333333',
+            new Date('2026-06-20T09:00:00.000Z'),
+            'deploy-stale'
+        );
+
+        assert.throws(() => assertDeployMarkerMatches(stale, expected), /created_at mismatch/);
+        assert.deepEqual(assertDeployMarkerMatches(expected, expected), expected);
+    });
+
+    it('rejects deploy markers with a stale deploy id even when the source commit and timestamp match', () => {
+        const expected = buildDeployMarker(
+            '3333333333333333333333333333333333333333',
+            new Date('2026-06-20T10:00:00.000Z'),
+            'deploy-current'
+        );
+        const stale = {
+            ...expected,
+            deploy_id: 'deploy-stale'
+        };
+
+        assert.throws(() => assertDeployMarkerMatches(stale, expected), /deploy_id mismatch/);
+    });
+
+    it('waits for the public service marker after management reports the new Space commit running', async () => {
+        const marker = buildDeployMarker(
+            '5555555555555555555555555555555555555555',
+            new Date('2026-06-20T12:00:00.000Z'),
+            'deploy-555'
+        );
+        let verifyCount = 0;
+
+        const runtime = await waitForRunning('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', marker, {
+            attempts: 2,
+            intervalMs: 0,
+            readInfo: () => ({
+                runtime: { stage: 'RUNNING' },
+                sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            }),
+            verifyMarker: async () => {
+                verifyCount += 1;
+                if (verifyCount === 1) throw new Error('deploy marker deploy_id mismatch');
+                return marker;
+            },
+            sleep: async () => {},
+            log: () => {}
+        });
+
+        assert.equal(verifyCount, 2);
+        assert.deepEqual(runtime, {
+            stage: 'RUNNING',
+            sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            service_marker_verified: true,
+            marker
+        });
+    });
+
+    it('builds a no-store API route for service-side deploy marker verification', () => {
+        const marker = buildDeployMarker(
+            '4444444444444444444444444444444444444444',
+            new Date('2026-06-20T11:00:00.000Z'),
+            'deploy-444'
+        );
+        const source = buildDeployMarkerRouteSource(marker);
+
+        assert.match(source, /NextResponse\.json/);
+        assert.match(source, /Cache-Control/);
+        assert.match(source, /no-store/);
+        assert.match(source, /4444444444444444444444444444444444444444/);
+        assert.match(source, /deploy-444/);
+        assert.doesNotMatch(source, /key|token|secret|password/i);
+    });
+
+    it('keeps the generated deploy markers from being deleted on upload', () => {
+        assert.deepEqual(
+            findRemoteDeletePaths(new Set(['README.md', 'public/hf-space-deploy-marker.json', 'src/app/api/deploy-marker/route.ts']), [
+                'README.md',
+                'public/hf-space-deploy-marker.json',
+                'src/app/api/deploy-marker/route.ts',
+                'old.md'
+            ]),
             ['old.md']
         );
     });

@@ -18,6 +18,7 @@ import {
 import { buildFirstRunReport, formatFirstRunText } from './first-run.mjs';
 import {
     buildAdminCommands,
+    buildImageUpstreamLocalEndpointStatus,
     buildImageUpstreamRealSmokeStatus,
     parseGitStatusEntries,
     readStatusEnvFromFiles,
@@ -39,7 +40,8 @@ describe('Command center scripts', () => {
             docker_cleanup_fixtures: 'npm run docker:cleanup-fixtures',
             agent_doctor: 'npm run agent:doctor',
             hf_space_doctor: 'npm run doctor:hf-space',
-            hf_space_smoke: 'npm run smoke:hf-space'
+            hf_space_local_smoke: 'npm run smoke:hf-space-local',
+            hf_space_smoke_legacy_alias: 'npm run smoke:hf-space'
         });
     });
 
@@ -113,6 +115,19 @@ describe('Command center scripts', () => {
             'gpt2image-responses-sse',
             'matsca-images-sse'
         ]);
+        assert.deepEqual(missing.request_modes['images-non-stream'], {
+            required_count: 1,
+            required_cases: ['original-images-json'],
+            configuration_complete: false,
+            configured_count: 0,
+            configured_cases: [],
+            missing_count: 1,
+            missing_cases: ['original-images-json'],
+            invalid_count: 0,
+            invalid_cases: [],
+            smoke_state: 'not_run_by_status'
+        });
+        assert.deepEqual(missing.request_modes['responses-sse'].required_cases, ['gpt2image-responses-sse']);
         assert.deepEqual(missing.missing_env_any['sub2api-responses-json'][0], [
             'IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL',
             'IMAGE_REAL_SMOKE_SUB2API_BASE_URL'
@@ -139,6 +154,9 @@ describe('Command center scripts', () => {
         assert.equal(configured.configuration_complete, true);
         assert.equal(configured.configured_count, 6);
         assert.equal(configured.missing_count, 0);
+        assert.equal(configured.request_modes['images-sse'].configured_count, 3);
+        assert.deepEqual(configured.request_modes['responses-non-stream'].configured_cases, ['sub2api-responses-json']);
+        assert.deepEqual(configured.request_modes['responses-sse'].configured_cases, ['gpt2image-responses-sse']);
         assert.doesNotMatch(JSON.stringify(configured), /secret|example\/v1/);
     });
 
@@ -219,6 +237,83 @@ describe('Command center scripts', () => {
         ]);
         assert.equal(status.missing_env_any['original-images-json'], undefined);
         assert.doesNotMatch(JSON.stringify(status), /user:pass|original\.example|token=secret|original-secret/);
+    });
+
+    it('checks local real smoke endpoints without exposing URL paths or credentials', async () => {
+        const status = await buildImageUpstreamLocalEndpointStatus(
+            {
+                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'http://127.0.0.1:3010/v1?ignored=no',
+                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'original-secret',
+                IMAGE_REAL_SMOKE_GAOREN_BASE_URL: 'http://localhost:3001/v1',
+                IMAGE_REAL_SMOKE_GAOREN_API_KEY: 'gaoren-secret',
+                IMAGE_REAL_SMOKE_SUB2API_BASE_URL: 'https://sub2api.example/v1',
+                IMAGE_REAL_SMOKE_SUB2API_API_KEY: 'sub2api-secret'
+            },
+            {
+                probe: async (endpoint) => ({
+                    ok: endpoint.port === 3001,
+                    reason: endpoint.port === 3001 ? undefined : 'connection_refused'
+                })
+            }
+        );
+
+        assert.deepEqual(status, {
+            checked_count: 1,
+            unavailable_count: 0,
+            unavailable_cases: [],
+            results: [
+                {
+                    id: 'gaoren-images-sse',
+                    endpoint: 'localhost:3001',
+                    ok: true
+                }
+            ]
+        });
+        assert.doesNotMatch(JSON.stringify(status), /secret|\/v1|sub2api\.example|ignored=no/);
+    });
+
+    it('reports unavailable local real smoke endpoints by case id', async () => {
+        const status = await buildImageUpstreamLocalEndpointStatus(
+            {
+                IMAGE_REAL_SMOKE_SUB2API_BASE_URL: 'http://127.0.0.1:3021/v1',
+                IMAGE_REAL_SMOKE_SUB2API_API_KEY: 'sub2api-secret',
+                IMAGE_REAL_SMOKE_MATSCA_BASE_URL: 'http://[::1]:3090/v1',
+                IMAGE_REAL_SMOKE_MATSCA_API_KEY: 'matsca-secret'
+            },
+            {
+                probe: async (endpoint) => ({
+                    ok: false,
+                    reason: endpoint.port === 3021 ? 'connection_refused' : 'timeout'
+                })
+            }
+        );
+
+        assert.deepEqual(status, {
+            checked_count: 3,
+            unavailable_count: 3,
+            unavailable_cases: ['sub2api-images-sse', 'sub2api-responses-json', 'matsca-images-sse'],
+            results: [
+                {
+                    id: 'sub2api-images-sse',
+                    endpoint: '127.0.0.1:3021',
+                    ok: false,
+                    reason: 'connection_refused'
+                },
+                {
+                    id: 'sub2api-responses-json',
+                    endpoint: '127.0.0.1:3021',
+                    ok: false,
+                    reason: 'connection_refused'
+                },
+                {
+                    id: 'matsca-images-sse',
+                    endpoint: '[::1]:3090',
+                    ok: false,
+                    reason: 'timeout'
+                }
+            ]
+        });
+        assert.doesNotMatch(JSON.stringify(status), /secret|\/v1/);
     });
 
     it('loads independent image upstream smoke readiness from env files without overriding shell env', async () => {
@@ -491,6 +586,14 @@ describe('Command center scripts', () => {
                         has_password_hash: false,
                         has_any_auth: true
                     });
+                    assert.deepEqual(report.agent_auth_service, {
+                        required: true,
+                        required_schemes: ['bearer'],
+                        ready: true,
+                        has_token: true,
+                        has_password_hash: false,
+                        has_any_auth: true
+                    });
                     assert.deepEqual(report.private_agent_env, {
                         exists: true,
                         has_token: true,
@@ -507,6 +610,21 @@ describe('Command center scripts', () => {
                     );
                     assert.equal(report.service.capabilities.page_sse_auth_required, true);
                     assert.equal(report.service.capabilities.page_sse_auth_form_field, 'passwordHash');
+                    assert.equal(report.service.capabilities.page_sse_declared_supported, true);
+                    assert.equal(report.service.capabilities.page_sse_real_smoke, 'not_run_by_first_run');
+                    assert.equal(report.service.capabilities.responses_image_backend_real_smoke, 'not_run_by_first_run');
+                    assert.deepEqual(report.service.capabilities.page_sse_real_smoke_status, {
+                        state: 'not_run',
+                        billable: false,
+                        reason: 'first-run is non-billable and does not call /api/images'
+                    });
+                    assert.deepEqual(report.service.capabilities.responses_image_backend_real_smoke_status, {
+                        state: 'not_run',
+                        billable: false,
+                        reason: 'first-run is non-billable and does not call Responses image generation'
+                    });
+                    assert.match(formatFirstRunText(report), /页面 SSE：声明支持，实测=未执行真实 smoke/);
+                    assert.match(formatFirstRunText(report), /Responses 后端：声明未支持，启用=否，实测=未执行真实 smoke/);
                     assert.equal(
                         report.checks.find((check) => check.name === 'agent_auth_available_to_process')
                             .auth_in_private_env_file,
@@ -516,6 +634,55 @@ describe('Command center scripts', () => {
                     assert.match(JSON.stringify(report.next_actions), /agent:doctor/);
                     assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_APP_PASSWORD_HASH/);
                     assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_AGENT_TOKEN/);
+                } finally {
+                    await rm(tempDir, { recursive: true, force: true });
+                }
+            }
+        );
+    });
+
+    it('treats bearer-required services as not ready when only APP_PASSWORD is loaded', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'first-run-auth-bearer-'));
+        await writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
+        await withServer(
+            (_request, response) => {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(
+                    JSON.stringify({
+                        auth: { schemes: ['bearer'] },
+                        defaults: { state_backend: 'memory' }
+                    })
+                );
+            },
+            async (baseUrl) => {
+                try {
+                    const report = await buildFirstRunReport(
+                        {
+                            cwd: tempDir,
+                            baseUrl,
+                            envFiles: ['.env.agent.local'],
+                            timeoutMs: 1000
+                        },
+                        { GPT_IMAGE_APP_PASSWORD_HASH: 'shell-secret' }
+                    );
+
+                    assert.deepEqual(report.agent_auth_process, {
+                        has_token: false,
+                        has_password_hash: true,
+                        has_any_auth: true
+                    });
+                    assert.deepEqual(report.agent_auth_service, {
+                        required: true,
+                        required_schemes: ['bearer'],
+                        ready: false,
+                        has_token: false,
+                        has_password_hash: false,
+                        has_any_auth: false
+                    });
+                    assert.match(formatFirstRunText(report), /当前进程鉴权：已加载访问码哈希/);
+                    assert.match(formatFirstRunText(report), /服务鉴权：未满足当前服务鉴权要求/);
+                    assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_AGENT_TOKEN/);
+                    assert.doesNotMatch(JSON.stringify(report.next_actions), /GPT_IMAGE_APP_PASSWORD_HASH/);
                 } finally {
                     await rm(tempDir, { recursive: true, force: true });
                 }
@@ -535,6 +702,7 @@ describe('Command center scripts', () => {
         assert.match(text, /当前进程鉴权：未加载/);
         assert.match(text, /私有 Agent env：不存在/);
         assert.match(text, /下一步：/);
+        assert.doesNotMatch(text, /实测=passed/);
         assert.doesNotMatch(text, /^\{/);
     });
 
@@ -637,12 +805,28 @@ describe('Command center scripts', () => {
                                 }
                             },
                             agent_jobs: { supported: true },
+                            orchestration: {
+                                supported: true,
+                                endpoint: '/api/agent/image-requests',
+                                transport_selection: 'server_owned'
+                            },
+                            request_mode_controls: {
+                                global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
+                                channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                                agent_client_policy: 'diagnostics_only'
+                            },
                             routing_rules: {
                                 high_resolution_edit: {
                                     conditions: { operation: 'edit', max_edge: { operator: 'gt', value: 2048 } }
                                 }
                             },
                             supported: {
+                                request_modes: [
+                                    'images-non-stream',
+                                    'images-sse',
+                                    'responses-non-stream',
+                                    'responses-sse'
+                                ],
                                 image_backend_requirements: {
                                     'responses-image-generation': {
                                         supported: true,
@@ -650,6 +834,18 @@ describe('Command center scripts', () => {
                                         missing_env: []
                                     }
                                 }
+                            },
+                            upstream_request_headers: {
+                                channels: [
+                                    {
+                                        id: 'images',
+                                        request_modes: ['images-non-stream', 'images-sse']
+                                    },
+                                    {
+                                        id: 'responses',
+                                        request_modes: ['responses-sse']
+                                    }
+                                ]
                             }
                         })
                     );
@@ -663,8 +859,25 @@ describe('Command center scripts', () => {
                                 defaultMode: 'auto',
                                 unavailableMarkScope: 'channel+backend+strategy+operation'
                             },
-                            streamingBatch: { enabled: true },
-                            responsesImageBackend: { enabled: true, mode: 'experimental' }
+                            streamingBatch: { enabled: true, recommendedConcurrency: 2 },
+                            channelQueue: { enabled: true, capacityPerCredential: 1 },
+                            responsesImageBackend: { enabled: true, mode: 'experimental' },
+                            channelRouting: {
+                                strategy: 'round_robin',
+                                requestModeControls: {
+                                    global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
+                                    channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                                    agent_client_policy: 'diagnostics_only'
+                                },
+                                configuredRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
+                                effectiveRequestModes: ['images-non-stream', 'images-sse'],
+                                effectiveRequestModesByChannel: [
+                                    {
+                                        channelId: 'images',
+                                        requestModes: ['images-non-stream', 'images-sse']
+                                    }
+                                ]
+                            }
                         })
                     );
                     return;
@@ -675,6 +888,19 @@ describe('Command center scripts', () => {
                         response.end(JSON.stringify({ images: [{ id: 'doctor-generate', filename: 'doctor.png' }] }));
                         return;
                     }
+                    response.writeHead(400, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'idempotency_key_required',
+                                message: 'missing key',
+                                retryable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/proxy/api/agent/image-requests') {
                     response.writeHead(400, { 'content-type': 'application/json' });
                     response.end(
                         JSON.stringify({
@@ -718,12 +944,93 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.runtime, 'ok');
                 assert.equal(body.summary.state_backend, 'memory');
                 assert.equal(body.summary.page_sse_auth_ready, false);
+                assert.equal(body.summary.page_sse_declared_supported, true);
+                assert.equal(body.summary.page_sse_real_smoke, 'skipped');
+                assert.equal(body.summary.orchestration_generate_smoke, 'skipped');
+                assert.equal(body.summary.agent_generate_smoke, 'skipped');
+                assert.equal(body.summary.responses_page_sse_generate_smoke, 'skipped');
+                assert.deepEqual(body.summary.real_smoke_checks, {
+                    orchestration_generate_1k: 'skipped',
+                    agent_generate_1k: 'skipped',
+                    responses_page_sse_generate_1k: 'skipped',
+                    responses_agent_generate_1k: 'skipped',
+                    agent_edit_1k: 'skipped',
+                    page_sse_edit_2k: 'skipped'
+                });
+                assert.deepEqual(body.summary.request_modes.supported, [
+                    'images-non-stream',
+                    'images-sse',
+                    'responses-non-stream',
+                    'responses-sse'
+                ]);
+                assert.deepEqual(body.summary.request_modes.configured, ['images-non-stream', 'images-sse', 'responses-sse']);
+                assert.deepEqual(body.summary.request_modes.effective, ['images-non-stream', 'images-sse']);
+                assert.deepEqual(body.summary.request_modes.smoke['responses-non-stream'].checks, [
+                    'responses_agent_generate_1k'
+                ]);
+                assert.deepEqual(body.summary.request_modes.smoke['images-non-stream'].checks, [
+                    'orchestration_generate_1k',
+                    'edit_1k'
+                ]);
+                assert.equal(body.summary.request_modes.smoke['responses-non-stream'].state, 'skipped');
+                assert.equal(body.summary.request_modes.smoke['responses-sse'].state, 'skipped');
+                assert.equal(body.summary.request_modes.smoke['responses-sse'].billable, false);
                 assert.equal(body.summary.responses_gpt2image_ready, true);
+                assert.equal(body.summary.responses_image_backend_declared_supported, true);
+                assert.deepEqual(body.summary.runtime_environment, {
+                    state_backend: 'memory',
+                    image_storage_mode: 'indexeddb',
+                    postgres_configured: false,
+                    page_sse_auth_required: true,
+                    agent_auth_schemes: [],
+                    orchestration_endpoint: '/api/agent/image-requests',
+                    orchestration_transport_selection: 'server_owned',
+                    request_mode_control_policy: 'diagnostics_only',
+                    request_mode_controls: {
+                        global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
+                        channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                        agent_client_policy: 'diagnostics_only'
+                    },
+                    runtime_strategy: 'round_robin',
+                    effective_request_modes: ['images-non-stream', 'images-sse'],
+                    streaming_batch_enabled: true,
+                    recommended_concurrency: 2,
+                    channel_queue_enabled: true,
+                    channel_queue_capacity_per_credential: 1
+                });
                 assert.equal(body.summary.billable_smoke, 'skipped');
                 assert.equal(body.layers.find((layer) => layer.name === 'billable_smoke').skipped, true);
+                assert.ok(
+                    body.layers
+                        .find((layer) => layer.name === 'billable_smoke')
+                        .checks.some((check) => check.name === 'responses_agent_generate_1k' && check.skipped === true)
+                );
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').executable_routing_rules, true);
+                assert.deepEqual(body.layers.find((layer) => layer.name === 'capabilities').request_modes_supported, [
+                    'images-non-stream',
+                    'images-sse',
+                    'responses-non-stream',
+                    'responses-sse'
+                ]);
+                assert.deepEqual(body.layers.find((layer) => layer.name === 'runtime_backend').effective_request_modes, [
+                    'images-non-stream',
+                    'images-sse'
+                ]);
+                assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_declared_supported, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_required, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_ready, false);
+                assert.equal(body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').declared_supported, true);
+                assert.match(
+                    body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').real_smoke_gate,
+                    /gpt2image-responses-sse/
+                );
+                assert.deepEqual(
+                    body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').real_smoke_gates,
+                    [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-responses-json --allow-billable',
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable'
+                    ]
+                );
                 assert.match(
                     body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_next_action,
                     /GPT_IMAGE_APP_PASSWORD_HASH/
@@ -748,6 +1055,11 @@ describe('Command center scripts', () => {
                             storage: { image_storage_mode: 'indexeddb', postgres_configured: false },
                             agent_streaming: { page_sse: { supported: true } },
                             agent_jobs: { supported: true },
+                            orchestration: {
+                                supported: true,
+                                endpoint: '/api/agent/image-requests',
+                                transport_selection: 'server_owned'
+                            },
                             routing_rules: {
                                 high_resolution_edit: {
                                     conditions: { operation: 'edit', max_edge: { operator: 'gt', value: 2048 } }
@@ -798,6 +1110,263 @@ describe('Command center scripts', () => {
                     }
                     return;
                 }
+                if (request.url === '/api/images') {
+                    (async () => {
+                        const requestText = await readRequestText(request);
+                        if (requestText.includes('contract check')) {
+                            response.writeHead(400, { 'content-type': 'application/json' });
+                            response.end(JSON.stringify({ error: 'clientRequestId 长度不能超过 128 个字符。' }));
+                            return;
+                        }
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"doctor-page-sse.png","path":"/api/image/doctor-page-sse.png","output_format":"png"}',
+                                '',
+                                'data: {"type":"done","client_request_id":"doctor-page-sse-request","images":[{"filename":"doctor-page-sse.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                    })().catch((error) => {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: error.message }));
+                    });
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests') {
+                    if (request.headers['idempotency-key']) {
+                        response.writeHead(202, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                job: {
+                                    id: 'doctor-orchestration-job',
+                                    state: 'running',
+                                    result_url: '/api/agent/jobs/doctor-orchestration-job/result',
+                                    retry_after_seconds: 1
+                                }
+                            })
+                        );
+                    } else {
+                        response.writeHead(400, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                error: {
+                                    code: 'idempotency_key_required',
+                                    message: 'missing key',
+                                    retryable: false
+                                }
+                            })
+                        );
+                    }
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/doctor-orchestration-job/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'doctor-orchestration-job',
+                            idempotency_key: 'agent-doctor-orchestration-generate',
+                            cached: false,
+                            images: [{ id: 'doctor-orchestration', filename: 'doctor-orchestration.png' }],
+                            execution: {
+                                transport: 'server_orchestrated',
+                                endpoint: '/api/agent/image-requests',
+                                route_mode: 'auto',
+                                image_backend: 'images-api',
+                                stream_mode: 'non_stream',
+                                streaming_strategy: 'off',
+                                channel_request_mode: 'images-non-stream',
+                                channel_request_mode_fallback_applied: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/images/generate') {
+                    response.writeHead(202, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'doctor-agent-job',
+                                state: 'running',
+                                result_url: '/api/agent/jobs/doctor-agent-job/result',
+                                retry_after_seconds: 1
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/doctor-agent-job/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'doctor-agent-job',
+                            idempotency_key: 'agent-doctor-agent-generate',
+                            cached: false,
+                            images: [{ id: 'doctor-agent', filename: 'doctor-agent.png' }],
+                            execution: {
+                                transport: 'agent_json',
+                                endpoint: '/api/agent/jobs/images/generate',
+                                route_mode: 'agent',
+                                image_backend: 'images-api',
+                                stream_mode: 'non_stream',
+                                streaming_strategy: 'off',
+                                channel_request_mode: 'images-non-stream',
+                                channel_request_mode_fallback_applied: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runNodeCommandAsync(
+                    ['scripts/agent-doctor.mjs', '--base-url', baseUrl, '--allow-billable'],
+                    { timeoutMs: 15_000 }
+                );
+
+                assert.equal(result.ok, true);
+                const body = parseJsonPayload(result.stdout, 'agent doctor');
+                assert.equal(body.service_base_url_source, 'user_provided');
+                assert.equal(body.interactive_confirmation_required, false);
+                assert.equal(body.summary.page_sse_real_smoke, 'passed');
+                assert.equal(body.summary.orchestration_generate_smoke, 'passed');
+                assert.equal(body.summary.agent_generate_smoke, 'passed');
+                assert.equal(body.summary.responses_page_sse_generate_smoke, 'passed');
+                assert.equal(body.summary.responses_agent_generate_smoke, 'passed');
+                assert.equal(body.summary.real_smoke_checks.orchestration_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.agent_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.responses_page_sse_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.responses_agent_generate_1k, 'passed');
+                assert.equal(body.summary.request_modes.smoke['images-non-stream'].state, 'passed');
+                assert.equal(body.summary.request_modes.smoke['responses-non-stream'].state, 'passed');
+                assert.equal(body.summary.request_modes.smoke['responses-sse'].state, 'passed');
+                assert.equal(body.summary.real_smoke_checks.agent_edit_1k, 'skipped');
+                assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
+                assert.ok(hits.includes('/api/agent/images/generate'));
+                assert.ok(hits.includes('/api/agent/image-requests'));
+                assert.ok(hits.includes('/api/images'));
+            }
+        );
+    });
+
+    it('reports failed agent:doctor page SSE smoke checks without hiding the failure', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            defaults: { state_backend: 'memory' },
+                            storage: { image_storage_mode: 'indexeddb', postgres_configured: false },
+                            orchestration: {
+                                supported: true,
+                                endpoint: '/api/agent/image-requests',
+                                transport_selection: 'server_owned'
+                            },
+                            agent_streaming: { page_sse: { supported: true } },
+                            agent_jobs: { supported: true },
+                            routing_rules: {},
+                            supported: {
+                                image_backend_requirements: {
+                                    'responses-image-generation': {
+                                        supported: true,
+                                        enabled: true,
+                                        missing_env: []
+                                    }
+                                }
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/runtime-capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            streaming: {
+                                defaultMode: 'auto',
+                                unavailableMarkScope: 'channel+backend+strategy+operation'
+                            },
+                            streamingBatch: { enabled: true },
+                            responsesImageBackend: { enabled: true, mode: 'experimental' }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/images/generate') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ images: [{ id: 'doctor-generate', filename: 'doctor.png' }] }));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests') {
+                    if (request.headers['idempotency-key']) {
+                        response.writeHead(202, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                job: {
+                                    id: 'doctor-orchestration-job',
+                                    state: 'running',
+                                    result_url: '/api/agent/jobs/doctor-orchestration-job/result',
+                                    retry_after_seconds: 1
+                                }
+                            })
+                        );
+                    } else {
+                        response.writeHead(400, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                error: {
+                                    code: 'idempotency_key_required',
+                                    message: 'missing key',
+                                    retryable: false
+                                }
+                            })
+                        );
+                    }
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/doctor-orchestration-job/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'doctor-orchestration-job',
+                            idempotency_key: 'agent-doctor-orchestration-generate',
+                            cached: false,
+                            images: [{ id: 'doctor-orchestration', filename: 'doctor-orchestration.png' }],
+                            execution: {
+                                transport: 'server_orchestrated',
+                                endpoint: '/api/agent/image-requests',
+                                route_mode: 'auto',
+                                image_backend: 'images-api',
+                                stream_mode: 'non_stream',
+                                streaming_strategy: 'off',
+                                channel_request_mode: 'images-non-stream',
+                                channel_request_mode_fallback_applied: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/images') {
+                    (async () => {
+                        const requestText = await readRequestText(request);
+                        if (requestText.includes('contract check')) {
+                            response.writeHead(400, { 'content-type': 'application/json' });
+                            response.end(JSON.stringify({ error: 'clientRequestId 长度不能超过 128 个字符。' }));
+                            return;
+                        }
+                        response.writeHead(503, { 'content-type': 'text/plain' });
+                        response.end('503 Service temporarily unavailable');
+                    })().catch((error) => {
+                        response.writeHead(500, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: error.message }));
+                    });
+                    return;
+                }
                 if (request.url === '/api/agent/jobs/images/generate') {
                     response.writeHead(400, { 'content-type': 'application/json' });
                     response.end(
@@ -820,11 +1389,30 @@ describe('Command center scripts', () => {
                     { timeoutMs: 15_000 }
                 );
 
-                assert.equal(result.ok, true);
+                assert.equal(result.ok, false);
                 const body = parseJsonPayload(result.stdout, 'agent doctor');
-                assert.equal(body.service_base_url_source, 'user_provided');
-                assert.equal(body.interactive_confirmation_required, false);
-                assert.ok(hits.includes('/api/agent/images/generate'));
+                assert.equal(body.ok, false);
+                assert.equal(body.summary.billable_smoke, 'failed');
+                assert.equal(body.summary.page_sse_real_smoke, 'failed');
+                assert.equal(body.summary.orchestration_generate_smoke, 'passed');
+                assert.equal(body.summary.agent_generate_smoke, 'passed');
+                assert.equal(body.summary.responses_page_sse_generate_smoke, 'failed');
+                assert.equal(body.summary.responses_agent_generate_smoke, 'passed');
+                assert.equal(body.summary.real_smoke_checks.orchestration_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.agent_generate_1k, 'passed');
+                assert.equal(body.summary.real_smoke_checks.responses_page_sse_generate_1k, 'failed');
+                assert.equal(body.summary.real_smoke_checks.responses_agent_generate_1k, 'passed');
+                assert.equal(body.summary.request_modes.smoke['images-non-stream'].state, 'passed');
+                assert.equal(body.summary.request_modes.smoke['responses-non-stream'].state, 'passed');
+                assert.equal(body.summary.request_modes.smoke['responses-sse'].state, 'failed');
+                assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
+                const pageSseOutput = body.layers
+                    .find((layer) => layer.name === 'billable_smoke')
+                    .checks.find((check) => check.name === 'responses_page_sse_generate_1k').output;
+                const pageSseFailure = parseJsonPayload(pageSseOutput, 'responses page SSE doctor smoke');
+                assert.equal(pageSseFailure.summary.selected_channel_id, null);
+                assert.equal(pageSseFailure.summary.upstream_host, null);
+                assert.match(pageSseOutput, /503 Service temporarily unavailable/);
             }
         );
     });
@@ -1005,5 +1593,17 @@ function runNodeCommandAsync(args, options = {}) {
                 elapsed_ms: Date.now() - startedAt
             });
         });
+    });
+}
+
+function readRequestText(request) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        request.setEncoding('utf8');
+        request.on('data', (chunk) => {
+            body += chunk;
+        });
+        request.on('end', () => resolve(body));
+        request.on('error', reject);
     });
 }

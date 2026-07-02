@@ -1,8 +1,8 @@
-import { assertAgentAuthorized } from '@/lib/agent-auth';
 import {
     buildPageRequestDiagnosticsNoMatchNote,
     buildPageRequestDiagnosticsRetention
 } from '@/lib/agent-api-contracts';
+import { assertAgentAuthorized } from '@/lib/agent-auth';
 import { buildPageRequestDiagnostics } from '@/lib/agent-request-diagnostics';
 import { createRequestId } from '@/lib/agent-state-store';
 import { AgentApiError, agentErrorResponse, normalizeAgentError } from '@/lib/api-error-response';

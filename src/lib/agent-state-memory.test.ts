@@ -1,5 +1,5 @@
-import { MemoryAgentStateStore } from './agent-state-memory';
 import type { AgentImageResponse } from './agent-api-contracts';
+import { MemoryAgentStateStore } from './agent-state-memory';
 import { hashAgentPayload, type AgentArtifactRecord } from './agent-state-store';
 import type { FeedbackRecord } from './feedback-store';
 import assert from 'node:assert/strict';
@@ -72,7 +72,9 @@ describe('MemoryAgentStateStore', () => {
         });
         assert.equal(begin.type, 'acquired');
         if (begin.type !== 'acquired') throw new Error('expected acquired');
-        await store.saveArtifacts([buildArtifact({ id: 'artifact-memory-recovery', requestId: begin.record.requestId })]);
+        await store.saveArtifacts([
+            buildArtifact({ id: 'artifact-memory-recovery', requestId: begin.record.requestId })
+        ]);
 
         const recovered = await store.recoverExpiredRequests(new Date('2026-05-12T00:00:01.000Z'));
         const replay = await store.beginRequest({
@@ -159,9 +161,10 @@ describe('MemoryAgentStateStore', () => {
         await store.upsertFeedbackBatch([first, second, { ...first, note: 'stale retry' }]);
 
         assert.deepEqual(await store.readFeedback('page_request', 'web-feedback-request'), second);
-        assert.deepEqual(await store.listFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-feedback-request' }]), [
-            second
-        ]);
+        assert.deepEqual(
+            await store.listFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-feedback-request' }]),
+            [second]
+        );
         assert.equal(
             await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-feedback-request' }], {
                 deletedAt: '2026-05-12T00:00:30.000Z'
@@ -169,7 +172,10 @@ describe('MemoryAgentStateStore', () => {
             0
         );
         assert.deepEqual(await store.readFeedback('page_request', 'web-feedback-request'), second);
-        assert.equal(await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-feedback-request' }]), 1);
+        assert.equal(
+            await store.deleteFeedbackByTargets([{ targetType: 'page_request', targetId: 'web-feedback-request' }]),
+            1
+        );
         assert.equal(await store.readFeedback('page_request', 'web-feedback-request'), undefined);
     });
 
@@ -321,8 +327,16 @@ describe('MemoryAgentStateStore', () => {
         assert.equal(beginA.type, 'acquired');
         assert.equal(beginB.type, 'acquired');
         if (beginA.type !== 'acquired' || beginB.type !== 'acquired') throw new Error('expected acquired');
-        const first = buildArtifact({ id: 'artifact-memory-a', requestId: beginA.record.requestId, filename: 'shared.png' });
-        const second = buildArtifact({ id: 'artifact-memory-b', requestId: beginB.record.requestId, filename: 'shared.png' });
+        const first = buildArtifact({
+            id: 'artifact-memory-a',
+            requestId: beginA.record.requestId,
+            filename: 'shared.png'
+        });
+        const second = buildArtifact({
+            id: 'artifact-memory-b',
+            requestId: beginB.record.requestId,
+            filename: 'shared.png'
+        });
 
         await store.saveArtifacts([first]);
         await assert.rejects(() => store.saveArtifacts([second]), /UNIQUE/);
@@ -353,7 +367,11 @@ describe('MemoryAgentStateStore', () => {
         assert.equal(beginA.type, 'acquired');
         assert.equal(beginB.type, 'acquired');
         if (beginA.type !== 'acquired' || beginB.type !== 'acquired') throw new Error('expected acquired');
-        const first = buildArtifact({ id: 'artifact-memory-stable', requestId: beginA.record.requestId, filename: 'stable-a.png' });
+        const first = buildArtifact({
+            id: 'artifact-memory-stable',
+            requestId: beginA.record.requestId,
+            filename: 'stable-a.png'
+        });
         const rewritten = buildArtifact({
             id: 'artifact-memory-stable',
             requestId: beginB.record.requestId,

@@ -190,7 +190,7 @@ function ActivityHistoryRow({
                                 alt={image.filename}
                                 fill
                                 sizes='28px'
-                                className='object-cover'
+                                className='image-edge object-cover'
                                 unoptimized
                             />
                         </span>
@@ -230,7 +230,7 @@ export function ActivityTimeline({
                     {history.length > 0 ? (
                         <button
                             type='button'
-                            className='text-muted-foreground hover:text-foreground shrink-0 text-xs'
+                            className='text-muted-foreground hover:text-foreground focus-visible:ring-ring min-h-11 shrink-0 rounded-md px-2 py-2 text-xs transition-[color,box-shadow] focus-visible:ring-2 focus-visible:outline-none lg:min-h-8 lg:py-1'
                             onClick={onClearHistory}>
                             {t('history.clear')}
                         </button>

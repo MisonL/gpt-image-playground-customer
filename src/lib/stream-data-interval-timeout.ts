@@ -7,10 +7,7 @@ export class ImageStreamDataIntervalTimeoutError extends Error {
     }
 }
 
-export async function* withStreamDataIntervalTimeout<T>(
-    stream: AsyncIterable<T>,
-    timeoutMs: number
-): AsyncIterable<T> {
+export async function* withStreamDataIntervalTimeout<T>(stream: AsyncIterable<T>, timeoutMs: number): AsyncIterable<T> {
     if (timeoutMs <= 0) {
         yield* stream;
         return;

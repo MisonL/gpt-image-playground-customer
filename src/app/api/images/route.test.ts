@@ -3,6 +3,7 @@ import {
     imageFormRequest,
     readSseEvents,
     startHangingImagesStreamUpstream,
+    startImagesAcceptedTaskStreamFallbackUpstream,
     startImagesJsonUpstream,
     startImagesStreamFallbackUpstream,
     startResponsesImageUpstream,
@@ -32,6 +33,11 @@ function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
 beforeEach(() => {
     originalEnv = { ...process.env };
     console.error = () => {};
+    for (const key of Object.keys(process.env)) {
+        if (/^OPENAI_CHANNEL_\d+_/.test(key)) {
+            delete process.env[key];
+        }
+    }
     delete process.env.APP_PASSWORD;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
@@ -39,6 +45,7 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED;
@@ -113,6 +120,160 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
             assert.equal(upstreamJson.stream, true);
             assert.equal(upstreamJson.partial_images, 2);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('uses a non-streaming channel request mode when page auto streaming has no SSE channel', async () => {
+        const { POST } = await import('./route');
+        const upstreamBodies: string[] = [];
+        let observedIdempotencyKey: string | string[] | undefined;
+        const upstream = await startImagesJsonUpstream(async (body, _url, request) => {
+            if (request.method === 'POST') {
+                upstreamBodies.push(body);
+                observedIdempotencyKey = request.headers['idempotency-key'];
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-only';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            assert.equal(upstreamBodies.length, 1);
+            const upstreamJson = JSON.parse(upstreamBodies[0] || '{}') as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, false);
+            assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
+            assert.equal(observedIdempotencyKey, 'client-route-stream');
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('retries accepted async image tasks with the same upstream idempotency key', async () => {
+        const { POST } = await import('./route');
+        const observedIdempotencyKeys: Array<string | string[] | undefined> = [];
+        let upstreamCalls = 0;
+        const upstream = await startImagesJsonUpstream(async (_body, _url, request) => {
+            if (request.method !== 'POST') {
+                return { data: [{ b64_json: PNG_BASE64 }] };
+            }
+            upstreamCalls += 1;
+            observedIdempotencyKeys.push(request.headers['idempotency-key']);
+            if (upstreamCalls === 1) {
+                return {
+                    object: 'image.task',
+                    status: 'pending',
+                    task_id: 'sync-gen-task',
+                    poll_url: '/api/image-tasks?ids=sync-gen-task'
+                };
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-task';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'auto',
+                    clientRequestId: 'accepted-task-retry-key'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            assert.equal(upstreamCalls, 2);
+            assert.deepEqual(observedIdempotencyKeys, ['accepted-task-retry-key', 'accepted-task-retry-key']);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('retries accepted async edit tasks with the same upstream idempotency key', async () => {
+        const { POST } = await import('./route');
+        const observedIdempotencyKeys: Array<string | string[] | undefined> = [];
+        let upstreamCalls = 0;
+        const upstream = await startImagesJsonUpstream(async (_body, _url, request) => {
+            if (request.method !== 'POST') {
+                return { data: [{ b64_json: PNG_BASE64 }] };
+            }
+            upstreamCalls += 1;
+            observedIdempotencyKeys.push(request.headers['idempotency-key']);
+            if (upstreamCalls === 1) {
+                return {
+                    object: 'image.task',
+                    status: 'pending',
+                    task_id: 'sync-edit-task',
+                    poll_url: '/api/image-tasks?ids=sync-edit-task'
+                };
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-edit-task';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    mode: 'edit',
+                    streamMode: 'auto',
+                    clientRequestId: 'accepted-edit-task-retry-key'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            assert.equal(upstreamCalls, 2);
+            assert.deepEqual(observedIdempotencyKeys, [
+                'accepted-edit-task-retry-key',
+                'accepted-edit-task-retry-key'
+            ]);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('fails explicit page stream requests instead of falling back to non-streaming request modes', async () => {
+        const { POST } = await import('./route');
+        const upstreamBodies: string[] = [];
+        const upstream = await startImagesJsonUpstream(async (body, _url, request) => {
+            if (request.method === 'POST') {
+                upstreamBodies.push(body);
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-only';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'stream',
+                    imageStreamingStrategy: 'openai-sse'
+                })
+            );
+
+            assert.equal(response.status, 503);
+            const body = (await response.json()) as { error?: string };
+            assert.match(body.error || '', /images-sse/);
+            assert.equal(upstreamBodies.length, 0);
         } finally {
             await upstream.close();
         }
@@ -395,6 +556,45 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         } finally {
             await upstream.close();
             await otherUpstream.close();
+        }
+    });
+
+    it('retries accepted async image tasks after auto stream fallback with the same idempotency key', async () => {
+        const { POST } = await import('./route');
+        const upstream = await startImagesAcceptedTaskStreamFallbackUpstream();
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    streamMode: 'auto',
+                    clientRequestId: 'client-route-auto-fallback-task'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            const events = await readSseEvents(response);
+            assert.deepEqual(
+                events.map((event) => event.type),
+                ['partial_image', 'completed', 'done']
+            );
+            assert.equal(events[2].fallback_used, true);
+            assert.deepEqual(
+                upstream.calls.map((call) => call.stream),
+                [true, false, false]
+            );
+            assert.deepEqual(
+                upstream.calls.map((call) => call.idempotencyKey),
+                [
+                    'client-route-auto-fallback-task',
+                    'client-route-auto-fallback-task',
+                    'client-route-auto-fallback-task'
+                ]
+            );
+        } finally {
+            await upstream.close();
         }
     });
 
@@ -743,13 +943,13 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
     it('rejects the experimental Responses API backend when the feature flag is disabled', async () => {
         const { POST } = await import('./route');
         const response = await POST(
-                imageFormRequest({
-                    apiBaseUrl: 'http://127.0.0.1:1/v1',
-                    apiKey: 'test-key',
-                    stream: false,
-                    streamMode: 'non_stream',
-                    imageBackend: 'responses'
-                })
+            imageFormRequest({
+                apiBaseUrl: 'http://127.0.0.1:1/v1',
+                apiKey: 'test-key',
+                stream: false,
+                streamMode: 'non_stream',
+                imageBackend: 'responses'
+            })
         );
 
         assert.equal(response.status, 400);
@@ -761,13 +961,13 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
         const { POST } = await import('./route');
         const response = await POST(
-                imageFormRequest({
-                    apiBaseUrl: 'http://127.0.0.1:1/v1',
-                    apiKey: 'test-key',
-                    stream: false,
-                    streamMode: 'non_stream',
-                    imageBackend: 'responses'
-                })
+            imageFormRequest({
+                apiBaseUrl: 'http://127.0.0.1:1/v1',
+                apiKey: 'test-key',
+                stream: false,
+                streamMode: 'non_stream',
+                imageBackend: 'responses'
+            })
         );
 
         assert.equal(response.status, 400);
@@ -781,14 +981,14 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         const { POST } = await import('./route');
 
         const multiImage = await POST(
-                imageFormRequest({
-                    apiBaseUrl: 'http://127.0.0.1:1/v1',
-                    apiKey: 'test-key',
-                    stream: false,
-                    streamMode: 'non_stream',
-                    imageBackend: 'responses',
-                    n: '2'
-                })
+            imageFormRequest({
+                apiBaseUrl: 'http://127.0.0.1:1/v1',
+                apiKey: 'test-key',
+                stream: false,
+                streamMode: 'non_stream',
+                imageBackend: 'responses',
+                n: '2'
+            })
         );
         assert.equal(multiImage.status, 400);
         assert.match(String(((await multiImage.json()) as Record<string, unknown>).error), /单张生成/);
@@ -799,15 +999,15 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
         const { POST } = await import('./route');
         const edit = await POST(
-                imageFormRequest({
-                    apiBaseUrl: 'http://127.0.0.1:1/v1',
-                    apiKey: 'test-key',
-                    stream: false,
-                    streamMode: 'non_stream',
-                    imageBackend: 'responses',
-                    n: '2',
-                    mode: 'edit'
-                })
+            imageFormRequest({
+                apiBaseUrl: 'http://127.0.0.1:1/v1',
+                apiKey: 'test-key',
+                stream: false,
+                streamMode: 'non_stream',
+                imageBackend: 'responses',
+                n: '2',
+                mode: 'edit'
+            })
         );
         assert.equal(edit.status, 400);
         assert.match(String(((await edit.json()) as Record<string, unknown>).error), /单张编辑/);
@@ -1293,7 +1493,10 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             };
             assert.equal(upstreamJson.tools?.[0]?.type, 'image_generation');
             assert.equal(upstreamJson.tools?.[0]?.action, 'edit');
-            assert.equal(upstreamJson.input?.[0]?.content?.some((item) => item.type === 'input_image'), true);
+            assert.equal(
+                upstreamJson.input?.[0]?.content?.some((item) => item.type === 'input_image'),
+                true
+            );
         } finally {
             await upstream.close();
         }
@@ -1619,6 +1822,33 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             const body = (await response.json()) as Record<string, unknown>;
             assert.match(String(body.error), /clientRequestId/);
             assert.match(String(body.error), /128/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('rejects page SSE client request ids with control characters before contacting upstream', async () => {
+        const { POST } = await import('./route');
+        let upstreamCalls = 0;
+        const upstream = await startImagesJsonUpstream(async () => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    clientRequestId: 'bad\nrequest'
+                })
+            );
+
+            assert.equal(response.status, 400);
+            const body = (await response.json()) as Record<string, unknown>;
+            assert.match(String(body.error), /clientRequestId/);
+            assert.match(String(body.error), /控制字符/);
             assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();

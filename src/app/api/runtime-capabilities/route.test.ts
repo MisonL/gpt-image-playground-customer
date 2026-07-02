@@ -20,22 +20,26 @@ beforeEach(() => {
     process.env.npm_lifecycle_event = 'test';
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
     delete process.env.OPENAI_RESPONSES_API_MODEL;
+    delete process.env.IMAGE_GENERATION_BACKEND;
     delete process.env.IMAGE_STREAMING_STRATEGY;
     delete process.env.IMAGE_UPSTREAM_TIMEOUT_MS;
     delete process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS;
     delete process.env.IMAGE_UPSTREAM_MAX_RETRIES;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
+    delete process.env.OPENAI_ROUTING_STRATEGY;
     delete process.env.OPENAI_CHANNEL_1_ID;
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_2_ID;
     delete process.env.OPENAI_CHANNEL_2_API_KEYS;
     delete process.env.OPENAI_CHANNEL_2_BASE_URL;
     delete process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST;
+    delete process.env.OPENAI_CHANNEL_2_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED;
     delete process.env.OPENAI_CHANNEL_QUEUE_ENABLED;
     delete process.env.OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS;
@@ -59,13 +63,17 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
     it('exposes streaming batch capability by default without the removed env gate', async () => {
         const { GET } = await import('./route');
 
-        const body = (await (await GET()).json()) as Record<string, { enabled: boolean; recommendedConcurrency?: number }>;
+        const body = (await (await GET()).json()) as Record<
+            string,
+            { enabled: boolean; recommendedConcurrency?: number }
+        >;
 
         assert.equal(body.streamingBatch.enabled, true);
         assert.equal(typeof body.streamingBatch.recommendedConcurrency, 'number');
     });
 
-    it('exposes the runtime default streaming strategy for client-side fanout decisions', async () => {
+    it('exposes the runtime default streaming settings for client-side fanout decisions', async () => {
+        process.env.IMAGE_GENERATION_BACKEND = 'responses-image-generation';
         process.env.IMAGE_STREAMING_STRATEGY = 'off';
         process.env.IMAGE_UPSTREAM_TIMEOUT_MS = '1200000';
         process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS = '600000';
@@ -75,6 +83,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         const body = (await (await GET()).json()) as Record<
             string,
             {
+                defaultBackend?: string;
                 defaultMode?: string;
                 defaultStrategy?: string;
                 upstream_timeout_ms?: number;
@@ -83,6 +92,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             }
         >;
 
+        assert.equal(body.streaming.defaultBackend, 'responses-image-generation');
         assert.equal(body.streaming.defaultMode, 'non_stream');
         assert.equal(body.streaming.defaultStrategy, 'off');
         assert.deepEqual(body.imageTransport, {
@@ -204,7 +214,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.equal(defaultBody.upstreamProfile.serverProfile, 'openai-compatible');
         assert.equal(defaultBody.upstreamProfile.serverProfileMixed, false);
         assert.equal(defaultBody.upstreamProfile.requestProfile, 'openai-compatible');
-        assert.equal((defaultBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages, 10);
+        assert.equal(
+            (defaultBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages,
+            10
+        );
 
         process.env.OPENAI_CHANNEL_1_ID = 'matsca';
         process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-matsca';
@@ -223,7 +236,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             (matscaBody.upstreamProfile.activeConstraints as { generateCount: { max: number } }).generateCount.max,
             4
         );
-        assert.equal((matscaBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages, 8);
+        assert.equal(
+            (matscaBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages,
+            8
+        );
         assert.equal(JSON.stringify(matscaBody).includes('sk-matsca'), false);
 
         process.env.OPENAI_CHANNEL_2_ID = 'official';
@@ -240,7 +256,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             (mixedBody.upstreamProfile.activeConstraints as { generateCount: { max: number } }).generateCount.max,
             4
         );
-        assert.equal((mixedBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages, 8);
+        assert.equal(
+            (mixedBody.upstreamProfile.activeConstraints as { upload: { maxImages: number } }).upload.maxImages,
+            8
+        );
         assert.deepEqual(
             (mixedBody.upstreamProfile.activeConstraints as { partialImages: { min: number; max: number } })
                 .partialImages,
@@ -370,5 +389,120 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.equal(enabled.responsesImageBackend.mode, 'experimental');
         assert.equal(enabled.responsesImageBackend.hasDefaultModel, true);
         assert.deepEqual(enabled.responsesImageBackend.missingEnv, []);
+    });
+
+    it('exposes sanitized channel request modes for routing diagnostics', async () => {
+        process.env.OPENAI_ROUTING_STRATEGY = 'round_robin';
+        process.env.OPENAI_CHANNEL_1_ID = 'images';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://images.example.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-secret';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream,images-sse';
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as {
+            channelRouting: {
+                strategy: string;
+                credentialCount: number;
+                channelCount: number;
+                supportedRequestModes: string[];
+                configuredRequestModes: string[];
+                effectiveRequestModes: string[];
+                requestModeControls: {
+                    globalEnv: string;
+                    channelEnvPattern: string;
+                    mutableAtRuntime: boolean;
+                    smokeGateCommands: Record<string, string[]>;
+                };
+                requestModeHealth: Array<{
+                    mode: string;
+                    configuredCredentialCount: number;
+                    healthyCredentialCount: number;
+                    configuredChannelCount: number;
+                    healthyChannelCount: number;
+                }>;
+                requestModesByChannel: Array<{
+                    channelId: string;
+                    requestModes: string[];
+                }>;
+                effectiveRequestModesByChannel: Array<{
+                    channelId: string;
+                    requestModes: string[];
+                }>;
+            };
+        };
+
+        assert.deepEqual(body.channelRouting, {
+            strategy: 'round_robin',
+            credentialCount: 1,
+            channelCount: 1,
+            supportedRequestModes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
+            configuredRequestModes: ['images-non-stream', 'images-sse'],
+            effectiveRequestModes: ['images-non-stream', 'images-sse'],
+            requestModeControls: {
+                source: 'admin_env_whitelist',
+                globalEnv: 'OPENAI_UPSTREAM_REQUEST_MODES',
+                channelEnvPattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                mutableAtRuntime: false,
+                finalGateCommand:
+                    'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable',
+                smokeGateCommands: {
+                    'images-non-stream': [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case original-images-json --allow-billable'
+                    ],
+                    'images-sse': [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-images-sse --allow-billable'
+                    ],
+                    'responses-non-stream': [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case sub2api-responses-json --allow-billable'
+                    ],
+                    'responses-sse': [
+                        'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --case gpt2image-responses-sse --allow-billable'
+                    ]
+                }
+            },
+            requestModeHealth: [
+                {
+                    mode: 'images-non-stream',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'images-sse',
+                    configuredCredentialCount: 1,
+                    healthyCredentialCount: 1,
+                    configuredChannelCount: 1,
+                    healthyChannelCount: 1
+                },
+                {
+                    mode: 'responses-non-stream',
+                    configuredCredentialCount: 0,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 0,
+                    healthyChannelCount: 0
+                },
+                {
+                    mode: 'responses-sse',
+                    configuredCredentialCount: 0,
+                    healthyCredentialCount: 0,
+                    configuredChannelCount: 0,
+                    healthyChannelCount: 0
+                }
+            ],
+            requestModesByChannel: [
+                {
+                    channelId: 'images',
+                    requestModes: ['images-non-stream', 'images-sse']
+                }
+            ],
+            effectiveRequestModesByChannel: [
+                {
+                    channelId: 'images',
+                    requestModes: ['images-non-stream', 'images-sse']
+                }
+            ]
+        });
+        assert.equal(JSON.stringify(body.channelRouting).includes('sk-secret'), false);
     });
 });

@@ -32,12 +32,13 @@ export function buildBatchPartialFailureMessage(options: {
     t: Translate;
 }): string {
     const reasons = options.errors
-        .map((error, index) =>
-            `${index + 1}. ${buildUserFacingApiErrorMessage({
-                message: error.message,
-                status: error.status,
-                t: options.t
-            })}`
+        .map(
+            (error, index) =>
+                `${index + 1}. ${buildUserFacingApiErrorMessage({
+                    message: error.message,
+                    status: error.status,
+                    t: options.t
+                })}`
         )
         .join(' ');
 
@@ -61,5 +62,13 @@ function buildApiErrorAdvice(status: number | undefined, t: Translate): string |
 }
 
 function isUpstreamStatus(status: number | undefined): boolean {
-    return status === 500 || status === 502 || status === 503 || status === 504 || status === 520 || status === 522 || status === 523;
+    return (
+        status === 500 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504 ||
+        status === 520 ||
+        status === 522 ||
+        status === 523
+    );
 }

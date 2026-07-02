@@ -1,12 +1,12 @@
-import type { AppLogEntry } from './app-logger';
 import {
     buildAgentRequestDiagnosticsRetention,
     readAgentStateBackend,
     type AgentImageResponse,
     type AgentRequestDiagnosticsRetention
 } from './agent-api-contracts';
-import type { AgentErrorBody } from './api-error-response';
 import type { AgentArtifactRecord, AgentRequestRecord } from './agent-state-store';
+import type { AgentErrorBody } from './api-error-response';
+import type { AppLogEntry } from './app-logger';
 import type { FeedbackResponse } from './feedback-store';
 import { buildLogScopeDiagnostics, filterLogsByScope, resolveLogClientRequestIds } from './log-filter';
 
@@ -28,8 +28,7 @@ const DIAGNOSTIC_CONTEXT_FIELD_TYPES = {
     transport_error: 'boolean'
 } as const satisfies Record<string, 'string' | 'number' | 'boolean'>;
 
-type DiagnosticContextFieldType =
-    (typeof DIAGNOSTIC_CONTEXT_FIELD_TYPES)[keyof typeof DIAGNOSTIC_CONTEXT_FIELD_TYPES];
+type DiagnosticContextFieldType = (typeof DIAGNOSTIC_CONTEXT_FIELD_TYPES)[keyof typeof DIAGNOSTIC_CONTEXT_FIELD_TYPES];
 type DiagnosticContextValue = string | number | boolean;
 
 export type AgentLogDiagnosticEvent = {
@@ -252,8 +251,7 @@ function sanitizeContext(context: string | undefined): Record<string, Diagnostic
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
     const sanitized: Record<string, DiagnosticContextValue> = {};
     for (const [key, value] of Object.entries(parsed)) {
-        const expectedType =
-            DIAGNOSTIC_CONTEXT_FIELD_TYPES[key as keyof typeof DIAGNOSTIC_CONTEXT_FIELD_TYPES];
+        const expectedType = DIAGNOSTIC_CONTEXT_FIELD_TYPES[key as keyof typeof DIAGNOSTIC_CONTEXT_FIELD_TYPES];
         if (!expectedType) continue;
         if (isDiagnosticContextValue(value, expectedType)) {
             sanitized[key] = value;
@@ -262,7 +260,10 @@ function sanitizeContext(context: string | undefined): Record<string, Diagnostic
     return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
-function isDiagnosticContextValue(value: unknown, expectedType: DiagnosticContextFieldType): value is DiagnosticContextValue {
+function isDiagnosticContextValue(
+    value: unknown,
+    expectedType: DiagnosticContextFieldType
+): value is DiagnosticContextValue {
     if (expectedType === 'number') return typeof value === 'number' && Number.isFinite(value);
     return typeof value === expectedType;
 }

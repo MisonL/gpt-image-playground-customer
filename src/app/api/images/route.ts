@@ -1,4 +1,10 @@
 import { appLogger } from '@/lib/app-logger';
+import type { ChannelCapacityLease } from '@/lib/channel-capacity-queue';
+import {
+    isStreamingChannelRequestMode,
+    resolveChannelRequestMode,
+    type ChannelRequestMode
+} from '@/lib/channel-request-mode';
 import { type ChannelCredential, resolveEffectiveCredential } from '@/lib/channel-router';
 import {
     RequestValidationError,
@@ -11,11 +17,6 @@ import {
     readStorageMode,
     validateApiBaseUrl
 } from '@/lib/image-request-utils';
-import {
-    mergeUpstreamHeadersWithFixed,
-    readImageUpstreamProfile,
-    type PartialImagesCount
-} from '@/lib/image-upstream-profile';
 import { handleEditImageMode, handleGenerateImageMode } from '@/lib/image-route-mode-handlers';
 import {
     assertResponsesImageBackendAllowed,
@@ -35,6 +36,11 @@ import {
     persistOpenAiImages
 } from '@/lib/image-service';
 import {
+    mergeUpstreamHeadersWithFixed,
+    readImageUpstreamProfile,
+    type PartialImagesCount
+} from '@/lib/image-upstream-profile';
+import {
     readImageGenerationBackend,
     readImageStreamMode,
     readImageStreamingStrategy,
@@ -43,12 +49,11 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
+import { createOpenAIImageClientOptions } from '@/lib/openai-image-transport';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { getServerChannelState } from '@/lib/server-channel-router';
-import { createOpenAIImageClientOptions } from '@/lib/openai-image-transport';
-import type { ChannelCapacityLease } from '@/lib/channel-capacity-queue';
-import type { StreamingAvailabilityKey, StreamingOperation } from '@/lib/streaming-availability';
 import { buildAccessCookie, readAffinityKey, verifyPasswordHash } from '@/lib/server-runtime';
+import type { StreamingAvailabilityKey, StreamingOperation } from '@/lib/streaming-availability';
 import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
@@ -60,6 +65,7 @@ type StreamResolutionInput = {
     operation: StreamingOperation;
     selectedCredential?: ChannelCredential;
     sourceId?: string;
+    forceNonStream?: boolean;
 };
 
 type StreamResolution = {
@@ -67,6 +73,17 @@ type StreamResolution = {
     streamEnabled: boolean;
     streamFallbackEnabled: boolean;
     streamingMarkedUnavailable: boolean;
+};
+
+type ChannelRequestModePlan = {
+    preferred: ChannelRequestMode;
+    fallback?: ChannelRequestMode;
+};
+
+type PageChannelSelection = {
+    selectedCredential?: ChannelCredential;
+    requestMode: ChannelRequestMode;
+    forcedNonStream: boolean;
 };
 
 function readErrorStatus(error: unknown): number | undefined {
@@ -101,7 +118,10 @@ function createAvailabilityKey(input: StreamResolutionInput): StreamingAvailabil
     };
 }
 
-function createAvailabilitySourceId(input: { selectedCredential?: ChannelCredential; baseUrl?: string }): string | undefined {
+function createAvailabilitySourceId(input: {
+    selectedCredential?: ChannelCredential;
+    baseUrl?: string;
+}): string | undefined {
     if (input.selectedCredential) return undefined;
     const normalized = normalizeAvailabilityBaseUrl(input.baseUrl);
     const digest = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
@@ -122,6 +142,14 @@ function normalizeAvailabilityBaseUrl(baseUrl: string | undefined): string {
 function resolvePageStream(input: StreamResolutionInput): StreamResolution {
     const availabilityKey = createAvailabilityKey(input);
     const streamingAvailability = getServerChannelState().streamingAvailability;
+    if (input.forceNonStream) {
+        return {
+            availabilityKey,
+            streamEnabled: false,
+            streamFallbackEnabled: false,
+            streamingMarkedUnavailable: streamingAvailability.isUnavailable(availabilityKey)
+        };
+    }
     if (input.streamMode === 'non_stream') {
         return {
             availabilityKey,
@@ -159,6 +187,67 @@ function resolvePageStream(input: StreamResolutionInput): StreamResolution {
         streamFallbackEnabled: input.streamMode === 'auto',
         streamingMarkedUnavailable: false
     };
+}
+
+function resolvePageChannelRequestModePlan(input: {
+    streamMode: ImageStreamMode;
+    imageBackend: ImageGenerationBackend;
+    streamingStrategy: ImageStreamingStrategy;
+}): ChannelRequestModePlan {
+    if (input.streamMode === 'non_stream') {
+        return {
+            preferred: resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false })
+        };
+    }
+    if (input.streamMode === 'auto' && input.streamingStrategy === 'off') {
+        return {
+            preferred: resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false })
+        };
+    }
+    const preferred = resolveChannelRequestMode({
+        imageBackend: input.imageBackend,
+        streamEnabled: resolveImageStreamEnabled({
+            imageBackend: input.imageBackend,
+            requestedStream: true,
+            streamingStrategy: input.streamingStrategy
+        })
+    });
+    if (input.streamMode !== 'auto' || !isStreamingChannelRequestMode(preferred)) {
+        return { preferred };
+    }
+    return {
+        preferred,
+        fallback: resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false })
+    };
+}
+
+function selectPageServerCredential(input: {
+    router: NonNullable<ReturnType<typeof getServerChannelState>['router']>;
+    affinityKey: string;
+    plan: ChannelRequestModePlan;
+}): PageChannelSelection {
+    try {
+        return {
+            selectedCredential: input.router.select({
+                affinityKey: input.affinityKey,
+                requestMode: input.plan.preferred
+            }),
+            requestMode: input.plan.preferred,
+            forcedNonStream: false
+        };
+    } catch (error) {
+        if (!input.plan.fallback || !(error instanceof RequestValidationError)) {
+            throw error;
+        }
+        return {
+            selectedCredential: input.router.select({
+                affinityKey: input.affinityKey,
+                requestMode: input.plan.fallback
+            }),
+            requestMode: input.plan.fallback,
+            forcedNonStream: true
+        };
+    }
 }
 
 function markStreamingUnavailable(input: {
@@ -228,6 +317,7 @@ function releaseChannelLeaseAfterResponse(response: Response, lease: ChannelCapa
 
 export async function POST(request: NextRequest) {
     let selectedServerCredential: ChannelCredential | undefined;
+    let selectedServerRequestMode: ChannelRequestMode | undefined;
     let channelLease: ChannelCapacityLease | undefined;
     let clientRequestId: string | undefined;
     let requestLogContext: RequestLogContext | undefined;
@@ -244,6 +334,7 @@ export async function POST(request: NextRequest) {
         }
         const formData = await request.formData();
         clientRequestId = readClientRequestId(formData);
+        const upstreamIdempotencyKey = clientRequestId || crypto.randomUUID();
         requestLogContext = clientRequestId ? { clientRequestId } : undefined;
         const requestApiKey = String(formData.get('apiKey') || '').trim();
         const requestApiBaseUrl = String(formData.get('apiBaseUrl') || '').trim();
@@ -252,9 +343,24 @@ export async function POST(request: NextRequest) {
         );
         assertSafeApiOverride(requestApiKey, requestApiBaseUrl);
         validateApiBaseUrl(requestApiBaseUrl, { allowedPlainHttpBaseUrls });
-        selectedServerCredential = requestApiKey
-            ? undefined
-            : serverChannelRouter?.select({ affinityKey: readAffinityKey(request.headers) });
+        const streamMode = readImageStreamMode(formData, process.env);
+        const imageBackend = readImageGenerationBackend(formData, process.env);
+        const streamingStrategy = readImageStreamingStrategy(formData, process.env);
+        const requestModePlan = resolvePageChannelRequestModePlan({ streamMode, imageBackend, streamingStrategy });
+        const channelSelection =
+            requestApiKey || !serverChannelRouter
+                ? {
+                      selectedCredential: undefined,
+                      requestMode: requestModePlan.preferred,
+                      forcedNonStream: false
+                  }
+                : selectPageServerCredential({
+                      router: serverChannelRouter,
+                      affinityKey: readAffinityKey(request.headers),
+                      plan: requestModePlan
+                  });
+        selectedServerCredential = channelSelection.selectedCredential;
+        selectedServerRequestMode = channelSelection.requestMode;
         const {
             apiKey: effectiveApiKey,
             baseUrl: effectiveApiBaseUrl,
@@ -280,7 +386,11 @@ export async function POST(request: NextRequest) {
         if (selectedCredential) {
             appLogger.info(
                 `已选择 API 渠道：${selectedCredential.channelId}，凭证：${selectedCredential.id}，策略：server`,
-                requestLogContext
+                {
+                    ...requestLogContext,
+                    channelRequestMode: channelSelection.requestMode,
+                    channelRequestModeFallbackApplied: channelSelection.forcedNonStream
+                }
             );
         }
 
@@ -337,12 +447,15 @@ export async function POST(request: NextRequest) {
             requestLogContext
         );
 
-        const streamMode = readImageStreamMode(formData, process.env);
         const partialImagesCount = toPartialImagesCount(
-            readCount(formData, 'partial_images', 2, upstreamProfile.partialImages.min, upstreamProfile.partialImages.max)
+            readCount(
+                formData,
+                'partial_images',
+                2,
+                upstreamProfile.partialImages.min,
+                upstreamProfile.partialImages.max
+            )
         );
-        const imageBackend = readImageGenerationBackend(formData, process.env);
-        const streamingStrategy = readImageStreamingStrategy(formData, process.env);
         const streamResolution = resolvePageStream({
             streamMode,
             imageBackend,
@@ -352,7 +465,8 @@ export async function POST(request: NextRequest) {
             sourceId: createAvailabilitySourceId({
                 selectedCredential,
                 baseUrl: effectiveApiBaseUrl
-            })
+            }),
+            forceNonStream: channelSelection.forcedNonStream
         });
         assertResponsesImageBackendAllowed({ imageBackend, mode });
         appLogger.info('图片上游兼容策略。', {
@@ -363,6 +477,8 @@ export async function POST(request: NextRequest) {
             streamEnabled: streamResolution.streamEnabled,
             streamFallbackEnabled: streamResolution.streamFallbackEnabled,
             streamingMarkedUnavailable: streamResolution.streamingMarkedUnavailable,
+            channelRequestMode: channelSelection.requestMode,
+            channelRequestModeFallbackApplied: channelSelection.forcedNonStream,
             upstreamProfile: upstreamProfile.id,
             upstreamExtraHeaders: Boolean(upstreamHeaders)
         });
@@ -398,9 +514,11 @@ export async function POST(request: NextRequest) {
                       apiBaseUrl: effectiveApiBaseUrl,
                       apiKey: effectiveApiKey,
                       startedAtMs: upstreamStartedAtMs,
+                      upstreamIdempotencyKey,
                       clientRequestId,
                       requestLogContext,
                       selectedCredential,
+                      channelRequestMode: channelSelection.requestMode,
                       accessCookie,
                       abortSignal: request.signal,
                       streamFallbackEnabled: streamResolution.streamFallbackEnabled,
@@ -427,9 +545,11 @@ export async function POST(request: NextRequest) {
                       apiBaseUrl: effectiveApiBaseUrl,
                       apiKey: effectiveApiKey,
                       startedAtMs: upstreamStartedAtMs,
+                      upstreamIdempotencyKey,
                       clientRequestId,
                       requestLogContext,
                       selectedCredential,
+                      channelRequestMode: channelSelection.requestMode,
                       accessCookie,
                       abortSignal: request.signal,
                       streamFallbackEnabled: streamResolution.streamFallbackEnabled,
@@ -503,8 +623,11 @@ export async function POST(request: NextRequest) {
                 preview: typeof invalidResult === 'string' ? invalidResult.slice(0, 300) : invalidResult,
                 ...requestLogContext
             });
-            reportServerCredentialFailure(selectedCredential, { status: 502 });
-            const response = NextResponse.json({ error: describeInvalidImagesResponse(invalidResult) }, { status: 502 });
+            reportServerCredentialFailure(selectedCredential, { status: 502 }, selectedServerRequestMode);
+            const response = NextResponse.json(
+                { error: describeInvalidImagesResponse(invalidResult) },
+                { status: 502 }
+            );
             const responseWithHeaders = appendChannelQueueHeaders(response, channelLease);
             channelLease?.release();
             channelLease = undefined;
@@ -513,7 +636,7 @@ export async function POST(request: NextRequest) {
     } catch (error: unknown) {
         channelLease?.release();
         channelLease = undefined;
-        reportServerCredentialFailure(selectedServerCredential, error);
+        reportServerCredentialFailure(selectedServerCredential, error, selectedServerRequestMode);
         appLogger.error('/api/images 处理失败：', {
             ...requestLogContext,
             error: error instanceof Error ? error.message : String(error)

@@ -68,6 +68,14 @@ const SERVER_CHANNEL_CASES = [
         backend: 'responses-image-generation',
         serverChannel: true,
         endpoint: 'agent-generate'
+    },
+    {
+        id: 'server-channel-agent-responses-json',
+        prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        stream: false,
+        backend: 'responses-image-generation',
+        serverChannel: true,
+        endpoint: 'agent-generate'
     }
 ];
 

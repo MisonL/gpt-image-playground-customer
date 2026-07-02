@@ -14,7 +14,7 @@ import {
     validateSpaceUrl
 } from './hf-space-doctor-utils.mjs';
 
-const MIN_NODE_MAJOR = 20;
+const MIN_NODE_VERSION = '>=20.9.0';
 const REQUIRED_SPACE_VARIABLES = ['AGENT_STATE_BACKEND', 'NEXT_PUBLIC_IMAGE_STORAGE_MODE'];
 const RECOMMENDED_SPACE_VARIABLES = ['APP_LOG_LEVEL'];
 const REQUIRED_SPACE_VARIABLE_VALUES = new Map([
@@ -46,12 +46,14 @@ function addCheck(checks, status, name, message, details = {}) {
 }
 
 function checkNode(checks) {
-    const major = Number.parseInt(process.versions.node.split('.')[0], 10);
-    if (major >= MIN_NODE_MAJOR) {
+    const match = process.version.match(/^v(\d+)\.(\d+)\./);
+    const major = match ? Number(match[1]) : 0;
+    const minor = match ? Number(match[2]) : 0;
+    if (major > 20 || (major === 20 && minor >= 9)) {
         addCheck(checks, 'pass', 'node', `Node.js ${process.version} is supported.`);
         return;
     }
-    addCheck(checks, 'fail', 'node', `Node.js ${process.version} is too old. Install Node.js ${MIN_NODE_MAJOR} or newer.`);
+    addCheck(checks, 'fail', 'node', `Node.js ${process.version} is too old. Install Node.js ${MIN_NODE_VERSION} or newer.`);
 }
 
 function checkCommand(checks, name, command, args, failureAction) {
@@ -179,7 +181,7 @@ function main() {
 
     const checks = [];
     checkNode(checks);
-    checkCommand(checks, 'npm', 'npm', ['--version'], 'npm is missing. Install Node.js 20 or newer with npm.');
+    checkCommand(checks, 'npm', 'npm', ['--version'], `npm is missing. Install Node.js ${MIN_NODE_VERSION} or newer with npm.`);
     const hfAvailable = checkCommand(checks, 'hf-cli', 'hf', ['version'], 'hf CLI is missing. Install the Hugging Face CLI.');
     const hfAuth = hfAvailable ? runDoctorCommand('hf', ['auth', 'whoami']) : { ok: false };
     if (hfAvailable && hfAuth.ok) {
@@ -200,7 +202,7 @@ function main() {
     if (docker.ok) {
         addCheck(checks, 'pass', 'docker', 'docker is available.', { version: docker.stdout.split(/\r?\n/)[0] });
     } else {
-        addCheck(checks, 'warn', 'docker', 'Docker is unavailable; npm run smoke:hf-space will not work.', {
+        addCheck(checks, 'warn', 'docker', 'Docker is unavailable; npm run smoke:hf-space-local will not work.', {
             error: docker.error
         });
         const dockerCli = runDoctorCommand('docker', ['--version']);

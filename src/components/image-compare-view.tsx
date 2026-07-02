@@ -29,7 +29,9 @@ export function ImageCompareView({ leftImage, leftLabel, rightImage, rightLabel 
                 { image: leftImage, label: leftLabel },
                 { image: rightImage, label: rightLabel }
             ].map(({ image, label }) => (
-                <figure key={`${label}-${image.filename}`} className='photo-paper relative aspect-square overflow-hidden p-2'>
+                <figure
+                    key={`${label}-${image.filename}`}
+                    className='photo-paper relative aspect-square overflow-hidden p-2'>
                     <div className='relative h-full w-full'>
                         <Image
                             src={image.path}
@@ -40,10 +42,10 @@ export function ImageCompareView({ leftImage, leftLabel, rightImage, rightLabel 
                             unoptimized
                         />
                     </div>
-                    <figcaption className='absolute top-3 left-3 rounded border border-border/70 bg-background/88 px-2 py-1 text-[11px] font-medium text-foreground shadow-sm'>
+                    <figcaption className='border-border/70 bg-background/88 text-foreground absolute top-3 left-3 rounded border px-2 py-1 text-[11px] font-medium shadow-sm'>
                         {label}
                     </figcaption>
-                    <span className='absolute right-3 bottom-3 left-3 truncate rounded bg-background/84 px-2 py-1 text-[10px] text-muted-foreground'>
+                    <span className='bg-background/84 text-muted-foreground absolute right-3 bottom-3 left-3 truncate rounded px-2 py-1 text-[10px]'>
                         {image.filename}
                     </span>
                 </figure>

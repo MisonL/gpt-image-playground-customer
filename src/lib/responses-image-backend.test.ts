@@ -1,3 +1,4 @@
+import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
 import {
     createResponsesImageEditStream,
     createResponsesImageStream,
@@ -5,7 +6,6 @@ import {
     generateImageWithResponsesBackend,
     type ResponsesImageGenerateInput
 } from './responses-image-backend';
-import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type OpenAI from 'openai';
@@ -286,7 +286,10 @@ describe('generateImageWithResponsesBackend', () => {
                 moderation: 'auto'
             });
 
-        await assert.rejects(() => makeInput('data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='), /image_generation_call.result/);
+        await assert.rejects(
+            () => makeInput('data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='),
+            /image_generation_call.result/
+        );
         await assert.rejects(() => makeInput('<script>alert(1)</script>'), /image_generation_call.result/);
     });
 

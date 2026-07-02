@@ -1,6 +1,11 @@
-import { RequestValidationError } from './image-request-utils';
-import { isChannelFailure } from './channel-router';
 import { ChannelCapacityQueueError } from './channel-capacity-queue';
+import {
+    CHANNEL_REQUEST_MODES,
+    type ChannelRequestMode,
+    type ChannelRequestModeDecision
+} from './channel-request-mode';
+import { isChannelFailure, isChannelRequestModeFailure } from './channel-router';
+import { RequestValidationError } from './image-request-utils';
 import { NextResponse } from 'next/server';
 
 export type AgentErrorCode =
@@ -20,6 +25,9 @@ export type AgentErrorCode =
 
 export type AgentErrorDiagnostics = {
     elapsed_ms?: number;
+    channel_request_mode?: ChannelRequestMode;
+    channel_request_mode_fallback_applied?: boolean;
+    route_decision?: ChannelRequestModeDecision;
     selected_channel_id?: string;
     upstream_host?: string;
     upstream_status?: number;
@@ -33,6 +41,7 @@ export type AgentErrorDiagnostics = {
     cooldown_target?: {
         channel_id: string;
         credential_id?: string;
+        request_mode?: ChannelRequestMode;
     };
     channel_cooldown_scope?: 'credential' | 'channel';
     response_headers?: Record<string, string>;
@@ -156,11 +165,17 @@ function cleanDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): Agent
             ? normalizeNonNegativeInteger(diagnostics.partial_image_count)
             : undefined;
     const retryAfterMs =
-        diagnostics.retry_after_ms !== undefined
-            ? normalizeNonNegativeInteger(diagnostics.retry_after_ms)
-            : undefined;
+        diagnostics.retry_after_ms !== undefined ? normalizeNonNegativeInteger(diagnostics.retry_after_ms) : undefined;
+    const cooldownTarget = cleanCooldownTarget(diagnostics.cooldown_target);
     const cleaned: AgentErrorDiagnostics = {
-        ...(diagnostics.elapsed_ms !== undefined ? { elapsed_ms: Math.max(0, Math.round(diagnostics.elapsed_ms)) } : {}),
+        ...(diagnostics.elapsed_ms !== undefined
+            ? { elapsed_ms: Math.max(0, Math.round(diagnostics.elapsed_ms)) }
+            : {}),
+        ...(diagnostics.channel_request_mode ? { channel_request_mode: diagnostics.channel_request_mode } : {}),
+        ...(diagnostics.channel_request_mode_fallback_applied !== undefined
+            ? { channel_request_mode_fallback_applied: diagnostics.channel_request_mode_fallback_applied }
+            : {}),
+        ...(diagnostics.route_decision ? { route_decision: diagnostics.route_decision } : {}),
         ...(diagnostics.selected_channel_id ? { selected_channel_id: diagnostics.selected_channel_id } : {}),
         ...(diagnostics.upstream_host ? { upstream_host: diagnostics.upstream_host } : {}),
         ...(diagnostics.upstream_status !== undefined ? { upstream_status: diagnostics.upstream_status } : {}),
@@ -171,11 +186,34 @@ function cleanDiagnostics(diagnostics: AgentErrorDiagnostics | undefined): Agent
         ...(retryAfterSeconds !== undefined ? { retry_after_seconds: retryAfterSeconds } : {}),
         ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
         ...(diagnostics.cooldown_until ? { cooldown_until: diagnostics.cooldown_until } : {}),
-        ...(diagnostics.cooldown_target ? { cooldown_target: diagnostics.cooldown_target } : {}),
+        ...(cooldownTarget ? { cooldown_target: cooldownTarget } : {}),
         ...(diagnostics.channel_cooldown_scope ? { channel_cooldown_scope: diagnostics.channel_cooldown_scope } : {}),
         ...(responseHeaders ? { response_headers: responseHeaders } : {})
     };
     return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+function cleanCooldownTarget(target: unknown): AgentErrorDiagnostics['cooldown_target'] | undefined {
+    if (typeof target !== 'object' || target === null) return undefined;
+    const source = target as Record<string, unknown>;
+    const channelId = normalizeNonEmptyString(source.channel_id);
+    if (!channelId) return undefined;
+    const credentialId = normalizeNonEmptyString(source.credential_id);
+    const requestMode = normalizeDiagnosticRequestMode(source.request_mode);
+    return {
+        channel_id: channelId,
+        ...(credentialId ? { credential_id: credentialId } : {}),
+        ...(requestMode ? { request_mode: requestMode } : {})
+    };
+}
+
+function normalizeDiagnosticRequestMode(value: unknown): ChannelRequestMode | undefined {
+    if (typeof value !== 'string') return undefined;
+    return CHANNEL_REQUEST_MODES.includes(value as ChannelRequestMode) ? (value as ChannelRequestMode) : undefined;
+}
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function readNumberField(error: unknown, field: string): number | undefined {
@@ -292,22 +330,30 @@ function isTransportError(error: unknown): boolean {
     const name = readStringField(error, 'name') || readConstructorName(error);
     if (name === 'APIConnectionError' || name === 'APIConnectionTimeoutError') return true;
     const code = readStringField(error, 'code') || readCauseChainString(error, 'code');
-    if (code === 'ENOTFOUND' || code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'EAI_AGAIN') {
+    if (
+        code === 'ENOTFOUND' ||
+        code === 'ECONNRESET' ||
+        code === 'ECONNREFUSED' ||
+        code === 'ETIMEDOUT' ||
+        code === 'EAI_AGAIN'
+    ) {
         return true;
     }
     const message = (readStringField(error, 'message') || '')
         .trim()
         .toLowerCase()
         .replace(/[.!?]+$/, '');
-    return message.includes('connection error') || message.includes('request timed out') || message.includes('fetch failed');
+    return (
+        message.includes('connection error') ||
+        message.includes('request timed out') ||
+        message.includes('fetch failed')
+    );
 }
 
 function classifyTransportErrorKind(error: unknown): AgentTransportErrorKind | undefined {
     const name = readStringField(error, 'name') || readConstructorName(error);
     const code = readStringField(error, 'code') || readCauseChainString(error, 'code');
-    const message = (readStringField(error, 'message') || '')
-        .trim()
-        .toLowerCase();
+    const message = (readStringField(error, 'message') || '').trim().toLowerCase();
 
     if (
         name === 'MissingFinalImageStreamResultError' ||
@@ -316,6 +362,9 @@ function classifyTransportErrorKind(error: unknown): AgentTransportErrorKind | u
         message.includes('final image')
     ) {
         return 'sse_final_missing';
+    }
+    if (isAcceptedImageTaskError(error)) {
+        return 'upstream_timeout';
     }
     if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'dns';
     if (
@@ -431,6 +480,36 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
 
     const status = readNumberField(error, 'status') ?? readNumberField(error, 'statusCode');
     const message = error instanceof Error ? error.message : (readStringField(error, 'message') ?? '发生未知错误。');
+    if (isAcceptedImageTaskError(error)) {
+        return new AgentApiError({
+            code: 'upstream_unavailable',
+            message,
+            status: 502,
+            retryable: false,
+            upstreamStatus: status,
+            diagnostics: buildDiagnostics(error, {
+                ...diagnostics,
+                ...(status !== undefined ? { upstreamStatus: status } : {})
+            })
+        });
+    }
+    if (isChannelRequestModeFailure(error, diagnostics.channel_request_mode)) {
+        const retryAfterSeconds = readRetryAfterSeconds(error) ?? 15;
+        return new AgentApiError({
+            code: 'upstream_unavailable',
+            message,
+            status: 502,
+            retryable: true,
+            upstreamStatus: 403,
+            retryAfterSeconds,
+            diagnostics: buildDiagnostics(error, {
+                ...diagnostics,
+                upstreamStatus: 403,
+                retryAfterSeconds,
+                channel_cooldown_scope: 'channel'
+            })
+        });
+    }
     if (error instanceof ChannelCapacityQueueError) {
         const retryAfterSeconds = Math.max(1, Math.ceil(Number(error.details.max_wait_ms ?? 30_000) / 1000));
         return new AgentApiError({
@@ -532,4 +611,9 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
         retryable: false,
         diagnostics: buildDiagnostics(error, diagnostics)
     });
+}
+
+function isAcceptedImageTaskError(error: unknown): boolean {
+    const name = readStringField(error, 'name') || readConstructorName(error);
+    return name === 'AcceptedImageTaskResponseError' || name === 'AcceptedImageTaskStreamResultError';
 }

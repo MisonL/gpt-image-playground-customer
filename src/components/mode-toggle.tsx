@@ -27,19 +27,16 @@ export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
     const { t } = useI18n();
 
     return (
-        <Tabs
-            value={currentMode}
-            onValueChange={(value) => onModeChange(value as WorkbenchMode)}
-            className='w-full'>
-            <TabsList className='grid h-auto w-full grid-cols-4 gap-1 rounded-md border border-border bg-background/70 p-0.5'>
+        <Tabs value={currentMode} onValueChange={(value) => onModeChange(value as WorkbenchMode)} className='w-full'>
+            <TabsList className='border-border bg-background/70 grid h-auto w-full grid-cols-4 gap-1 rounded-md border p-0.5'>
                 {modeItems.map(({ value, labelKey, descriptionKey, Icon }) => (
                     <TabsTrigger
                         key={value}
                         value={value}
                         className={`min-h-11 rounded-md border px-1 py-1 text-center transition-colors lg:min-h-10 2xl:px-1.5 ${
                             currentMode === value
-                                ? 'border-primary/35 bg-primary text-primary-foreground shadow-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground'
-                                : 'border-transparent bg-muted/30 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground'
+                                ? 'border-primary/35 bg-primary text-primary-foreground data-[state=active]:bg-primary data-[state=active]:text-primary-foreground shadow-sm'
+                                : 'bg-muted/30 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground border-transparent'
                         } `}>
                         <span className='flex w-full items-center justify-center gap-0.5 2xl:gap-1'>
                             <Icon className='hidden h-3.5 w-3.5 shrink-0 opacity-75 2xl:block' />

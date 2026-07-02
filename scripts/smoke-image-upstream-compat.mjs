@@ -297,7 +297,7 @@ async function main() {
     const { POST } = await import('../src/app/api/images/route.ts');
     try {
         for (const testCase of cases) await runCase(POST, testCase);
-        console.log('image upstream compatibility mock smoke passed');
+        console.log('image upstream compatibility local fixture smoke passed');
     } finally {
         restoreProcessEnv();
     }

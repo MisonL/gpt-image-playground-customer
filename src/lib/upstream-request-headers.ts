@@ -10,12 +10,22 @@ export type UpstreamRequestHeaderSummary = {
 };
 
 const DEFAULT_PRODUCT_USER_AGENT = `gpt-image-playground/${packageJson.version}`;
-const CONFIGURABLE_HEADER_BLOCKLIST = new Set(['authorization', 'accept', 'content-type', 'content-length', 'host']);
+const CONFIGURABLE_HEADER_BLOCKLIST = new Set([
+    'authorization',
+    'accept',
+    'content-type',
+    'content-length',
+    'host',
+    'idempotency-key'
+]);
+// Defense-in-depth: fixed idempotency headers must never leak from extra upstream headers.
+const ALWAYS_FILTERED_EXTRA_HEADER_NAMES = new Set(['idempotency-key']);
 const CANONICAL_HEADER_NAMES: Record<string, string> = {
     accept: 'Accept',
     authorization: 'Authorization',
     'content-length': 'Content-Length',
     'content-type': 'Content-Type',
+    'idempotency-key': 'Idempotency-Key',
     'user-agent': 'User-Agent',
     'x-app-id': 'X-App-ID',
     'x-app-secret': 'X-App-Secret'
@@ -24,7 +34,9 @@ const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/;
 
 export function readDefaultUpstreamUserAgent(env: Record<string, string | undefined> = process.env): string {
-    return normalizeHeaderValue(env.OPENAI_UPSTREAM_USER_AGENT || env.UPSTREAM_USER_AGENT || DEFAULT_PRODUCT_USER_AGENT);
+    return normalizeHeaderValue(
+        env.OPENAI_UPSTREAM_USER_AGENT || env.UPSTREAM_USER_AGENT || DEFAULT_PRODUCT_USER_AGENT
+    );
 }
 
 export function buildDefaultUpstreamHeaders(
@@ -66,7 +78,10 @@ export function mergeUpstreamHeadersWithFixed(
     const extraHeaders = normalizeHeaderMap(upstreamHeaders, { rejectBlocked: false });
     const fixedNames = new Set(Object.keys(fixedHeaders).map((name) => name.toLowerCase()));
     const filteredExtraHeaders = Object.fromEntries(
-        Object.entries({ ...baseHeaders, ...extraHeaders }).filter(([name]) => !fixedNames.has(name.toLowerCase()))
+        Object.entries({ ...baseHeaders, ...extraHeaders }).filter(([name]) => {
+            const lowerName = name.toLowerCase();
+            return !fixedNames.has(lowerName) && !ALWAYS_FILTERED_EXTRA_HEADER_NAMES.has(lowerName);
+        })
     );
     return {
         ...filteredExtraHeaders,

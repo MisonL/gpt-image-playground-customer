@@ -620,4 +620,19 @@ describe('normalizeUpstreamImageStreamEvent', () => {
         assert.equal(unknown.providerDialect, 'unknown_ignored_event');
         assert.deepEqual(unknown.events, []);
     });
+
+    it('recognizes accepted image task payloads as a dedicated provider dialect', () => {
+        const result = normalizeUpstreamImageStreamEventWithDiagnostics({
+            id: 'sync-gen-task',
+            object: 'image.task',
+            status: 'pending',
+            task_id: 'sync-gen-task',
+            poll_url: '/api/image-tasks?ids=sync-gen-task',
+            message: 'Image task accepted. Poll poll_url with the same Authorization header.'
+        });
+
+        assert.equal(result.providerDialect, 'image_task_accepted');
+        assert.deepEqual(result.events, []);
+        assert.equal(result.upstreamEventType, undefined);
+    });
 });
