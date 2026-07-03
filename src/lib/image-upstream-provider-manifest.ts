@@ -78,6 +78,10 @@ export type ImageProviderManifestSummary = {
         generate: boolean;
         edit: boolean;
     };
+    executionSupport: {
+        generate?: 'implemented' | 'declared_only';
+        edit?: 'implemented' | 'declared_only';
+    };
 };
 
 type PartialRange = {
@@ -166,6 +170,10 @@ export function createProviderManifestSummary(manifest: ImageProviderManifest): 
         asyncPolling: {
             generate: Boolean(manifest.modes.generate?.poll),
             edit: Boolean(manifest.modes.edit?.poll)
+        },
+        executionSupport: {
+            ...(manifest.modes.generate ? { generate: readExecutionSupport(manifest.modes.generate) } : {}),
+            ...(manifest.modes.edit ? { edit: readExecutionSupport(manifest.modes.edit) } : {})
         }
     };
 }
@@ -298,6 +306,10 @@ function readBaseProfile(value: unknown): ImageUpstreamProfileId {
 function readExecutionMode(mode: ImageProviderModeManifest): ProviderExecutionMode {
     if (mode.poll) return 'async-poll';
     return readSubmitContentType(mode) === 'multipart/form-data' ? 'multipart' : 'sync-json';
+}
+
+function readExecutionSupport(mode: ImageProviderModeManifest): 'implemented' | 'declared_only' {
+    return mode.poll ? 'declared_only' : 'implemented';
 }
 
 function readSubmitContentType(mode: ImageProviderModeManifest): ProviderSubmitContentType {

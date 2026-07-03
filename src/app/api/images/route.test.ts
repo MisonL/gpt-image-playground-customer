@@ -239,10 +239,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(response.status, 200);
             assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
             assert.equal(upstreamCalls, 2);
-            assert.deepEqual(observedIdempotencyKeys, [
-                'accepted-edit-task-retry-key',
-                'accepted-edit-task-retry-key'
-            ]);
+            assert.deepEqual(observedIdempotencyKeys, ['accepted-edit-task-retry-key', 'accepted-edit-task-retry-key']);
         } finally {
             await upstream.close();
         }
@@ -371,6 +368,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
             process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
             process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream,images-sse';
             process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'app-id';
             process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'app-secret';
             process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
@@ -406,6 +404,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             process.env.OPENAI_CHANNEL_1_ID = 'official';
             process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
             process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream,images-sse';
             process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
             process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
             process.env.OPENAI_MAX_STREAMS_PER_CREDENTIAL = '1';
@@ -448,9 +447,11 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         let upstreamAppId: string | string[] | undefined;
         let upstreamAppSecret: string | string[] | undefined;
         const upstream = await startImagesJsonUpstream(async (body, _url, request) => {
-            upstreamBody = body;
-            upstreamAppId = request.headers['x-app-id'];
-            upstreamAppSecret = request.headers['x-app-secret'];
+            if (request.method === 'POST' && request.url?.endsWith('/images/generations')) {
+                upstreamBody = body;
+                upstreamAppId = request.headers['x-app-id'];
+                upstreamAppSecret = request.headers['x-app-secret'];
+            }
             return {
                 data: [{ b64_json: PNG_BASE64 }]
             };
@@ -461,6 +462,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
             process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
             process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
             process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'app-id';
             process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'app-secret';
             process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
@@ -471,6 +473,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
 
             const response = await POST(
                 imageFormRequest({
+                    streamMode: 'non_stream',
                     n: '4',
                     size: '123x456',
                     background: 'transparent'
@@ -484,6 +487,32 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(upstreamJson.background, 'transparent');
             assert.equal(upstreamAppId, 'app-id');
             assert.equal(upstreamAppSecret, 'app-secret');
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('returns upstream diagnostics when JSON Images responses omit image data', async () => {
+        const { POST } = await import('./route');
+        const upstream = await startImagesJsonUpstream(async () => ({ data: [{ status: 'done' }] }));
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    streamMode: 'non_stream'
+                })
+            );
+
+            assert.equal(response.status, 502);
+            const body = (await response.json()) as {
+                error?: string;
+                diagnostics?: { category?: string; structure?: unknown };
+            };
+            assert.match(body.error || '', /不是 OpenAI Images 格式/);
+            assert.equal(body.diagnostics?.category, 'unknown_response_format');
+            assert.equal(JSON.stringify(body.diagnostics).includes('test-key'), false);
         } finally {
             await upstream.close();
         }

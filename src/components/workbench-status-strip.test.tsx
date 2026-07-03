@@ -80,4 +80,81 @@ describe('WorkbenchStatusStrip', () => {
         assert.match(routeLimitedHtml, /运行态受限/);
         assert.match(customOverrideHtml, /使用自定义上游/);
     });
+
+    it('shows request mode health details and suggested channel env in the status strip', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchStatusStrip
+                    model='gpt-image-2'
+                    routeLabel='服务器默认'
+                    streamStatus='流式可用'
+                    costLabel='预计 0.12 积分'
+                    channelRouting={{
+                        effectiveRequestModes: ['images-non-stream', 'images-sse'],
+                        requestModeHealth: [
+                            {
+                                mode: 'images-non-stream',
+                                configuredCredentialCount: 2,
+                                healthyCredentialCount: 1,
+                                configuredChannelCount: 2,
+                                healthyChannelCount: 1
+                            },
+                            {
+                                mode: 'responses-sse',
+                                configuredCredentialCount: 1,
+                                healthyCredentialCount: 0,
+                                configuredChannelCount: 1,
+                                healthyChannelCount: 0
+                            }
+                        ]
+                    }}
+                    runtimeLastFailure={{
+                        scope: 'channel',
+                        status: 403,
+                        code: 'image_generation_disabled',
+                        requestMode: 'responses-sse'
+                    }}
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /请求方式/);
+        assert.match(html, /images-non-stream/);
+        assert.match(html, /已验证/);
+        assert.match(html, /responses-sse/);
+        assert.match(html, /冷却中或待探测/);
+        assert.match(html, /最近渠道失败/);
+        assert.match(html, /HTTP 403/);
+        assert.match(html, /responses-sse/);
+        assert.match(html, /OPENAI_CHANNEL_N_REQUEST_MODES=images-non-stream/);
+    });
+
+    it('keeps request mode details constrained on narrow screens', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchStatusStrip
+                    model='gpt-image-2'
+                    routeLabel='服务器默认'
+                    streamStatus='流式可用'
+                    costLabel='预计 0.12 积分'
+                    channelRouting={{
+                        effectiveRequestModes: ['images-non-stream'],
+                        requestModeHealth: [
+                            {
+                                mode: 'images-non-stream',
+                                configuredCredentialCount: 1,
+                                healthyCredentialCount: 1,
+                                configuredChannelCount: 1,
+                                healthyChannelCount: 1
+                            }
+                        ]
+                    }}
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /basis-full sm:basis-auto/);
+        assert.match(html, /absolute left-0 right-0/);
+        assert.match(html, /sm:left-auto sm:w-\[min\(88vw,28rem\)\]/);
+    });
 });

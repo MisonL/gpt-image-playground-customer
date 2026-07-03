@@ -1,4 +1,9 @@
-import { describeInvalidImagesResponse, readClientRequestId } from './image-route-support';
+import {
+    describeInvalidImagesResponse,
+    inspectInvalidImagesResponse,
+    inspectUpstreamError,
+    readClientRequestId
+} from './image-route-support';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -24,6 +29,58 @@ describe('describeInvalidImagesResponse', () => {
 
     it('keeps the generic explanation for ordinary invalid Images responses', () => {
         assert.match(describeInvalidImagesResponse({}), /不是 OpenAI Images 格式/);
+    });
+});
+
+describe('inspectInvalidImagesResponse', () => {
+    it('classifies Responses outputs that never expose a completed image result', () => {
+        const diagnostics = inspectInvalidImagesResponse({
+            output: [
+                {
+                    type: 'image_generation_call',
+                    status: 'pending'
+                }
+            ]
+        });
+
+        assert.equal(diagnostics.category, 'missing_image_call_result');
+    });
+
+    it('redacts sensitive upstream response fields while preserving structure', () => {
+        const diagnostics = inspectInvalidImagesResponse({
+            data: [
+                {
+                    url: 'https://provider.example.test/final.png',
+                    b64_json: 'secret-base64',
+                    prompt: 'secret prompt'
+                }
+            ],
+            api_key: 'sk-secret'
+        });
+
+        assert.equal(diagnostics.category, 'url_only_result');
+        const serialized = JSON.stringify(diagnostics);
+        assert.equal(serialized.includes('https://provider.example.test/final.png'), false);
+        assert.equal(serialized.includes('secret-base64'), false);
+        assert.equal(serialized.includes('secret prompt'), false);
+        assert.equal(serialized.includes('sk-secret'), false);
+        assert.equal(serialized.includes('"redacted":true'), true);
+    });
+});
+
+describe('inspectUpstreamError', () => {
+    it('classifies disabled Responses image_generation groups', () => {
+        const diagnostics = inspectUpstreamError(
+            new Error('403 Image generation is not enabled for this group: image_generation')
+        );
+
+        assert.equal(diagnostics?.category, 'responses_disabled');
+    });
+
+    it('classifies partial-only stream failures', () => {
+        const diagnostics = inspectUpstreamError(new Error('流式图片响应未返回最终图片 b64_json。'));
+
+        assert.equal(diagnostics?.category, 'partial_no_final');
     });
 });
 

@@ -158,14 +158,17 @@ node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.json
 
 - `--base-url`
 - `--model`
+- `--responses-model`
 - `--prompt`
 - `--size`
 - `--quality`
 - `--format`
+- `--output-compression`
 - `--timeout-ms`
+- `--request-mode` / `--request-modes`
 - `--allow-billable`
 
-上游探针默认使用 `User-Agent: gpt-image-playground/probe`，可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖；输出的 `summary.request_headers` 只暴露脱敏摘要。
+上游探针默认只做非计费 `/models` 检查。添加 `--allow-billable` 后才会按 `--request-mode` 真实请求图片路径；可选值为 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`，也支持别名 `images-json`、`images-sse`、`responses-json`、`responses-sse` 和 `all`。探测 Responses 路径时必须提供 `--responses-model` 或配置 `OPENAI_RESPONSES_API_MODEL`，它是 `/responses` 顶层模型，不是图片模型。`request_modes.passed` 和 `request_modes.suggested_channel_config` 只是管理员写入 `OPENAI_CHANNEL_N_REQUEST_MODES` 的候选值；远程 URL-only、pending/poll_url、失败或未实测的 mode 不应写入。上游探针默认使用 `User-Agent: gpt-image-playground/probe`，可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖；输出的 `summary.request_headers` 只暴露脱敏摘要。
 
 上游探针读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL` 作为上游地址，读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY` 作为上游鉴权。base URL 必须是无凭据、无查询参数和无片段的 `http`/`https` 绝对 URL。输出不会包含 key，也不会输出完整 base64。
 
@@ -210,7 +213,8 @@ GET /api/agent/capabilities
 - `supported.request_modes`：服务端支持的上游请求方式枚举，当前为 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`。该字段描述服务端能力全集，不代表每个管理员渠道都已真实 smoke 通过。
 - `upstream_request_headers.default`：默认上游请求头摘要，包含 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`。
 - `upstream_request_headers.channels`：每个服务端渠道的脱敏请求头摘要。该字段不包含 API key、Authorization 值、Matsca app secret 值或任意 header value。
-- `request_mode_controls`：管理员 request mode 白名单控制面，声明 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、真实 smoke gate 和 `agent_client_policy=diagnostics_only`；Agent 客户端只能用于解释执行结果，不应据此自行选择上游请求方式。接入新渠道时，先用 `scripts/probe-upstream-image.mjs` 验证 `/models` 和 `/images/generations`，再用 `npm run smoke:image-upstream-real -- --allow-billable` 跑 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse` 之类的真实 smoke；如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，就把该渠道的 `responses-non-stream` 和 `responses-sse` 从白名单里删掉，只保留通过的 `images-*` 模式。
+- `request_mode_controls`：管理员 request mode 白名单控制面，声明 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、真实 smoke gate 和 `agent_client_policy=diagnostics_only`；Agent 客户端只能用于解释执行结果，不应据此自行选择上游请求方式。接入新渠道时，先用 `scripts/probe-upstream-image.mjs` 验证 `/models` 和 `/images/generations`，再用 `npm run smoke:image-upstream-real -- --allow-billable` 跑 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse` 之类的真实 smoke；也可用 `--case images-json`、`--case images-sse`、`--case responses-json`、`--case responses-sse` 按 request mode 筛选。脚本输出的 `request_modes.passed` 和顶层 `suggested_channel_config` 是写入 `OPENAI_CHANNEL_N_REQUEST_MODES` 的候选值；未通过、未实测、只返回远程 URL-only 或只返回 pending/poll_url 的 mode 不应写入。只有内联 `b64_json`、Responses `result` 或与 API Base URL 同源的 artifact URL 才算可被本服务消费。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，就把该渠道的 `responses-non-stream` 和 `responses-sse` 从白名单里删掉，只保留通过的 `images-*` 模式。
+- `providerManifests[].manifest.executionSupport`：`implemented` 表示当前执行器可按现有 Images/Responses 路径执行；`declared_only` 表示 manifest 声明了 async-poll，但当前执行器不会自动轮询 provider `poll` 配置。pending/poll_url 只能作为诊断线索，不是可写入 request mode 白名单的通过证明。
 - `routing_rules.high_resolution_edit`：`edit` 且最大边大于 `2048` 时默认优先使用页面端 `/api/images` SSE，页面流式有问题时显式回退。
 - `routing_rules.complex_ui_batch`：复杂 UI 批量出图推荐使用页面端 `/api/images` SSE。
 - `routing_rules.long_image_recovery`：长图恢复或续跑锚点场景推荐使用页面端 `/api/images` SSE。

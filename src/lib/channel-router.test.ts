@@ -1,5 +1,4 @@
 import { ChannelCapacityQueueError } from './channel-capacity-queue';
-import { CHANNEL_REQUEST_MODES } from './channel-request-mode';
 import {
     createChannelRouter,
     describeChannelFailure,
@@ -206,7 +205,7 @@ describe('getChannelPoolSummary', () => {
                     effectiveProfile: IMAGE_UPSTREAM_PROFILES['openai-compatible'],
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
-                    requestModes: CHANNEL_REQUEST_MODES,
+                    requestModes: ['images-non-stream'],
                     credentialCount: 2
                 },
                 {
@@ -216,7 +215,7 @@ describe('getChannelPoolSummary', () => {
                     effectiveProfile: IMAGE_UPSTREAM_PROFILES['openai-compatible'],
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
-                    requestModes: CHANNEL_REQUEST_MODES,
+                    requestModes: ['images-non-stream'],
                     credentialCount: 1
                 }
             ]
@@ -249,7 +248,7 @@ describe('getChannelPoolSummary', () => {
                         has_extra_headers: true,
                         configured_header_names: ['x-app-id', 'x-app-secret']
                     },
-                    requestModes: CHANNEL_REQUEST_MODES,
+                    requestModes: ['images-non-stream'],
                     credentialCount: 1
                 }
             ]
@@ -357,7 +356,7 @@ describe('getChannelPoolSummary', () => {
                     effectiveProfile: config.credentials[0]?.providerProfile,
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
-                    requestModes: CHANNEL_REQUEST_MODES,
+                    requestModes: ['images-non-stream'],
                     providerManifest: {
                         id: 'custom_provider',
                         name: 'Custom Provider',
@@ -377,6 +376,10 @@ describe('getChannelPoolSummary', () => {
                         asyncPolling: {
                             generate: true,
                             edit: false
+                        },
+                        executionSupport: {
+                            generate: 'declared_only',
+                            edit: 'implemented'
                         }
                     },
                     credentialCount: 1
@@ -1422,12 +1425,13 @@ describe('createChannelRouter', () => {
             1000
         );
 
-        assert.deepEqual(toPublicChannelFailure(reason), {
+        assert.deepEqual(toPublicChannelFailure({ ...reason, requestMode: 'images-sse' }), {
             at: 1000,
             scope: 'channel',
             status: 524,
             code: 'cf_timeout',
-            requestId: 'req_123'
+            requestId: 'req_123',
+            requestMode: 'images-sse'
         });
     });
 

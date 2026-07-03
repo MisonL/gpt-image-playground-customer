@@ -16,7 +16,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - 批量 generate/edit：优先运行 `scripts/batch-images.mjs`，用 JSONL 输入和 append-only manifest 管理续跑。
 - 转换本地图片格式：优先运行 `scripts/convert-image-format.mjs`。
 - 查询页面请求的结果反馈或日志诊断摘要：优先运行 `scripts/diagnose-request.mjs`。
-- 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。接入新上游渠道时，先确认 `/models` 和 `/images/generations` 能通，再用 `npm run smoke:image-upstream-real -- --allow-billable` 逐个验证 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。如果某一路径先返回 `object=image.task,status=pending`，说明该请求方式不是直接完成结果；应先确认同一业务键能否在同一渠道下重试拿到最终图片，再把可用的 `request_modes` 写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，就把该渠道的 `responses-non-stream`、`responses-sse` 从 `OPENAI_CHANNEL_N_REQUEST_MODES` 移除。
+- 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。接入新上游渠道时，先确认 `/models` 和 `/images/generations` 能通，再用 `npm run smoke:image-upstream-real -- --allow-billable` 逐个验证 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。脚本也接受 request mode 别名 `images-json`、`images-sse`、`responses-json`、`responses-sse`，方便按通道能力筛选 case。只有内联 `b64_json`、Responses `result` 或与 API Base URL 同源的 artifact URL 才算可被本服务消费；远程 URL-only 结果不能写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果某一路径先返回 `object=image.task,status=pending`，说明该请求方式不是直接完成结果；应先确认同一业务键能否在同一渠道下重试拿到最终图片，再把可用的 `request_modes` 写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，就把该渠道的 `responses-non-stream`、`responses-sse` 从 `OPENAI_CHANNEL_N_REQUEST_MODES` 移除。
 - 不要临时编写 Node/Python/shell 脚本、curl 命令或手写 fetch/FormData 来重复实现这些脚本已经覆盖的 API 调用。
 - 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下 ad hoc 调用脚本。
 - 先用 dry-run、`--check-remote` 或 `--contract-check` 检查请求、路由、鉴权和服务声明的默认编排入口；只有用户明确允许真实计费时才加 `--allow-billable`。
@@ -33,6 +33,7 @@ Agent API 只作为自动化客户端接口，不作为首战场景或用户验�
 
 - 先读取 `GET /api/agent/capabilities` 的 `orchestration` 与 `routing_rules`。普通文生图默认提交业务意图到 `orchestration.endpoint`，当前为 `POST /api/agent/image-requests`；服务端负责选择内部执行路径、上游策略和 job polling。Agent 客户端不要按尺寸、远端 HTTPS 或流式策略自行选择 `/api/images`、`/api/agent/images/generate` 或 job endpoint。
 - `capabilities.supported.request_modes`、`capabilities.upstream_request_headers.channels[].request_modes` 和 `capabilities.request_mode_controls` 是服务端管理员配置的渠道请求方式白名单与诊断控制面；Agent 客户端不要据此绕过 `orchestration.endpoint` 自行挑选 Images、Responses、SSE 或非流式路径。
+- `providerManifests[].manifest.executionSupport=declared_only` 表示 manifest 声明了 async-poll，但当前执行器不会自动轮询 provider `poll` 配置。遇到 pending/poll_url 时按结构化诊断处理，不要把它当成可用同步 request mode。
 
 执行决策表：
 
@@ -252,7 +253,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 
 诊断脚本只输出状态、耗时、脱敏错误摘要、白名单响应头、Agent state 摘要和 base64 长度，不输出 API key、完整 prompt、完整图片数据或本地文件路径。
 
-上游探针脚本支持 `--base-url`、`--model`、`--prompt`、`--size`、`--quality`、`--format`、`--output-compression`、`--timeout-ms` 和 `--allow-billable`。默认读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL`，API Key 读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY`。上游 base URL 同样必须是无凭据、无查询参数、无片段的 `http`/`https` 绝对 URL。
+上游探针脚本支持 `--base-url`、`--model`、`--responses-model`、`--prompt`、`--size`、`--quality`、`--format`、`--output-compression`、`--timeout-ms`、`--request-mode` / `--request-modes` 和 `--allow-billable`。默认读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL`，API Key 读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY`。默认只做非计费 `/models` 检查；添加 `--allow-billable` 后才会按 `--request-mode` 真实请求图片路径。探测 Responses 路径时必须传 `--responses-model` 或配置 `OPENAI_RESPONSES_API_MODEL`。上游 base URL 同样必须是无凭据、无查询参数、无片段的 `http`/`https` 绝对 URL。
 
 脚本读取以下环境变量：
 

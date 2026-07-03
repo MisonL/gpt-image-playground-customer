@@ -29,6 +29,10 @@ function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
     }
 }
 
+function setPrimaryChannelRequestModes(requestModes: string) {
+    process.env.OPENAI_UPSTREAM_REQUEST_MODES = requestModes;
+}
+
 beforeEach(async () => {
     originalEnv = { ...process.env };
     originalCwd = process.cwd();
@@ -49,6 +53,7 @@ beforeEach(async () => {
     delete process.env.AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
+    delete process.env.OPENAI_UPSTREAM_REQUEST_MODES;
     delete process.env.OPENAI_UPSTREAM_USER_AGENT;
     delete process.env.UPSTREAM_USER_AGENT;
     delete process.env.OPENAI_CHANNEL_1_ID;
@@ -145,7 +150,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
-                request_modes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
+                request_modes: ['images-non-stream'],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -214,7 +219,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
-                request_modes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
+                request_modes: ['images-non-stream'],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -476,6 +481,7 @@ describe('Agent route integration', () => {
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('images-non-stream,images-sse');
 
         try {
             const response = await generateImage(
@@ -666,6 +672,7 @@ describe('Agent route integration', () => {
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('images-sse');
 
         try {
             const response = await generateImage(
@@ -700,6 +707,7 @@ describe('Agent route integration', () => {
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('images-sse');
 
         try {
             const response = await generateImage(
@@ -738,6 +746,7 @@ describe('Agent route integration', () => {
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('images-sse');
 
         try {
             const response = await generateImage(
@@ -793,6 +802,7 @@ describe('Agent route integration', () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('responses-sse');
 
         try {
             const response = await generateImage(
@@ -833,6 +843,7 @@ describe('Agent route integration', () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('responses-sse');
 
         try {
             const response = await generateImage(
@@ -881,6 +892,7 @@ describe('Agent route integration', () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('responses-sse');
 
         try {
             const response = await generateImage(
@@ -925,6 +937,7 @@ describe('Agent route integration', () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('responses-sse');
 
         try {
             const response = await generateImage(
@@ -955,6 +968,7 @@ describe('Agent route integration', () => {
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
         process.env.OPENAI_API_KEY = 'test-key';
+        setPrimaryChannelRequestModes('responses-sse');
 
         const response = await generateImage(
             agentJsonRequest('agent-responses-partial-range-key', {
@@ -1024,6 +1038,7 @@ describe('Agent route integration', () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('responses-sse');
 
         try {
             const response = await generateImage(
@@ -1055,6 +1070,7 @@ describe('Agent route integration', () => {
         ]);
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('images-sse');
 
         try {
             const response = await generateImage(
@@ -1403,6 +1419,7 @@ describe('Agent route integration', () => {
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('images-sse');
 
         try {
             const created = await createGenerateJob(
@@ -1455,6 +1472,7 @@ describe('Agent route integration', () => {
         ]);
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('images-sse');
 
         try {
             const created = await createGenerateJob(
@@ -1528,6 +1546,7 @@ describe('Agent route integration', () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('responses-sse');
 
         try {
             const created = await createGenerateJob(
@@ -1591,6 +1610,7 @@ describe('Agent route integration', () => {
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('responses-sse');
 
         try {
             const created = await createGenerateJob(
@@ -2059,6 +2079,7 @@ describe('Agent route integration', () => {
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        setPrimaryChannelRequestModes('images-sse');
 
         try {
             const response = await editImage(
@@ -2266,6 +2287,7 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
         process.env.OPENAI_UPSTREAM_PROFILE = 'openai-compatible';
+        setPrimaryChannelRequestModes('images-sse');
 
         try {
             const response = await editImage(

@@ -23,11 +23,14 @@ import {
     attachAccessCookie,
     describeInvalidImagesResponse,
     ensureOutputDirExists,
+    inspectInvalidImagesResponse,
+    inspectUpstreamError,
     readClientRequestId,
     reportServerCredentialFailure,
     resolveRequestActualCostSafely,
     type AccessCookie,
-    type RequestLogContext
+    type RequestLogContext,
+    type UpstreamResponseDiagnostics
 } from '@/lib/image-route-support';
 import {
     InvalidOpenAiImagesResponseError,
@@ -280,8 +283,9 @@ function appendChannelQueueHeaders(response: Response, lease: ChannelCapacityLea
 
 function releaseChannelLeaseAfterResponse(response: Response, lease: ChannelCapacityLease): Response {
     if (!response.body) {
+        const responseWithHeaders = appendChannelQueueHeaders(response, lease);
         lease.release();
-        return appendChannelQueueHeaders(response, lease);
+        return responseWithHeaders;
     }
 
     const reader = response.body.getReader();
@@ -301,8 +305,11 @@ function releaseChannelLeaseAfterResponse(response: Response, lease: ChannelCapa
             }
         },
         async cancel(reason) {
-            lease.release();
-            await reader.cancel(reason);
+            try {
+                await reader.cancel(reason);
+            } finally {
+                lease.release();
+            }
         }
     });
     return appendChannelQueueHeaders(
@@ -312,6 +319,22 @@ function releaseChannelLeaseAfterResponse(response: Response, lease: ChannelCapa
             headers: response.headers
         }),
         lease
+    );
+}
+
+function reportPersistDiagnosticsFailure(input: {
+    credential?: ChannelCredential;
+    diagnostics: UpstreamResponseDiagnostics;
+    requestMode?: ChannelRequestMode;
+}) {
+    if (input.diagnostics.category !== 'responses_disabled') return;
+    reportServerCredentialFailure(
+        input.credential,
+        {
+            status: 403,
+            error: { message: 'Image generation is not enabled for this group' }
+        },
+        input.requestMode
     );
 }
 
@@ -611,21 +634,43 @@ export async function POST(request: NextRequest) {
             return responseWithHeaders;
         } catch (persistError) {
             if (persistError instanceof MissingOpenAiImageDataError) {
-                appLogger.error(`第 ${persistError.index} 个图片数据缺少 b64_json。`, requestLogContext);
-                throw persistError;
+                const invalidResult = persistError.result;
+                const diagnostics = inspectInvalidImagesResponse(invalidResult);
+                appLogger.error(`第 ${persistError.index} 个图片数据缺少 b64_json。`, {
+                    upstreamDiagnostics: diagnostics,
+                    ...requestLogContext
+                });
+                reportPersistDiagnosticsFailure({
+                    credential: selectedCredential,
+                    diagnostics,
+                    requestMode: selectedServerRequestMode
+                });
+                const response = NextResponse.json(
+                    { error: describeInvalidImagesResponse(invalidResult), diagnostics },
+                    { status: 502 }
+                );
+                const responseWithHeaders = appendChannelQueueHeaders(response, channelLease);
+                channelLease?.release();
+                channelLease = undefined;
+                return responseWithHeaders;
             }
             if (!(persistError instanceof InvalidOpenAiImagesResponseError)) {
                 throw persistError;
             }
             const invalidResult: unknown = persistError.result;
+            const diagnostics = inspectInvalidImagesResponse(invalidResult);
             appLogger.error('OpenAI API 返回的数据无效或为空：', {
                 type: typeof invalidResult,
-                preview: typeof invalidResult === 'string' ? invalidResult.slice(0, 300) : invalidResult,
+                upstreamDiagnostics: diagnostics,
                 ...requestLogContext
             });
-            reportServerCredentialFailure(selectedCredential, { status: 502 }, selectedServerRequestMode);
+            reportPersistDiagnosticsFailure({
+                credential: selectedCredential,
+                diagnostics,
+                requestMode: selectedServerRequestMode
+            });
             const response = NextResponse.json(
-                { error: describeInvalidImagesResponse(invalidResult) },
+                { error: describeInvalidImagesResponse(invalidResult), diagnostics },
                 { status: 502 }
             );
             const responseWithHeaders = appendChannelQueueHeaders(response, channelLease);
@@ -637,9 +682,11 @@ export async function POST(request: NextRequest) {
         channelLease?.release();
         channelLease = undefined;
         reportServerCredentialFailure(selectedServerCredential, error, selectedServerRequestMode);
+        const upstreamDiagnostics = inspectUpstreamError(error);
         appLogger.error('/api/images 处理失败：', {
             ...requestLogContext,
-            error: error instanceof Error ? error.message : String(error)
+            error: error instanceof Error ? error.message : String(error),
+            ...(upstreamDiagnostics ? { upstreamDiagnostics } : {})
         });
 
         let errorMessage = '发生未知错误。';
@@ -665,6 +712,9 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        return NextResponse.json({ error: errorMessage }, { status });
+        return NextResponse.json(
+            { error: errorMessage, ...(upstreamDiagnostics ? { diagnostics: upstreamDiagnostics } : {}) },
+            { status }
+        );
     }
 }

@@ -359,6 +359,7 @@ type RuntimeCapabilities = {
             status?: number;
             code?: string;
             requestId?: string;
+            requestMode?: string;
         };
     };
     responsesImageBackend?: {
@@ -3390,6 +3391,8 @@ export default function HomePage() {
                                     parallelBatchEnabled={activeParallelBatchVisible}
                                     costLabel={activeEstimatedCostLabel}
                                     runtimeHealthStatus={activeRuntimeHealthStatus}
+                                    channelRouting={runtimeCapabilities?.channelRouting ?? null}
+                                    runtimeLastFailure={runtimeCapabilities?.streamingBatch.lastFailure ?? null}
                                 />
                                 <div className='text-muted-foreground hidden items-center gap-4 sm:flex'>
                                     <HelpCircle className='h-4 w-4' aria-hidden='true' />

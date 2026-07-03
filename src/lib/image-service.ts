@@ -1,5 +1,5 @@
-import { detectImageFormat, readImageDimensions, writeFileAtomic } from './agent-file-utils';
 import { readAcceptedImageTaskDetails } from './accepted-image-task';
+import { detectImageFormat, readImageDimensions, writeFileAtomic } from './agent-file-utils';
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
 import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
@@ -45,12 +45,14 @@ export class InvalidOpenAiImagesResponseError extends Error {
 
 export class MissingOpenAiImageDataError extends Error {
     readonly index: number;
+    readonly result: unknown;
     readonly status = 502;
 
-    constructor(index: number) {
+    constructor(index: number, result?: unknown) {
         super(`索引 ${index} 的图片数据缺少 base64 数据。`);
         this.name = 'MissingOpenAiImageDataError';
         this.index = index;
+        this.result = result;
     }
 }
 
@@ -192,7 +194,7 @@ export async function persistOpenAiImages(options: {
                   })
                 : undefined);
         if (!b64Json) {
-            throw new MissingOpenAiImageDataError(index);
+            throw new MissingOpenAiImageDataError(index, result);
         }
         const buffer = Buffer.from(b64Json, 'base64');
         const detectedFormat = detectImageFormat(buffer, options.outputFormat);

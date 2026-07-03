@@ -2,44 +2,83 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
+import { CHANNEL_REQUEST_MODES } from '../src/lib/channel-request-mode-values.mjs';
+
 const originalEnv = { ...process.env };
 const CASES = [
-    { id: 'original-images-json', prefix: 'IMAGE_REAL_SMOKE_ORIGINAL', stream: false },
-    { id: 'gaoren-images-sse', prefix: 'IMAGE_REAL_SMOKE_GAOREN', stream: true, strategy: 'newapi-keepalive-sse' },
-    { id: 'sub2api-images-sse', prefix: 'IMAGE_REAL_SMOKE_SUB2API', stream: true, strategy: 'newapi-keepalive-sse' },
+    {
+        id: 'original-images-json',
+        aliases: ['images-json', 'images-non-stream'],
+        prefix: 'IMAGE_REAL_SMOKE_ORIGINAL',
+        requestMode: 'images-non-stream',
+        stream: false
+    },
+    {
+        id: 'gaoren-images-sse',
+        aliases: ['images-sse'],
+        prefix: 'IMAGE_REAL_SMOKE_GAOREN',
+        requestMode: 'images-sse',
+        stream: true,
+        strategy: 'newapi-keepalive-sse'
+    },
+    {
+        id: 'sub2api-images-sse',
+        aliases: ['images-sse'],
+        prefix: 'IMAGE_REAL_SMOKE_SUB2API',
+        requestMode: 'images-sse',
+        stream: true,
+        strategy: 'newapi-keepalive-sse'
+    },
     {
         id: 'sub2api-responses-json',
+        aliases: ['responses-json', 'responses-non-stream'],
         prefix: 'IMAGE_REAL_SMOKE_SUB2API_RESPONSES',
         fallbackPrefix: 'IMAGE_REAL_SMOKE_SUB2API',
+        requestMode: 'responses-non-stream',
         stream: false,
         backend: 'responses-image-generation'
     },
     {
         id: 'gpt2image-responses-sse',
+        aliases: ['responses-sse'],
         prefix: 'IMAGE_REAL_SMOKE_GPT2IMAGE',
+        requestMode: 'responses-sse',
         stream: true,
         strategy: 'responses-sse',
         backend: 'responses-image-generation'
     },
     {
         id: 'matsca-images-sse',
+        aliases: ['images-sse'],
         prefix: 'IMAGE_REAL_SMOKE_MATSCA',
+        requestMode: 'images-sse',
         stream: true,
         strategy: 'newapi-keepalive-sse'
     }
 ];
 const SERVER_CHANNEL_CASES = [
-    { id: 'server-channel-images-json', prefix: 'IMAGE_REAL_SMOKE_SERVER', stream: false, serverChannel: true },
+    {
+        id: 'server-channel-images-json',
+        aliases: ['images-json', 'images-non-stream'],
+        prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        requestMode: 'images-non-stream',
+        stream: false,
+        serverChannel: true
+    },
     {
         id: 'server-channel-images-sse',
+        aliases: ['images-sse'],
         prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        requestMode: 'images-sse',
         stream: true,
         strategy: 'newapi-keepalive-sse',
         serverChannel: true
     },
     {
         id: 'server-channel-responses-sse',
+        aliases: ['responses-sse'],
         prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        requestMode: 'responses-sse',
         stream: true,
         strategy: 'responses-sse',
         backend: 'responses-image-generation',
@@ -47,14 +86,18 @@ const SERVER_CHANNEL_CASES = [
     },
     {
         id: 'server-channel-responses-json',
+        aliases: ['responses-json', 'responses-non-stream'],
         prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        requestMode: 'responses-non-stream',
         stream: false,
         backend: 'responses-image-generation',
         serverChannel: true
     },
     {
         id: 'server-channel-agent-images-sse',
+        aliases: ['images-sse'],
         prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        requestMode: 'images-sse',
         stream: true,
         strategy: 'newapi-keepalive-sse',
         serverChannel: true,
@@ -62,7 +105,9 @@ const SERVER_CHANNEL_CASES = [
     },
     {
         id: 'server-channel-agent-responses-sse',
+        aliases: ['responses-sse'],
         prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        requestMode: 'responses-sse',
         stream: true,
         strategy: 'responses-sse',
         backend: 'responses-image-generation',
@@ -71,7 +116,9 @@ const SERVER_CHANNEL_CASES = [
     },
     {
         id: 'server-channel-agent-responses-json',
+        aliases: ['responses-json', 'responses-non-stream'],
         prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        requestMode: 'responses-non-stream',
         stream: false,
         backend: 'responses-image-generation',
         serverChannel: true,
@@ -91,9 +138,7 @@ try {
     } else {
         configureRouteEnv();
         const availableCases = options.includeServerChannel ? [...CASES, ...SERVER_CHANNEL_CASES] : CASES;
-        const selectedCases = availableCases.filter(
-            (testCase) => options.caseId === 'all' || testCase.id === options.caseId
-        );
+        const selectedCases = availableCases.filter((testCase) => matchesCaseSelection(testCase, options.caseId));
         if (selectedCases.length === 0) throw new Error(`未知真实 smoke 场景：${options.caseId}`);
         const billablePreflight = buildBillablePreflight(selectedCases);
         const results = [];
@@ -127,6 +172,7 @@ try {
             missingRequiredCaseSet.has(id)
         );
         const finalGateSatisfied = isFinalGateSatisfied(results, missingRequiredCases);
+        const requestModeSummary = buildRequestModeSummary(results);
         const report = {
             ok:
                 results.every((item) => item.ok || item.skipped) &&
@@ -134,7 +180,9 @@ try {
                 invalidRequiredCases.length === 0,
             billable: options.allowBillable,
             final_gate_satisfied: finalGateSatisfied,
+            request_modes: requestModeSummary,
             ...(independentTargetSummary ? { independent_targets: independentTargetSummary } : {}),
+            suggested_channel_config: requestModeSummary.suggested_channel_config,
             ...(unselectedRequiredCases.length > 0 ? { unselected_required_cases: unselectedRequiredCases } : {}),
             ...(invalidRequiredCases.length > 0 ? { invalid_required_count: invalidRequiredCases.length } : {}),
             ...(invalidRequiredCases.length > 0 ? { invalid_required_cases: invalidRequiredCases } : {}),
@@ -177,6 +225,56 @@ function isFinalGateSatisfied(results, missingRequiredCases) {
         results.filter((item) => !item.server_channel && !item.skipped && item.ok).map((item) => item.id)
     );
     return CASES.every((testCase) => passedIndependentCases.has(testCase.id));
+}
+
+function buildRequestModeSummary(results) {
+    const modes = Object.fromEntries(
+        CHANNEL_REQUEST_MODES.map((mode) => {
+            const cases = results.filter((item) => item.request_mode === mode);
+            const passedCases = cases.filter((item) => item.ok === true && item.skipped !== true && item.blocked !== true);
+            const failedCases = cases.filter((item) => item.ok !== true && item.skipped !== true && item.blocked !== true);
+            const skippedCases = cases.filter((item) => item.skipped === true);
+            return [
+                mode,
+                {
+                    state: readRequestModeState({ cases, passedCases, failedCases }),
+                    case_count: cases.length,
+                    passed_cases: passedCases.map((item) => item.id),
+                    failed_cases: failedCases.map((item) => item.id),
+                    skipped_cases: skippedCases.map((item) => item.id)
+                }
+            ];
+        })
+    );
+    const passed = CHANNEL_REQUEST_MODES.filter((mode) => modes[mode].state === 'passed');
+    const failed = CHANNEL_REQUEST_MODES.filter((mode) => modes[mode].state === 'failed');
+    const skipped = CHANNEL_REQUEST_MODES.filter((mode) => modes[mode].state === 'skipped');
+    const notSelected = CHANNEL_REQUEST_MODES.filter((mode) => modes[mode].state === 'not_selected');
+    return {
+        passed,
+        failed,
+        skipped,
+        not_selected: notSelected,
+        suggested_channel_config: passed.join(','),
+        suggested_env_key: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+        modes
+    };
+}
+
+function readRequestModeState({ cases, passedCases, failedCases }) {
+    if (cases.length === 0) return 'not_selected';
+    if (failedCases.length > 0) return 'failed';
+    if (passedCases.length > 0) return 'passed';
+    return 'skipped';
+}
+
+function matchesCaseSelection(testCase, caseId) {
+    return (
+        caseId === 'all' ||
+        testCase.id === caseId ||
+        testCase.requestMode === caseId ||
+        (Array.isArray(testCase.aliases) && testCase.aliases.includes(caseId))
+    );
 }
 
 function buildBillablePreflight(selectedCases) {
@@ -323,6 +421,7 @@ async function runCase(loadRouteHandlersForBillable, testCase, preflight = {}) {
     if (!options.allowBillable) {
         return {
             id: testCase.id,
+            request_mode: testCase.requestMode,
             skipped: true,
             ok: true,
             reason: 'requires --allow-billable',
@@ -362,6 +461,7 @@ async function runBillableCase(routeHandlers, testCase, target, startedAt, signa
                 : await summarizeResponse(response);
         return {
             id: testCase.id,
+            request_mode: testCase.requestMode,
             ok: isSuccessfulBillableSmokeResponse(response, summary),
             status: response.status,
             elapsed_ms: Date.now() - startedAt,
@@ -382,6 +482,7 @@ function withCaseTimeout(run, testCase, target, startedAt, abortController) {
             abortController.abort();
             resolve({
                 id: testCase.id,
+                request_mode: testCase.requestMode,
                 ok: false,
                 timed_out: true,
                 elapsed_ms: Date.now() - startedAt,
@@ -470,6 +571,7 @@ function skipped(testCase, target) {
     const missingEnvAny = readMissingEnvAny(testCase, target);
     return {
         id: testCase.id,
+        request_mode: testCase.requestMode,
         skipped: true,
         ok: true,
         reason: readSkippedReason(target),
@@ -481,6 +583,7 @@ function skipped(testCase, target) {
 function invalid(testCase, target, invalidEnv) {
     return {
         id: testCase.id,
+        request_mode: testCase.requestMode,
         ok: false,
         invalid: true,
         reason: 'invalid base url env',
@@ -492,6 +595,7 @@ function invalid(testCase, target, invalidEnv) {
 function blocked(testCase, target, reason = 'blocked by invalid base url env') {
     return {
         id: testCase.id,
+        request_mode: testCase.requestMode,
         skipped: true,
         blocked: true,
         ok: true,
@@ -808,6 +912,7 @@ function printUsage() {
   IMAGE_REAL_SMOKE_SERVER_* 可覆盖当前服务端渠道的 MODEL / SIZE / QUALITY / RESPONSES_MODEL
 
 可选 --case：all、original-images-json、gaoren-images-sse、sub2api-images-sse、sub2api-responses-json、gpt2image-responses-sse、matsca-images-sse。
+也可直接用 request mode 别名 images-json、images-sse、responses-json、responses-sse；同一个 request mode 可能命中多个 case。
 添加 --include-server-channel 后还可运行：server-channel-images-json、server-channel-images-sse、server-channel-responses-sse、server-channel-responses-json、server-channel-agent-images-sse、server-channel-agent-responses-sse。
 默认只检查配置并跳过真实生图；必须加 --allow-billable 才会调用 /api/images 或 /api/agent/images/generate。
 可用 --env-file 指向独立真实上游凭据文件；shell 环境变量优先级高于 --env-file，--env-file 优先级高于 .env.local。
