@@ -59,6 +59,8 @@ async function main() {
             upstream_host: readHost(fixture.baseUrl),
             final_gate_satisfied: report.final_gate_satisfied,
             independent_targets: report.independent_targets,
+            request_modes: report.request_modes,
+            suggested_channel_config: report.suggested_channel_config,
             results: report.results.map(summarizeResult)
         });
     } finally {
@@ -230,6 +232,7 @@ function assertFinalGateReport(report) {
 function summarizeResult(result) {
     return {
         id: result.id,
+        request_mode: result.request_mode,
         status: result.status,
         content_type: result.content_type,
         event_types: result.event_types,

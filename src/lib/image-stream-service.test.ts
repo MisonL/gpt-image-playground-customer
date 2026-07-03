@@ -66,6 +66,15 @@ async function startImageDownloadServer(): Promise<{ baseUrl: string; close: () 
     };
 }
 
+async function waitForCondition(predicate: () => boolean, message: string) {
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+        if (predicate()) return;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.fail(message);
+}
+
 describe('createImageStreamResponse', () => {
     it('emits the stable client SSE contract for normalized upstream image events', async () => {
         const response = createImageStreamResponse({
@@ -336,6 +345,46 @@ describe('createImageStreamResponse', () => {
                 process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS = originalTimeout;
             }
         }
+    });
+
+    it('cancels the upstream iterator when the response body is cancelled', async () => {
+        let returnCalled = false;
+        let resolveNextStarted: (() => void) | undefined;
+        const nextStarted = new Promise<void>((resolve) => {
+            resolveNextStarted = resolve;
+        });
+        const stream: AsyncIterable<unknown> = {
+            [Symbol.asyncIterator]() {
+                return {
+                    next: () => {
+                        resolveNextStarted?.();
+                        return new Promise<IteratorResult<unknown>>(() => {});
+                    },
+                    return: async () => {
+                        returnCalled = true;
+                        return { done: true, value: undefined };
+                    }
+                };
+            }
+        };
+
+        const response = createImageStreamResponse({
+            stream,
+            modeLabel: '生成',
+            outputFormat: 'png',
+            storageMode: 'indexeddb',
+            apiKey: 'test-key',
+            model: 'gpt-image-2',
+            startedAtMs: 1000,
+            resolveActualCost,
+            logProviderDiagnostics: false
+        });
+
+        assert.ok(response.body);
+        await nextStarted;
+        const reader = response.body.getReader();
+        await reader.cancel('client cancelled');
+        await waitForCondition(() => returnCalled, 'expected upstream iterator return() to run after body cancel');
     });
 
     it('deduplicates repeated Responses final image items by item id', async () => {

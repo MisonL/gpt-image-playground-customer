@@ -58,4 +58,36 @@ describe('withStreamDataIntervalTimeout', () => {
         );
         assert.equal(returnCalled, true);
     });
+
+    it('closes the upstream iterator when the caller aborts while waiting for data', async () => {
+        let returnCalled = false;
+        const abortController = new AbortController();
+        const stream: AsyncIterable<string> = {
+            [Symbol.asyncIterator]() {
+                return {
+                    next: () => new Promise<IteratorResult<string>>(() => undefined),
+                    return: () => {
+                        returnCalled = true;
+                        return new Promise<IteratorResult<string>>(() => undefined);
+                    }
+                };
+            }
+        };
+
+        const iterator = withStreamDataIntervalTimeout(stream, 1000, abortController.signal)[Symbol.asyncIterator]();
+        const nextPromise = iterator.next();
+        abortController.abort(new Error('caller stopped'));
+
+        await assert.rejects(
+            () =>
+                Promise.race([
+                    nextPromise,
+                    new Promise<never>((_, reject) => {
+                        setTimeout(() => reject(new Error('abort assertion did not settle')), 50);
+                    })
+                ]),
+            /caller stopped/
+        );
+        assert.equal(returnCalled, true);
+    });
 });

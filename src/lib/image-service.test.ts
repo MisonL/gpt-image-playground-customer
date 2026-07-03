@@ -1,6 +1,8 @@
 import {
     AcceptedImageTaskResponseError,
     assertOpenAiImagesResponse,
+    MissingOpenAiImageDataError,
+    persistOpenAiImages,
     readAcceptedImageTaskDetails,
     readRetryAfterSecondsHeader,
     resolveAcceptedImageTaskResponse
@@ -47,6 +49,30 @@ describe('assertOpenAiImagesResponse', () => {
                 status: 'pending',
                 task_id: 'sync-gen-task'
             })
+        );
+    });
+});
+
+describe('persistOpenAiImages', () => {
+    it('preserves the upstream response on missing image data errors', async () => {
+        const result = {
+            data: [{ status: 'done' }]
+        } as unknown as OpenAI.Images.ImagesResponse;
+
+        await assert.rejects(
+            () =>
+                persistOpenAiImages({
+                    result,
+                    outputFormat: 'webp',
+                    storageMode: 'indexeddb',
+                    includeBase64: true
+                }),
+            (error) => {
+                assert.ok(error instanceof MissingOpenAiImageDataError);
+                assert.equal(error.index, 0);
+                assert.equal(error.result, result);
+                return true;
+            }
         );
     });
 });

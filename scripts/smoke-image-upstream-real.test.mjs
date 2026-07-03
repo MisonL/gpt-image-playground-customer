@@ -26,6 +26,16 @@ describe('image upstream real smoke script', () => {
             report.results.every((item) => item.skipped === true),
             true
         );
+        assert.deepEqual(report.request_modes.passed, []);
+        assert.deepEqual(report.request_modes.failed, []);
+        assert.deepEqual(report.request_modes.skipped, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.deepEqual(report.request_modes.not_selected, []);
+        assert.equal(report.suggested_channel_config, '');
         assert.equal(
             report.results.every((item) => item.reason === 'missing base url env'),
             true
@@ -69,6 +79,8 @@ describe('image upstream real smoke script', () => {
         assert.equal(report.results.length, 1);
         assert.equal(report.results[0].reason, 'requires --allow-billable');
         assert.equal(report.results[0].upstream_host, 'example.test');
+        assert.deepEqual(report.request_modes.skipped, ['images-non-stream']);
+        assert.equal(report.suggested_channel_config, '');
         assert.equal('missing_env_any' in report.results[0], false);
         assert.deepEqual(report.independent_targets.required_cases, independentSmokeCaseIds());
         assert.deepEqual(report.independent_targets.selected_cases, ['original-images-json']);
@@ -82,6 +94,22 @@ describe('image upstream real smoke script', () => {
         assert.equal(report.independent_targets.configuration_complete, false);
         assert.deepEqual(report.independent_targets.configured_cases, ['original-images-json']);
         assert.deepEqual(report.independent_targets.missing_cases, []);
+    });
+
+    it('accepts request-mode aliases as smoke case selectors', () => {
+        const result = runScript(['--case', 'responses-json'], {
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_BASE_URL: 'https://example.test/v1',
+            IMAGE_REAL_SMOKE_SUB2API_RESPONSES_API_KEY: 'secret-real-smoke-key'
+        });
+
+        assert.equal(result.status, 0);
+        assert.equal(result.stderr.trim(), '');
+        const report = JSON.parse(result.stdout);
+        assert.equal(report.results.length, 1);
+        assert.deepEqual(report.results.map((item) => item.id), ['sub2api-responses-json']);
+        assert.deepEqual(report.results.map((item) => item.request_mode), ['responses-non-stream']);
+        assert.deepEqual(report.request_modes.skipped, ['responses-non-stream']);
+        assert.deepEqual(report.request_modes.not_selected, ['images-non-stream', 'images-sse', 'responses-sse']);
     });
 
     it('loads independent real upstream targets from an explicit env file without leaking API keys', () => {
@@ -483,6 +511,7 @@ describe('image upstream real smoke script', () => {
                 {
                     OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
                     OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                    OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
                     AGENT_API_TOKEN: 'secret-agent-token'
                 }
             );
@@ -506,6 +535,7 @@ describe('image upstream real smoke script', () => {
                 {
                     OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
                     OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                    OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
                     APP_PASSWORD: 'page-access-code'
                 }
             );
@@ -530,7 +560,8 @@ describe('image upstream real smoke script', () => {
                 ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
                 {
                     OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
-                    OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key'
+                    OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                    OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse'
                 }
             );
 
@@ -558,6 +589,7 @@ describe('image upstream real smoke script', () => {
                 {
                     OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
                     OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                    OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-non-stream',
                     IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL: 'gpt-5.4'
                 }
             );
@@ -588,6 +620,17 @@ describe('image upstream real smoke script', () => {
             const report = JSON.parse(result.stdout);
             assert.equal(report.ok, true);
             assert.equal(report.final_gate_satisfied, true);
+            assert.deepEqual(report.request_modes.passed, [
+                'images-non-stream',
+                'images-sse',
+                'responses-non-stream',
+                'responses-sse'
+            ]);
+            assert.deepEqual(report.request_modes.failed, []);
+            assert.equal(
+                report.suggested_channel_config,
+                'images-non-stream,images-sse,responses-non-stream,responses-sse'
+            );
             assert.equal(report.independent_targets.configuration_complete, true);
             assert.equal(report.independent_targets.configured_count, 6);
             assert.equal(report.results.length, 6);
@@ -618,6 +661,11 @@ describe('image upstream real smoke script', () => {
 
             assert.equal(report.ok, false);
             assert.equal(report.final_gate_satisfied, false);
+            assert.deepEqual(report.request_modes.failed, ['images-sse']);
+            assert.equal(
+                report.suggested_channel_config,
+                'images-non-stream,responses-non-stream,responses-sse'
+            );
             assert.equal(failedCase?.ok, false);
             assert.equal(failedCase?.status, 200);
             assert.equal(failedCase?.done_image_count, 0);

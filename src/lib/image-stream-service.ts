@@ -92,6 +92,12 @@ type StreamRuntime = {
     state: StreamState;
 };
 
+type LinkedAbortController = {
+    signal: AbortSignal;
+    abort: (reason?: unknown) => void;
+    cleanup: () => void;
+};
+
 function readErrorStatus(error: unknown): number | undefined {
     if (typeof error !== 'object' || error === null) return undefined;
     if ('status' in error && typeof error.status === 'number') return error.status;
@@ -108,6 +114,30 @@ function isAbortLikeError(error: unknown, abortSignal?: AbortSignal): boolean {
     if (typeof error !== 'object' || error === null) return false;
     const name = 'name' in error ? error.name : undefined;
     return name === 'AbortError' || name === 'CanceledError';
+}
+
+function createLinkedAbortController(parentSignal?: AbortSignal): LinkedAbortController {
+    const controller = new AbortController();
+    const abort = (reason?: unknown) => {
+        try {
+            controller.abort(reason);
+        } catch {
+            controller.abort();
+        }
+    };
+    const parentAbort = () => abort(parentSignal?.reason);
+    if (parentSignal?.aborted) {
+        parentAbort();
+    } else if (parentSignal) {
+        parentSignal.addEventListener('abort', parentAbort, { once: true });
+    }
+    return {
+        signal: controller.signal,
+        abort,
+        cleanup: () => {
+            parentSignal?.removeEventListener('abort', parentAbort);
+        }
+    };
 }
 
 function createSseWriter(controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder) {
@@ -275,7 +305,11 @@ async function emitNormalizedEvent(
 }
 
 async function consumeUpstreamStream(runtime: StreamRuntime): Promise<boolean> {
-    const stream = withStreamDataIntervalTimeout(runtime.options.stream, readImageStreamDataIntervalTimeoutMs());
+    const stream = withStreamDataIntervalTimeout(
+        runtime.options.stream,
+        readImageStreamDataIntervalTimeoutMs(),
+        runtime.options.abortSignal
+    );
     for await (const event of stream) {
         const diagnostics = normalizeUpstreamImageStreamEventWithDiagnostics(event);
         if (diagnostics.providerDialect === 'sdk_parsed_fallback' && !runtime.state.streamingDegraded) {
@@ -389,11 +423,16 @@ function emitErrorEvent(runtime: StreamRuntime, error: unknown): boolean {
 export function createImageStreamResponse(options: ImageStreamResponseOptions): Response {
     const encoder = new TextEncoder();
     const batchId = createBatchId();
+    const linkedAbort = createLinkedAbortController(options.abortSignal);
+    const runtimeOptions: ImageStreamResponseOptions = {
+        ...options,
+        abortSignal: linkedAbort.signal
+    };
     const readableStream = new ReadableStream({
         async start(controller) {
             const sse = createSseWriter(controller, encoder);
             const runtime: StreamRuntime = {
-                options,
+                options: runtimeOptions,
                 batchId,
                 sse,
                 state: {
@@ -409,14 +448,14 @@ export function createImageStreamResponse(options: ImageStreamResponseOptions): 
                 if (!(await emitDoneEvent(runtime))) return;
                 sse.close();
             } catch (error) {
-                if (isAbortLikeError(error, options.abortSignal)) {
+                if (isAbortLikeError(error, runtimeOptions.abortSignal)) {
                     sse.close();
                     return;
                 }
-                if (runtime.state.completedImages.length === 0 && options.fallbackOnError) {
+                if (runtime.state.completedImages.length === 0 && runtimeOptions.fallbackOnError) {
                     runtime.options.onStreamUnavailable?.(error, 'stream_error_without_final_image');
                     try {
-                        if (!(await emitFallbackImages(runtime, await options.fallbackOnError(error)))) return;
+                        if (!(await emitFallbackImages(runtime, await runtimeOptions.fallbackOnError(error)))) return;
                         if (!(await emitDoneEvent(runtime))) return;
                         sse.close();
                         return;
@@ -428,7 +467,13 @@ export function createImageStreamResponse(options: ImageStreamResponseOptions): 
                 }
                 if (!emitErrorEvent(runtime, error)) return;
                 sse.close();
+            } finally {
+                linkedAbort.cleanup();
             }
+        },
+        cancel(reason) {
+            linkedAbort.abort(reason);
+            linkedAbort.cleanup();
         }
     });
 

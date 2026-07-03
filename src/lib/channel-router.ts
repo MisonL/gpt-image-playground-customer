@@ -824,7 +824,8 @@ export function toPublicChannelFailure(
         scope: reason.scope,
         ...(reason.status === undefined ? {} : { status: reason.status }),
         ...(reason.code === undefined ? {} : { code: reason.code }),
-        ...(reason.requestId === undefined ? {} : { requestId: reason.requestId })
+        ...(reason.requestId === undefined ? {} : { requestId: reason.requestId }),
+        ...(reason.requestMode === undefined ? {} : { requestMode: reason.requestMode })
     };
 }
 

@@ -42,7 +42,7 @@ export type ChannelRequestModeHealthSummary = {
     }>;
 };
 
-export const DEFAULT_CHANNEL_REQUEST_MODES: readonly ChannelRequestMode[] = CHANNEL_REQUEST_MODES;
+export const DEFAULT_CHANNEL_REQUEST_MODES: readonly ChannelRequestMode[] = ['images-non-stream'];
 export const CHANNEL_REQUEST_MODE_ADMIN_CONTROL = SHARED_CHANNEL_REQUEST_MODE_ADMIN_CONTROL as {
     readonly source: 'admin_env_whitelist';
     readonly globalEnv: 'OPENAI_UPSTREAM_REQUEST_MODES';

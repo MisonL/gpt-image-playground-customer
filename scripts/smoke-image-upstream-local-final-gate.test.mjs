@@ -23,6 +23,16 @@ describe('local image upstream final gate smoke launcher', () => {
         assert.equal(report.local_fixture, true);
         assert.equal(report.final_gate_satisfied, true);
         assert.equal(report.independent_targets.configuration_complete, true);
+        assert.deepEqual(report.request_modes.passed, [
+            'images-non-stream',
+            'images-sse',
+            'responses-non-stream',
+            'responses-sse'
+        ]);
+        assert.equal(
+            report.suggested_channel_config,
+            'images-non-stream,images-sse,responses-non-stream,responses-sse'
+        );
         assert.equal(report.results.length, 6);
         assert.deepEqual(
             report.results.map((item) => item.id),
@@ -33,6 +43,17 @@ describe('local image upstream final gate smoke launcher', () => {
                 'sub2api-responses-json',
                 'gpt2image-responses-sse',
                 'matsca-images-sse'
+            ]
+        );
+        assert.deepEqual(
+            report.results.map((item) => item.request_mode),
+            [
+                'images-non-stream',
+                'images-sse',
+                'images-sse',
+                'responses-non-stream',
+                'responses-sse',
+                'images-sse'
             ]
         );
         assert.equal(

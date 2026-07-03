@@ -477,6 +477,10 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stdout);
                 assert.equal(body.ok, true);
                 assert.equal(body.billable, false);
+                assert.equal(body.models.model_count, 1);
+                assert.equal(body.models.first_model_id, 'gpt-image-2');
+                assert.equal(body.models.image_count, undefined);
+                assert.equal(body.models.first_b64_length, undefined);
                 assert.equal(body.summary.ok, true);
                 assert.equal(body.summary.billable, false);
                 assert.equal(body.summary.transport, 'upstream_probe');
@@ -513,6 +517,193 @@ describe('Agent skill script argument validation', () => {
                     'user-agent'
                 ]);
                 assert.equal(JSON.stringify(body).includes('probe-secret'), false);
+            }
+        );
+    });
+
+    it('probes explicit request modes and classifies Responses 403 as unavailable', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push(`${request.method} ${request.url}`);
+                if (request.url === '/v1/models') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+                    return;
+                }
+                if (request.url === '/v1/images/generations') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ data: [{ b64_json: 'YmFzZTY0LWltYWdl' }] }));
+                    return;
+                }
+                if (request.url === '/v1/responses') {
+                    response.writeHead(403, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            error: {
+                                code: 'permission_denied',
+                                message: 'Image generation is not enabled for this group',
+                                type: 'invalid_request_error'
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'probe-upstream-image.mjs',
+                    [
+                        '--base-url',
+                        `${baseUrl}/v1`,
+                        '--allow-billable',
+                        '--request-mode',
+                        'images-non-stream,responses-non-stream',
+                        '--responses-model',
+                        'gpt-4.1-mini',
+                        '--timeout-ms',
+                        '1000'
+                    ]
+                );
+
+                assert.equal(result.status, 1);
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.ok, false);
+                assert.equal(body.billable, true);
+                assert.deepEqual(body.request_modes.requested, ['images-non-stream', 'responses-non-stream']);
+                assert.deepEqual(body.request_modes.passed, ['images-non-stream']);
+                assert.deepEqual(body.request_modes.failed, ['responses-non-stream']);
+                assert.deepEqual(body.request_modes.skipped, []);
+                assert.deepEqual(body.request_modes.not_selected, ['images-sse', 'responses-sse']);
+                assert.equal(body.request_modes.suggested_channel_config, 'images-non-stream');
+                assert.equal(body.request_modes.suggested_env_key, 'OPENAI_CHANNEL_N_REQUEST_MODES');
+                assert.equal(body.request_modes.modes['images-non-stream'].ok, true);
+                assert.equal(body.request_modes.modes['responses-non-stream'].ok, false);
+                assert.equal(body.request_modes.modes['responses-non-stream'].category, 'responses_disabled');
+                assert.match(body.request_modes.modes['responses-non-stream'].error, /Image generation is not enabled/);
+                assert.equal(body.request_modes.modes['responses-non-stream'].responses_model, 'gpt-4.1-mini');
+                assert.deepEqual(requests, [
+                    'GET /v1/models',
+                    'POST /v1/images/generations',
+                    'POST /v1/responses'
+                ]);
+            }
+        );
+    });
+
+    it('does not suggest remote URL-only Responses results as usable request modes', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push(`${request.method} ${request.url}`);
+                if (request.url === '/v1/models') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+                    return;
+                }
+                if (request.url === '/v1/responses') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            output: [
+                                {
+                                    type: 'image_generation_call',
+                                    status: 'completed',
+                                    url: 'https://cdn.example.test/final.png'
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'probe-upstream-image.mjs',
+                    [
+                        '--base-url',
+                        `${baseUrl}/v1`,
+                        '--allow-billable',
+                        '--request-mode',
+                        'responses-non-stream',
+                        '--responses-model',
+                        'gpt-4.1-mini',
+                        '--timeout-ms',
+                        '1000'
+                    ]
+                );
+
+                assert.equal(result.status, 1);
+                const body = JSON.parse(result.stdout);
+                const mode = body.request_modes.modes['responses-non-stream'];
+                assert.deepEqual(body.request_modes.passed, []);
+                assert.deepEqual(body.request_modes.failed, ['responses-non-stream']);
+                assert.equal(body.request_modes.suggested_channel_config, '');
+                assert.equal(mode.ok, false);
+                assert.equal(mode.error, 'url_only_result');
+                assert.equal(mode.has_url_result, true);
+                assert.equal(mode.has_remote_url_result, true);
+                assert.equal(mode.has_consumable_image, false);
+                assert.deepEqual(requests, ['GET /v1/models', 'POST /v1/responses']);
+            }
+        );
+    });
+
+    it('treats data URL image results as consumable in upstream probe output', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/v1/models') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+                    return;
+                }
+                if (request.url === '/v1/responses') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            output: [
+                                {
+                                    type: 'image_generation_call',
+                                    status: 'completed',
+                                    url: 'data:image/png;base64,YmFzZTY0LWltYWdl'
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'probe-upstream-image.mjs',
+                    [
+                        '--base-url',
+                        `${baseUrl}/v1`,
+                        '--allow-billable',
+                        '--request-mode',
+                        'responses-non-stream',
+                        '--responses-model',
+                        'gpt-4.1-mini',
+                        '--timeout-ms',
+                        '1000'
+                    ]
+                );
+
+                assert.equal(result.status, 0);
+                const body = JSON.parse(result.stdout);
+                const mode = body.request_modes.modes['responses-non-stream'];
+                assert.deepEqual(body.request_modes.passed, ['responses-non-stream']);
+                assert.equal(body.request_modes.suggested_channel_config, 'responses-non-stream');
+                assert.equal(mode.ok, true);
+                assert.equal(mode.has_inline_base64, true);
+                assert.equal(mode.has_consumable_image, true);
+                assert.equal(mode.has_remote_url_result, false);
             }
         );
     });

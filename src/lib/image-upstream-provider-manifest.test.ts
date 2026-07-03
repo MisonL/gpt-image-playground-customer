@@ -73,6 +73,10 @@ describe('image upstream provider manifest', () => {
             asyncPolling: {
                 generate: true,
                 edit: false
+            },
+            executionSupport: {
+                generate: 'declared_only',
+                edit: 'implemented'
             }
         });
         assert.deepEqual(createProviderManifestProfile(manifest), {

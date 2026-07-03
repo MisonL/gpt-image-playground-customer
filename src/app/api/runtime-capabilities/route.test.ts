@@ -152,6 +152,48 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.equal(JSON.stringify(body).includes('sk-secret'), false);
     });
 
+    it('includes request mode on public lastFailure when present', async () => {
+        process.env.OPENAI_CHANNEL_1_ID = 'official';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://api.openai.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-secret';
+        process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+        process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+        const { GET } = await import('./route');
+        const { getServerChannelState } = await import('@/lib/server-channel-router');
+
+        const state = getServerChannelState();
+        const credential = state.config.credentials[0];
+        assert.ok(credential);
+        state.router?.reportFailure(credential, {
+            scope: 'channel',
+            requestMode: 'responses-non-stream',
+            reason: {
+                at: Date.now(),
+                scope: 'channel',
+                status: 403,
+                code: 'permission_denied',
+                message: 'Image generation is not enabled for this group',
+                requestMode: 'responses-non-stream'
+            }
+        });
+
+        const body = (await (await GET()).json()) as {
+            streamingBatch: {
+                lastFailure?: {
+                    scope: string;
+                    status?: number;
+                    code?: string;
+                    requestMode?: string;
+                };
+            };
+        };
+
+        assert.equal(body.streamingBatch.lastFailure?.scope, 'channel');
+        assert.equal(body.streamingBatch.lastFailure?.status, 403);
+        assert.equal(body.streamingBatch.lastFailure?.code, 'permission_denied');
+        assert.equal(body.streamingBatch.lastFailure?.requestMode, 'responses-non-stream');
+    });
+
     it('exposes when channel failure cooldown is disabled', async () => {
         process.env.OPENAI_CHANNEL_1_ID = 'official';
         process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://api.openai.com/v1';
@@ -343,7 +385,8 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                     modes: { generate: 'async-poll' },
                     requestTypes: { generate: 'application/json' },
                     responseFormats: { generate: 'custom-json' },
-                    asyncPolling: { generate: true, edit: false }
+                    asyncPolling: { generate: true, edit: false },
+                    executionSupport: { generate: 'declared_only' }
                 }
             }
         ]);
@@ -503,6 +546,51 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                 }
             ]
         });
+        assert.equal(JSON.stringify(body.channelRouting).includes('sk-secret'), false);
+    });
+
+    it('exposes the fail-closed default request mode when no whitelist is configured', async () => {
+        process.env.OPENAI_API_KEY = 'sk-secret';
+        process.env.OPENAI_API_BASE_URL = 'https://images.example.com/v1';
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as {
+            channelRouting: {
+                configuredRequestModes: string[];
+                effectiveRequestModes: string[];
+                requestModeHealth: Array<{
+                    mode: string;
+                    configuredCredentialCount: number;
+                    healthyCredentialCount: number;
+                }>;
+                requestModesByChannel: Array<{
+                    channelId: string;
+                    requestModes: string[];
+                }>;
+            };
+        };
+
+        assert.deepEqual(body.channelRouting.configuredRequestModes, ['images-non-stream']);
+        assert.deepEqual(body.channelRouting.effectiveRequestModes, ['images-non-stream']);
+        assert.deepEqual(body.channelRouting.requestModesByChannel, [
+            {
+                channelId: 'default',
+                requestModes: ['images-non-stream']
+            }
+        ]);
+        assert.deepEqual(
+            body.channelRouting.requestModeHealth.map((item) => [
+                item.mode,
+                item.configuredCredentialCount,
+                item.healthyCredentialCount
+            ]),
+            [
+                ['images-non-stream', 1, 1],
+                ['images-sse', 0, 0],
+                ['responses-non-stream', 0, 0],
+                ['responses-sse', 0, 0]
+            ]
+        );
         assert.equal(JSON.stringify(body.channelRouting).includes('sk-secret'), false);
     });
 });
