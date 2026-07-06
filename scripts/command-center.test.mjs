@@ -1,13 +1,4 @@
-import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { createServer } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import { describe, it } from 'node:test';
-
 import { buildAgentDoctorArgs, buildAgentDoctorContractArgs } from './agent-doctor.mjs';
-import { fetchJsonWithTimeout, parseJsonPayload, pickFailureOutput, runCommand } from './command-center-utils.mjs';
 import {
     buildAbsentReport,
     buildSkippedReport,
@@ -15,6 +6,8 @@ import {
     parseDockerInspectContainer,
     summarizeDockerMounts
 } from './cleanup-docker-fixtures.mjs';
+import { fetchJsonWithTimeout, parseJsonPayload, pickFailureOutput, runCommand } from './command-center-utils.mjs';
+import { assertLocalProbeMatchesMode, buildDockerComposeArgs, buildDockerComposeEnv } from './deploy-local.mjs';
 import { buildFirstRunReport, formatFirstRunText } from './first-run.mjs';
 import {
     buildAdminCommands,
@@ -24,8 +17,14 @@ import {
     readStatusEnvFromFiles,
     readRemoteStatusFromResult
 } from './status.mjs';
-import { assertLocalProbeMatchesMode, buildDockerComposeArgs, buildDockerComposeEnv } from './deploy-local.mjs';
 import { buildVerifyPlan } from './verify.mjs';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, it } from 'node:test';
 
 describe('Command center scripts', () => {
     it('exposes a small stable administrator command set', () => {
@@ -600,9 +599,18 @@ describe('Command center scripts', () => {
                         has_password_hash: false
                     });
                     assert.equal(report.service.ok, true);
-                    assert.equal(report.checks.find((check) => check.name === 'agent_auth_available_to_process').ok, true);
-                    assert.equal(report.checks.find((check) => check.name === 'page_sse_auth_available_to_process').ok, false);
-                    assert.equal(report.checks.find((check) => check.name === 'page_sse_auth_available_to_process').skipped, false);
+                    assert.equal(
+                        report.checks.find((check) => check.name === 'agent_auth_available_to_process').ok,
+                        true
+                    );
+                    assert.equal(
+                        report.checks.find((check) => check.name === 'page_sse_auth_available_to_process').ok,
+                        false
+                    );
+                    assert.equal(
+                        report.checks.find((check) => check.name === 'page_sse_auth_available_to_process').skipped,
+                        false
+                    );
                     assert.equal(
                         report.checks.find((check) => check.name === 'page_sse_auth_available_to_process')
                             .auth_in_private_env_file,
@@ -612,7 +620,10 @@ describe('Command center scripts', () => {
                     assert.equal(report.service.capabilities.page_sse_auth_form_field, 'passwordHash');
                     assert.equal(report.service.capabilities.page_sse_declared_supported, true);
                     assert.equal(report.service.capabilities.page_sse_real_smoke, 'not_run_by_first_run');
-                    assert.equal(report.service.capabilities.responses_image_backend_real_smoke, 'not_run_by_first_run');
+                    assert.equal(
+                        report.service.capabilities.responses_image_backend_real_smoke,
+                        'not_run_by_first_run'
+                    );
                     assert.deepEqual(report.service.capabilities.page_sse_real_smoke_status, {
                         state: 'not_run',
                         billable: false,
@@ -624,7 +635,10 @@ describe('Command center scripts', () => {
                         reason: 'first-run is non-billable and does not call Responses image generation'
                     });
                     assert.match(formatFirstRunText(report), /页面 SSE：声明支持，实测=未执行真实 smoke/);
-                    assert.match(formatFirstRunText(report), /Responses 后端：声明未支持，启用=否，实测=未执行真实 smoke/);
+                    assert.match(
+                        formatFirstRunText(report),
+                        /Responses 后端：声明未支持，启用=否，实测=未执行真实 smoke/
+                    );
                     assert.equal(
                         report.checks.find((check) => check.name === 'agent_auth_available_to_process')
                             .auth_in_private_env_file,
@@ -777,7 +791,10 @@ describe('Command center scripts', () => {
                     );
 
                     assert.equal(report.service_base_url, baseUrl);
-                    assert.equal(report.checks.find((check) => check.name === 'agent_auth_available_to_process').skipped, false);
+                    assert.equal(
+                        report.checks.find((check) => check.name === 'agent_auth_available_to_process').skipped,
+                        false
+                    );
                     assert.equal(report.checks.find((check) => check.name === 'service_reachable').status, 401);
                     assert.equal('runtime' in report.service, false);
                     assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_AGENT_TOKEN/);
@@ -824,6 +841,7 @@ describe('Command center scripts', () => {
                                 request_modes: [
                                     'images-non-stream',
                                     'images-sse',
+                                    'images-json',
                                     'responses-non-stream',
                                     'responses-sse'
                                 ],
@@ -960,11 +978,46 @@ describe('Command center scripts', () => {
                 assert.deepEqual(body.summary.request_modes.supported, [
                     'images-non-stream',
                     'images-sse',
+                    'images-json',
                     'responses-non-stream',
                     'responses-sse'
                 ]);
-                assert.deepEqual(body.summary.request_modes.configured, ['images-non-stream', 'images-sse', 'responses-sse']);
+                assert.deepEqual(body.summary.request_modes.configured, [
+                    'images-non-stream',
+                    'images-sse',
+                    'responses-sse'
+                ]);
                 assert.deepEqual(body.summary.request_modes.effective, ['images-non-stream', 'images-sse']);
+                assert.deepEqual(body.summary.request_modes.admin_whitelist_by_channel, [
+                    { channel_id: 'images', request_modes: ['images-non-stream', 'images-sse'] },
+                    { channel_id: 'responses', request_modes: ['responses-sse'] }
+                ]);
+                assert.deepEqual(body.summary.request_modes.effective_by_channel, [
+                    { channel_id: 'images', request_modes: ['images-non-stream', 'images-sse'] }
+                ]);
+                assert.deepEqual(body.summary.request_modes.gaps, [
+                    {
+                        code: 'unrecognized_request_modes',
+                        severity: 'warning',
+                        request_modes: ['images-json'],
+                        message: '服务返回了当前 Agent 未识别的 request mode；升级 skill 或确认服务端模式名称。'
+                    },
+                    {
+                        code: 'configured_request_modes_not_effective',
+                        severity: 'warning',
+                        request_modes: ['responses-sse'],
+                        message: '部分已配置 request mode 没有在 runtime 生效；检查对应渠道 key、健康状态和白名单。'
+                    },
+                    {
+                        code: 'channels_without_effective_request_modes',
+                        severity: 'warning',
+                        channel_ids: ['responses'],
+                        message: '部分渠道没有生效 request mode。'
+                    }
+                ]);
+                assert.equal(body.summary.request_modes.suggested_channel_env_key, 'OPENAI_CHANNEL_N_REQUEST_MODES');
+                assert.equal(body.summary.request_modes.suggested_effective_value, 'images-non-stream,images-sse');
+                assert.match(body.summary.request_modes.next_action, /先修正未生效的渠道 request mode/);
                 assert.deepEqual(body.summary.request_modes.smoke['responses-non-stream'].checks, [
                     'responses_agent_generate_1k'
                 ]);
@@ -1009,17 +1062,24 @@ describe('Command center scripts', () => {
                 assert.deepEqual(body.layers.find((layer) => layer.name === 'capabilities').request_modes_supported, [
                     'images-non-stream',
                     'images-sse',
+                    'images-json',
                     'responses-non-stream',
                     'responses-sse'
                 ]);
-                assert.deepEqual(body.layers.find((layer) => layer.name === 'runtime_backend').effective_request_modes, [
-                    'images-non-stream',
-                    'images-sse'
-                ]);
-                assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_declared_supported, true);
+                assert.deepEqual(
+                    body.layers.find((layer) => layer.name === 'runtime_backend').effective_request_modes,
+                    ['images-non-stream', 'images-sse']
+                );
+                assert.equal(
+                    body.layers.find((layer) => layer.name === 'capabilities').page_sse_declared_supported,
+                    true
+                );
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_required, true);
                 assert.equal(body.layers.find((layer) => layer.name === 'capabilities').page_sse_auth_ready, false);
-                assert.equal(body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').declared_supported, true);
+                assert.equal(
+                    body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').declared_supported,
+                    true
+                );
                 assert.match(
                     body.layers.find((layer) => layer.name === 'responses_gpt2image_readiness').real_smoke_gate,
                     /gpt2image-responses-sse/
@@ -1271,6 +1331,7 @@ describe('Command center scripts', () => {
                             agent_jobs: { supported: true },
                             routing_rules: {},
                             supported: {
+                                request_modes: ['images-non-stream', 'responses-non-stream', 'responses-sse'],
                                 image_backend_requirements: {
                                     'responses-image-generation': {
                                         supported: true,
@@ -1278,6 +1339,18 @@ describe('Command center scripts', () => {
                                         missing_env: []
                                     }
                                 }
+                            },
+                            upstream_request_headers: {
+                                channels: [
+                                    {
+                                        id: 'images',
+                                        request_modes: ['images-non-stream']
+                                    },
+                                    {
+                                        id: 'responses',
+                                        request_modes: ['responses-non-stream', 'responses-sse']
+                                    }
+                                ]
                             }
                         })
                     );
@@ -1292,7 +1365,21 @@ describe('Command center scripts', () => {
                                 unavailableMarkScope: 'channel+backend+strategy+operation'
                             },
                             streamingBatch: { enabled: true },
-                            responsesImageBackend: { enabled: true, mode: 'experimental' }
+                            responsesImageBackend: { enabled: true, mode: 'experimental' },
+                            channelRouting: {
+                                configuredRequestModes: ['images-non-stream', 'responses-non-stream', 'responses-sse'],
+                                effectiveRequestModes: ['images-non-stream', 'responses-non-stream', 'responses-sse'],
+                                effectiveRequestModesByChannel: [
+                                    {
+                                        channelId: 'images',
+                                        requestModes: ['images-non-stream']
+                                    },
+                                    {
+                                        channelId: 'responses',
+                                        requestModes: ['responses-non-stream', 'responses-sse']
+                                    }
+                                ]
+                            }
                         })
                     );
                     return;
@@ -1405,6 +1492,24 @@ describe('Command center scripts', () => {
                 assert.equal(body.summary.request_modes.smoke['images-non-stream'].state, 'passed');
                 assert.equal(body.summary.request_modes.smoke['responses-non-stream'].state, 'passed');
                 assert.equal(body.summary.request_modes.smoke['responses-sse'].state, 'failed');
+                assert.deepEqual(body.summary.request_modes.effective, [
+                    'images-non-stream',
+                    'responses-non-stream',
+                    'responses-sse'
+                ]);
+                assert.equal(
+                    body.summary.request_modes.suggested_effective_value,
+                    'images-non-stream,responses-non-stream'
+                );
+                assert.deepEqual(
+                    body.summary.request_modes.gaps.find((gap) => gap.code === 'request_mode_smoke_failed'),
+                    {
+                        code: 'request_mode_smoke_failed',
+                        severity: 'critical',
+                        request_modes: ['responses-sse'],
+                        message: '真实 smoke 显示部分 request mode 不可用；不要写入渠道白名单。'
+                    }
+                );
                 assert.equal(body.summary.real_smoke_checks.page_sse_edit_2k, 'skipped');
                 const pageSseOutput = body.layers
                     .find((layer) => layer.name === 'billable_smoke')
@@ -1467,7 +1572,10 @@ describe('Command center scripts', () => {
     });
 
     it('preserves invalid URL fetch errors while building timeout diagnostics', async () => {
-        await assert.rejects(() => fetchJsonWithTimeout('not a url', { timeoutMs: 20 }), /Failed to parse URL|Invalid URL/i);
+        await assert.rejects(
+            () => fetchJsonWithTimeout('not a url', { timeoutMs: 20 }),
+            /Failed to parse URL|Invalid URL/i
+        );
     });
 
     it('includes a response snippet when HTTP probes return non-JSON bodies', async () => {
