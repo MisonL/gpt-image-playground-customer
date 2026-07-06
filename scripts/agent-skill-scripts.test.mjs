@@ -1,10 +1,10 @@
+import { AGENT_ENDPOINTS } from '../skills/gpt-image-playground-agent/scripts/lib/agent-api-paths.mjs';
+import { enrichFailureWithAgentDiagnostics } from '../skills/gpt-image-playground-agent/scripts/lib/agent-diagnostics-summary.mjs';
 import {
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
     resolveSameOriginUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
-import { enrichFailureWithAgentDiagnostics } from '../skills/gpt-image-playground-agent/scripts/lib/agent-diagnostics-summary.mjs';
-import { AGENT_ENDPOINTS } from '../skills/gpt-image-playground-agent/scripts/lib/agent-api-paths.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -76,7 +76,13 @@ describe('Agent skill script argument validation', () => {
     });
 
     it('rejects repeated --image edit image aliases', () => {
-        const result = runSkillScript('edit-image.mjs', ['--image', '/tmp/source.png', '--image', '/tmp/other.png', 'prompt']);
+        const result = runSkillScript('edit-image.mjs', [
+            '--image',
+            '/tmp/source.png',
+            '--image',
+            '/tmp/other.png',
+            'prompt'
+        ]);
 
         assert.equal(result.status, 2);
         assert.match(result.stderr, /--image 只能设置一次/);
@@ -248,7 +254,12 @@ describe('Agent skill script argument validation', () => {
                 ].join('\n')
             );
 
-            const loaded = runSkillScript('generate-image.mjs', ['prompt'], {}, { cwd: tempRoot, loadPrivateAgentEnv: true });
+            const loaded = runSkillScript(
+                'generate-image.mjs',
+                ['prompt'],
+                {},
+                { cwd: tempRoot, loadPrivateAgentEnv: true }
+            );
             assert.equal(loaded.status, 0);
             const loadedBody = JSON.parse(loaded.stdout);
             assert.equal(loadedBody.verification_scope.service_base_url, 'https://file-space.example.test');
@@ -312,7 +323,10 @@ describe('Agent skill script argument validation', () => {
                 );
                 assert.equal(projectLoaded.status, 0);
                 const projectLoadedBody = JSON.parse(projectLoaded.stdout);
-                assert.equal(projectLoadedBody.verification_scope.service_base_url, 'https://project-copy.example.test');
+                assert.equal(
+                    projectLoadedBody.verification_scope.service_base_url,
+                    'https://project-copy.example.test'
+                );
 
                 const projectSkillScriptsLoaded = runSkillScript(
                     'generate-image.mjs',
@@ -372,17 +386,11 @@ describe('Agent skill script argument validation', () => {
 
     it('inherits longer image transport timeout from capabilities by default', () => {
         assert.equal(
-            readCapabilitiesImageTransportTimeoutMs(
-                { image_transport: { upstream_timeout_ms: 900_000 } },
-                420_000
-            ),
+            readCapabilitiesImageTransportTimeoutMs({ image_transport: { upstream_timeout_ms: 900_000 } }, 420_000),
             900_000
         );
         assert.equal(
-            readCapabilitiesImageTransportTimeoutMs(
-                { image_transport: { upstream_timeout_ms: 300_000 } },
-                420_000
-            ),
+            readCapabilitiesImageTransportTimeoutMs({ image_transport: { upstream_timeout_ms: 300_000 } }, 420_000),
             420_000
         );
     });
@@ -512,10 +520,7 @@ describe('Agent skill script argument validation', () => {
                 const body = JSON.parse(result.stdout);
                 assert.equal(body.summary.request_headers.user_agent_effective, 'custom-probe');
                 assert.equal(body.summary.request_headers.has_extra_headers, true);
-                assert.deepEqual(body.summary.request_headers.configured_header_names, [
-                    'authorization',
-                    'user-agent'
-                ]);
+                assert.deepEqual(body.summary.request_headers.configured_header_names, ['authorization', 'user-agent']);
                 assert.equal(JSON.stringify(body).includes('probe-secret'), false);
             }
         );
@@ -553,20 +558,17 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync(
-                    'probe-upstream-image.mjs',
-                    [
-                        '--base-url',
-                        `${baseUrl}/v1`,
-                        '--allow-billable',
-                        '--request-mode',
-                        'images-non-stream,responses-non-stream',
-                        '--responses-model',
-                        'gpt-4.1-mini',
-                        '--timeout-ms',
-                        '1000'
-                    ]
-                );
+                const result = await runSkillScriptAsync('probe-upstream-image.mjs', [
+                    '--base-url',
+                    `${baseUrl}/v1`,
+                    '--allow-billable',
+                    '--request-mode',
+                    'images-non-stream,responses-non-stream',
+                    '--responses-model',
+                    'gpt-4.1-mini',
+                    '--timeout-ms',
+                    '1000'
+                ]);
 
                 assert.equal(result.status, 1);
                 const body = JSON.parse(result.stdout);
@@ -584,11 +586,7 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.request_modes.modes['responses-non-stream'].category, 'responses_disabled');
                 assert.match(body.request_modes.modes['responses-non-stream'].error, /Image generation is not enabled/);
                 assert.equal(body.request_modes.modes['responses-non-stream'].responses_model, 'gpt-4.1-mini');
-                assert.deepEqual(requests, [
-                    'GET /v1/models',
-                    'POST /v1/images/generations',
-                    'POST /v1/responses'
-                ]);
+                assert.deepEqual(requests, ['GET /v1/models', 'POST /v1/images/generations', 'POST /v1/responses']);
             }
         );
     });
@@ -622,20 +620,17 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync(
-                    'probe-upstream-image.mjs',
-                    [
-                        '--base-url',
-                        `${baseUrl}/v1`,
-                        '--allow-billable',
-                        '--request-mode',
-                        'responses-non-stream',
-                        '--responses-model',
-                        'gpt-4.1-mini',
-                        '--timeout-ms',
-                        '1000'
-                    ]
-                );
+                const result = await runSkillScriptAsync('probe-upstream-image.mjs', [
+                    '--base-url',
+                    `${baseUrl}/v1`,
+                    '--allow-billable',
+                    '--request-mode',
+                    'responses-non-stream',
+                    '--responses-model',
+                    'gpt-4.1-mini',
+                    '--timeout-ms',
+                    '1000'
+                ]);
 
                 assert.equal(result.status, 1);
                 const body = JSON.parse(result.stdout);
@@ -680,20 +675,17 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync(
-                    'probe-upstream-image.mjs',
-                    [
-                        '--base-url',
-                        `${baseUrl}/v1`,
-                        '--allow-billable',
-                        '--request-mode',
-                        'responses-non-stream',
-                        '--responses-model',
-                        'gpt-4.1-mini',
-                        '--timeout-ms',
-                        '1000'
-                    ]
-                );
+                const result = await runSkillScriptAsync('probe-upstream-image.mjs', [
+                    '--base-url',
+                    `${baseUrl}/v1`,
+                    '--allow-billable',
+                    '--request-mode',
+                    'responses-non-stream',
+                    '--responses-model',
+                    'gpt-4.1-mini',
+                    '--timeout-ms',
+                    '1000'
+                ]);
 
                 assert.equal(result.status, 0);
                 const body = JSON.parse(result.stdout);
@@ -809,6 +801,14 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
+    it('rejects single generate dimension-check without a fixed requested size before remote execution', () => {
+        const result = runSkillScript('generate-image.mjs', ['--dimension-check', '--size', 'auto', 'prompt']);
+
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout.trim(), '');
+        assert.match(result.stderr, /--dimension-check 需要 --size 为 WIDTHxHEIGHT/);
+    });
+
     it('explains explicit page SSE dry-runs without blaming high-resolution routing', () => {
         const result = runSkillScript('generate-image.mjs', ['--page-sse', '--size', '1024x1024', 'prompt']);
 
@@ -869,11 +869,9 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync(
-                    'generate-image.mjs',
-                    ['--check-remote', 'prompt'],
-                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
-                );
+                const result = await runSkillScriptAsync('generate-image.mjs', ['--check-remote', 'prompt'], {
+                    GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                });
 
                 assert.equal(result.status, 0);
                 assert.equal(result.stderr.trim(), '');
@@ -1111,11 +1109,9 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync(
-                    'generate-image.mjs',
-                    ['--contract-check', 'contract check'],
-                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
-                );
+                const result = await runSkillScriptAsync('generate-image.mjs', ['--contract-check', 'contract check'], {
+                    GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                });
 
                 assert.equal(result.status, 0);
                 assert.equal(result.stderr.trim(), '');
@@ -1150,9 +1146,7 @@ describe('Agent skill script argument validation', () => {
                 requests.push({ method: request.method, url: request.url });
                 if (request.url === '/api/agent/capabilities') {
                     response.writeHead(200, { 'content-type': 'application/json' });
-                    response.end(
-                        JSON.stringify(agentGenerateCapabilities({ orchestration: undefined }))
-                    );
+                    response.end(JSON.stringify(agentGenerateCapabilities({ orchestration: undefined })));
                     return;
                 }
                 if (request.url === '/api/agent/images/generate') {
@@ -1172,11 +1166,9 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ error: 'unexpected contract probe' }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync(
-                    'generate-image.mjs',
-                    ['--contract-check', 'contract check'],
-                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
-                );
+                const result = await runSkillScriptAsync('generate-image.mjs', ['--contract-check', 'contract check'], {
+                    GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                });
 
                 assert.equal(result.status, 1);
                 assert.equal(result.stdout.trim(), '');
@@ -1184,10 +1176,7 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.error.code, 'orchestration_required');
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
-                    [
-                        'GET /api/agent/capabilities',
-                        'POST /api/agent/images/generate'
-                    ]
+                    ['GET /api/agent/capabilities', 'POST /api/agent/images/generate']
                 );
             }
         );
@@ -1203,7 +1192,11 @@ describe('Agent skill script argument validation', () => {
         assert.equal(agentBody.request.stream_mode, 'non_stream');
         assert.equal(agentBody.routing_guidance.transport, 'agent_json');
 
-        const upstreamSseResult = runSkillScript('generate-image.mjs', ['--preset', '4k-upstream-sse-newapi', 'prompt']);
+        const upstreamSseResult = runSkillScript('generate-image.mjs', [
+            '--preset',
+            '4k-upstream-sse-newapi',
+            'prompt'
+        ]);
         assert.equal(upstreamSseResult.status, 0);
         const upstreamSseBody = JSON.parse(upstreamSseResult.stdout);
         assert.equal(upstreamSseBody.request.size, '3840x2160');
@@ -1541,7 +1534,9 @@ describe('Agent skill script argument validation', () => {
             (request, response) => {
                 if (request.url === '/api/agent/capabilities') {
                     response.writeHead(200, { 'content-type': 'application/json' });
-                    response.end(JSON.stringify({ agent_streaming: { page_sse: { supported: true, endpoint: '/api/images' } } }));
+                    response.end(
+                        JSON.stringify({ agent_streaming: { page_sse: { supported: true, endpoint: '/api/images' } } })
+                    );
                     return;
                 }
                 if (request.url === '/api/images') {
@@ -1830,7 +1825,11 @@ describe('Agent skill script argument validation', () => {
                 }
                 if (request.url === '/api/agent/images/generate') {
                     response.writeHead(500, { 'content-type': 'application/json' });
-                    response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'fetch failed', retryable: false } }));
+                    response.end(
+                        JSON.stringify({
+                            error: { code: 'unexpected_error', message: 'fetch failed', retryable: false }
+                        })
+                    );
                     return;
                 }
                 if (request.url === '/api/agent/diagnostics/requests?idempotency_key=diag-generate-key') {
@@ -1881,7 +1880,15 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--agent', '--idempotency-key', 'diag-generate-key', '--size', '1024x1024', 'prompt'],
+                    [
+                        '--allow-billable',
+                        '--agent',
+                        '--idempotency-key',
+                        'diag-generate-key',
+                        '--size',
+                        '1024x1024',
+                        'prompt'
+                    ],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -1979,7 +1986,15 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--agent', '--idempotency-key', 'path-diag-key', '--size', '1024x1024', 'prompt'],
+                    [
+                        '--allow-billable',
+                        '--agent',
+                        '--idempotency-key',
+                        'path-diag-key',
+                        '--size',
+                        '1024x1024',
+                        'prompt'
+                    ],
                     { GPT_IMAGE_PLAYGROUND_URL: `${baseUrl}/playground` }
                 );
 
@@ -2044,7 +2059,15 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--agent', '--idempotency-key', 'terminal-diag-key', '--size', '1024x1024', 'prompt'],
+                    [
+                        '--allow-billable',
+                        '--agent',
+                        '--idempotency-key',
+                        'terminal-diag-key',
+                        '--size',
+                        '1024x1024',
+                        'prompt'
+                    ],
                     {
                         GPT_IMAGE_AGENT_MAX_ATTEMPTS: '1',
                         GPT_IMAGE_PLAYGROUND_URL: baseUrl
@@ -2072,7 +2095,11 @@ describe('Agent skill script argument validation', () => {
                 }
                 if (request.url === '/api/agent/images/generate') {
                     response.writeHead(500, { 'content-type': 'application/json' });
-                    response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'fetch failed', retryable: false } }));
+                    response.end(
+                        JSON.stringify({
+                            error: { code: 'unexpected_error', message: 'fetch failed', retryable: false }
+                        })
+                    );
                     return;
                 }
                 if (request.url === '/api/agent/diagnostics/requests?idempotency_key=diag-unavailable-key') {
@@ -2086,7 +2113,15 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--agent', '--idempotency-key', 'diag-unavailable-key', '--size', '1024x1024', 'prompt'],
+                    [
+                        '--allow-billable',
+                        '--agent',
+                        '--idempotency-key',
+                        'diag-unavailable-key',
+                        '--size',
+                        '1024x1024',
+                        'prompt'
+                    ],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
@@ -2162,7 +2197,9 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
-    it('strips page SSE base64 from default path-mode output', async () => {
+    it('checks default path-mode page SSE generate dimensions from raw SSE image bytes before formatting', async () => {
+        const finalImageBase64 = fakePngBase64(3072, 2048);
+        let imageRouteHits = 0;
         await withServer(
             (request, response) => {
                 if (request.url === '/api/agent/capabilities') {
@@ -2185,7 +2222,13 @@ describe('Agent skill script argument validation', () => {
                     response.writeHead(200, { 'content-type': 'text/event-stream' });
                     response.end(
                         [
-                            'data: {"type":"completed","filename":"image.png","b64_json":"final-base64","path":"/api/image/image.png","output_format":"png"}',
+                            `data: ${JSON.stringify({
+                                type: 'completed',
+                                filename: 'image.png',
+                                b64_json: finalImageBase64,
+                                path: '/api/image/image.png',
+                                output_format: 'png'
+                            })}`,
                             '',
                             'data: {"type":"done","client_request_id":"page-request-1","images":[{"filename":"image.png"}]}',
                             '',
@@ -2194,18 +2237,34 @@ describe('Agent skill script argument validation', () => {
                     );
                     return;
                 }
+                if (request.url === '/api/image/image.png') {
+                    imageRouteHits += 1;
+                    response.writeHead(401, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'cookie required' }));
+                    return;
+                }
                 response.writeHead(404, { 'content-type': 'application/json' });
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'generate-image.mjs',
-                    ['--allow-billable', '--page-sse', '--size', '3072x2048', '--quality', 'high', 'prompt'],
+                    [
+                        '--allow-billable',
+                        '--page-sse',
+                        '--dimension-check',
+                        '--size',
+                        '3072x2048',
+                        '--quality',
+                        'high',
+                        'prompt'
+                    ],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
                 );
 
                 assert.equal(result.status, 0);
                 assert.equal(result.stderr.trim(), '');
+                assert.equal(imageRouteHits, 0);
                 const body = JSON.parse(result.stdout);
                 assert.equal(body.images[0].filename, 'image.png');
                 assert.equal('b64_json' in body.images[0], false);
@@ -2213,6 +2272,8 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.images[0].absolute_path, `${baseUrl}/api/image/image.png`);
                 assert.equal(body.images[0].output_format, 'png');
                 assert.equal(body.images[0].clientRequestId, 'page-request-1');
+                assert.deepEqual(body.images[0].dimensions, { width: 3072, height: 2048 });
+                assert.deepEqual(body.summary.actual_dimensions, { width: 3072, height: 2048 });
             }
         );
     });
@@ -2372,7 +2433,7 @@ describe('Agent skill script argument validation', () => {
                         'prompt'
                     ],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl },
-                    { timeoutMs: 1_200 }
+                    { timeoutMs: 3_000 }
                 );
 
                 assert.equal(result.timedOut, false);
@@ -2627,7 +2688,9 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.summary.endpoint, '/api/agent/images/generate');
                 assert.equal(body.summary.route_mode, 'agent');
                 assert.deepEqual(body.summary.content_urls, ['/api/agent/artifacts/artifact-off/content']);
-                assert.deepEqual(body.summary.absolute_content_urls, [`${baseUrl}/api/agent/artifacts/artifact-off/content`]);
+                assert.deepEqual(body.summary.absolute_content_urls, [
+                    `${baseUrl}/api/agent/artifacts/artifact-off/content`
+                ]);
                 assert.deepEqual(body.summary.actual_dimensions, { width: 1254, height: 1254 });
                 assert.deepEqual(body.summary.image_dimensions, [{ width: 1254, height: 1254 }]);
                 assert.equal(typeof body.summary.elapsed_ms, 'number');
@@ -3168,6 +3231,20 @@ describe('Agent skill script argument validation', () => {
         assert.equal(result.stderr.trim(), '');
     });
 
+    it('rejects edit dimension-check without a fixed requested size before remote execution', () => {
+        const result = runSkillScript('edit-image.mjs', [
+            '--dimension-check',
+            '--size',
+            'auto',
+            '/tmp/source.png',
+            'prompt'
+        ]);
+
+        assert.equal(result.status, 2);
+        assert.equal(result.stdout.trim(), '');
+        assert.match(result.stderr, /--dimension-check 需要 --size 为 WIDTHxHEIGHT/);
+    });
+
     it('routes GPT2Image-compatible edit options through page SSE dry-runs', () => {
         const result = runSkillScript('edit-image.mjs', [
             '--format',
@@ -3201,6 +3278,23 @@ describe('Agent skill script argument validation', () => {
         assert.equal(body.request.thinking, 'medium');
         assert.equal(body.request.promptOptimization, false);
         assert.equal(body.request.force_web, true);
+    });
+
+    it('shows edit dimension-check in dry-run requests', () => {
+        const result = runSkillScript('edit-image.mjs', [
+            '--dimension-check',
+            '--size',
+            '1024x1024',
+            '--agent',
+            '/tmp/source.png',
+            'prompt'
+        ]);
+
+        assert.equal(result.status, 0);
+        assert.equal(result.stderr.trim(), '');
+        const body = JSON.parse(result.stdout);
+        assert.equal(body.request.dimension_check, true);
+        assert.equal(body.routing_guidance.transport, 'agent_json');
     });
 
     it('uses page SSE for billable high-resolution edit requests', async () => {
@@ -3279,6 +3373,154 @@ describe('Agent skill script argument validation', () => {
                     assert.match(pageSseRequestBody, /name="mode"\r?\n\r?\nedit/);
                     assert.match(pageSseRequestBody, /name="clientRequestId"\r?\n\r?\nedit-page-sse-key/);
                     assert.match(pageSseRequestBody, /name="image_0"; filename="source\.png"/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('checks edit page SSE output dimensions from raw SSE image bytes before formatting', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-page-sse-dim-'));
+        try {
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+            const finalImageBase64 = fakePngBase64(1024, 1024);
+            let imageRouteHits = 0;
+
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify(
+                                agentGenerateCapabilities({ agent_streaming: { page_sse: { supported: true } } })
+                            )
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                `data: ${JSON.stringify({
+                                    type: 'completed',
+                                    filename: 'edit.png',
+                                    b64_json: finalImageBase64,
+                                    path: '/api/image/edit-ok.png'
+                                })}`,
+                                '',
+                                'data: {"type":"done","images":[{"filename":"edit.png","path":"/api/image/edit-ok.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/image/edit-ok.png') {
+                        imageRouteHits += 1;
+                        response.writeHead(401, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: 'cookie required' }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'edit-image.mjs',
+                        [
+                            '--allow-billable',
+                            '--dimension-check',
+                            '--page-sse',
+                            '--size',
+                            '1024x1024',
+                            imagePath,
+                            'prompt'
+                        ],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.equal(imageRouteHits, 0);
+                    const body = JSON.parse(result.stdout);
+                    assert.equal('b64_json' in body.images[0], false);
+                    assert.equal(body.images[0].path, '/api/image/edit-ok.png');
+                    assert.equal(body.images[0].absolute_path, `${baseUrl}/api/image/edit-ok.png`);
+                    assert.deepEqual(body.images[0].dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.summary.actual_dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.summary.image_dimensions, [{ width: 1024, height: 1024 }]);
+                    assert.equal(body.summary.transport, 'page_sse');
+                    assert.equal(body.summary.endpoint, '/api/images');
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('reports edit dimension-check artifact download failures as validation failures', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-page-sse-dim-download-'));
+        try {
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify(
+                                agentGenerateCapabilities({ agent_streaming: { page_sse: { supported: true } } })
+                            )
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                'data: {"type":"completed","filename":"edit.png","path":"/artifact/missing-edit.png"}',
+                                '',
+                                'data: {"type":"done","images":[{"filename":"edit.png","path":"/artifact/missing-edit.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing artifact' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'edit-image.mjs',
+                        [
+                            '--allow-billable',
+                            '--dimension-check',
+                            '--page-sse',
+                            '--size',
+                            '1024x1024',
+                            imagePath,
+                            'prompt'
+                        ],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stdout.trim(), '');
+                    const body = JSON.parse(result.stderr);
+                    assert.equal(body.error.code, 'dimension_check_failed');
+                    assert.match(body.error.message, /下载产物失败，状态码 404/);
+                    assert.equal(body.validation_failure_kind, 'generated_artifact_failed_dimension_check');
+                    assert.equal(body.summary.dimension_check_failed, true);
+                    assert.deepEqual(body.summary.expected_dimensions, { width: 1024, height: 1024 });
+                    assert.equal(body.summary.actual_dimensions, null);
+                    assert.equal(body.summary.transport, 'page_sse');
+                    assert.equal(body.response.images[0].absolute_path, `${baseUrl}/artifact/missing-edit.png`);
                 }
             );
         } finally {
@@ -3466,6 +3708,172 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('checks explicit Agent edit output dimensions from base64 images', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-agent-dim-'));
+        try {
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify(agentGenerateCapabilities()));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/edit') {
+                        await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                request_id: 'edit-dimension-ok',
+                                idempotency_key: 'edit-dimension-ok-key',
+                                execution: {
+                                    transport: 'agent_json',
+                                    endpoint: '/api/agent/images/edit',
+                                    route_mode: 'agent',
+                                    channel_request_mode: 'images-non-stream',
+                                    channel_request_mode_fallback_applied: false,
+                                    route_decision: {
+                                        requested_backend: 'images-api',
+                                        preferred_channel_request_mode: 'images-non-stream',
+                                        selected_channel_request_mode: 'images-non-stream'
+                                    },
+                                    selected_channel_id: 'edit-dim-channel',
+                                    upstream_host: 'edit-dim-upstream.example.test'
+                                },
+                                images: [{ id: 'edit-ok', filename: 'edit.png', b64_json: fakePngBase64(1024, 1024) }]
+                            })
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'edit-image.mjs',
+                        [
+                            '--allow-billable',
+                            '--agent',
+                            '--dimension-check',
+                            '--size',
+                            '1024x1024',
+                            '--idempotency-key',
+                            'edit-dimension-ok-key',
+                            imagePath,
+                            'prompt'
+                        ],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    const body = JSON.parse(result.stdout);
+                    assert.deepEqual(body.images[0].dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.summary.actual_dimensions, { width: 1024, height: 1024 });
+                    assert.equal(body.summary.channel_request_mode, 'images-non-stream');
+                    assert.equal(body.summary.selected_channel_id, 'edit-dim-channel');
+                    assert.equal(body.summary.upstream_host, 'edit-dim-upstream.example.test');
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('fails explicit Agent edit dimension-check mismatches with route diagnostics', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-agent-dim-bad-'));
+        try {
+            const imagePath = join(tempRoot, 'source.png');
+            writeFileSync(imagePath, fakePngBuffer(2, 1));
+
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify(agentGenerateCapabilities()));
+                        return;
+                    }
+                    if (request.url === '/api/agent/images/edit') {
+                        await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                request_id: 'edit-dimension-bad',
+                                idempotency_key: 'edit-dimension-bad-key',
+                                execution: {
+                                    transport: 'agent_json',
+                                    endpoint: '/api/agent/images/edit',
+                                    route_mode: 'agent',
+                                    channel_request_mode: 'images-non-stream',
+                                    channel_request_mode_fallback_applied: true,
+                                    route_decision: {
+                                        requested_backend: 'images-api',
+                                        preferred_channel_request_mode: 'images-sse',
+                                        fallback_channel_request_mode: 'images-non-stream',
+                                        selected_channel_request_mode: 'images-non-stream'
+                                    },
+                                    selected_channel_id: 'edit-dim-bad-channel',
+                                    upstream_host: 'edit-dim-bad-upstream.example.test'
+                                },
+                                images: [{ id: 'edit-bad', filename: 'edit.png', b64_json: fakePngBase64(1254, 1254) }]
+                            })
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'edit-image.mjs',
+                        [
+                            '--allow-billable',
+                            '--agent',
+                            '--dimension-check',
+                            '--size',
+                            '1024x1024',
+                            '--idempotency-key',
+                            'edit-dimension-bad-key',
+                            imagePath,
+                            'prompt'
+                        ],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 1);
+                    assert.equal(result.stdout.trim(), '');
+                    const body = JSON.parse(result.stderr);
+                    assert.equal(body.error.code, 'dimension_check_failed');
+                    assert.equal(body.validation_failure_kind, 'generated_artifact_failed_dimension_check');
+                    assert.deepEqual(body.error.expected_dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.error.actual_dimensions, { width: 1254, height: 1254 });
+                    assert.equal(body.response.images[0].b64_json, undefined);
+                    assert.equal(body.response.images[0].b64_json_length, fakePngBase64(1254, 1254).length);
+                    assert.deepEqual(body.response.images[0].dimensions, { width: 1254, height: 1254 });
+                    assert.equal(body.summary.dimension_check_failed, true);
+                    assert.equal(body.summary.transport, 'agent_json');
+                    assert.equal(body.summary.endpoint, '/api/agent/images/edit');
+                    assert.equal(body.summary.route_mode, 'agent');
+                    assert.equal(body.summary.channel_request_mode, 'images-non-stream');
+                    assert.equal(body.summary.channel_request_mode_fallback_applied, true);
+                    assert.deepEqual(body.summary.route_decision, {
+                        requested_backend: 'images-api',
+                        preferred_channel_request_mode: 'images-sse',
+                        fallback_channel_request_mode: 'images-non-stream',
+                        selected_channel_request_mode: 'images-non-stream'
+                    });
+                    assert.equal(body.summary.selected_channel_id, 'edit-dim-bad-channel');
+                    assert.equal(body.summary.upstream_host, 'edit-dim-bad-upstream.example.test');
+                    assert.match(body.summary.next_action, /确认当前编辑渠道是否支持请求尺寸/);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('enriches failed Agent edit summaries with Agent state diagnostics', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-edit-diagnostics-'));
         try {
@@ -3490,7 +3898,11 @@ describe('Agent skill script argument validation', () => {
                     if (request.url === '/api/agent/images/edit') {
                         await readRequestText(request);
                         response.writeHead(500, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'edit failed', retryable: false } }));
+                        response.end(
+                            JSON.stringify({
+                                error: { code: 'unexpected_error', message: 'edit failed', retryable: false }
+                            })
+                        );
                         return;
                     }
                     if (request.url === '/api/agent/diagnostics/requests?idempotency_key=diag-edit-key') {
@@ -3615,7 +4027,9 @@ describe('Agent skill script argument validation', () => {
                     }
                     if (request.url === '/api/images') {
                         response.writeHead(200, { 'content-type': 'text/event-stream' });
-                        response.end('data: {"type":"error","error":{"message":"edit stream failed"},"status":502}\n\n');
+                        response.end(
+                            'data: {"type":"error","error":{"message":"edit stream failed"},"status":502}\n\n'
+                        );
                         return;
                     }
                     if (request.url === '/api/agent/images/edit') {
@@ -3980,7 +4394,10 @@ describe('Agent skill script argument validation', () => {
 
         assert.match(readmeText, /partial_images_by_backend\["responses-image-generation"\]/);
         assert.match(skillText, /limits\.partial_images_by_backend\[image_backend\]/);
-        assert.match(skillText, /Agent edit 不接受 `image_backend`，其内部上游流式字段按默认 Images API\/profile 范围校验/);
+        assert.match(
+            skillText,
+            /Agent edit 不接受 `image_backend`，其内部上游流式字段按默认 Images API\/profile 范围校验/
+        );
         assert.match(skillText, /Responses image_generation edit 属于页面 SSE 路径/);
         assert.match(
             skillText,
@@ -3998,9 +4415,18 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /只代表“声明支持”，不代表当前渠道每次实测都能成功/);
         assert.match(apiReference, /如果 `selected_channel_id`、`upstream_host` 为空/);
         assert.match(apiReference, /Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`/);
-        assert.match(apiReference, /强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API\/profile 范围校验/);
-        assert.match(apiReference, /图片路径可以用位置参数 `<image-path> <prompt>`，也可以用 `--image <path> <prompt>`/);
-        assert.match(apiReference, /Agent edit 不接受 `image_backend`；需要 Responses backend edit 字段时必须使用页面端 `\/api\/images` form-data SSE 路径/);
+        assert.match(
+            apiReference,
+            /强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API\/profile 范围校验/
+        );
+        assert.match(
+            apiReference,
+            /图片路径可以用位置参数 `<image-path> <prompt>`，也可以用 `--image <path> <prompt>`/
+        );
+        assert.match(
+            apiReference,
+            /Agent edit 不接受 `image_backend`；需要 Responses backend edit 字段时必须使用页面端 `\/api\/images` form-data SSE 路径/
+        );
         assert.match(apiReference, /Responses image_generation edit 必须走页面 SSE/);
         assert.match(apiReference, /JSONL 字段名必须使用 `streaming_strategy`/);
         assert.match(apiReference, /`image_streaming_strategy` 是页面 form-data 字段名，不是 batch JSONL 字段/);
@@ -4048,7 +4474,10 @@ describe('Agent skill script argument validation', () => {
         assert.match(readmeText, /streamingBatch\.recommendedConcurrency/);
         assert.match(readmeText, /channelQueue\.capacityPerCredential/);
         assert.match(readmeText, /Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致/);
-        assert.match(readmeText, /不要直接输出 `\.env\.local`、`\.env\*\.local`、secret 文件或原始 `docker inspect \.Config\.Env`/);
+        assert.match(
+            readmeText,
+            /不要直接输出 `\.env\.local`、`\.env\*\.local`、secret 文件或原始 `docker inspect \.Config\.Env`/
+        );
         assert.match(readmeText, /npm run env:summary/);
         assert.match(readmeText, /verification_scope\.mode=local_planning_only/);
         assert.match(readmeText, /Hugging Face Space Secrets 只能写入和列出名称/);
@@ -4073,7 +4502,8 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /不要手动并行启动多个单张脚本来绕过 `capacity_feedback`/);
         assert.match(apiReference, /streamingBatch\.recommendedConcurrency/);
         assert.match(apiReference, /channelQueue\.capacityPerCredential/);
-        assert.match(apiReference, /尺寸敏感任务必须使用批量 `--dimension-check` 或下载后校验/);
+        assert.match(apiReference, /尺寸敏感任务必须使用生成\/编辑\/批量 `--dimension-check` 或下载后校验/);
+        assert.match(apiReference, /编辑 `--dimension-check` 会读取响应 `b64_json` 或同 origin `content_url`/);
         assert.match(apiReference, /channel_capacity_queue_aborted/);
         assert.match(apiReference, /npm run env:summary/);
         assert.match(apiReference, /verification_scope\.mode=local_planning_only/);
@@ -4142,7 +4572,10 @@ describe('Agent skill script argument validation', () => {
         const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
         const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
 
-        assert.match(readmeText, /新增 probe、diagnostics 或路由可观测能力时，先落 API \/ capabilities \/ OpenAPI 契约/);
+        assert.match(
+            readmeText,
+            /新增 probe、diagnostics 或路由可观测能力时，先落 API \/ capabilities \/ OpenAPI 契约/
+        );
         assert.match(readmeText, /Skill 脚本做薄封装/);
         assert.match(skillText, /新增 probe、diagnostics、路由健康或请求旅程能力时/);
         assert.match(skillText, /GET \/api\/agent\/capabilities/);
@@ -4306,7 +4739,10 @@ describe('Agent skill script argument validation', () => {
         try {
             const inputPath = join(tempRoot, 'tasks.jsonl');
             const manifestPath = join(tempRoot, 'manifest.jsonl');
-            writeFileSync(inputPath, JSON.stringify({ id: 'diag-task', prompt: 'prompt', idempotency_key: 'batch-diag-key' }));
+            writeFileSync(
+                inputPath,
+                JSON.stringify({ id: 'diag-task', prompt: 'prompt', idempotency_key: 'batch-diag-key' })
+            );
 
             await withServer(
                 (request, response) => {
@@ -4317,7 +4753,11 @@ describe('Agent skill script argument validation', () => {
                     }
                     if (request.url === '/api/agent/image-requests') {
                         response.writeHead(500, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ error: { code: 'unexpected_error', message: 'fetch failed', retryable: false } }));
+                        response.end(
+                            JSON.stringify({
+                                error: { code: 'unexpected_error', message: 'fetch failed', retryable: false }
+                            })
+                        );
                         return;
                     }
                     if (request.url === '/api/agent/diagnostics/requests?idempotency_key=batch-diag-key') {
@@ -4471,16 +4911,22 @@ describe('Agent skill script argument validation', () => {
                     if (request.url === '/api/agent/image-requests') {
                         agentRequestBody = await readRequestText(request);
                         response.writeHead(200, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ images: [{ id: 'compressed-image', filename: 'compressed.jpg' }] }));
+                        response.end(
+                            JSON.stringify({ images: [{ id: 'compressed-image', filename: 'compressed.jpg' }] })
+                        );
                         return;
                     }
                     response.writeHead(404, { 'content-type': 'application/json' });
                     response.end(JSON.stringify({ error: 'missing' }));
                 },
                 async (baseUrl) => {
-                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
-                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
-                    });
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath],
+                        {
+                            GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                        }
+                    );
 
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
@@ -4962,7 +5408,13 @@ describe('Agent skill script argument validation', () => {
             writeFileSync(imagePath, fakePngBuffer(2, 1));
             writeFileSync(
                 inputPath,
-                JSON.stringify({ mode: 'edit', id: 'edit-one', prompt: 'edit prompt', image_path: imagePath, size: '1024x1024' })
+                JSON.stringify({
+                    mode: 'edit',
+                    id: 'edit-one',
+                    prompt: 'edit prompt',
+                    image_path: imagePath,
+                    size: '1024x1024'
+                })
             );
 
             const requests = [];
@@ -4972,7 +5424,11 @@ describe('Agent skill script argument validation', () => {
                     requests.push({ method: request.method, url: request.url });
                     if (request.url === '/api/agent/capabilities') {
                         response.writeHead(200, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ agent_streaming: { page_sse: { supported: true, endpoint: '/api/images' } } }));
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: { page_sse: { supported: true, endpoint: '/api/images' } }
+                            })
+                        );
                         return;
                     }
                     if (request.url === '/api/images') {
@@ -4993,9 +5449,13 @@ describe('Agent skill script argument validation', () => {
                     response.end(JSON.stringify({ error: 'missing' }));
                 },
                 async (baseUrl) => {
-                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
-                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
-                    });
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath],
+                        {
+                            GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                        }
+                    );
 
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
@@ -5073,9 +5533,13 @@ describe('Agent skill script argument validation', () => {
                     response.end(JSON.stringify({ error: 'missing' }));
                 },
                 async (baseUrl) => {
-                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
-                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
-                    });
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath],
+                        {
+                            GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                        }
+                    );
 
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
@@ -5193,9 +5657,13 @@ describe('Agent skill script argument validation', () => {
                     response.end(JSON.stringify({ error: 'missing' }));
                 },
                 async (baseUrl) => {
-                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
-                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
-                    });
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath],
+                        {
+                            GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                        }
+                    );
 
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
@@ -5214,7 +5682,11 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(body.results[0].summary.channel_request_mode, 'responses-sse');
                     assert.deepEqual(
                         requests.map((item) => `${item.method} ${item.url}`),
-                        ['GET /api/agent/capabilities', 'POST /api/agent/image-requests', 'GET /api/agent/jobs/batch-job-responses/result']
+                        [
+                            'GET /api/agent/capabilities',
+                            'POST /api/agent/image-requests',
+                            'GET /api/agent/jobs/batch-job-responses/result'
+                        ]
                     );
                     const requestBody = JSON.parse(pageSseRequestBody);
                     assert.equal(requestBody.image_backend, 'responses-image-generation');
@@ -5292,9 +5764,13 @@ describe('Agent skill script argument validation', () => {
                     response.end(JSON.stringify({ error: 'missing' }));
                 },
                 async (baseUrl) => {
-                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
-                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
-                    });
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath],
+                        {
+                            GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                        }
+                    );
 
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
@@ -5408,9 +5884,13 @@ describe('Agent skill script argument validation', () => {
                     response.end(JSON.stringify({ error: 'missing' }));
                 },
                 async (baseUrl) => {
-                    const result = await runSkillScriptAsync('batch-images.mjs', ['--allow-billable', '--input', inputPath], {
-                        GPT_IMAGE_PLAYGROUND_URL: baseUrl
-                    });
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath],
+                        {
+                            GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                        }
+                    );
 
                     assert.equal(result.status, 0);
                     assert.equal(result.stderr.trim(), '');
@@ -5428,7 +5908,11 @@ describe('Agent skill script argument validation', () => {
                     assert.equal(body.results[0].summary.channel_request_mode, 'images-non-stream');
                     assert.deepEqual(
                         requests.map((item) => `${item.method} ${item.url}`),
-                        ['GET /api/agent/capabilities', 'POST /api/agent/image-requests', 'GET /api/agent/jobs/batch-no-page-sse-job/result']
+                        [
+                            'GET /api/agent/capabilities',
+                            'POST /api/agent/image-requests',
+                            'GET /api/agent/jobs/batch-no-page-sse-job/result'
+                        ]
                     );
                 }
             );
@@ -5691,7 +6175,9 @@ describe('Agent skill script argument validation', () => {
                     if (request.url === '/api/agent/image-requests') {
                         idempotencyKeys.push(request.headers['idempotency-key']);
                         response.writeHead(500, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
+                        response.end(
+                            JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } })
+                        );
                         return;
                     }
                     response.writeHead(404, { 'content-type': 'application/json' });
@@ -5755,7 +6241,9 @@ describe('Agent skill script argument validation', () => {
                     if (request.url === '/api/agent/image-requests') {
                         idempotencyKeys.push(request.headers['idempotency-key']);
                         response.writeHead(500, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
+                        response.end(
+                            JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } })
+                        );
                         return;
                     }
                     response.writeHead(404, { 'content-type': 'application/json' });
@@ -5811,7 +6299,9 @@ describe('Agent skill script argument validation', () => {
                     if (request.url === '/api/agent/image-requests') {
                         idempotencyKeys.push(request.headers['idempotency-key']);
                         response.writeHead(500, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } }));
+                        response.end(
+                            JSON.stringify({ error: { message: 'upstream failed', code: 'upstream_failed' } })
+                        );
                         return;
                     }
                     response.writeHead(404, { 'content-type': 'application/json' });
@@ -5921,7 +6411,11 @@ describe('Agent skill script argument validation', () => {
                     }
                     if (request.url === '/api/agent/image-requests') {
                         response.writeHead(200, { 'content-type': 'application/json' });
-                        response.end(JSON.stringify({ images: [{ id: 'dim-image', filename: 'dim.png', content_url: '/artifact/dim.png' }] }));
+                        response.end(
+                            JSON.stringify({
+                                images: [{ id: 'dim-image', filename: 'dim.png', content_url: '/artifact/dim.png' }]
+                            })
+                        );
                         return;
                     }
                     if (request.url === '/artifact/dim.png') {
@@ -5952,6 +6446,83 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('checks batch page SSE path-mode dimensions from raw SSE image bytes before formatting', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-page-sse-dim-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const finalImageBase64 = fakePngBase64(1024, 1024);
+            let imageRouteHits = 0;
+            writeFileSync(
+                inputPath,
+                JSON.stringify({ id: 'dim-page-sse', prompt: 'prompt', size: '1024x1024', page_sse: true })
+            );
+
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                agent_streaming: { page_sse: { supported: true, endpoint: '/api/images' } }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/images') {
+                        await readRequestText(request);
+                        response.writeHead(200, { 'content-type': 'text/event-stream' });
+                        response.end(
+                            [
+                                `data: ${JSON.stringify({
+                                    type: 'completed',
+                                    filename: 'batch.png',
+                                    b64_json: finalImageBase64,
+                                    path: '/api/image/batch.png',
+                                    output_format: 'png'
+                                })}`,
+                                '',
+                                'data: {"type":"done","images":[{"filename":"batch.png","path":"/api/image/batch.png"}]}',
+                                '',
+                                ''
+                            ].join('\n')
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/image/batch.png') {
+                        imageRouteHits += 1;
+                        response.writeHead(401, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ error: 'cookie required' }));
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--dimension-check', '--input', inputPath],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.equal(imageRouteHits, 0);
+                    const body = JSON.parse(result.stdout);
+                    assert.equal(body.results[0].status, 'succeeded');
+                    assert.equal(body.results[0].routing.transport, 'page_sse');
+                    assert.equal('b64_json' in body.results[0].response.images[0], false);
+                    assert.equal(body.results[0].response.images[0].path, '/api/image/batch.png');
+                    assert.equal(body.results[0].response.images[0].absolute_path, `${baseUrl}/api/image/batch.png`);
+                    assert.deepEqual(body.results[0].response.images[0].dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.results[0].summary.actual_dimensions, { width: 1024, height: 1024 });
+                    assert.deepEqual(body.results[0].summary.image_dimensions, [{ width: 1024, height: 1024 }]);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('fails batch dimension-check mismatches and invalid size parameters', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-'));
         try {
@@ -5963,7 +6534,10 @@ describe('Agent skill script argument validation', () => {
             assert.equal(invalidResult.stdout.trim(), '');
 
             const nonPositiveInputPath = join(tempRoot, 'non-positive.jsonl');
-            writeFileSync(nonPositiveInputPath, JSON.stringify({ id: 'non-positive-size', prompt: 'prompt', size: '0x3840' }));
+            writeFileSync(
+                nonPositiveInputPath,
+                JSON.stringify({ id: 'non-positive-size', prompt: 'prompt', size: '0x3840' })
+            );
             const nonPositiveResult = runSkillScript('batch-images.mjs', ['--input', nonPositiveInputPath]);
             assert.equal(nonPositiveResult.status, 2);
             assert.match(nonPositiveResult.stderr, /non-positive-size\.size 的宽度和高度必须是正数/);
@@ -5998,10 +6572,7 @@ describe('Agent skill script argument validation', () => {
             assert.equal(pngCompressionResult.status, 0);
             assert.equal(pngCompressionResult.stderr.trim(), '');
             const pngCompressionBody = JSON.parse(pngCompressionResult.stdout);
-            assert.equal(
-                pngCompressionBody.tasks[0].request.normalizations.output_compression_ignored_for_png,
-                true
-            );
+            assert.equal(pngCompressionBody.tasks[0].request.normalizations.output_compression_ignored_for_png, true);
             assert.equal(pngCompressionBody.tasks[0].request.output_compression, undefined);
 
             const conflictingFormatInputPath = join(tempRoot, 'conflicting-format.jsonl');
@@ -6084,7 +6655,10 @@ describe('Agent skill script argument validation', () => {
                     responsesModel: 'gpt-4.1'
                 })
             );
-            const editResponsesModelResult = runSkillScript('batch-images.mjs', ['--input', editResponsesModelInputPath]);
+            const editResponsesModelResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                editResponsesModelInputPath
+            ]);
             assert.equal(editResponsesModelResult.status, 2);
             assert.match(
                 editResponsesModelResult.stderr,
@@ -6131,7 +6705,10 @@ describe('Agent skill script argument validation', () => {
                     image_streaming_strategy: 'responses-sse'
                 })
             );
-            const formFieldStreamingResult = runSkillScript('batch-images.mjs', ['--input', formFieldStreamingInputPath]);
+            const formFieldStreamingResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                formFieldStreamingInputPath
+            ]);
             assert.equal(formFieldStreamingResult.status, 2);
             assert.match(
                 formFieldStreamingResult.stderr,
@@ -6308,7 +6885,10 @@ describe('Agent skill script argument validation', () => {
                     transport: 'agent_json'
                 })
             );
-            const unsupportedTransportResult = runSkillScript('batch-images.mjs', ['--input', unsupportedTransportInputPath]);
+            const unsupportedTransportResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                unsupportedTransportInputPath
+            ]);
             assert.equal(unsupportedTransportResult.status, 2);
             assert.match(unsupportedTransportResult.stderr, /unsupported-transport\.transport 必须是 page_sse/);
             assert.equal(unsupportedTransportResult.stdout.trim(), '');
@@ -6390,6 +6970,21 @@ describe('Agent skill script argument validation', () => {
                         response.writeHead(200, { 'content-type': 'application/json' });
                         response.end(
                             JSON.stringify({
+                                execution: {
+                                    transport: 'agent_job_polling',
+                                    endpoint: '/api/agent/image-requests',
+                                    route_mode: 'job',
+                                    channel_request_mode: 'images-non-stream',
+                                    channel_request_mode_fallback_applied: true,
+                                    route_decision: {
+                                        requested_backend: 'images-api',
+                                        preferred_channel_request_mode: 'images-sse',
+                                        fallback_channel_request_mode: 'images-non-stream',
+                                        selected_channel_request_mode: 'images-non-stream'
+                                    },
+                                    selected_channel_id: 'dimension-channel',
+                                    upstream_host: 'dimension-upstream.example.test'
+                                },
                                 images: [
                                     { id: 'dim-image-bad', filename: 'dim-bad.png', b64_json: fakePngBase64(512, 512) },
                                     { id: 'dim-image-ok', filename: 'dim-ok.png', b64_json: fakePngBase64(1024, 1024) }
@@ -6431,9 +7026,25 @@ describe('Agent skill script argument validation', () => {
                     assert.deepEqual(body.results[0].summary.expected_dimensions, { width: 1024, height: 1024 });
                     assert.deepEqual(body.results[0].summary.actual_dimensions, { width: 512, height: 512 });
                     assert.equal(body.results[0].summary.dimension_check_failed, true);
+                    assert.equal(body.results[0].summary.transport, 'agent_job_polling');
+                    assert.equal(body.results[0].summary.endpoint, '/api/agent/image-requests');
+                    assert.equal(body.results[0].summary.route_mode, 'job');
+                    assert.equal(body.results[0].summary.channel_request_mode, 'images-non-stream');
+                    assert.equal(body.results[0].summary.channel_request_mode_fallback_applied, true);
+                    assert.deepEqual(body.results[0].summary.route_decision, {
+                        requested_backend: 'images-api',
+                        preferred_channel_request_mode: 'images-sse',
+                        fallback_channel_request_mode: 'images-non-stream',
+                        selected_channel_request_mode: 'images-non-stream'
+                    });
+                    assert.equal(body.results[0].summary.selected_channel_id, 'dimension-channel');
+                    assert.equal(body.results[0].summary.upstream_host, 'dimension-upstream.example.test');
                     assert.equal(body.failure_summary.validation_failure_count, 1);
                     assert.equal(body.failure_summary.request_failure_count, 0);
-                    assert.equal(body.failure_summary.tasks[0].failure_kind, 'generated_artifact_failed_dimension_check');
+                    assert.equal(
+                        body.failure_summary.tasks[0].failure_kind,
+                        'generated_artifact_failed_dimension_check'
+                    );
                     assert.deepEqual(body.failure_summary.tasks[0].artifact_ids, ['dim-image-bad', 'dim-image-ok']);
                 }
             );
@@ -6487,11 +7098,184 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
+    it('checks single generate output dimensions from same-origin artifact URLs', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-dimension-ok',
+                                state: 'succeeded',
+                                result_url: '/api/agent/jobs/job-dimension-ok/result'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/job-dimension-ok/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'request-dimension-ok',
+                            idempotency_key: 'dimension-ok-key',
+                            images: [
+                                {
+                                    id: 'artifact-dimension-ok',
+                                    content_url: '/artifact/dimension-ok.png'
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/artifact/dimension-ok.png') {
+                    response.writeHead(200, { 'content-type': 'image/png' });
+                    response.end(fakePngBuffer(1024, 1024));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--dimension-check',
+                        '--size',
+                        '1024x1024',
+                        '--idempotency-key',
+                        'dimension-ok-key',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.deepEqual(body.images[0].dimensions, { width: 1024, height: 1024 });
+                assert.deepEqual(body.summary.actual_dimensions, { width: 1024, height: 1024 });
+                assert.deepEqual(body.summary.image_dimensions, [{ width: 1024, height: 1024 }]);
+            }
+        );
+    });
+
+    it('fails single generate dimension-check mismatches with route diagnostics', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities()));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests' && request.method === 'POST') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            job: {
+                                id: 'job-dimension-bad',
+                                state: 'succeeded',
+                                result_url: '/api/agent/jobs/job-dimension-bad/result'
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/api/agent/jobs/job-dimension-bad/result') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            request_id: 'request-dimension-bad',
+                            idempotency_key: 'dimension-bad-key',
+                            execution: {
+                                transport: 'agent_job_polling',
+                                endpoint: '/api/agent/image-requests',
+                                route_mode: 'job',
+                                channel_request_mode: 'images-non-stream',
+                                channel_request_mode_fallback_applied: true,
+                                route_decision: {
+                                    requested_backend: 'images-api',
+                                    preferred_channel_request_mode: 'images-sse',
+                                    fallback_channel_request_mode: 'images-non-stream',
+                                    selected_channel_request_mode: 'images-non-stream'
+                                },
+                                selected_channel_id: 'single-dimension-channel',
+                                upstream_host: 'single-dimension-upstream.example.test'
+                            },
+                            images: [
+                                {
+                                    id: 'artifact-dimension-bad',
+                                    b64_json: fakePngBase64(1254, 1254)
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    [
+                        '--allow-billable',
+                        '--dimension-check',
+                        '--size',
+                        '1024x1024',
+                        '--idempotency-key',
+                        'dimension-bad-key',
+                        'prompt'
+                    ],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                const body = JSON.parse(result.stderr);
+                assert.equal(body.error.code, 'dimension_check_failed');
+                assert.equal(body.validation_failure_kind, 'generated_artifact_failed_dimension_check');
+                assert.deepEqual(body.error.expected_dimensions, { width: 1024, height: 1024 });
+                assert.deepEqual(body.error.actual_dimensions, { width: 1254, height: 1254 });
+                assert.equal(body.response.images[0].b64_json, undefined);
+                assert.equal(body.response.images[0].b64_json_length, fakePngBase64(1254, 1254).length);
+                assert.deepEqual(body.response.images[0].dimensions, { width: 1254, height: 1254 });
+                assert.equal(body.summary.dimension_check_failed, true);
+                assert.equal(body.summary.transport, 'agent_job_polling');
+                assert.equal(body.summary.endpoint, '/api/agent/image-requests');
+                assert.equal(body.summary.route_mode, 'job');
+                assert.equal(body.summary.channel_request_mode, 'images-non-stream');
+                assert.equal(body.summary.channel_request_mode_fallback_applied, true);
+                assert.deepEqual(body.summary.route_decision, {
+                    requested_backend: 'images-api',
+                    preferred_channel_request_mode: 'images-sse',
+                    fallback_channel_request_mode: 'images-non-stream',
+                    selected_channel_request_mode: 'images-non-stream'
+                });
+                assert.equal(body.summary.selected_channel_id, 'single-dimension-channel');
+                assert.equal(body.summary.upstream_host, 'single-dimension-upstream.example.test');
+                assert.match(body.summary.next_action, /确认当前渠道是否支持请求尺寸/);
+            }
+        );
+    });
+
     it('creates artifact share links through the Agent share endpoint when requested', async () => {
         const requests = [];
         await withServer(
             async (request, response) => {
-                requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+                requests.push({
+                    method: request.method,
+                    url: request.url,
+                    authorization: request.headers.authorization
+                });
                 if (request.url === '/api/agent/capabilities') {
                     response.writeHead(200, { 'content-type': 'application/json' });
                     response.end(JSON.stringify(agentGenerateCapabilities()));
@@ -6680,11 +7464,7 @@ describe('Agent skill script argument validation', () => {
     });
 
     it('rejects share-only generate flags without share mode', async () => {
-        const result = await runSkillScriptAsync(
-            'generate-image.mjs',
-            ['--share-expires-minutes', '60', 'prompt'],
-            {}
-        );
+        const result = await runSkillScriptAsync('generate-image.mjs', ['--share-expires-minutes', '60', 'prompt'], {});
 
         assert.equal(result.status, 2);
         assert.match(result.stderr, /--share-expires-minutes 需要和 --share 一起使用/);
@@ -6735,7 +7515,10 @@ describe('Agent skill script argument validation', () => {
                     );
                     return;
                 }
-                if (request.url === '/playground/api/agent/artifacts/artifact-subpath-share/share' && request.method === 'POST') {
+                if (
+                    request.url === '/playground/api/agent/artifacts/artifact-subpath-share/share' &&
+                    request.method === 'POST'
+                ) {
                     response.writeHead(201, { 'content-type': 'application/json' });
                     response.end(
                         JSON.stringify({
@@ -6883,7 +7666,11 @@ describe('Agent skill script argument validation', () => {
         const requests = [];
         await withServer(
             async (request, response) => {
-                requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+                requests.push({
+                    method: request.method,
+                    url: request.url,
+                    authorization: request.headers.authorization
+                });
                 if (request.url === '/api/agent/capabilities') {
                     response.writeHead(200, { 'content-type': 'application/json' });
                     response.end(
@@ -7038,9 +7825,7 @@ describe('Agent skill script argument validation', () => {
                                         copy_text: `requestIds=${requestId}`
                                     },
                                     matched_log_count: 1,
-                                    events: [
-                                        { id: 1, at: '2026-05-12T00:00:01.000Z', level: 'info', message: 'ok' }
-                                    ]
+                                    events: [{ id: 1, at: '2026-05-12T00:00:01.000Z', level: 'info', message: 'ok' }]
                                 }))
                             })
                         );
@@ -7309,11 +8094,9 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ diagnostics: [] }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync(
-                    'diagnose-request.mjs',
-                    ['--client-request-id', 'web-diag'],
-                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
-                );
+                const result = await runSkillScriptAsync('diagnose-request.mjs', ['--client-request-id', 'web-diag'], {
+                    GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                });
 
                 assert.equal(result.status, 1);
                 assert.equal(result.stdout.trim(), '');
@@ -7352,11 +8135,9 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync(
-                    'diagnose-request.mjs',
-                    ['--client-request-id', 'web-diag'],
-                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
-                );
+                const result = await runSkillScriptAsync('diagnose-request.mjs', ['--client-request-id', 'web-diag'], {
+                    GPT_IMAGE_PLAYGROUND_URL: baseUrl
+                });
 
                 assert.equal(result.status, 1);
                 assert.equal(result.stdout.trim(), '');
@@ -7539,15 +8320,7 @@ function runSkillScript(filename, args, env = {}, options = {}) {
 }
 
 function buildIsolatedSkillScriptEnv(options = {}) {
-    const keepNames = [
-        'HOME',
-        'PATH',
-        'SystemRoot',
-        'TEMP',
-        'TMP',
-        'TMPDIR',
-        'USERPROFILE'
-    ];
+    const keepNames = ['HOME', 'PATH', 'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'USERPROFILE'];
     const isolated = {};
     for (const name of keepNames) {
         if (process.env[name] !== undefined) isolated[name] = process.env[name];
@@ -7665,6 +8438,12 @@ function fakePngBuffer(width, height) {
     const buffer = Buffer.alloc(24);
     buffer[0] = 0x89;
     buffer.write('PNG', 1, 'ascii');
+    buffer[4] = 0x0d;
+    buffer[5] = 0x0a;
+    buffer[6] = 0x1a;
+    buffer[7] = 0x0a;
+    buffer.writeUInt32BE(13, 8);
+    buffer.write('IHDR', 12, 'ascii');
     buffer.writeUInt32BE(width, 16);
     buffer.writeUInt32BE(height, 20);
     return buffer;
