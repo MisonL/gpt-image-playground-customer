@@ -2,9 +2,24 @@
 import { AGENT_ENDPOINTS, buildAgentArtifactSharePath, buildAgentJobResultPath } from './lib/agent-api-paths.mjs';
 import { enrichFailureWithAgentDiagnostics } from './lib/agent-diagnostics-summary.mjs';
 import {
+    assertImageDimensions,
+    buildDimensionCheckFailureBody,
+    isDimensionCheckError,
+    parseExpectedDimensions
+} from './lib/dimension-check.mjs';
+import { formatPageSseOutput as formatSharedPageSseOutput } from './lib/page-sse-client.mjs';
+import {
+    attachSummary,
+    buildFailureSummary,
+    buildSuccessSummary,
+    completeScriptTiming,
+    startScriptTiming
+} from './lib/script-summary.mjs';
+import {
     errorMessage,
     assertValidImageSizeForModel,
     normalizeOutputFormat,
+    parseImageSizeValue,
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
     readConfiguredPositiveInteger,
@@ -17,13 +32,6 @@ import {
     sleep,
     validateAgentGenerateRequestAgainstCapabilities
 } from './lib/script-utils.mjs';
-import {
-    attachSummary,
-    buildFailureSummary,
-    buildSuccessSummary,
-    completeScriptTiming,
-    startScriptTiming
-} from './lib/script-summary.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -45,6 +53,7 @@ const DEFAULT_OUTPUT_FORMAT = 'webp';
 const DEFAULT_OUTPUT_COMPRESSION = 100;
 const DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
 const PAGE_SSE_ENDPOINT = '/api/images';
+const DIMENSION_CHECK_URL_FIELDS = ['absolute_content_url', 'content_url', 'absolute_path', 'path'];
 const SERVER_ORCHESTRATED_TRANSPORT = 'server_orchestrated';
 const MIN_SHARE_ACCESS_CODE_LENGTH = 8;
 const MAX_SHARE_ACCESS_CODE_LENGTH = 128;
@@ -68,6 +77,7 @@ const GENERATE_PRESETS = {
         '2'
     ]
 };
+
 loadPrivateAgentEnvFile();
 const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
@@ -209,22 +219,32 @@ try {
             }
         });
     } else if (shouldUsePageSse(capabilities, requestBody, options.routeMode)) {
+        const routing = {
+            ...buildPageSseSummaryRouting(),
+            fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
+            fallback_mode: 'manual_after_diagnosis'
+        };
         try {
             const result = await runPageSseRequest();
-            console.log(
-                JSON.stringify(
-                    await buildSuccessOutput(formatPageSseOutput(result), {
-                        ...buildPageSseSummaryRouting(),
-                        fallback_endpoint: AGENT_ENDPOINTS.create_image_request,
-                        fallback_mode: 'manual_after_diagnosis'
-                    }, completeScriptTiming(scriptTiming)),
-                    null,
-                    2
-                )
+            const checkedResult = await assertDimensionsIfRequested(
+                formatPageSseOutput(result, { preserveBase64: true })
             );
-            process.exit(0);
+            await writeSuccessOutputAndExit(
+                formatPageSseOutput(checkedResult),
+                routing,
+                completeScriptTiming(scriptTiming),
+                {
+                    dimensionChecked: true
+                }
+            );
         } catch (error) {
-            console.error(JSON.stringify(buildPageSseFailureOutput(error, completeScriptTiming(scriptTiming)), null, 2));
+            if (isDimensionCheckError(error)) {
+                console.error(JSON.stringify(buildDimensionCheckFailureOutput(error, routing), null, 2));
+                process.exit(1);
+            }
+            console.error(
+                JSON.stringify(buildPageSseFailureOutput(error, completeScriptTiming(scriptTiming)), null, 2)
+            );
             process.exit(1);
         }
     } else {
@@ -256,6 +276,7 @@ function parseArgs(argv) {
         forceWeb: undefined,
         share: false,
         shareExpiresMinutes: undefined,
+        dimensionCheck: false,
         streamMode: undefined,
         streamingStrategy: undefined,
         partialImages: undefined,
@@ -285,18 +306,25 @@ function parseArgs(argv) {
         else if (arg === '--size') parsed.size = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--quality') parsed.quality = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--n') parsed.n = readOptionValue(expandedArgv, (index += 1), arg);
-        else if (arg === '--format' || arg === '--output-format') parsed.format = readOptionValue(expandedArgv, (index += 1), arg);
-        else if (arg === '--output-compression') parsed.outputCompression = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--format' || arg === '--output-format')
+            parsed.format = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--output-compression')
+            parsed.outputCompression = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--response-mode') parsed.responseMode = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--image-backend') parsed.imageBackend = readOptionValue(expandedArgv, (index += 1), arg);
-        else if (arg === '--responses-model' || arg === '--gpt-model') parsed.responsesModel = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--responses-model' || arg === '--gpt-model')
+            parsed.responsesModel = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--thinking') parsed.thinking = readOptionValue(expandedArgv, (index += 1), arg);
-        else if (arg === '--prompt-optimization') parsed.promptOptimization = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--prompt-optimization')
+            parsed.promptOptimization = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--force-web') parsed.forceWeb = true;
         else if (arg === '--share') parsed.share = true;
-        else if (arg === '--share-expires-minutes') parsed.shareExpiresMinutes = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--share-expires-minutes')
+            parsed.shareExpiresMinutes = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--dimension-check') parsed.dimensionCheck = true;
         else if (arg === '--stream-mode') parsed.streamMode = readOptionValue(expandedArgv, (index += 1), arg);
-        else if (arg === '--streaming-strategy') parsed.streamingStrategy = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--streaming-strategy')
+            parsed.streamingStrategy = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--partial-images') parsed.partialImages = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--sse-log') parsed.sseLogPath = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(expandedArgv, (index += 1), arg);
@@ -347,7 +375,9 @@ function buildRequestBody(promptValue, parsed) {
             size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size'),
             quality: parsed.quality,
             output_format: normalizeOutputFormat(parsed.format),
-            ...(readOutputCompression(parsed) !== undefined ? { output_compression: readOutputCompression(parsed) } : {}),
+            ...(readOutputCompression(parsed) !== undefined
+                ? { output_compression: readOutputCompression(parsed) }
+                : {}),
             response_mode: parsed.responseMode
         },
         parsed
@@ -362,7 +392,9 @@ function buildDryRunRequestBody(parsed) {
             size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size'),
             quality: parsed.quality,
             output_format: normalizeOutputFormat(parsed.format),
-            ...(readOutputCompression(parsed) !== undefined ? { output_compression: readOutputCompression(parsed) } : {}),
+            ...(readOutputCompression(parsed) !== undefined
+                ? { output_compression: readOutputCompression(parsed) }
+                : {}),
             response_mode: parsed.responseMode
         },
         parsed
@@ -378,7 +410,9 @@ function addUpstreamStrategyFields(body, parsed) {
     return {
         ...body,
         ...(parsed.imageBackend ? { image_backend: parsed.imageBackend } : {}),
-        ...(parsed.responsesModel ? { responsesModel: readNonEmptyString(parsed.responsesModel, '--responses-model') } : {}),
+        ...(parsed.responsesModel
+            ? { responsesModel: readNonEmptyString(parsed.responsesModel, '--responses-model') }
+            : {}),
         ...(parsed.thinking ? { thinking: parsed.thinking } : {}),
         ...(parsed.promptOptimization !== undefined
             ? { promptOptimization: readBooleanOption(parsed.promptOptimization, '--prompt-optimization') }
@@ -395,6 +429,9 @@ function addUpstreamStrategyFields(body, parsed) {
 function validateUpstreamStrategyOptions(parsed) {
     if (!RESPONSE_MODES.has(parsed.responseMode)) {
         throw new Error('--response-mode 必须是 path、base64 或 both。');
+    }
+    if (parsed.dimensionCheck && !parseImageSizeValue(parsed.size)) {
+        throw new Error('--dimension-check 需要 --size 为 WIDTHxHEIGHT。');
     }
     if (parsed.imageBackend && !IMAGE_BACKENDS.has(parsed.imageBackend)) {
         throw new Error('--image-backend 必须是 images-api、images、responses 或 responses-image-generation。');
@@ -446,7 +483,8 @@ function validateResponsesModelBackend(parsed) {
 function readOutputCompression(parsed) {
     const outputFormat = normalizeOutputFormat(parsed.format);
     if (outputFormat === 'png') return undefined;
-    const value = parsed.outputCompression === undefined ? String(DEFAULT_OUTPUT_COMPRESSION) : String(parsed.outputCompression);
+    const value =
+        parsed.outputCompression === undefined ? String(DEFAULT_OUTPUT_COMPRESSION) : String(parsed.outputCompression);
     if (!/^\d+$/.test(value)) throw new Error('--output-compression 必须是 0 到 100 之间的整数。');
     const parsedValue = Number(value);
     if (!Number.isInteger(parsedValue) || parsedValue < 0 || parsedValue > 100) {
@@ -670,14 +708,11 @@ async function runGenerateRequest(options = {}) {
         });
 
         if (response.ok) {
-            console.log(
-                JSON.stringify(
-                    await buildSuccessOutput(enrichImageUrls(result), options.routing, completeScriptTiming(scriptTiming)),
-                    null,
-                    2
-                )
+            await writeSuccessOutputAndExit(
+                enrichImageUrls(result),
+                options.routing,
+                completeScriptTiming(scriptTiming)
             );
-            process.exit(0);
         }
 
         const retryAfter = parseRetryAfterValue(response.headers.get('retry-after'));
@@ -825,23 +860,14 @@ function assertPageSseClientRequestIdLength(clientRequestId) {
     }
 }
 
-function formatPageSseOutput(result) {
-    if (!result || !Array.isArray(result.images)) return result;
-    return {
-        ...result,
-        images: result.images.map((image) => formatPageSseImage(image))
-    };
-}
-
-function formatPageSseImage(image) {
-    const output = { ...image };
-    if (output.path) {
-        output.absolute_path = absoluteUrl(output.path);
-        if (requestBody.response_mode === 'path') {
-            delete output.b64_json;
-        }
-    }
-    return output;
+function formatPageSseOutput(result, { preserveBase64 = false } = {}) {
+    return formatSharedPageSseOutput({
+        result,
+        baseUrl,
+        responseMode: requestBody.response_mode,
+        defaultOutputFormat: requestBody.output_format,
+        preserveBase64
+    });
 }
 
 function createPageSseState() {
@@ -924,14 +950,22 @@ async function collectPageSseResult(response, signal) {
         elapsed_ms: completeScriptTiming(scriptTiming).elapsed_ms,
         final_image_count: state.completedImages.length
     });
-    return { images: state.completedImages, usage: state.usage, actualCost: state.actualCost, sse_diagnostics: buildPageSseDiagnostics(state) };
+    return {
+        images: state.completedImages,
+        usage: state.usage,
+        actualCost: state.actualCost,
+        sse_diagnostics: buildPageSseDiagnostics(state)
+    };
 }
 
 function appendPageSseLog(rawEvent) {
     if (!options.sseLogPath || !rawEvent.trim()) return;
     try {
         fs.mkdirSync(path.dirname(options.sseLogPath), { recursive: true });
-        fs.appendFileSync(options.sseLogPath, `${JSON.stringify({ at: new Date().toISOString(), raw_event: rawEvent })}\n`);
+        fs.appendFileSync(
+            options.sseLogPath,
+            `${JSON.stringify({ at: new Date().toISOString(), raw_event: rawEvent })}\n`
+        );
     } catch (error) {
         console.warn(`SSE log write failed: ${errorMessage(error)}`);
     }
@@ -941,7 +975,10 @@ function appendPageSseTrace(event, details) {
     if (!options.sseLogPath) return;
     try {
         fs.mkdirSync(path.dirname(options.sseLogPath), { recursive: true });
-        fs.appendFileSync(options.sseLogPath, `${JSON.stringify({ at: new Date().toISOString(), event, ...details })}\n`);
+        fs.appendFileSync(
+            options.sseLogPath,
+            `${JSON.stringify({ at: new Date().toISOString(), event, ...details })}\n`
+        );
     } catch (error) {
         console.warn(`SSE log write failed: ${errorMessage(error)}`);
     }
@@ -1054,11 +1091,12 @@ function parsePageSseEvent(rawEvent) {
     }
 }
 
-async function buildSuccessOutput(result, routing, timing) {
+async function buildSuccessOutput(result, routing, timing, { dimensionChecked = false } = {}) {
+    const checkedResult = dimensionChecked ? result : await assertDimensionsIfRequested(result);
     const output = attachSummary(
-        routing ? { ...result, routing } : result,
+        routing ? { ...checkedResult, routing } : checkedResult,
         buildSuccessSummary({
-            result,
+            result: checkedResult,
             routing,
             timing,
             idempotencyKey,
@@ -1069,7 +1107,32 @@ async function buildSuccessOutput(result, routing, timing) {
         return output;
     }
     const shareSummary = await maybeCreateShares(output);
-    return shareSummary ? attachSummary({ ...output, shares: shareSummary.share_results }, { ...output.summary, ...shareSummary }) : output;
+    return shareSummary
+        ? attachSummary({ ...output, shares: shareSummary.share_results }, { ...output.summary, ...shareSummary })
+        : output;
+}
+
+async function writeSuccessOutputAndExit(result, routing, timing, options = {}) {
+    try {
+        console.log(JSON.stringify(await buildSuccessOutput(result, routing, timing, options), null, 2));
+        process.exit(0);
+    } catch (error) {
+        if (!isDimensionCheckError(error)) throw error;
+        console.error(JSON.stringify(buildDimensionCheckFailureOutput(error, routing), null, 2));
+        process.exit(1);
+    }
+}
+
+async function assertDimensionsIfRequested(response) {
+    if (!options.dimensionCheck) return response;
+    return assertImageDimensions({
+        response,
+        expected: parseExpectedDimensions(requestBody.size),
+        baseUrl,
+        authHeaders,
+        timeoutMs,
+        readUrlFields: DIMENSION_CHECK_URL_FIELDS
+    });
 }
 
 async function maybeCreateShares(output) {
@@ -1092,7 +1155,11 @@ async function maybeCreateShares(output) {
 async function createShareForArtifact(artifactId) {
     const body = {};
     if (options.shareExpiresMinutes !== undefined) {
-        body.expires_in_minutes = readConfiguredPositiveInteger(options.shareExpiresMinutes, '--share-expires-minutes', 1);
+        body.expires_in_minutes = readConfiguredPositiveInteger(
+            options.shareExpiresMinutes,
+            '--share-expires-minutes',
+            1
+        );
     }
     if (process.env.GPT_IMAGE_SHARE_ACCESS_CODE !== undefined) {
         body.access_code = readShareAccessCodeFromEnv();
@@ -1177,14 +1244,17 @@ function buildPageSseScriptFailure(error, diagnostics, timing) {
         routing: buildPageSseRouting('manual_after_diagnosis'),
         next_step: '先补齐页面流式 capability 或访问码哈希，再重新执行；不要静默切换到其他端点。'
     };
-    return attachSummary(output, buildFailureSummary({
-        errorBody: output,
-        routing: output.routing,
-        timing,
-        idempotencyKey,
-        billable: false,
-        nextAction: 'fix_capability_or_auth'
-    }));
+    return attachSummary(
+        output,
+        buildFailureSummary({
+            errorBody: output,
+            routing: output.routing,
+            timing,
+            idempotencyKey,
+            billable: false,
+            nextAction: 'fix_capability_or_auth'
+        })
+    );
 }
 
 function buildPageSseRequestRejectedFailure(error, diagnostics, timing) {
@@ -1200,14 +1270,17 @@ function buildPageSseRequestRejectedFailure(error, diagnostics, timing) {
         routing: buildPageSseRouting('fix_request_before_retry'),
         next_step: '先修正页面端拒绝的请求参数或鉴权，再重新执行；这类本地 4xx 不应按上游计费失败处理。'
     };
-    return attachSummary(output, buildFailureSummary({
-        errorBody: output,
-        routing: output.routing,
-        timing,
-        idempotencyKey,
-        billable: false,
-        nextAction: 'fix_request_before_retry'
-    }));
+    return attachSummary(
+        output,
+        buildFailureSummary({
+            errorBody: output,
+            routing: output.routing,
+            timing,
+            idempotencyKey,
+            billable: false,
+            nextAction: 'fix_request_before_retry'
+        })
+    );
 }
 
 function buildBillablePageSseFailure(error, diagnostics, timing) {
@@ -1224,14 +1297,17 @@ function buildBillablePageSseFailure(error, diagnostics, timing) {
         next_step:
             '先用 diagnose-request 诊断页面流式失败原因，再用新的 Idempotency-Key 显式选择服务端编排入口或其他诊断路径。'
     };
-    return attachSummary(output, buildFailureSummary({
-        errorBody: output,
-        routing: output.routing,
-        timing,
-        idempotencyKey,
-        billable: true,
-        nextAction: 'diagnose_then_new_idempotency_key'
-    }));
+    return attachSummary(
+        output,
+        buildFailureSummary({
+            errorBody: output,
+            routing: output.routing,
+            timing,
+            idempotencyKey,
+            billable: true,
+            nextAction: 'diagnose_then_new_idempotency_key'
+        })
+    );
 }
 
 function buildFailureOutput(output, routing) {
@@ -1242,9 +1318,14 @@ function buildFailureOutput(output, routing) {
             routing,
             timing: completeScriptTiming(scriptTiming),
             idempotencyKey,
-            billable: output?.billable !== false
+            billable: output?.billable !== false,
+            nextAction: output?.next_step
         })
     );
+}
+
+function buildDimensionCheckFailureOutput(error, routing) {
+    return buildFailureOutput(buildDimensionCheckFailureBody(error, routing), routing);
 }
 
 async function buildAgentFailureOutput(output, routing) {
@@ -1308,14 +1389,7 @@ async function runGenerateJob(options = {}) {
 
         if (response.ok) {
             const jobResult = await pollJobResult(result?.job);
-            console.log(
-                JSON.stringify(
-                    await buildSuccessOutput(enrichImageUrls(jobResult), routing, completeScriptTiming(scriptTiming)),
-                    null,
-                    2
-                )
-            );
-            process.exit(0);
+            await writeSuccessOutputAndExit(enrichImageUrls(jobResult), routing, completeScriptTiming(scriptTiming));
         }
 
         const retryAfter = parseRetryAfterValue(response.headers.get('retry-after'));
@@ -1325,16 +1399,7 @@ async function runGenerateJob(options = {}) {
         await sleep(retryAfter);
     }
 
-    console.error(
-        JSON.stringify(
-            buildFailureOutput(
-                { ...lastResult, retry_after: lastRetryAfter },
-                routing
-            ),
-            null,
-            2
-        )
-    );
+    console.error(JSON.stringify(buildFailureOutput({ ...lastResult, retry_after: lastRetryAfter }, routing), null, 2));
     process.exit(1);
 }
 
@@ -1419,7 +1484,9 @@ async function checkContractEndpoint(endpoint) {
         timeoutMs
     });
     if (response.status !== 400 || result?.error?.code !== 'idempotency_key_required') {
-        console.error(JSON.stringify({ ok: false, billable: false, endpoint, status: response.status, result }, null, 2));
+        console.error(
+            JSON.stringify({ ok: false, billable: false, endpoint, status: response.status, result }, null, 2)
+        );
         process.exit(1);
     }
     return { endpoint, status: response.status, error_code: result.error.code };
@@ -1444,7 +1511,13 @@ async function checkPageSseContract() {
         timeoutMs
     });
     if (response.status !== 400 || !text.includes('clientRequestId')) {
-        console.error(JSON.stringify({ ok: false, billable: false, endpoint: PAGE_SSE_ENDPOINT, status: response.status, text }, null, 2));
+        console.error(
+            JSON.stringify(
+                { ok: false, billable: false, endpoint: PAGE_SSE_ENDPOINT, status: response.status, text },
+                null,
+                2
+            )
+        );
         process.exit(1);
     }
     return {
@@ -1650,7 +1723,7 @@ function printUsage() {
     console.error('用法：generate-image.mjs [options] <prompt>');
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
     console.error(
-        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --share --share-expires-minutes --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --check-remote --page-sse --agent --job --no-job(兼容别名)'
+        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --share --share-expires-minutes --dimension-check --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --check-remote --page-sse --agent --job --no-job(兼容别名)'
     );
     console.error(
         '契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check'
