@@ -1,16 +1,25 @@
 #!/usr/bin/env node
-
-import { fileURLToPath } from 'node:url';
-
-import { isMainModule, parseJsonPayload, pickFailureOutput, printJson, redactBaseUrl, runCommand } from './command-center-utils.mjs';
 import {
     loadPrivateAgentEnvFile,
     resolvePlaygroundBaseUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
 import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_SMOKE_CASES } from '../src/lib/channel-request-mode-values.mjs';
+import {
+    isMainModule,
+    parseJsonPayload,
+    pickFailureOutput,
+    printJson,
+    redactBaseUrl,
+    runCommand
+} from './command-center-utils.mjs';
+import { fileURLToPath } from 'node:url';
 
-const GENERATE_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url));
-const EDIT_SCRIPT = fileURLToPath(new URL('../skills/gpt-image-playground-agent/scripts/edit-image.mjs', import.meta.url));
+const GENERATE_SCRIPT = fileURLToPath(
+    new URL('../skills/gpt-image-playground-agent/scripts/generate-image.mjs', import.meta.url)
+);
+const EDIT_SCRIPT = fileURLToPath(
+    new URL('../skills/gpt-image-playground-agent/scripts/edit-image.mjs', import.meta.url)
+);
 const AGENT_DOCTOR_TIMEOUT_MS = 75_000;
 const ORCHESTRATION_GENERATE_SMOKE_NAME = 'orchestration_generate_1k';
 const AGENT_GENERATE_SMOKE_NAME = 'agent_generate_1k';
@@ -40,7 +49,8 @@ function parseArgs(argv) {
         const arg = argv[index];
         if (arg === '--help' || arg === '-h') parsed.help = true;
         else if (arg === '--allow-billable') parsed.allowBillable = true;
-        else if (arg === '--timeout-ms') parsed.timeoutMs = readPositiveInteger(readOptionValue(argv, (index += 1), arg), '--timeout-ms');
+        else if (arg === '--timeout-ms')
+            parsed.timeoutMs = readPositiveInteger(readOptionValue(argv, (index += 1), arg), '--timeout-ms');
         else if (arg === '--base-url') parsed.baseUrl = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--edit-image') parsed.editImage = readOptionValue(argv, (index += 1), arg);
         else throw new Error(`未知参数：${arg}`);
@@ -118,7 +128,8 @@ async function readJsonLayer(name, url, timeoutMs) {
     try {
         const response = await fetch(url, { headers: authHeaders(), signal: controller.signal });
         const text = await response.text();
-        if (!response.ok) throw new Error(`${safePathname(url)} failed with HTTP ${response.status}${formatBodySnippet(text)}`);
+        if (!response.ok)
+            throw new Error(`${safePathname(url)} failed with HTTP ${response.status}${formatBodySnippet(text)}`);
         return { ok: true, body: text ? JSON.parse(text) : {} };
     } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error), name };
@@ -425,11 +436,12 @@ function buildSummary({ capabilities, runtime, contract, smoke }) {
         }),
         responses_gpt2image_ready:
             capabilities.ok && runtime.ok
-                ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled === true &&
-                  runtime.body?.responsesImageBackend?.enabled === true
+                ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.enabled ===
+                      true && runtime.body?.responsesImageBackend?.enabled === true
                 : false,
         responses_image_backend_declared_supported: capabilities.ok
-            ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.supported === true
+            ? capabilities.body?.supported?.image_backend_requirements?.['responses-image-generation']?.supported ===
+              true
             : false,
         billable_smoke: smoke.skipped ? 'skipped' : smoke.ok ? 'ok' : 'failed'
     };
@@ -445,7 +457,8 @@ function buildRuntimeEnvironmentSummary({ capabilities, runtime }) {
         orchestration_endpoint: capabilities?.orchestration?.endpoint || null,
         orchestration_transport_selection: capabilities?.orchestration?.transport_selection || null,
         request_mode_control_policy: capabilities?.request_mode_controls?.agent_client_policy || null,
-        request_mode_controls: runtime?.channelRouting?.requestModeControls || capabilities?.request_mode_controls || null,
+        request_mode_controls:
+            runtime?.channelRouting?.requestModeControls || capabilities?.request_mode_controls || null,
         runtime_strategy: runtime?.channelRouting?.strategy || null,
         effective_request_modes: readRequestModeList(runtime?.channelRouting?.effectiveRequestModes),
         streaming_batch_enabled: runtime?.streamingBatch?.enabled === true,
@@ -483,16 +496,170 @@ function buildRequestModeSummary({ capabilities, runtime, smoke }) {
     const supported = readRequestModeList(capabilities?.supported?.request_modes);
     const configured = readRequestModeList(runtime?.channelRouting?.configuredRequestModes);
     const effective = readRequestModeList(runtime?.channelRouting?.effectiveRequestModes);
+    const adminWhitelistByChannel = readCapabilitiesRequestModesByChannel(capabilities);
+    const effectiveByChannel = readRuntimeRequestModesByChannel(runtime);
+    const smokeSummary = Object.fromEntries(
+        CHANNEL_REQUEST_MODES.map((mode) => [mode, summarizeRequestModeSmoke(smoke, mode)])
+    );
+    const gaps = buildRequestModeGaps({
+        supported,
+        configured,
+        effective,
+        adminWhitelistByChannel,
+        effectiveByChannel,
+        smoke: smokeSummary
+    });
     return {
         supported,
         configured,
         effective,
-        admin_whitelist_by_channel: readCapabilitiesRequestModesByChannel(capabilities),
-        effective_by_channel: readRuntimeRequestModesByChannel(runtime),
-        smoke: Object.fromEntries(
-            CHANNEL_REQUEST_MODES.map((mode) => [mode, summarizeRequestModeSmoke(smoke, mode)])
-        )
+        admin_whitelist_by_channel: adminWhitelistByChannel,
+        effective_by_channel: effectiveByChannel,
+        smoke: smokeSummary,
+        gaps,
+        suggested_channel_env_key: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+        suggested_effective_value: buildSuggestedEffectiveRequestModes({ effective, smoke: smokeSummary }).join(','),
+        next_action: buildRequestModeNextAction({ effective, gaps, smoke: smokeSummary })
     };
+}
+
+function buildSuggestedEffectiveRequestModes({ effective, smoke }) {
+    if (Object.values(smoke).every((value) => value.state === 'skipped')) return effective;
+    return effective.filter((mode) => smoke[mode]?.state === 'passed');
+}
+
+function buildRequestModeGaps({
+    supported,
+    configured,
+    effective,
+    adminWhitelistByChannel,
+    effectiveByChannel,
+    smoke
+}) {
+    const supportedModes = Array.isArray(supported) ? supported : [];
+    const configuredModes = Array.isArray(configured) ? configured : [];
+    const effectiveModes = Array.isArray(effective) ? effective : [];
+    const adminChannels = normalizeRequestModeChannelEntries(adminWhitelistByChannel);
+    const effectiveChannels = normalizeRequestModeChannelEntries(effectiveByChannel);
+    const gaps = [];
+    if (effectiveModes.length === 0) {
+        gaps.push({
+            code: 'no_effective_request_modes',
+            severity: 'critical',
+            message: '当前服务没有可用上游请求方式；检查 OPENAI_CHANNEL_N_REQUEST_MODES、渠道健康和 API key。'
+        });
+    }
+    const unrecognizedModes = collectUnrecognizedRequestModes(
+        supportedModes,
+        configuredModes,
+        effectiveModes,
+        adminChannels.flatMap((channel) => channel.request_modes),
+        effectiveChannels.flatMap((channel) => channel.request_modes)
+    );
+    if (unrecognizedModes.length > 0) {
+        gaps.push({
+            code: 'unrecognized_request_modes',
+            severity: 'warning',
+            request_modes: unrecognizedModes,
+            message: '服务返回了当前 Agent 未识别的 request mode；升级 skill 或确认服务端模式名称。'
+        });
+    }
+    const unsupportedConfigured = configuredModes.filter((mode) => !supportedModes.includes(mode));
+    if (unsupportedConfigured.length > 0) {
+        gaps.push({
+            code: 'configured_unsupported_request_modes',
+            severity: 'warning',
+            request_modes: unsupportedConfigured,
+            message: '配置中包含服务不支持的 request mode。'
+        });
+    }
+    const configuredButIneffective = configuredModes.filter(
+        (mode) => supportedModes.includes(mode) && !effectiveModes.includes(mode)
+    );
+    if (configuredButIneffective.length > 0) {
+        gaps.push({
+            code: 'configured_request_modes_not_effective',
+            severity: 'warning',
+            request_modes: configuredButIneffective,
+            message: '部分已配置 request mode 没有在 runtime 生效；检查对应渠道 key、健康状态和白名单。'
+        });
+    }
+    const effectiveByChannelMap = new Map(
+        effectiveChannels.map((channel) => [channel.channel_id, channel.request_modes])
+    );
+    const channelsWithoutModes = [
+        ...adminChannels
+            .filter((channel) => channel.request_modes.length > 0)
+            .filter((channel) => (effectiveByChannelMap.get(channel.channel_id) || []).length === 0),
+        ...effectiveChannels.filter((channel) => channel.request_modes.length === 0)
+    ];
+    const uniqueChannelsWithoutModes = [
+        ...new Map(channelsWithoutModes.map((channel) => [channel.channel_id, channel])).values()
+    ];
+    if (uniqueChannelsWithoutModes.length > 0) {
+        gaps.push({
+            code: 'channels_without_effective_request_modes',
+            severity: 'warning',
+            channel_ids: uniqueChannelsWithoutModes.map((channel) => channel.channel_id),
+            message: '部分渠道没有生效 request mode。'
+        });
+    }
+    const failedSmokeModes = Object.entries(smoke)
+        .filter(([, value]) => value.state === 'failed')
+        .map(([mode]) => mode);
+    if (failedSmokeModes.length > 0) {
+        gaps.push({
+            code: 'request_mode_smoke_failed',
+            severity: 'critical',
+            request_modes: failedSmokeModes,
+            message: '真实 smoke 显示部分 request mode 不可用；不要写入渠道白名单。'
+        });
+    }
+    return gaps;
+}
+
+function normalizeRequestModeChannelEntries(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((channel) => ({
+            channel_id: String(channel?.channel_id || ''),
+            request_modes: readRequestModeList(channel?.request_modes)
+        }))
+        .filter((channel) => channel.channel_id);
+}
+
+function collectUnrecognizedRequestModes(...modeLists) {
+    const unrecognized = [];
+    const seen = new Set();
+    for (const modes of modeLists) {
+        if (!Array.isArray(modes)) continue;
+        for (const mode of modes) {
+            if (CHANNEL_REQUEST_MODES.includes(mode) || seen.has(mode)) continue;
+            seen.add(mode);
+            unrecognized.push(mode);
+        }
+    }
+    return unrecognized;
+}
+
+function buildRequestModeNextAction({ effective, gaps, smoke }) {
+    if (effective.length === 0) {
+        return '先用 probe-upstream-image.mjs 或 npm run smoke:image-upstream-real -- --allow-billable 探测上游，再配置 OPENAI_CHANNEL_N_REQUEST_MODES。';
+    }
+    if (gaps.some((gap) => gap.code === 'request_mode_smoke_failed')) {
+        return '从 OPENAI_CHANNEL_N_REQUEST_MODES 移除 smoke 失败的 request mode，只保留通过的模式。';
+    }
+    if (
+        gaps.some((gap) =>
+            ['configured_request_modes_not_effective', 'channels_without_effective_request_modes'].includes(gap.code)
+        )
+    ) {
+        return '先修正未生效的渠道 request mode、API key 或健康状态，再用 --allow-billable smoke 验证真实可用性。';
+    }
+    if (Object.values(smoke).every((value) => value.state === 'skipped')) {
+        return '当前只验证了配置可见性；真实渠道可用性需要显式 --allow-billable smoke。';
+    }
+    return '当前 request mode 配置可见；以 effective 和 smoke passed 的交集作为管理员白名单候选。';
 }
 
 function summarizeRequestModeSmoke(smoke, mode) {
@@ -516,30 +683,43 @@ function readCapabilitiesRequestModesByChannel(body) {
     const channels = Array.isArray(body?.upstream_request_headers?.channels)
         ? body.upstream_request_headers.channels
         : [];
-    return channels.map((channel) => ({
-        channel_id: String(channel?.id || ''),
-        request_modes: readRequestModeList(channel?.request_modes)
-    })).filter((channel) => channel.channel_id);
+    return channels
+        .map((channel) => ({
+            channel_id: String(channel?.id || ''),
+            request_modes: readRequestModeList(channel?.request_modes)
+        }))
+        .filter((channel) => channel.channel_id);
 }
 
 function readRuntimeRequestModesByChannel(body) {
     const channels = Array.isArray(body?.channelRouting?.effectiveRequestModesByChannel)
         ? body.channelRouting.effectiveRequestModesByChannel
         : [];
-    return channels.map((channel) => ({
-        channel_id: String(channel?.channelId || ''),
-        request_modes: readRequestModeList(channel?.requestModes)
-    })).filter((channel) => channel.channel_id);
+    return channels
+        .map((channel) => ({
+            channel_id: String(channel?.channelId || ''),
+            request_modes: readRequestModeList(channel?.requestModes)
+        }))
+        .filter((channel) => channel.channel_id);
 }
 
 function readRequestModeList(value) {
     if (!Array.isArray(value)) return [];
-    return CHANNEL_REQUEST_MODES.filter((mode) => value.includes(mode));
+    const modes = [];
+    const seen = new Set();
+    for (const item of value) {
+        const mode = typeof item === 'string' ? item.trim() : '';
+        if (!mode || seen.has(mode)) continue;
+        seen.add(mode);
+        modes.push(mode);
+    }
+    return modes;
 }
 
 function authHeaders() {
     if (process.env.GPT_IMAGE_AGENT_TOKEN) return { Authorization: `Bearer ${process.env.GPT_IMAGE_AGENT_TOKEN}` };
-    if (process.env.GPT_IMAGE_APP_PASSWORD_HASH) return { 'X-App-Password-Hash': process.env.GPT_IMAGE_APP_PASSWORD_HASH };
+    if (process.env.GPT_IMAGE_APP_PASSWORD_HASH)
+        return { 'X-App-Password-Hash': process.env.GPT_IMAGE_APP_PASSWORD_HASH };
     return {};
 }
 
@@ -557,7 +737,9 @@ function readPositiveInteger(value, name) {
 }
 
 function normalizeBaseUrl(value) {
-    const normalized = String(value || '').trim().replace(/\/+$/, '');
+    const normalized = String(value || '')
+        .trim()
+        .replace(/\/+$/, '');
     const parsed = new URL(normalized);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         throw new Error('base URL must use http or https.');
