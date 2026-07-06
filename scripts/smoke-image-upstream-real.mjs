@@ -1,8 +1,7 @@
 #!/usr/bin/env node
+import { CHANNEL_REQUEST_MODES } from '../src/lib/channel-request-mode-values.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-
-import { CHANNEL_REQUEST_MODES } from '../src/lib/channel-request-mode-values.mjs';
 
 const originalEnv = { ...process.env };
 const CASES = [
@@ -231,8 +230,12 @@ function buildRequestModeSummary(results) {
     const modes = Object.fromEntries(
         CHANNEL_REQUEST_MODES.map((mode) => {
             const cases = results.filter((item) => item.request_mode === mode);
-            const passedCases = cases.filter((item) => item.ok === true && item.skipped !== true && item.blocked !== true);
-            const failedCases = cases.filter((item) => item.ok !== true && item.skipped !== true && item.blocked !== true);
+            const passedCases = cases.filter(
+                (item) => item.ok === true && item.skipped !== true && item.blocked !== true
+            );
+            const failedCases = cases.filter(
+                (item) => item.ok !== true && item.skipped !== true && item.blocked !== true
+            );
             const skippedCases = cases.filter((item) => item.skipped === true);
             return [
                 mode,
@@ -432,7 +435,14 @@ async function runCase(loadRouteHandlersForBillable, testCase, preflight = {}) {
     const startedAt = Date.now();
     const abortController = new AbortController();
     return withCaseTimeout(
-        () => runBillableCaseAfterLoadingHandlers(loadRouteHandlersForBillable, testCase, target, startedAt, abortController.signal),
+        () =>
+            runBillableCaseAfterLoadingHandlers(
+                loadRouteHandlersForBillable,
+                testCase,
+                target,
+                startedAt,
+                abortController.signal
+            ),
         testCase,
         target,
         startedAt,
@@ -480,6 +490,7 @@ function withCaseTimeout(run, testCase, target, startedAt, abortController) {
         const timeout = setTimeout(() => {
             settled = true;
             abortController.abort();
+            clearTimeout(timeout);
             resolve({
                 id: testCase.id,
                 request_mode: testCase.requestMode,
