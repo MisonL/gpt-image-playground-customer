@@ -23,7 +23,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 生成、编辑、批量和上游诊断都应先使用这些内置脚本；不要临时编写 Node/Python/shell 脚本、curl 命令或手写 fetch/FormData 来重复实现同一套 API 调用。
 
 - `scripts/generate-image.mjs`：JSON 文生图调用。
-- `scripts/edit-image.mjs`：multipart 编辑调用。
+- `scripts/edit-image.mjs`：multipart 编辑调用；固定尺寸任务可添加 `--dimension-check` 验收真实产物尺寸。
 - `scripts/batch-images.mjs`：JSONL 批量 generate/edit 调用。
 - `scripts/convert-image-format.mjs`：本地 PNG/JPEG/WebP 互转。
 - `scripts/diagnose-request.mjs`：按页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断，支持 `--base-url` 固定目标服务。
@@ -43,11 +43,12 @@ Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 se
 npm run env:summary
 npm run env:summary -- --file .env.local --container gpt-image-playground-customer
 ```
+
 当服务返回相对 `content_url`、`metadata_url` 或页面 SSE `path` 时，辅助脚本会额外输出 `absolute_content_url`、`absolute_metadata_url` 或 `absolute_path`。
 同一个 `Idempotency-Key` 如果已经进入终态 `failed`，再次调用 generate/edit 或 job result/status 只会回放该失败，且 `retryable=false`。需要重新尝试时应创建新的业务操作和新的 `Idempotency-Key`。
 页面端 `/api/images` SSE 会把同一个业务 key 复用到 `clientRequestId`，因此脚本使用的 `Idempotency-Key` 不能超过 capabilities 中 `agent_streaming.page_sse.client_request_id.max_length` 声明的字符数；超长时会直接报错，不会静默截断。
 脚本会在 dry-run 和真实请求前前置校验 `--size` 或 JSONL `size`。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI-compatible 上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量和上游探针默认请求 `output_format=webp`、`output_compression=100`。
-真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`share_urls`、`direct_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。`transport` 表示 Agent 对外访问的服务端端点形态，`route_mode` 表示 Agent/job/page SSE 路径，`channel_request_mode` 表示服务端实际调用上游的 Images/Responses 与 SSE/非流式组合，`route_decision` 记录 requested backend、preferred/fallback/selected request mode、fallback 是否发生、选中渠道、上游 host 或 no-channel 原因。`share_urls` 只在显式 `--share` 后出现，用于给用户浏览器打开分享页；`direct_content_urls` 只在显式 `--share` 后出现，用于分享后的内容直链；公开分享可直接打开 `direct_content_urls`，设置访问码时优先给用户 `share_urls`；`content_urls` 仍是需要 Agent 鉴权的 artifact 下载路径。失败摘要也稳定包含空数组或 `null` 形式的产物、路由、渠道和尺寸字段，便于 subagent 按同一模板汇报；尺寸门禁失败属于“上游已生成但本地验收失败”，失败摘要会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls` 和 `image_dimensions`。失败摘要还包含 `route_decision`、`transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`。Agent JSON 失败时脚本会按幂等键只读查询 Agent state；若命中，会把 `request_id`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host`、`transport_error_kind` 合并进首次失败摘要，并输出 `agent_failure_diagnostics`。回答耗时问题时优先读取 `summary.elapsed_ms`；需要区分脚本等待和上游耗时时读取 `summary.elapsed_breakdown`。
+真实执行输出会包含机器可读 `summary`。成功摘要包含 `ok`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`share_urls`、`direct_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`started_at`、`completed_at`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host`、脱敏 `request_headers` 和 `next_action`。`transport` 表示 Agent 对外访问的服务端端点形态，`route_mode` 表示 Agent/job/page SSE 路径，`channel_request_mode` 表示服务端实际调用上游的 Images/Responses 与 SSE/非流式组合，`route_decision` 记录 requested backend、preferred/fallback/selected request mode、fallback 是否发生、选中渠道、上游 host 或 no-channel 原因。`share_urls` 只在显式 `--share` 后出现，用于给用户浏览器打开分享页；`direct_content_urls` 只在显式 `--share` 后出现，用于分享后的内容直链；公开分享可直接打开 `direct_content_urls`，设置访问码时优先给用户 `share_urls`；`content_urls` 仍是需要 Agent 鉴权的 artifact 下载路径。失败摘要也稳定包含空数组或 `null` 形式的产物、路由、渠道和尺寸字段，便于 subagent 按同一模板汇报；尺寸门禁失败属于“上游已生成但本地验收失败”，失败摘要会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls` 和 `image_dimensions`。失败摘要还包含 `route_decision`、`transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`；渠道与路由诊断优先读取 `error.diagnostics`，没有对应诊断字段时才回退到响应里的 `execution`。Agent JSON 失败时脚本会按幂等键只读查询 Agent state；若命中，会把 `request_id`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host`、`transport_error_kind` 合并进首次失败摘要，并输出 `agent_failure_diagnostics`。回答耗时问题时优先读取 `summary.elapsed_ms`；需要区分脚本等待和上游耗时时读取 `summary.elapsed_breakdown`。
 
 生成脚本参数：
 
@@ -68,6 +69,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--partial-images`：可选，显式设置上游 SSE partial image 数量。generate 或页面 SSE 请求包含 `image_backend` 时优先按 capabilities 的 `limits.partial_images_by_backend[image_backend]` 校验；缺少 backend 专属范围时才使用 `limits.partial_images`。
 - `--share`：真实生图成功后，为每个 Agent artifact 调用 `POST /api/agent/artifacts/{id}/share` 创建用户可打开的分享链接，并在顶层 `shares`、`summary.share_urls` 和 `summary.direct_content_urls` 输出结果。
 - `--share-expires-minutes`：可选，设置分享有效期分钟数；省略时使用服务端默认值。
+- `--dimension-check`：读取响应 `b64_json` 或同 origin `absolute_content_url`/`content_url`/`absolute_path`/`path`，校验 PNG/JPEG/WebP 尺寸等于 `--size`；通过时 summary 写入实际尺寸，失败时写入 `error.code=dimension_check_failed`、`validation_failure_kind=generated_artifact_failed_dimension_check`、产物 URL、`expected_dimensions` 和 `actual_dimensions`。这个失败表示上游已生成但本地验收未通过，不等于上游请求失败。
 - `GPT_IMAGE_SHARE_ACCESS_CODE`：可选，创建需要访问码的分享链接；访问码不会出现在返回 URL 中，也不会出现在命令行参数里。
 - `--timeout-ms`：未显式指定时，脚本先用 `420000ms` 读取 capabilities；真实请求会采用 `420000ms` 与 `capabilities.image_transport.upstream_timeout_ms` 中较大的值。
 - `--prompt-file`：从文本文件读取 prompt。
@@ -103,6 +105,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--sse-log`
 - `--timeout-ms`
 - `--idempotency-key`
+- `--dimension-check`
 - `--page-sse`
 - `--agent`
 - `--dry-run`
@@ -110,7 +113,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 
 图片路径可以用位置参数 `<image-path> <prompt>`，也可以用 `--image <path> <prompt>`；两者不能同时设置。
 默认 WebP edit 走页面端 `/api/images` form-data SSE，因为 Agent edit 不接收输出格式字段。显式 `--format`、`--output-compression`、`--image-backend responses-image-generation`、页面高级字段或 `--page-sse` 也会走页面 SSE；失败后脚本输出结构化失败和备用端点建议，不会在同一次请求里静默二次调用。
-显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。Agent edit 只是页面 SSE 失败后的显式对照路径，不保证与页面 SSE 的输出格式和像素尺寸完全一致；尺寸敏感任务必须使用批量 `--dimension-check` 或下载后校验。Responses image_generation edit 必须走页面 SSE，可显式设置 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`。如果运行时已显式配置 `IMAGE_GENERATION_BACKEND=responses-image-generation` 或兼容别名 `responses`，且 `IMAGE_STREAMING_STRATEGY=responses-sse`，也可依赖服务端默认值；Docker compose 本身不设置这两个默认值，未配置 `.env.local` 时仍是 `images-api` 和 `auto`。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`，并使用新的 `Idempotency-Key`。
+显式 `--page-sse` 会强制页面流式；显式 `--agent` 会走 Agent edit 最终 JSON。Agent edit 不接受 `image_backend`、`output_format` 或 `output_compression`；强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API/profile 范围校验。Agent edit 只是页面 SSE 失败后的显式对照路径，不保证与页面 SSE 的输出格式和像素尺寸完全一致；尺寸敏感任务必须使用生成/编辑/批量 `--dimension-check` 或下载后校验。编辑 `--dimension-check` 会读取响应 `b64_json` 或同 origin `content_url`，通过时在图片和 summary 写入实际尺寸，失败时输出结构化 `dimension_check_failed`、`generated_artifact_failed_dimension_check`、产物 URL 和服务端选路摘要。Responses image_generation edit 必须走页面 SSE，可显式设置 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`。如果运行时已显式配置 `IMAGE_GENERATION_BACKEND=responses-image-generation` 或兼容别名 `responses`，且 `IMAGE_STREAMING_STRATEGY=responses-sse`，也可依赖服务端默认值；Docker compose 本身不设置这两个默认值，未配置 `.env.local` 时仍是 `images-api` 和 `auto`。默认 WebP edit 与 `stream_mode=non_stream` / `streaming_strategy=off` 冲突时脚本会前置拒绝；需要 Agent JSON 对照时必须显式添加 `--agent`，并使用新的 `Idempotency-Key`。
 
 批量脚本参数：
 
@@ -118,7 +121,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--manifest`：append-only JSONL manifest 路径，默认 `<input>.manifest.jsonl`。
 - `--resume`：读取 manifest 中已 `succeeded` 的 `id` 或 `idempotency_key` 并跳过。
 - `--ordered-prefix`：未显式提供 `idempotency_key` 时构造稳定有序 key 的前缀，默认 `batch`。
-- `--dimension-check`：读取响应 `b64_json` 或同 origin `content_url`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`；通过时 summary 写入实际尺寸，失败时写入 `error.code=dimension_check_failed`、`validation_failure_kind=generated_artifact_failed_dimension_check`、产物 URL、`expected_dimensions` 和 `actual_dimensions`。这个失败表示上游已生成但本地验收未通过，不等于上游请求失败。
+- `--dimension-check`：读取响应 `b64_json` 或同 origin `absolute_content_url`/`content_url`/`absolute_path`/`path`，校验 PNG/JPEG/WebP 尺寸等于任务 `size`；通过时 summary 写入实际尺寸，失败时写入 `error.code=dimension_check_failed`、`validation_failure_kind=generated_artifact_failed_dimension_check`、产物 URL、`expected_dimensions` 和 `actual_dimensions`。这个失败表示上游已生成但本地验收未通过，不等于上游请求失败。
 - `--max-attempts`：失败任务最大尝试次数。第二次及后续尝试会追加新的 attempt 级 `Idempotency-Key`，避免复用终态失败 key。
 - `--concurrency`：并发执行窗口，默认 `1`。大于 `1` 时会先读取 `/api/runtime-capabilities` 的 `streamingBatch.recommendedConcurrency` 和 `channelQueue.capacityPerCredential`，把有效并发限制到服务端建议值后按输入顺序输出结果；适合已确认渠道容量的批量生产。
 - `--max-consecutive-failures`：顺序执行下的连续失败熔断阈值，默认 `0` 表示不熔断。只能与 `--concurrency 1` 同用。
@@ -133,7 +136,15 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 Responses edit JSONL 正例：
 
 ```jsonl
-{"id":"edit-responses","mode":"edit","prompt":"replace the background","image_path":"source.png","image_backend":"responses-image-generation","streaming_strategy":"responses-sse","partial_images":1}
+{
+    "id": "edit-responses",
+    "mode": "edit",
+    "prompt": "replace the background",
+    "image_path": "source.png",
+    "image_backend": "responses-image-generation",
+    "streaming_strategy": "responses-sse",
+    "partial_images": 1
+}
 ```
 
 dry-run 预期：`routing.transport=page_sse`、`endpoint=/api/images`、`request.image_backend=responses-image-generation`。
@@ -141,7 +152,13 @@ dry-run 预期：`routing.transport=page_sse`、`endpoint=/api/images`、`reques
 缺少 `image_backend` 的反例：
 
 ```jsonl
-{"id":"edit-responses-missing-backend","mode":"edit","prompt":"replace the background","image_path":"source.png","responsesModel":"gpt-4.1"}
+{
+    "id": "edit-responses-missing-backend",
+    "mode": "edit",
+    "prompt": "replace the background",
+    "image_path": "source.png",
+    "responsesModel": "gpt-4.1"
+}
 ```
 
 dry-run 预期退出码为 `2`，错误包含 `responsesModel 必须同时设置 image_backend=responses-image-generation`。
@@ -229,6 +246,7 @@ GET /api/agent/capabilities
 - `GET /api/runtime-capabilities` 不属于 Agent capabilities。它是页面工作台读取的运行态能力摘要，用于展示流式默认值、图片上游传输配置、渠道健康、渠道队列、并发建议、Responses 后端 enablement 和缺失环境变量，不进入 Agent OpenAPI。
 
 新增 probe、diagnostics 或健康摘要时，先把机器契约放进 capabilities、OpenAPI 或明确的 Agent 只读端点，再让脚本消费这些字段；不要让脚本自己拼 page API、runtime API 和 Agent API 的边界逻辑。
+
 - `defaults.image_backend`：Agent generate 默认 `images-api`。
 - `defaults.stream_mode`：Agent generate 默认 `auto`。auto 会先尝试内部上游 SSE；无法产出最终图时显式回退并暴露可观测标记。
 - `defaults.streaming_strategy`：Agent generate 默认 `auto`。
@@ -265,18 +283,18 @@ Content-Type: application/json
 
 ```json
 {
-  "job": {
-    "id": "job-request-uuid",
-    "request_id": "job-request-uuid",
-    "idempotency_key": "stable-key",
-    "mode": "generate",
-    "state": "running",
-    "created_at": "2026-05-20T00:00:00.000Z",
-    "updated_at": "2026-05-20T00:00:00.000Z",
-    "expires_at": "2026-05-21T00:00:00.000Z",
-    "result_url": "/api/agent/jobs/job-request-uuid/result",
-    "retry_after_seconds": 5
-  }
+    "job": {
+        "id": "job-request-uuid",
+        "request_id": "job-request-uuid",
+        "idempotency_key": "stable-key",
+        "mode": "generate",
+        "state": "running",
+        "created_at": "2026-05-20T00:00:00.000Z",
+        "updated_at": "2026-05-20T00:00:00.000Z",
+        "expires_at": "2026-05-21T00:00:00.000Z",
+        "result_url": "/api/agent/jobs/job-request-uuid/result",
+        "retry_after_seconds": 5
+    }
 }
 ```
 
@@ -322,20 +340,20 @@ Content-Type: application/json
 
 ```json
 {
-  "prompt": "a product photo of a ceramic mug",
-  "model": "gpt-image-2",
-  "n": 1,
-  "size": "1024x1024",
-  "quality": "high",
-  "output_format": "webp",
-  "output_compression": 100,
-  "background": "auto",
-  "moderation": "auto",
-  "response_mode": "path",
-  "image_backend": "images-api",
-  "stream_mode": "auto",
-  "streaming_strategy": "auto",
-  "partial_images": 2
+    "prompt": "a product photo of a ceramic mug",
+    "model": "gpt-image-2",
+    "n": 1,
+    "size": "1024x1024",
+    "quality": "high",
+    "output_format": "webp",
+    "output_compression": 100,
+    "background": "auto",
+    "moderation": "auto",
+    "response_mode": "path",
+    "image_backend": "images-api",
+    "stream_mode": "auto",
+    "streaming_strategy": "auto",
+    "partial_images": 2
 }
 ```
 
@@ -353,47 +371,47 @@ Agent JSON 生成端点对外始终返回最终 JSON，不会对客户端返回 
 
 ```json
 {
-  "request_id": "uuid",
-  "idempotency_key": "stable-key",
-  "cached": false,
-  "images": [
-    {
-      "id": "artifact-uuid",
-      "filename": "1715400000000-abcdef1234567890-0.webp",
-      "content_url": "/api/agent/artifacts/artifact-uuid/content",
-      "metadata_url": "/api/agent/artifacts/artifact-uuid",
-      "output_format": "webp",
-      "mime_type": "image/webp",
-      "size_bytes": 12345,
-      "width": 1024,
-      "height": 1024
+    "request_id": "uuid",
+    "idempotency_key": "stable-key",
+    "cached": false,
+    "images": [
+        {
+            "id": "artifact-uuid",
+            "filename": "1715400000000-abcdef1234567890-0.webp",
+            "content_url": "/api/agent/artifacts/artifact-uuid/content",
+            "metadata_url": "/api/agent/artifacts/artifact-uuid",
+            "output_format": "webp",
+            "mime_type": "image/webp",
+            "size_bytes": 12345,
+            "width": 1024,
+            "height": 1024
+        }
+    ],
+    "usage": {},
+    "created_at": "2026-05-12T00:00:00.000Z",
+    "timing": {
+        "started_at": "2026-05-12T00:00:00.000Z",
+        "completed_at": "2026-05-12T00:01:04.000Z",
+        "elapsed_ms": 64000,
+        "server_elapsed_ms": 64000
+    },
+    "execution": {
+        "transport": "agent_job_polling",
+        "endpoint": "/api/agent/image-requests",
+        "route_mode": "job",
+        "operation": "generate",
+        "image_backend": "images-api",
+        "stream_mode": "non_stream",
+        "streaming_strategy": "off",
+        "selected_channel_id": "default",
+        "upstream_host": "api.example.test",
+        "request_headers": {
+            "user_agent_effective": "gpt-image-playground/2.1.0",
+            "has_extra_headers": false,
+            "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
+            "configured_header_names": []
+        }
     }
-  ],
-  "usage": {},
-  "created_at": "2026-05-12T00:00:00.000Z",
-  "timing": {
-    "started_at": "2026-05-12T00:00:00.000Z",
-    "completed_at": "2026-05-12T00:01:04.000Z",
-    "elapsed_ms": 64000,
-    "server_elapsed_ms": 64000
-  },
-  "execution": {
-    "transport": "agent_job_polling",
-    "endpoint": "/api/agent/image-requests",
-    "route_mode": "job",
-    "operation": "generate",
-    "image_backend": "images-api",
-    "stream_mode": "non_stream",
-    "streaming_strategy": "off",
-    "selected_channel_id": "default",
-    "upstream_host": "api.example.test",
-    "request_headers": {
-      "user_agent_effective": "gpt-image-playground/2.1.0",
-      "has_extra_headers": false,
-      "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
-      "configured_header_names": []
-    }
-  }
 }
 ```
 
@@ -473,15 +491,15 @@ Agent request diagnostics 来自 Agent state 后端，适用于 `/api/agent/imag
 
 ```json
 {
-  "target": { "type": "page_request", "id": "stable-operation-key" },
-  "feedback": {
-    "target_type": "page_request",
-    "target_id": "stable-operation-key",
-    "value": "usable",
-    "source": "webui",
-    "updated_at": "2026-05-12T00:00:00.000Z",
-    "note": "approved"
-  }
+    "target": { "type": "page_request", "id": "stable-operation-key" },
+    "feedback": {
+        "target_type": "page_request",
+        "target_id": "stable-operation-key",
+        "value": "usable",
+        "source": "webui",
+        "updated_at": "2026-05-12T00:00:00.000Z",
+        "note": "approved"
+    }
 }
 ```
 
@@ -491,7 +509,7 @@ Agent request diagnostics 来自 Agent state 后端，适用于 `/api/agent/imag
 
 ```json
 {
-  "ids": ["stable-operation-key", "stable-operation-key-2"]
+    "ids": ["stable-operation-key", "stable-operation-key-2"]
 }
 ```
 
@@ -501,8 +519,8 @@ Agent request diagnostics 来自 Agent state 后端，适用于 `/api/agent/imag
 
 ```json
 {
-  "ids": ["stable-operation-key", "stable-operation-key-2"],
-  "filenames": ["output.png"]
+    "ids": ["stable-operation-key", "stable-operation-key-2"],
+    "filenames": ["output.png"]
 }
 ```
 
@@ -512,50 +530,42 @@ Agent request diagnostics 来自 Agent state 后端，适用于 `/api/agent/imag
 
 ```json
 {
-  "scope": {
-    "request_ids": ["stable-operation-key"],
-    "filenames": ["output.png"],
-    "filename_matched_request_ids": [],
-    "copy_text": "requestIds=stable-operation-key filename=output.png"
-  },
-  "matched_log_count": 0,
-  "events": [],
-  "diagnostics_retention": {
-    "storage": "bounded_local_jsonl",
-    "max_entries": 300,
-    "default_max_entries": 300,
-    "min_entries": 100,
-    "max_configured_entries": 5000,
-    "configured_by": "APP_LOG_MAX_ENTRIES",
-    "persisted_across_process_restart": true,
-    "loss_modes": [
-      "entry_evicted_by_max_entries",
-      "log_level_filter",
-      "local_log_file_missing_or_cleared"
-    ],
-    "bounded": true,
-    "not_agent_state_backend": true
-  },
-  "diagnostics_note": {
-    "code": "no_matching_logs_in_retention_window",
-    "message": "没有匹配到页面请求日志；诊断只覆盖最近 300 条本地应用日志，日志可能已被保留条数淘汰、被日志级别过滤，或本地日志文件被清理。",
-    "retention": {
-      "storage": "bounded_local_jsonl",
-      "max_entries": 300,
-      "default_max_entries": 300,
-      "min_entries": 100,
-      "max_configured_entries": 5000,
-      "configured_by": "APP_LOG_MAX_ENTRIES",
-      "persisted_across_process_restart": true,
-      "loss_modes": [
-        "entry_evicted_by_max_entries",
-        "log_level_filter",
-        "local_log_file_missing_or_cleared"
-      ],
-      "bounded": true,
-      "not_agent_state_backend": true
+    "scope": {
+        "request_ids": ["stable-operation-key"],
+        "filenames": ["output.png"],
+        "filename_matched_request_ids": [],
+        "copy_text": "requestIds=stable-operation-key filename=output.png"
+    },
+    "matched_log_count": 0,
+    "events": [],
+    "diagnostics_retention": {
+        "storage": "bounded_local_jsonl",
+        "max_entries": 300,
+        "default_max_entries": 300,
+        "min_entries": 100,
+        "max_configured_entries": 5000,
+        "configured_by": "APP_LOG_MAX_ENTRIES",
+        "persisted_across_process_restart": true,
+        "loss_modes": ["entry_evicted_by_max_entries", "log_level_filter", "local_log_file_missing_or_cleared"],
+        "bounded": true,
+        "not_agent_state_backend": true
+    },
+    "diagnostics_note": {
+        "code": "no_matching_logs_in_retention_window",
+        "message": "没有匹配到页面请求日志；诊断只覆盖最近 300 条本地应用日志，日志可能已被保留条数淘汰、被日志级别过滤，或本地日志文件被清理。",
+        "retention": {
+            "storage": "bounded_local_jsonl",
+            "max_entries": 300,
+            "default_max_entries": 300,
+            "min_entries": 100,
+            "max_configured_entries": 5000,
+            "configured_by": "APP_LOG_MAX_ENTRIES",
+            "persisted_across_process_restart": true,
+            "loss_modes": ["entry_evicted_by_max_entries", "log_level_filter", "local_log_file_missing_or_cleared"],
+            "bounded": true,
+            "not_agent_state_backend": true
+        }
     }
-  }
 }
 ```
 
@@ -581,71 +591,71 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 
 首次配置和诊断输出字段速查：
 
-| 字段 | 出现位置 | 判断口径 |
-| --- | --- | --- |
-| `service_base_url` / `verification_scope.service_base_url` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。 |
-| `service_base_url_source` / `verification_scope.service_base_url_source` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。 |
-| `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。 |
-| `agent_auth_process.has_token` | `first-run --json` | 当前进程是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。 |
-| `page_sse_auth_available_to_process` | `first-run --json` | 目标服务要求页面 SSE `passwordHash` 时，当前进程是否已加载 `GPT_IMAGE_APP_PASSWORD_HASH`。 |
-| `summary.page_sse_auth_ready` | `agent:doctor` | 页面 SSE 鉴权是否已满足；为 `false` 时不要运行 `--page-sse` 真实计费请求。 |
-| `page_sse_real_smoke_status` | `first-run --json` | 结构化说明 `first-run` 未执行真实 `/api/images` smoke；`state=not_run` 且 `billable=false` 表示它只是只读就绪检查。 |
-| `responses_image_backend_real_smoke_status` | `first-run --json` | 结构化说明 `first-run` 未执行真实 Responses image_generation smoke；不要把声明支持当作实测通过。 |
-| `summary.page_sse_real_smoke` | `agent:doctor` | Page SSE 真实 smoke 的兼容聚合状态；任一 Page SSE smoke 失败为 `failed`，任一通过且无失败为 `passed`，全部跳过为 `skipped`；精确判断优先看 `summary.real_smoke_checks`。 |
-| `summary.orchestration_generate_smoke` | `agent:doctor` | `--allow-billable` 时默认 generate 主链 `/api/agent/image-requests` 的真实 smoke 状态；这是普通 generate 在 server-owned orchestration 下的主编排口径。 |
-| `summary.agent_generate_smoke` | `agent:doctor` | `--allow-billable` 时显式 `--agent` 的 Agent JSON 文生图 smoke 状态；用于诊断直连 Agent JSON，不代表默认主链。 |
-| `summary.responses_page_sse_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + page SSE + `responses-sse` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
-| `summary.responses_agent_generate_smoke` | `agent:doctor` | `--allow-billable` 时对 `responses-image-generation` + Agent JSON + `responses-non-stream` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。 |
-| `summary.real_smoke_checks` | `agent:doctor` | 各真实 smoke 的状态汇总，包含 `orchestration_generate_1k`、`agent_generate_1k`、`responses_page_sse_generate_1k`、`responses_agent_generate_1k`、`agent_edit_1k` 和 `page_sse_edit_2k`。 |
-| `summary.request_modes` | `agent:doctor` | 管理员 request mode 的配置和真实 smoke 摘要；`billable=false` 时只能证明配置可见，不能当作真实上游通过。 |
-| `request_mode_controls` | `capabilities` | 管理员 request mode 白名单控制面；包含 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、真实 smoke gate 和 `agent_client_policy=diagnostics_only`。 |
-| `private_agent_env.exists` | `first-run --json` | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。 |
-| `capabilities.ok` | `first-run --json`、`agent:doctor` | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。 |
-| `diagnostics_retention` | `diagnose-request.mjs` | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。 |
+| 字段                                                                                         | 出现位置                                                                                   | 判断口径                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `service_base_url` / `verification_scope.service_base_url`                                   | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 当前脚本准备访问的 Playground 服务地址。                                                                                                                                                                                                                                                                        |
+| `service_base_url_source` / `verification_scope.service_base_url_source`                     | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | `user_provided` 表示用户或命令行明确指定；`GPT_IMAGE_PLAYGROUND_URL` 表示来自环境变量；`default_local_probe` 表示默认本地探测。                                                                                                                                                                                 |
+| `interactive_confirmation_required` / `verification_scope.interactive_confirmation_required` | `first-run`、`agent:doctor`、诊断脚本为顶层；skill 脚本 dry-run 在 `verification_scope` 下 | 交互式任务中为 `true` 时，应先向用户确认是否使用该地址再发起真实请求。                                                                                                                                                                                                                                          |
+| `agent_auth_process.has_token`                                                               | `first-run --json`                                                                         | 当前进程是否已经拿到 `GPT_IMAGE_AGENT_TOKEN`。                                                                                                                                                                                                                                                                  |
+| `page_sse_auth_available_to_process`                                                         | `first-run --json`                                                                         | 目标服务要求页面 SSE `passwordHash` 时，当前进程是否已加载 `GPT_IMAGE_APP_PASSWORD_HASH`。                                                                                                                                                                                                                      |
+| `summary.page_sse_auth_ready`                                                                | `agent:doctor`                                                                             | 页面 SSE 鉴权是否已满足；为 `false` 时不要运行 `--page-sse` 真实计费请求。                                                                                                                                                                                                                                      |
+| `page_sse_real_smoke_status`                                                                 | `first-run --json`                                                                         | 结构化说明 `first-run` 未执行真实 `/api/images` smoke；`state=not_run` 且 `billable=false` 表示它只是只读就绪检查。                                                                                                                                                                                             |
+| `responses_image_backend_real_smoke_status`                                                  | `first-run --json`                                                                         | 结构化说明 `first-run` 未执行真实 Responses image_generation smoke；不要把声明支持当作实测通过。                                                                                                                                                                                                                |
+| `summary.page_sse_real_smoke`                                                                | `agent:doctor`                                                                             | Page SSE 真实 smoke 的兼容聚合状态；任一 Page SSE smoke 失败为 `failed`，任一通过且无失败为 `passed`，全部跳过为 `skipped`；精确判断优先看 `summary.real_smoke_checks`。                                                                                                                                        |
+| `summary.orchestration_generate_smoke`                                                       | `agent:doctor`                                                                             | `--allow-billable` 时默认 generate 主链 `/api/agent/image-requests` 的真实 smoke 状态；这是普通 generate 在 server-owned orchestration 下的主编排口径。                                                                                                                                                         |
+| `summary.agent_generate_smoke`                                                               | `agent:doctor`                                                                             | `--allow-billable` 时显式 `--agent` 的 Agent JSON 文生图 smoke 状态；用于诊断直连 Agent JSON，不代表默认主链。                                                                                                                                                                                                  |
+| `summary.responses_page_sse_generate_smoke`                                                  | `agent:doctor`                                                                             | `--allow-billable` 时对 `responses-image-generation` + page SSE + `responses-sse` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。                                                                                                                                                                       |
+| `summary.responses_agent_generate_smoke`                                                     | `agent:doctor`                                                                             | `--allow-billable` 时对 `responses-image-generation` + Agent JSON + `responses-non-stream` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。                                                                                                                                                              |
+| `summary.real_smoke_checks`                                                                  | `agent:doctor`                                                                             | 各真实 smoke 的状态汇总，包含 `orchestration_generate_1k`、`agent_generate_1k`、`responses_page_sse_generate_1k`、`responses_agent_generate_1k`、`agent_edit_1k` 和 `page_sse_edit_2k`。                                                                                                                        |
+| `summary.request_modes`                                                                      | `agent:doctor`                                                                             | 管理员 request mode 的配置和真实 smoke 摘要，包含 `supported`、`configured`、`effective`、`admin_whitelist_by_channel`、`effective_by_channel`、带 `severity` 的 `gaps`、`suggested_channel_env_key`、`suggested_effective_value` 和 `next_action`；`billable=false` 时只能证明配置可见，不能当作真实上游通过。 |
+| `request_mode_controls`                                                                      | `capabilities`                                                                             | 管理员 request mode 白名单控制面；包含 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、真实 smoke gate 和 `agent_client_policy=diagnostics_only`。                                                                                                                                           |
+| `private_agent_env.exists`                                                                   | `first-run --json`                                                                         | 本机是否存在 `.env.agent.local` 私有配置；Agent CLI 默认从当前仓库根目录读取该文件。                                                                                                                                                                                                                            |
+| `capabilities.ok`                                                                            | `first-run --json`、`agent:doctor`                                                         | 目标地址是否返回 Agent capabilities；失败时先看 HTTP 状态、鉴权提示和服务地址。                                                                                                                                                                                                                                 |
+| `diagnostics_retention`                                                                      | `diagnose-request.mjs`                                                                     | 页面日志诊断的保留窗口；无匹配日志不等于请求一定没发生。                                                                                                                                                                                                                                                        |
 
 单条 Agent state 诊断响应示例：
 
 ```json
 {
-  "found": true,
-  "diagnostics": {
-    "request": {
-      "request_id": "req_abc",
-      "idempotency_key": "stable-operation-key",
-      "mode": "generate",
-      "status": "succeeded",
-      "cached": false,
-      "created_at": "2026-05-12T00:00:00.000Z",
-      "updated_at": "2026-05-12T00:01:04.000Z",
-      "expires_at": "2026-05-13T00:00:00.000Z"
-    },
-    "response": {
-      "image_count": 1,
-      "artifact_ids": ["artifact-uuid"],
-      "content_urls": ["/api/agent/artifacts/artifact-uuid/content"],
-      "timing": {
-        "elapsed_ms": 64000,
-        "server_elapsed_ms": 64000
-      },
-      "execution": {
-        "transport": "agent_json",
-        "endpoint": "/api/agent/images/generate",
-        "request_headers": {
-          "user_agent_effective": "gpt-image-playground/2.1.0",
-          "has_extra_headers": false,
-          "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
-          "configured_header_names": []
+    "found": true,
+    "diagnostics": {
+        "request": {
+            "request_id": "req_abc",
+            "idempotency_key": "stable-operation-key",
+            "mode": "generate",
+            "status": "succeeded",
+            "cached": false,
+            "created_at": "2026-05-12T00:00:00.000Z",
+            "updated_at": "2026-05-12T00:01:04.000Z",
+            "expires_at": "2026-05-13T00:00:00.000Z"
+        },
+        "response": {
+            "image_count": 1,
+            "artifact_ids": ["artifact-uuid"],
+            "content_urls": ["/api/agent/artifacts/artifact-uuid/content"],
+            "timing": {
+                "elapsed_ms": 64000,
+                "server_elapsed_ms": 64000
+            },
+            "execution": {
+                "transport": "agent_json",
+                "endpoint": "/api/agent/images/generate",
+                "request_headers": {
+                    "user_agent_effective": "gpt-image-playground/2.1.0",
+                    "has_extra_headers": false,
+                    "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
+                    "configured_header_names": []
+                }
+            }
+        },
+        "state_backend": "sqlite",
+        "diagnostics_retention": {
+            "storage": "agent_state",
+            "ttl_seconds": 86400,
+            "bounded": true,
+            "loss_modes": ["request_expired_by_ttl", "artifact_deleted_or_purged", "state_backend_reset"]
         }
-      }
-    },
-    "state_backend": "sqlite",
-    "diagnostics_retention": {
-      "storage": "agent_state",
-      "ttl_seconds": 86400,
-      "bounded": true,
-      "loss_modes": ["request_expired_by_ttl", "artifact_deleted_or_purged", "state_backend_reset"]
     }
-  }
 }
 ```
 
@@ -666,21 +676,21 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 
 ### 边界矩阵
 
-| 前端能力或端点 | 归属契约 | 进入 Agent OpenAPI | 自动化口径 |
-| --- | --- | --- | --- |
-| `POST /api/agent/image-requests`、`POST /api/agent/images/generate`、`POST /api/agent/images/edit`、Agent jobs、Agent artifacts、`POST /api/agent/artifacts/{id}/share` | Agent API | 是 | 普通 generate 默认用 image-requests；其他 Agent 端点通过 skill 脚本和 Agent 鉴权调用。分享创建需要 Agent 鉴权，返回的分享 URL 给用户浏览器访问。 |
-| `POST /api/images` | 页面 form-data SSE API | 否 | 仅在默认 WebP edit、复杂 UI 批量、页面高级字段或显式 `--page-sse` 诊断时由 skill 选择。 |
-| `GET /api/runtime-capabilities` | 页面运行态能力 API | 否 | 页面展示运行态默认值、图片上游传输配置、渠道健康和后端 enablement；不是 Agent capabilities。 |
-| `PUT/DELETE /api/feedback` | 页面结果反馈写入和清理 API | 否 | 页面写入最近生成的结果反馈；删除历史时清理对应反馈。 |
-| `POST /api/agent/page-requests/feedback` | Agent 结果反馈批量只读 API | 是 | 按多个页面 `clientRequestId` 批量查询最新反馈。 |
-| `GET /api/agent/page-requests/{id}/feedback` | Agent 结果反馈只读 API | 是 | 按页面 `clientRequestId` 查询最新反馈。 |
-| `POST /api/agent/diagnostics/page-requests` | Agent 日志诊断批量只读 API | 是 | 按多个页面 `clientRequestId` 批量查询脱敏日志摘要。 |
-| `GET /api/agent/diagnostics/page-requests/{id}` | Agent 日志诊断摘要 API | 是 | 按页面 `clientRequestId` 查询脱敏日志摘要，不直接读取 `/api/logs` SSE。 |
-| `POST /api/shares`、`GET /api/shares/{token}`、`GET/POST /api/shares/{token}/content` | 分享访问 API | 否 | `POST /api/shares` 是页面上传创建端点，不进入 Agent OpenAPI；`GET/POST /content` 使用分享 token 或访问码服务用户浏览器，不复用 Agent artifact 下载契约。Agent 只通过 `/api/agent/artifacts/{id}/share` 创建这类分享记录。 |
-| `GET /api/logs` | 页面日志 SSE API | 否 | 使用页面访问码哈希的 Bearer 头，不接受 `AGENT_API_TOKEN`。 |
-| `POST /api/image-delete` | 页面图片文件删除 API | 否 | 按页面文件名删除 `generated-images/` 文件，不删除 Agent 状态库 artifact。 |
-| 灵感相册 | 浏览器本地工作台状态 | 否 | 只服务页面提示词复用，不作为 Agent capabilities。 |
-| 历史复用 | 浏览器本地历史状态 | 否 | 只服务页面继续编辑、做变体和复用提示词。 |
+| 前端能力或端点                                                                                                                                                          | 归属契约                   | 进入 Agent OpenAPI | 自动化口径                                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/agent/image-requests`、`POST /api/agent/images/generate`、`POST /api/agent/images/edit`、Agent jobs、Agent artifacts、`POST /api/agent/artifacts/{id}/share` | Agent API                  | 是                 | 普通 generate 默认用 image-requests；其他 Agent 端点通过 skill 脚本和 Agent 鉴权调用。分享创建需要 Agent 鉴权，返回的分享 URL 给用户浏览器访问。                                                                          |
+| `POST /api/images`                                                                                                                                                      | 页面 form-data SSE API     | 否                 | 仅在默认 WebP edit、复杂 UI 批量、页面高级字段或显式 `--page-sse` 诊断时由 skill 选择。                                                                                                                                   |
+| `GET /api/runtime-capabilities`                                                                                                                                         | 页面运行态能力 API         | 否                 | 页面展示运行态默认值、图片上游传输配置、渠道健康和后端 enablement；不是 Agent capabilities。                                                                                                                              |
+| `PUT/DELETE /api/feedback`                                                                                                                                              | 页面结果反馈写入和清理 API | 否                 | 页面写入最近生成的结果反馈；删除历史时清理对应反馈。                                                                                                                                                                      |
+| `POST /api/agent/page-requests/feedback`                                                                                                                                | Agent 结果反馈批量只读 API | 是                 | 按多个页面 `clientRequestId` 批量查询最新反馈。                                                                                                                                                                           |
+| `GET /api/agent/page-requests/{id}/feedback`                                                                                                                            | Agent 结果反馈只读 API     | 是                 | 按页面 `clientRequestId` 查询最新反馈。                                                                                                                                                                                   |
+| `POST /api/agent/diagnostics/page-requests`                                                                                                                             | Agent 日志诊断批量只读 API | 是                 | 按多个页面 `clientRequestId` 批量查询脱敏日志摘要。                                                                                                                                                                       |
+| `GET /api/agent/diagnostics/page-requests/{id}`                                                                                                                         | Agent 日志诊断摘要 API     | 是                 | 按页面 `clientRequestId` 查询脱敏日志摘要，不直接读取 `/api/logs` SSE。                                                                                                                                                   |
+| `POST /api/shares`、`GET /api/shares/{token}`、`GET/POST /api/shares/{token}/content`                                                                                   | 分享访问 API               | 否                 | `POST /api/shares` 是页面上传创建端点，不进入 Agent OpenAPI；`GET/POST /content` 使用分享 token 或访问码服务用户浏览器，不复用 Agent artifact 下载契约。Agent 只通过 `/api/agent/artifacts/{id}/share` 创建这类分享记录。 |
+| `GET /api/logs`                                                                                                                                                         | 页面日志 SSE API           | 否                 | 使用页面访问码哈希的 Bearer 头，不接受 `AGENT_API_TOKEN`。                                                                                                                                                                |
+| `POST /api/image-delete`                                                                                                                                                | 页面图片文件删除 API       | 否                 | 按页面文件名删除 `generated-images/` 文件，不删除 Agent 状态库 artifact。                                                                                                                                                 |
+| 灵感相册                                                                                                                                                                | 浏览器本地工作台状态       | 否                 | 只服务页面提示词复用，不作为 Agent capabilities。                                                                                                                                                                         |
+| 历史复用                                                                                                                                                                | 浏览器本地历史状态         | 否                 | 只服务页面继续编辑、做变体和复用提示词。                                                                                                                                                                                  |
 
 ## 错误
 
@@ -688,39 +698,39 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 
 ```json
 {
-  "error": {
-    "code": "validation_error",
-    "message": "请求校验失败。",
-    "retryable": false,
-    "details": {
-      "fields": {
-        "n": "必须是 1 到 10 之间的整数"
-      }
-    },
-    "diagnostics": {
-      "elapsed_ms": 1234,
-      "selected_channel_id": "default",
-      "upstream_host": "api.example.test",
-      "upstream_status": 524,
-      "upstream_event_type": "image_generation.partial_image",
-      "partial_image_count": 1,
-      "transport_error": false,
-      "transport_error_kind": "upstream_timeout",
-      "retry_after_seconds": 15,
-      "retry_after_ms": 15000,
-      "cooldown_until": "2026-05-20T00:00:15.000Z",
-      "cooldown_target": {
-        "channel_id": "default",
-        "request_mode": "images-sse"
-      },
-      "channel_cooldown_scope": "channel",
-      "response_headers": {
-        "date": "Wed, 20 May 2026 00:00:00 GMT",
-        "cf-ray": "example"
-      }
-    },
-    "request_id": "uuid"
-  }
+    "error": {
+        "code": "validation_error",
+        "message": "请求校验失败。",
+        "retryable": false,
+        "details": {
+            "fields": {
+                "n": "必须是 1 到 10 之间的整数"
+            }
+        },
+        "diagnostics": {
+            "elapsed_ms": 1234,
+            "selected_channel_id": "default",
+            "upstream_host": "api.example.test",
+            "upstream_status": 524,
+            "upstream_event_type": "image_generation.partial_image",
+            "partial_image_count": 1,
+            "transport_error": false,
+            "transport_error_kind": "upstream_timeout",
+            "retry_after_seconds": 15,
+            "retry_after_ms": 15000,
+            "cooldown_until": "2026-05-20T00:00:15.000Z",
+            "cooldown_target": {
+                "channel_id": "default",
+                "request_mode": "images-sse"
+            },
+            "channel_cooldown_scope": "channel",
+            "response_headers": {
+                "date": "Wed, 20 May 2026 00:00:00 GMT",
+                "cf-ray": "example"
+            }
+        },
+        "request_id": "uuid"
+    }
 }
 ```
 
