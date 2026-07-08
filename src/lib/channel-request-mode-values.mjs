@@ -5,6 +5,13 @@ export const CHANNEL_REQUEST_MODES = Object.freeze([
     'responses-sse'
 ]);
 
+export const DEFAULT_CHANNEL_REQUEST_MODE_PRIORITY = Object.freeze([
+    'images-non-stream',
+    'images-sse',
+    'responses-non-stream',
+    'responses-sse'
+]);
+
 export const CHANNEL_REQUEST_MODE_SMOKE_CASES = Object.freeze({
     'images-non-stream': Object.freeze(['orchestration_generate_1k', 'edit_1k']),
     'images-sse': Object.freeze(['page_sse_edit_2k']),
@@ -16,6 +23,10 @@ export const CHANNEL_REQUEST_MODE_ADMIN_CONTROL = Object.freeze({
     source: 'admin_env_whitelist',
     globalEnv: 'OPENAI_UPSTREAM_REQUEST_MODES',
     channelEnvPattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+    globalPriorityEnv: 'OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY',
+    channelPriorityEnvPattern: 'OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY',
+    defaultPriority: DEFAULT_CHANNEL_REQUEST_MODE_PRIORITY,
+    defaultPriorityPolicy: 'lowest_cost_first',
     mutableAtRuntime: false,
     finalGateCommand:
         'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable',

@@ -46,6 +46,21 @@ describe('inspectInvalidImagesResponse', () => {
         assert.equal(diagnostics.category, 'missing_image_call_result');
     });
 
+    it('classifies text-only Responses outputs as unsupported image_generation results', () => {
+        const diagnostics = inspectInvalidImagesResponse({
+            output: [
+                {
+                    type: 'message',
+                    status: 'completed',
+                    content: [{ type: 'output_text', text: 'I cannot generate images here.' }]
+                }
+            ]
+        });
+
+        assert.equal(diagnostics.category, 'missing_image_call_result');
+        assert.match(diagnostics.diagnostic_hint || '', /只兼容文本 Responses/);
+    });
+
     it('redacts sensitive upstream response fields while preserving structure', () => {
         const diagnostics = inspectInvalidImagesResponse({
             data: [

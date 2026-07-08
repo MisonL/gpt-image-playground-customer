@@ -150,7 +150,8 @@ describe('parseChannelPoolConfig', () => {
         assert.throws(
             () =>
                 parseChannelPoolConfig({
-                    OPENAI_CHANNELS_JSON: '{"channels":[]}'
+                    OPENAI_CHANNELS_JSON: '{"channels":[]}',
+                    OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY: 'images-sse,images-non-stream'
                 }),
             /OPENAI_CHANNEL_N/
         );
@@ -167,6 +168,26 @@ describe('parseChannelPoolConfig', () => {
         assert.deepEqual(config.credentials[0]?.requestModes, ['images-non-stream', 'images-sse']);
     });
 
+    it('parses global and per-channel request mode priority without changing the whitelist', () => {
+        const config = parseChannelPoolConfig({
+            OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY: 'images-sse, images-json',
+            OPENAI_CHANNEL_1_ID: 'images',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sk-one',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-json,images-sse',
+            OPENAI_CHANNEL_2_ID: 'json-first',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://json-first.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'sk-two',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'images-json,images-sse',
+            OPENAI_CHANNEL_2_REQUEST_MODE_PRIORITY: 'images-json,images-sse'
+        });
+
+        assert.deepEqual(config.credentials[0]?.requestModes, ['images-non-stream', 'images-sse']);
+        assert.deepEqual(config.requestModePriority, ['images-sse', 'images-non-stream']);
+        assert.deepEqual(config.credentials[0]?.requestModePriority, ['images-sse', 'images-non-stream']);
+        assert.deepEqual(config.credentials[1]?.requestModePriority, ['images-non-stream', 'images-sse']);
+    });
+
     it('rejects invalid per-channel request modes', () => {
         assert.throws(
             () =>
@@ -177,6 +198,20 @@ describe('parseChannelPoolConfig', () => {
                     OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-websocket'
                 }),
             /请求方式/
+        );
+    });
+
+    it('rejects per-channel request mode priority outside the channel whitelist', () => {
+        assert.throws(
+            () =>
+                parseChannelPoolConfig({
+                    OPENAI_CHANNEL_1_ID: 'images-only',
+                    OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+                    OPENAI_CHANNEL_1_API_KEYS: 'sk-one',
+                    OPENAI_CHANNEL_1_REQUEST_MODES: 'images-json',
+                    OPENAI_CHANNEL_1_REQUEST_MODE_PRIORITY: 'responses-sse,images-json'
+                }),
+            /REQUEST_MODE_PRIORITY.*不在白名单/
         );
     });
 });
@@ -206,6 +241,7 @@ describe('getChannelPoolSummary', () => {
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
                     requestModes: ['images-non-stream'],
+                    requestModePriority: ['images-non-stream'],
                     credentialCount: 2
                 },
                 {
@@ -216,6 +252,7 @@ describe('getChannelPoolSummary', () => {
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
                     requestModes: ['images-non-stream'],
+                    requestModePriority: ['images-non-stream'],
                     credentialCount: 1
                 }
             ]
@@ -249,6 +286,7 @@ describe('getChannelPoolSummary', () => {
                         configured_header_names: ['x-app-id', 'x-app-secret']
                     },
                     requestModes: ['images-non-stream'],
+                    requestModePriority: ['images-non-stream'],
                     credentialCount: 1
                 }
             ]
@@ -357,6 +395,7 @@ describe('getChannelPoolSummary', () => {
                     hasExtraHeaders: false,
                     requestHeaders: DEFAULT_HEADER_SUMMARY,
                     requestModes: ['images-non-stream'],
+                    requestModePriority: ['images-non-stream'],
                     providerManifest: {
                         id: 'custom_provider',
                         name: 'Custom Provider',
@@ -464,6 +503,167 @@ describe('createChannelRouter', () => {
         assert.equal(router.select({ requestMode: 'responses-sse' }).channelId, 'responses');
         assert.equal(router.select({ requestMode: 'images-non-stream' }).channelId, 'images');
         assert.throws(() => router.select({ requestMode: 'images-sse' }), /支持 images-sse/);
+    });
+
+    it('selects a request mode from channel priority when callers provide candidates', () => {
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'images',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'images-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse',
+            OPENAI_CHANNEL_1_REQUEST_MODE_PRIORITY: 'images-sse,images-non-stream'
+        });
+        const router = createChannelRouter(requestModeConfig);
+
+        assert.deepEqual(
+            router.selectWithRequestModes({
+                affinityKey: 'same-user',
+                requestModes: ['images-non-stream', 'images-sse']
+            }),
+            {
+                credential: requestModeConfig.credentials[0],
+                requestMode: 'images-sse',
+                preferredRequestMode: 'images-sse',
+                requestModePriority: ['images-sse', 'images-non-stream']
+            }
+        );
+    });
+
+    it('selects the lowest-cost request mode before routing across split-mode channels', () => {
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'sse',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://sse.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sse-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
+            OPENAI_CHANNEL_2_ID: 'json',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://json.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'json-key',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'images-non-stream'
+        });
+        const router = createChannelRouter({ ...requestModeConfig, strategy: 'round_robin' });
+
+        assert.deepEqual(
+            router.selectWithRequestModes({
+                affinityKey: 'same-user',
+                requestModes: ['images-non-stream', 'images-sse']
+            }),
+            {
+                credential: requestModeConfig.credentials[1],
+                requestMode: 'images-non-stream',
+                preferredRequestMode: 'images-non-stream',
+                requestModePriority: ['images-non-stream', 'images-sse']
+            }
+        );
+    });
+
+    it('uses a shared explicit request mode priority before routing across split-mode channels', () => {
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY: 'images-sse,images-non-stream',
+            OPENAI_CHANNEL_1_ID: 'sse',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://sse.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sse-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
+            OPENAI_CHANNEL_2_ID: 'json',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://json.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'json-key',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'images-non-stream'
+        });
+        const router = createChannelRouter({ ...requestModeConfig, strategy: 'round_robin' });
+
+        assert.deepEqual(
+            router.selectWithRequestModes({
+                affinityKey: 'same-user',
+                requestModes: ['images-non-stream', 'images-sse']
+            }),
+            {
+                credential: requestModeConfig.credentials[0],
+                requestMode: 'images-sse',
+                preferredRequestMode: 'images-sse',
+                requestModePriority: ['images-sse', 'images-non-stream']
+            }
+        );
+    });
+
+    it('uses a local request mode priority before global priority across split-mode channels', () => {
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY: 'images-sse,images-non-stream',
+            OPENAI_CHANNEL_1_ID: 'sse',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://sse.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sse-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
+            OPENAI_CHANNEL_2_ID: 'json',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://json.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'json-key',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'images-non-stream',
+            OPENAI_CHANNEL_2_REQUEST_MODE_PRIORITY: 'images-non-stream'
+        });
+        const router = createChannelRouter({ ...requestModeConfig, strategy: 'round_robin' });
+
+        assert.deepEqual(
+            router.selectWithRequestModes({
+                affinityKey: 'same-user',
+                requestModes: ['images-non-stream', 'images-sse']
+            }),
+            {
+                credential: requestModeConfig.credentials[1],
+                requestMode: 'images-non-stream',
+                preferredRequestMode: 'images-non-stream',
+                requestModePriority: ['images-non-stream']
+            }
+        );
+    });
+
+    it('uses a mixed channel local priority before default low-cost priority on sibling channels', () => {
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://mixed.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'mixed-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse',
+            OPENAI_CHANNEL_1_REQUEST_MODE_PRIORITY: 'images-sse,images-non-stream',
+            OPENAI_CHANNEL_2_ID: 'json',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://json.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'json-key',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'images-non-stream'
+        });
+        const router = createChannelRouter({ ...requestModeConfig, strategy: 'round_robin' });
+
+        assert.deepEqual(
+            router.selectWithRequestModes({
+                affinityKey: 'same-user',
+                requestModes: ['images-non-stream', 'images-sse']
+            }),
+            {
+                credential: requestModeConfig.credentials[0],
+                requestMode: 'images-sse',
+                preferredRequestMode: 'images-sse',
+                requestModePriority: ['images-sse', 'images-non-stream']
+            }
+        );
+    });
+
+    it('uses the local channel request mode priority for a single mixed-mode channel', () => {
+        const requestModeConfig = parseChannelPoolConfig({
+            OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY: 'images-sse,images-non-stream',
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://mixed.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'mixed-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse',
+            OPENAI_CHANNEL_1_REQUEST_MODE_PRIORITY: 'images-non-stream,images-sse'
+        });
+        const router = createChannelRouter(requestModeConfig);
+
+        assert.deepEqual(
+            router.selectWithRequestModes({
+                affinityKey: 'same-user',
+                requestModes: ['images-non-stream', 'images-sse']
+            }),
+            {
+                credential: requestModeConfig.credentials[0],
+                requestMode: 'images-non-stream',
+                preferredRequestMode: 'images-non-stream',
+                requestModePriority: ['images-non-stream', 'images-sse']
+            }
+        );
     });
 
     it('skips a failed credential until the cooldown expires', () => {
@@ -675,6 +875,7 @@ describe('createChannelRouter', () => {
         assert.deepEqual(router.getRequestModeHealthSummary(), {
             configuredRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
             effectiveRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
+            defaultRequestModePriority: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
             modes: [
                 {
                     mode: 'images-non-stream',
@@ -708,11 +909,13 @@ describe('createChannelRouter', () => {
             effectiveRequestModesByChannel: [
                 {
                     channelId: 'images',
-                    requestModes: ['images-non-stream', 'images-sse']
+                    requestModes: ['images-non-stream', 'images-sse'],
+                    requestModePriority: ['images-non-stream', 'images-sse']
                 },
                 {
                     channelId: 'responses',
-                    requestModes: ['responses-sse']
+                    requestModes: ['responses-sse'],
+                    requestModePriority: ['responses-sse']
                 }
             ]
         });
@@ -721,6 +924,7 @@ describe('createChannelRouter', () => {
         assert.deepEqual(router.getRequestModeHealthSummary(), {
             configuredRequestModes: ['images-non-stream', 'images-sse', 'responses-sse'],
             effectiveRequestModes: ['images-non-stream', 'images-sse'],
+            defaultRequestModePriority: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
             modes: [
                 {
                     mode: 'images-non-stream',
@@ -754,7 +958,8 @@ describe('createChannelRouter', () => {
             effectiveRequestModesByChannel: [
                 {
                     channelId: 'images',
-                    requestModes: ['images-non-stream', 'images-sse']
+                    requestModes: ['images-non-stream', 'images-sse'],
+                    requestModePriority: ['images-non-stream', 'images-sse']
                 }
             ]
         });
@@ -823,6 +1028,7 @@ describe('createChannelRouter', () => {
         assert.deepEqual(router.getRequestModeHealthSummary(), {
             configuredRequestModes: ['images-non-stream', 'images-sse'],
             effectiveRequestModes: ['images-non-stream'],
+            defaultRequestModePriority: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
             modes: [
                 {
                     mode: 'images-non-stream',
@@ -856,7 +1062,8 @@ describe('createChannelRouter', () => {
             effectiveRequestModesByChannel: [
                 {
                     channelId: 'mixed',
-                    requestModes: ['images-non-stream']
+                    requestModes: ['images-non-stream'],
+                    requestModePriority: ['images-non-stream']
                 }
             ]
         });

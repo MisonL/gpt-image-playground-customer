@@ -452,6 +452,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'request_mode_controls',
                         'defaults',
                         'limits',
+                        'force_request_controls',
                         'model_limits',
                         'agent_streaming',
                         'orchestration',
@@ -489,10 +490,14 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     type: 'array',
                                     items: {
                                         type: 'object',
-                                        required: ['id', 'request_modes', 'request_headers'],
+                                        required: ['id', 'request_modes', 'request_mode_priority', 'request_headers'],
                                         properties: {
                                             id: { type: 'string' },
                                             request_modes: {
+                                                type: 'array',
+                                                items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
+                                            },
+                                            request_mode_priority: {
                                                 type: 'array',
                                                 items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
                                             },
@@ -679,6 +684,27 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             additionalProperties: false
                         },
                         model_limits: { $ref: '#/components/schemas/AgentModelLimits' },
+                        force_request_controls: {
+                            type: 'object',
+                            required: ['field', 'cli_flag', 'default', 'effect', 'still_enforced', 'intended_for'],
+                            properties: {
+                                field: { type: 'string', const: capabilities.force_request_controls.field },
+                                cli_flag: { type: 'string', const: capabilities.force_request_controls.cli_flag },
+                                default: { type: 'boolean', const: false },
+                                effect: { type: 'string', const: capabilities.force_request_controls.effect },
+                                still_enforced: {
+                                    type: 'array',
+                                    items: { type: 'string' },
+                                    const: capabilities.force_request_controls.still_enforced
+                                },
+                                intended_for: {
+                                    type: 'array',
+                                    items: { type: 'string' },
+                                    const: capabilities.force_request_controls.intended_for
+                                }
+                            },
+                            additionalProperties: false
+                        },
                         agent_streaming: { $ref: '#/components/schemas/AgentStreamingCapabilities' },
                         orchestration: { $ref: '#/components/schemas/AgentOrchestrationCapabilities' },
                         routing_rules: { $ref: '#/components/schemas/AgentRoutingRules' },
@@ -1306,6 +1332,21 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     }
                                 }
                             }
+                        },
+                        {
+                            if: {
+                                not: {
+                                    properties: {
+                                        force_request: { const: true }
+                                    },
+                                    required: ['force_request']
+                                }
+                            },
+                            then: {
+                                properties: {
+                                    background: { type: 'string', enum: supportedBackgrounds }
+                                }
+                            }
                         }
                     ],
                     properties: {
@@ -1320,7 +1361,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         quality: { type: 'string', enum: AGENT_QUALITIES, default: 'high' },
                         output_format: { type: 'string', enum: AGENT_OUTPUT_FORMATS },
                         output_compression: { type: 'integer', minimum: 0, maximum: 100 },
-                        background: { type: 'string', enum: supportedBackgrounds },
+                        background: { type: 'string', enum: AGENT_BACKGROUNDS },
                         moderation: { type: 'string', enum: AGENT_MODERATIONS },
                         response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES, default: 'path' },
                         image_backend: {
@@ -1340,6 +1381,11 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         promptOptimization: { type: 'boolean' },
                         force_web: { type: 'boolean' },
+                        force_request: {
+                            type: 'boolean',
+                            description:
+                                '显式强制请求上游，跳过本服务本地 upstream profile 尺寸/背景限制；鉴权、幂等键、渠道白名单和安全校验仍然生效。'
+                        },
                         streaming_strategy: {
                             type: 'string',
                             enum: AGENT_STREAMING_STRATEGIES,
@@ -1381,6 +1427,11 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             type: 'string',
                             enum: AGENT_STREAMING_STRATEGIES,
                             default: 'auto'
+                        },
+                        force_request: {
+                            type: 'boolean',
+                            description:
+                                '显式强制请求上游，跳过本服务本地 upstream profile 尺寸限制；鉴权、幂等键、渠道白名单、图片数量、partial_images、文件大小和 mask 校验仍然生效。'
                         },
                         partial_images: {
                             type: 'integer',
@@ -1456,6 +1507,14 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     required: ['requested_backend', 'fallback_applied'],
                     properties: {
                         requested_backend: { type: 'string', enum: AGENT_IMAGE_BACKENDS },
+                        candidate_channel_request_modes: {
+                            type: 'array',
+                            items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
+                        },
+                        request_mode_priority: {
+                            type: 'array',
+                            items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
+                        },
                         preferred_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
                         fallback_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
                         selected_channel_request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
@@ -1984,6 +2043,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'source',
                         'global_env',
                         'channel_env_pattern',
+                        'global_priority_env',
+                        'channel_priority_env_pattern',
+                        'default_priority',
+                        'default_priority_policy',
                         'mutable_at_runtime',
                         'agent_client_policy',
                         'final_gate_command',
@@ -1993,6 +2056,13 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         source: { type: 'string', const: 'admin_env_whitelist' },
                         global_env: { type: 'string' },
                         channel_env_pattern: { type: 'string' },
+                        global_priority_env: { type: 'string' },
+                        channel_priority_env_pattern: { type: 'string' },
+                        default_priority: {
+                            type: 'array',
+                            items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
+                        },
+                        default_priority_policy: { type: 'string', const: 'lowest_cost_first' },
                         mutable_at_runtime: { type: 'boolean', const: false },
                         agent_client_policy: { type: 'string', const: 'diagnostics_only' },
                         final_gate_command: { type: 'string' },

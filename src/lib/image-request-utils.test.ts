@@ -171,6 +171,40 @@ describe('Matsca upstream image parameter compatibility', () => {
         assert.equal(readSize(formData, 'size', '1024x1024', 'gpt-image-2', IMAGE_UPSTREAM_PROFILES.matsca), '123x456');
     });
 
+    it('allows explicit force_request to bypass local gpt-image-2 size and background profile limits', () => {
+        const sizeFormData = new FormData();
+        sizeFormData.append('size', '512x512');
+        const backgroundFormData = new FormData();
+        backgroundFormData.append('background', 'transparent');
+
+        assert.throws(() => readSize(sizeFormData, 'size', '1024x1024', 'gpt-image-2'), /总像素/);
+        assert.equal(
+            readSize(sizeFormData, 'size', '1024x1024', 'gpt-image-2', IMAGE_UPSTREAM_PROFILES['openai-compatible'], {
+                forceRequest: true
+            }),
+            '512x512'
+        );
+        assert.equal(
+            readBackground(backgroundFormData, 'gpt-image-2', IMAGE_UPSTREAM_PROFILES['openai-compatible'], {
+                forceRequest: true
+            }),
+            'transparent'
+        );
+    });
+
+    it('does not let force_request bypass non gpt-image-2 size allowlists', () => {
+        const formData = new FormData();
+        formData.append('size', '512x512');
+
+        assert.throws(
+            () =>
+                readSize(formData, 'size', '1024x1024', 'gpt-image-1', IMAGE_UPSTREAM_PROFILES['openai-compatible'], {
+                    forceRequest: true
+                }),
+            /gpt-image-1 无效/
+        );
+    });
+
     it('uses the Matsca single upload limit for masks too', () => {
         const formData = new FormData();
         formData.append('mask', new File([Buffer.alloc(10 * 1024 * 1024 + 1)], 'mask.png', { type: 'image/png' }));

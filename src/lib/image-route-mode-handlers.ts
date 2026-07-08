@@ -24,10 +24,6 @@ import {
     type ValidOutputFormat
 } from './image-request-utils';
 import {
-    resolveAcceptedImageTaskResponse,
-    type AcceptedImageTaskResponseError
-} from './image-service';
-import {
     appendAccessCookie,
     reportServerCredentialFailure,
     resolveRequestActualCostSafely,
@@ -35,6 +31,7 @@ import {
     type ImageBackend,
     type RequestLogContext
 } from './image-route-support';
+import { resolveAcceptedImageTaskResponse, type AcceptedImageTaskResponseError } from './image-service';
 import { createImageStreamResponse } from './image-stream-service';
 import {
     mergeUpstreamHeadersWithFixed,
@@ -72,6 +69,7 @@ type CommonModeInput = {
     selectedCredential?: ChannelCredential;
     channelRequestMode?: ChannelRequestMode;
     accessCookie?: AccessCookie;
+    forceRequest?: boolean;
     abortSignal?: AbortSignal;
     streamFallbackEnabled?: boolean;
     onStreamUnavailable?: (error: unknown, reason: string) => void;
@@ -134,11 +132,15 @@ function readGenerateOptions(input: CommonModeInput): GenerateOptions {
         input.upstreamProfile.generateCount.min,
         input.upstreamProfile.generateCount.max
     );
-    const size = readSize(input.formData, 'size', '1024x1024', input.model, input.upstreamProfile);
+    const size = readSize(input.formData, 'size', '1024x1024', input.model, input.upstreamProfile, {
+        forceRequest: input.forceRequest === true
+    });
     const quality = readGenerateQuality(input.formData);
     const outputFormat = readOutputFormat(input.formData);
     const outputCompression = readOutputCompression(input.formData, outputFormat);
-    const background = readBackground(input.formData, input.model, input.upstreamProfile);
+    const background = readBackground(input.formData, input.model, input.upstreamProfile, {
+        forceRequest: input.forceRequest === true
+    });
     const moderation = readModeration(input.formData);
     const forceWeb = readBooleanAlias(input.formData, 'force_web', 'forceWeb');
     const baseParams: GenerateParams = {
@@ -429,7 +431,9 @@ function readEditOptions(input: CommonModeInput): EditOptions {
         input.upstreamProfile.editCount.min,
         input.upstreamProfile.editCount.max
     );
-    const size = readSize(input.formData, 'size', 'auto', input.model, input.upstreamProfile);
+    const size = readSize(input.formData, 'size', 'auto', input.model, input.upstreamProfile, {
+        forceRequest: input.forceRequest === true
+    });
     const quality = readEditQuality(input.formData);
     const outputFormat = readOutputFormat(input.formData);
     const outputCompression = readOutputCompression(input.formData, outputFormat);
