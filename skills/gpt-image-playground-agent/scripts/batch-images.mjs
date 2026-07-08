@@ -81,6 +81,8 @@ const PAGE_ADVANCED_FIELDS = [
     'prompt_optimization',
     'force_web',
     'forceWeb',
+    'force_request',
+    'forceRequest',
     'sse_log_path'
 ];
 const EDIT_ONLY_FIELDS = ['image_path', 'image_paths', 'mask_path'];
@@ -368,7 +370,9 @@ function normalizeIdempotencyKey(value, orderedPrefix, index, id) {
 
 function validateTaskSize(raw, id, mode, dimensionCheck) {
     if (raw.size !== undefined) {
-        assertValidImageSizeForModel(raw.size, raw.model || 'gpt-image-2', `${id}.size`);
+        assertValidImageSizeForModel(raw.size, raw.model || 'gpt-image-2', `${id}.size`, {
+            forceRequest: readForceRequest(raw, id) === true
+        });
     }
     if (!dimensionCheck) return;
     const size = raw.size || (mode === 'generate' ? '1024x1024' : undefined);
@@ -400,6 +404,8 @@ function validateTaskFields(raw, id, mode) {
     readPromptOptimization(raw, id);
     if (hasOwn(raw, 'force_web')) readBooleanAlias(raw.force_web, `${id}.force_web`);
     if (hasOwn(raw, 'forceWeb')) readBooleanAlias(raw.forceWeb, `${id}.forceWeb`);
+    if (hasOwn(raw, 'force_request')) readBooleanAlias(raw.force_request, `${id}.force_request`);
+    if (hasOwn(raw, 'forceRequest')) readBooleanAlias(raw.forceRequest, `${id}.forceRequest`);
     if (hasOwn(raw, 'sse_log_path')) readNonEmptyString(raw.sse_log_path, `${id}.sse_log_path`);
     validateResponsesModelField(raw, id);
     if (hasOwn(raw, 'stream_mode')) normalizeEnumValue(raw.stream_mode, STREAM_MODES, `${id}.stream_mode`);
@@ -492,6 +498,14 @@ function readForceWeb(raw, id) {
     const present = fields.filter((field) => hasOwn(raw, field));
     if (present.length === 0) return undefined;
     if (present.length > 1) throw new Error(`${id}.force_web 与 forceWeb 不能同时设置。`);
+    return readBooleanAlias(raw[present[0]], `${id}.${present[0]}`);
+}
+
+function readForceRequest(raw, id) {
+    const fields = ['force_request', 'forceRequest'];
+    const present = fields.filter((field) => hasOwn(raw, field));
+    if (present.length === 0) return undefined;
+    if (present.length > 1) throw new Error(`${id}.force_request 与 forceRequest 不能同时设置。`);
     return readBooleanAlias(raw[present[0]], `${id}.${present[0]}`);
 }
 
@@ -1115,6 +1129,7 @@ function buildPageSseRequestPreview(task) {
     if (readPromptOptimization(raw, task.id) !== undefined)
         preview.promptOptimization = readPromptOptimization(raw, task.id);
     if (readForceWeb(raw, task.id) !== undefined) preview.force_web = readForceWeb(raw, task.id);
+    if (readForceRequest(raw, task.id) !== undefined) preview.force_request = readForceRequest(raw, task.id);
     if (raw.sse_log_path) preview.sse_log_path = readNonEmptyString(raw.sse_log_path, `${task.id}.sse_log_path`);
     if (raw.background) preview.background = String(raw.background);
     if (raw.moderation) preview.moderation = String(raw.moderation);
@@ -1351,6 +1366,7 @@ function buildGenerateBody(raw) {
         : undefined;
     const promptOptimization = readPromptOptimization(raw, String(raw.id || 'generate'));
     const forceWeb = readForceWeb(raw, String(raw.id || 'generate'));
+    const forceRequest = readForceRequest(raw, String(raw.id || 'generate'));
     const body = {
         prompt: raw.prompt,
         model: raw.model || 'gpt-image-2',
@@ -1373,6 +1389,7 @@ function buildGenerateBody(raw) {
         ...(thinking ? { thinking } : {}),
         ...(promptOptimization !== undefined ? { promptOptimization } : {}),
         ...(forceWeb !== undefined ? { force_web: forceWeb } : {}),
+        ...(forceRequest !== undefined ? { force_request: forceRequest } : {}),
         ...(hasOwn(raw, 'stream_mode')
             ? { stream_mode: normalizeEnumValue(raw.stream_mode, STREAM_MODES, 'stream_mode') }
             : {}),
@@ -1416,6 +1433,8 @@ function buildPageSseTaskFormData(task) {
         formData.append('promptOptimization', String(readPromptOptimization(raw, task.id)));
     }
     if (readForceWeb(raw, task.id) !== undefined) formData.append('force_web', String(readForceWeb(raw, task.id)));
+    if (readForceRequest(raw, task.id) !== undefined)
+        formData.append('force_request', String(readForceRequest(raw, task.id)));
     if (raw.background) formData.append('background', String(raw.background));
     if (raw.moderation) formData.append('moderation', String(raw.moderation));
     if (readOutputCompression(raw, task.id) !== undefined) {

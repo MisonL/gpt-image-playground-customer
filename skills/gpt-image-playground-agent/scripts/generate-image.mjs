@@ -274,6 +274,7 @@ function parseArgs(argv) {
         thinking: undefined,
         promptOptimization: undefined,
         forceWeb: undefined,
+        forceRequest: false,
         share: false,
         shareExpiresMinutes: undefined,
         dimensionCheck: false,
@@ -318,6 +319,7 @@ function parseArgs(argv) {
         else if (arg === '--prompt-optimization')
             parsed.promptOptimization = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--force-web') parsed.forceWeb = true;
+        else if (arg === '--force-request') parsed.forceRequest = true;
         else if (arg === '--share') parsed.share = true;
         else if (arg === '--share-expires-minutes')
             parsed.shareExpiresMinutes = readOptionValue(expandedArgv, (index += 1), arg);
@@ -372,7 +374,9 @@ function buildRequestBody(promptValue, parsed) {
             prompt: promptValue || 'contract check',
             model: parsed.model,
             n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
-            size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size'),
+            size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size', {
+                forceRequest: parsed.forceRequest
+            }),
             quality: parsed.quality,
             output_format: normalizeOutputFormat(parsed.format),
             ...(readOutputCompression(parsed) !== undefined
@@ -389,7 +393,9 @@ function buildDryRunRequestBody(parsed) {
         {
             model: parsed.model,
             n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
-            size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size'),
+            size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size', {
+                forceRequest: parsed.forceRequest
+            }),
             quality: parsed.quality,
             output_format: normalizeOutputFormat(parsed.format),
             ...(readOutputCompression(parsed) !== undefined
@@ -418,6 +424,7 @@ function addUpstreamStrategyFields(body, parsed) {
             ? { promptOptimization: readBooleanOption(parsed.promptOptimization, '--prompt-optimization') }
             : {}),
         ...(parsed.forceWeb !== undefined ? { force_web: true } : {}),
+        ...(parsed.forceRequest ? { force_request: true } : {}),
         ...(parsed.streamMode ? { stream_mode: parsed.streamMode } : {}),
         ...(parsed.streamingStrategy ? { streaming_strategy: parsed.streamingStrategy } : {}),
         ...(parsed.partialImages !== undefined
@@ -839,6 +846,7 @@ function buildPageSseFormData() {
         formData.append('promptOptimization', String(requestBody.promptOptimization));
     }
     if (requestBody.force_web !== undefined) formData.append('force_web', String(requestBody.force_web));
+    if (requestBody.force_request !== undefined) formData.append('force_request', String(requestBody.force_request));
     if (requestBody.streaming_strategy) {
         formData.append('image_streaming_strategy', requestBody.streaming_strategy);
     }
@@ -1723,7 +1731,7 @@ function printUsage() {
     console.error('用法：generate-image.mjs [options] <prompt>');
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实生图。');
     console.error(
-        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --share --share-expires-minutes --dimension-check --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --check-remote --page-sse --agent --job --no-job(兼容别名)'
+        '常用参数：--model --size --quality --n --format --output-compression --response-mode --image-backend --responses-model --gpt-model --thinking --prompt-optimization --force-web --force-request --stream-mode --streaming-strategy --partial-images --share --share-expires-minutes --dimension-check --sse-log --timeout-ms --base-url --prompt-file --idempotency-key --check-remote --page-sse --agent --job --no-job(兼容别名)'
     );
     console.error(
         '契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 generate-image.mjs 或 generate-image.mjs --contract-check'

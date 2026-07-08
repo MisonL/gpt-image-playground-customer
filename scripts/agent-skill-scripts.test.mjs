@@ -112,6 +112,18 @@ describe('Agent skill script argument validation', () => {
         assert.equal(probeResult.status, 2);
         assert.match(probeResult.stderr, /--size 必须是 auto 或 WIDTHxHEIGHT/);
         assert.equal(probeResult.stdout.trim(), '');
+
+        const legacyForceResult = runSkillScript('generate-image.mjs', [
+            '--model',
+            'gpt-image-1',
+            '--force-request',
+            '--size',
+            '512x512',
+            'prompt'
+        ]);
+        assert.equal(legacyForceResult.status, 2);
+        assert.match(legacyForceResult.stderr, /非 gpt-image-2 只支持 auto、1024x1024、1536x1024、1024x1536/);
+        assert.equal(legacyForceResult.stdout.trim(), '');
     });
 
     it('caps Agent diagnostics enrichment timeout independently of image request timeouts', async () => {
@@ -4170,6 +4182,7 @@ describe('Agent skill script argument validation', () => {
                             'responses-sse',
                             '--partial-images',
                             '3',
+                            '--force-request',
                             imagePath,
                             'prompt'
                         ],
@@ -4185,6 +4198,7 @@ describe('Agent skill script argument validation', () => {
                     assert.match(editRequestBody, /name="stream_mode"\r?\n\r?\nstream/);
                     assert.match(editRequestBody, /name="streaming_strategy"\r?\n\r?\nresponses-sse/);
                     assert.match(editRequestBody, /name="partial_images"\r?\n\r?\n3/);
+                    assert.match(editRequestBody, /name="force_request"\r?\n\r?\ntrue/);
                     assert.match(editRequestBody, /name="image_0"; filename="source\.png"/);
                 }
             );
@@ -4417,7 +4431,7 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`/);
         assert.match(
             apiReference,
-            /强制 Agent edit 时输出格式固定为 PNG，`partial_images` 按默认 Images API\/profile 范围校验/
+            /强制 Agent edit 时由服务端固定使用 WebP 输出契约，`partial_images` 按默认 Images API\/profile 范围校验/
         );
         assert.match(
             apiReference,
@@ -4473,7 +4487,7 @@ describe('Agent skill script argument validation', () => {
         assert.match(readmeText, /不要手动并行启动多个单张脚本/);
         assert.match(readmeText, /streamingBatch\.recommendedConcurrency/);
         assert.match(readmeText, /channelQueue\.capacityPerCredential/);
-        assert.match(readmeText, /Agent edit 输出格式和尺寸可能与页面 SSE 不完全一致/);
+        assert.match(readmeText, /Agent edit 输出格式固定为 WebP，像素尺寸可能与页面 SSE 不完全一致/);
         assert.match(
             readmeText,
             /不要直接输出 `\.env\.local`、`\.env\*\.local`、secret 文件或原始 `docker inspect \.Config\.Env`/
@@ -4489,7 +4503,8 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /不要手动并行启动多个单张脚本/);
         assert.match(skillText, /capacity_feedback/);
         assert.match(skillText, /channelQueue\.capacityPerCredential/);
-        assert.match(skillText, /Agent edit 只是对照路径，不保证与页面 SSE 的输出格式和像素尺寸完全一致/);
+        assert.match(skillText, /输出格式固定为 Agent WebP 契约/);
+        assert.match(skillText, /Agent edit 只是对照路径，不保证与页面 SSE 的像素尺寸完全一致/);
         assert.match(skillText, /复杂 UI、长 prompt、高质量图生图遇到 5 分钟级超时/);
         assert.match(skillText, /Codex 会话日志会持久保存命令输出/);
         assert.match(skillText, /npm run env:summary/);
