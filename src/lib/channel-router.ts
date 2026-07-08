@@ -3,6 +3,8 @@ import {
     CHANNEL_REQUEST_MODES,
     channelSupportsRequestMode,
     getEffectiveChannelRequestModes,
+    orderChannelRequestModesByPriority,
+    parseChannelRequestModePriority,
     parseChannelRequestModes,
     type ChannelRequestMode,
     type ChannelRequestModeHealthSummary
@@ -41,17 +43,21 @@ export type ChannelCredential = {
     providerProfile?: ImageUpstreamProfile;
     failureCooldownMs?: number;
     requestModes?: ChannelRequestMode[];
+    requestModePriority?: ChannelRequestMode[];
+    requestModePrioritySource?: 'channel' | 'pool';
 };
 
 export type ChannelPoolConfig = {
     strategy: RoutingStrategy;
     credentials: ChannelCredential[];
+    requestModePriority?: ChannelRequestMode[];
 };
 
 export type ChannelPoolSummary = {
     credentialCount: number;
     channelCount: number;
     strategy: RoutingStrategy;
+    requestModePriority?: readonly ChannelRequestMode[];
     channels: Array<{
         id: string;
         baseUrl?: string;
@@ -61,18 +67,38 @@ export type ChannelPoolSummary = {
         requestHeaders: ReturnType<typeof summarizeUpstreamRequestHeaders>;
         providerManifest?: ImageProviderManifestSummary;
         requestModes: readonly ChannelRequestMode[];
+        requestModePriority: readonly ChannelRequestMode[];
         credentialCount: number;
     }>;
 };
 
 export type ChannelRouter = {
     select(options?: { affinityKey?: string; requestMode?: ChannelRequestMode }): ChannelCredential;
+    selectWithRequestModes(options: {
+        affinityKey?: string;
+        requestModes: readonly ChannelRequestMode[];
+    }): ChannelRequestModeSelection;
     reportFailure(credential: ChannelCredential, options?: ChannelFailureReportOptions): ChannelFailureReport;
     getRecoveryProbeCandidates(): ChannelRecoveryProbeCandidate[];
     reportRecoveryProbeSuccess(candidate: ChannelRecoveryProbeCandidate): boolean;
     reportRecoveryProbeFailure(candidate: ChannelRecoveryProbeCandidate, reason?: ChannelFailureReason): void;
     getHealthSummary(): ChannelPoolHealthSummary;
     getRequestModeHealthSummary(): ChannelRequestModeHealthSummary;
+};
+
+export type ChannelRequestModeSelection = {
+    credential: ChannelCredential;
+    requestMode: ChannelRequestMode;
+    preferredRequestMode: ChannelRequestMode;
+    requestModePriority: readonly ChannelRequestMode[];
+};
+
+type RankedRequestModeCandidate = {
+    credential: ChannelCredential;
+    requestMode: ChannelRequestMode;
+    requestModePriority: readonly ChannelRequestMode[];
+    modeRank: number;
+    sourceRank: number;
 };
 
 export type ChannelFailureReportOptions = {
@@ -146,7 +172,7 @@ const DEFAULT_STRATEGY: RoutingStrategy = 'sticky';
 const DEFAULT_FAILURE_COOLDOWN_MS = 30_000;
 const VALID_STRATEGIES = new Set<RoutingStrategy>(['sticky', 'round_robin', 'random']);
 const CHANNEL_KEY_PATTERN =
-    /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON|FAILURE_COOLDOWN_MS)$/;
+    /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|REQUEST_MODE_PRIORITY|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON|FAILURE_COOLDOWN_MS)$/;
 
 export function parseChannelPoolConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
     if (env.OPENAI_CHANNELS_JSON?.trim()) {
@@ -162,13 +188,19 @@ export function parseChannelPoolConfig(env: Record<string, string | undefined>):
     }
 
     const strategy = readStrategy(env.OPENAI_ROUTING_STRATEGY, 'OPENAI_ROUTING_STRATEGY');
-    const credentials = channelIndexes.flatMap((channelIndex) => parseNumberedChannel(env, channelIndex));
+    const requestModePriority = parseChannelRequestModePriority(
+        env.OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY,
+        'OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY'
+    );
+    const credentials = channelIndexes.flatMap((channelIndex) =>
+        parseNumberedChannel(env, channelIndex, requestModePriority)
+    );
 
     if (credentials.length === 0) {
         throw new RequestValidationError('至少需要配置一个 OPENAI_CHANNEL_N_API_KEYS 值。', 500);
     }
 
-    return { strategy, credentials };
+    return { strategy, credentials, ...(requestModePriority ? { requestModePriority } : {}) };
 }
 
 export function createChannelRouter(options: ChannelRouterOptions): ChannelRouter {
@@ -271,6 +303,50 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
         if (options.requireProbeForRecovery) probeRequiredCredentialIds.add(credential.id);
         return { cooldownApplied: true, cooldownUntil: unhealthyUntil, retryAfterMs: cooldownMs };
     };
+    const selectCredential = (selectOptions: { affinityKey?: string; requestMode?: ChannelRequestMode } = {}) => {
+        const requestMode = selectOptions.requestMode;
+        const candidates = options.credentials.filter((credential) => isHealthyForRequestMode(credential, requestMode));
+        if (candidates.length === 0) {
+            throw new RequestValidationError(
+                requestMode
+                    ? `当前没有支持 ${requestMode} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`
+                    : '当前没有可用的健康渠道凭证。',
+                503
+            );
+        }
+
+        if (options.strategy === 'round_robin') {
+            const credential = selectRoundRobinHealthy(
+                options.credentials,
+                nextIndex,
+                (candidate) => isHealthyForRequestMode(candidate, requestMode),
+                requestMode
+            );
+            nextIndex = credential.nextIndex;
+            return credential.value;
+        }
+
+        if (options.strategy === 'random') {
+            const index = Math.min(Math.floor(random() * candidates.length), candidates.length - 1);
+            return candidates[index];
+        }
+
+        const affinityKey = selectOptions.affinityKey || 'default';
+        const startIndex = stableHash(affinityKey) % options.credentials.length;
+        for (let offset = 0; offset < options.credentials.length; offset += 1) {
+            const credential = options.credentials[(startIndex + offset) % options.credentials.length];
+            if (isHealthyForRequestMode(credential, requestMode)) {
+                return credential;
+            }
+        }
+
+        throw new RequestValidationError(
+            requestMode
+                ? `当前没有支持 ${requestMode} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`
+                : '当前没有可用的健康渠道凭证。',
+            503
+        );
+    };
 
     const clearCredentialRequestModeCooldownsForChannel = (
         channelId: string,
@@ -289,50 +365,48 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
 
     return {
         select(selectOptions = {}) {
-            const requestMode = selectOptions.requestMode;
-            const candidates = options.credentials.filter((credential) =>
-                isHealthyForRequestMode(credential, requestMode)
+            return selectCredential(selectOptions);
+        },
+        selectWithRequestModes(selectOptions) {
+            const requestModes = Array.from(new Set(selectOptions.requestModes));
+            if (requestModes.length === 0) {
+                throw new RequestValidationError('至少需要一个候选请求方式。', 500);
+            }
+            const affinityKey = selectOptions.affinityKey || 'default';
+            const configuredCandidates = options.credentials.filter((credential) =>
+                requestModes.some((mode) => channelSupportsRequestMode(credential, mode))
             );
-            if (candidates.length === 0) {
+            const rankedConfiguredCandidates = getRankedRequestModeCandidates(
+                configuredCandidates,
+                requestModes,
+                options.requestModePriority
+            );
+            const preferredRequestMode = rankedConfiguredCandidates[0]?.requestMode;
+            const rankedHealthyCandidates = rankedConfiguredCandidates.filter((candidate) =>
+                isHealthyForRequestMode(candidate.credential, candidate.requestMode)
+            );
+            if (!preferredRequestMode || rankedHealthyCandidates.length === 0) {
                 throw new RequestValidationError(
-                    requestMode
-                        ? `当前没有支持 ${requestMode} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`
-                        : '当前没有可用的健康渠道凭证。',
+                    `当前没有支持 ${requestModes.join(', ')} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`,
                     503
                 );
             }
 
-            if (options.strategy === 'round_robin') {
-                const credential = selectRoundRobinHealthy(
-                    options.credentials,
-                    nextIndex,
-                    (candidate) => isHealthyForRequestMode(candidate, requestMode),
-                    requestMode
-                );
-                nextIndex = credential.nextIndex;
-                return credential.value;
-            }
-
-            if (options.strategy === 'random') {
-                const index = Math.min(Math.floor(random() * candidates.length), candidates.length - 1);
-                return candidates[index];
-            }
-
-            const affinityKey = selectOptions.affinityKey || 'default';
-            const startIndex = stableHash(affinityKey) % options.credentials.length;
-            for (let offset = 0; offset < options.credentials.length; offset += 1) {
-                const credential = options.credentials[(startIndex + offset) % options.credentials.length];
-                if (isHealthyForRequestMode(credential, requestMode)) {
-                    return credential;
-                }
-            }
-
-            throw new RequestValidationError(
-                requestMode
-                    ? `当前没有支持 ${requestMode} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`
-                    : '当前没有可用的健康渠道凭证。',
-                503
+            const selection = selectRankedRequestModeCandidate(
+                options.credentials,
+                options.strategy,
+                nextIndex,
+                affinityKey,
+                random,
+                rankedHealthyCandidates
             );
+            nextIndex = selection.nextIndex;
+            return {
+                credential: selection.candidate.credential,
+                requestMode: selection.candidate.requestMode,
+                preferredRequestMode,
+                requestModePriority: selection.candidate.requestModePriority
+            };
         },
         reportFailure(credential: ChannelCredential, reportOptions = {}) {
             const currentTime = now();
@@ -541,6 +615,10 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             return {
                 configuredRequestModes: summarizeCredentialRequestModes(options.credentials),
                 effectiveRequestModes: summarizeHealthyRequestModes(options.credentials, isHealthyForRequestMode),
+                defaultRequestModePriority: orderChannelRequestModesByPriority({
+                    requestModes: CHANNEL_REQUEST_MODES,
+                    requestModePriority: options.requestModePriority
+                }),
                 modes: summarizeRequestModeCoverage(options.credentials, isHealthyForRequestMode),
                 effectiveRequestModesByChannel: summarizeHealthyRequestModesByChannel(
                     options.credentials,
@@ -577,6 +655,106 @@ function readCredentialRequestModeKey(value: string):
     const [channelId, credentialId, requestMode] = value.split(REQUEST_MODE_KEY_SEPARATOR);
     if (!channelId || !credentialId || !isChannelRequestMode(requestMode)) return undefined;
     return { channelId, credentialId, requestMode };
+}
+
+function getRankedRequestModeCandidates(
+    credentials: readonly ChannelCredential[],
+    requestModes: readonly ChannelRequestMode[],
+    poolRequestModePriority?: readonly ChannelRequestMode[]
+): RankedRequestModeCandidate[] {
+    const configuredRequestModes = credentials.flatMap((credential) => getEffectiveChannelRequestModes(credential));
+    const poolPriority = orderChannelRequestModesByPriority({
+        requestModes: Array.from(new Set(configuredRequestModes)),
+        ...(poolRequestModePriority ? { requestModePriority: poolRequestModePriority } : {})
+    }).filter((mode) => requestModes.includes(mode));
+    const rankedCandidates = credentials.flatMap((credential, credentialIndex) => {
+        const credentialRequestModes = getEffectiveChannelRequestModes(credential).filter((mode) =>
+            requestModes.includes(mode)
+        );
+        const usesCredentialPriority = Boolean(
+            credential.requestModePriority && credential.requestModePrioritySource !== 'pool'
+        );
+        const requestModePriority = orderChannelRequestModesByPriority({
+            requestModes: credentialRequestModes,
+            ...(usesCredentialPriority && credential.requestModePriority
+                ? { requestModePriority: credential.requestModePriority }
+                : { requestModePriority: poolPriority })
+        });
+        const rankPriority = usesCredentialPriority ? requestModePriority : poolPriority;
+        const sourceRank = usesCredentialPriority
+            ? 0
+            : poolRequestModePriority || credential.requestModePriority
+              ? 1
+              : 2;
+        return requestModePriority.map((requestMode) => ({
+            credential,
+            requestMode,
+            requestModePriority: rankPriority,
+            modeRank: rankPriority.indexOf(requestMode),
+            sourceRank,
+            credentialIndex
+        }));
+    });
+
+    return rankedCandidates
+        .sort((left, right) => {
+            return (
+                left.sourceRank - right.sourceRank ||
+                left.modeRank - right.modeRank ||
+                left.credentialIndex - right.credentialIndex
+            );
+        })
+        .map(({ credential, requestMode, requestModePriority, modeRank, sourceRank }) => ({
+            credential,
+            requestMode,
+            requestModePriority,
+            modeRank,
+            sourceRank
+        }));
+}
+
+function selectRankedRequestModeCandidate(
+    credentials: ChannelCredential[],
+    strategy: RoutingStrategy,
+    nextIndex: number,
+    affinityKey: string,
+    random: () => number,
+    rankedCandidates: readonly RankedRequestModeCandidate[]
+): { candidate: RankedRequestModeCandidate; nextIndex: number } {
+    const [best] = rankedCandidates;
+    if (!best) throw new RequestValidationError('请求方式候选选择失败。', 500);
+    const candidateBucket = rankedCandidates.filter(
+        (candidate) => candidate.sourceRank === best.sourceRank && candidate.modeRank === best.modeRank
+    );
+    const candidateByCredentialId = new Map(candidateBucket.map((candidate) => [candidate.credential.id, candidate]));
+
+    if (strategy === 'round_robin') {
+        const selected = selectRoundRobinHealthy(
+            credentials,
+            nextIndex,
+            (credential) => candidateByCredentialId.has(credential.id),
+            best.requestMode
+        );
+        const candidate = candidateByCredentialId.get(selected.value.id);
+        if (!candidate) throw new RequestValidationError('请求方式候选选择失败。', 500);
+        return { candidate, nextIndex: selected.nextIndex };
+    }
+
+    if (strategy === 'random') {
+        const index = Math.min(Math.floor(random() * candidateBucket.length), candidateBucket.length - 1);
+        const candidate = candidateBucket[index];
+        if (!candidate) throw new RequestValidationError('请求方式候选选择失败。', 500);
+        return { candidate, nextIndex };
+    }
+
+    const startIndex = stableHash(affinityKey) % credentials.length;
+    for (let offset = 0; offset < credentials.length; offset += 1) {
+        const credential = credentials[(startIndex + offset) % credentials.length];
+        const candidate = candidateByCredentialId.get(credential.id);
+        if (candidate) return { candidate, nextIndex };
+    }
+
+    throw new RequestValidationError('请求方式候选选择失败。', 500);
 }
 
 function isChannelRequestMode(value: string | undefined): value is ChannelRequestMode {
@@ -640,6 +818,7 @@ export function getChannelPoolSummary(config: ChannelPoolConfig): ChannelPoolSum
             requestHeaders: ReturnType<typeof summarizeUpstreamRequestHeaders>;
             providerManifest?: ImageProviderManifestSummary;
             requestModes: readonly ChannelRequestMode[];
+            requestModePriority: readonly ChannelRequestMode[];
             credentialCount: number;
         }
     >();
@@ -659,6 +838,10 @@ export function getChannelPoolSummary(config: ChannelPoolConfig): ChannelPoolSum
             requestHeaders: summarizeUpstreamRequestHeaders(credential.upstreamHeaders),
             ...(credential.providerManifest ? { providerManifest: credential.providerManifest } : {}),
             requestModes: getEffectiveChannelRequestModes(credential),
+            requestModePriority: orderChannelRequestModesByPriority({
+                requestModes: getEffectiveChannelRequestModes(credential),
+                requestModePriority: credential.requestModePriority
+            }),
             credentialCount: 1
         });
     });
@@ -667,6 +850,7 @@ export function getChannelPoolSummary(config: ChannelPoolConfig): ChannelPoolSum
         credentialCount: config.credentials.length,
         channelCount: channels.size,
         strategy: config.strategy,
+        ...(config.requestModePriority ? { requestModePriority: config.requestModePriority } : {}),
         channels: Array.from(channels.values())
     };
 }
@@ -689,11 +873,19 @@ function summarizeHealthyRequestModes(
 function summarizeHealthyRequestModesByChannel(
     credentials: ChannelCredential[],
     isHealthyForRequestMode: (credential: ChannelCredential, mode: ChannelRequestMode) => boolean
-): Array<{ channelId: string; requestModes: readonly ChannelRequestMode[] }> {
+): Array<{
+    channelId: string;
+    requestModes: readonly ChannelRequestMode[];
+    requestModePriority: readonly ChannelRequestMode[];
+}> {
     return Array.from(new Set(credentials.map((credential) => credential.channelId))).flatMap((channelId) => {
         const channelCredentials = credentials.filter((credential) => credential.channelId === channelId);
         const requestModes = summarizeHealthyRequestModes(channelCredentials, isHealthyForRequestMode);
-        return requestModes.length ? [{ channelId, requestModes }] : [];
+        const requestModePriority = orderChannelRequestModesByPriority({
+            requestModes,
+            requestModePriority: channelCredentials[0]?.requestModePriority
+        });
+        return requestModes.length ? [{ channelId, requestModes, requestModePriority }] : [];
     });
 }
 
@@ -848,9 +1040,14 @@ function parseLegacyConfig(env: Record<string, string | undefined>): ChannelPool
         throw new RequestValidationError('OPENAI_UPSTREAM_PROFILE 必须是 openai-compatible 或 matsca。', 500);
     }
     const requestModes = parseChannelRequestModes(env.OPENAI_UPSTREAM_REQUEST_MODES, 'OPENAI_UPSTREAM_REQUEST_MODES');
+    const requestModePriority = parseChannelRequestModePriority(
+        env.OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY,
+        'OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY'
+    );
 
     return {
         strategy: DEFAULT_STRATEGY,
+        ...(requestModePriority ? { requestModePriority } : {}),
         credentials: [
             {
                 id: 'default#0',
@@ -862,13 +1059,18 @@ function parseLegacyConfig(env: Record<string, string | undefined>): ChannelPool
                     channelId: 'default',
                     baseUrl
                 }).id,
-                ...(requestModes ? { requestModes } : {})
+                ...(requestModes ? { requestModes } : {}),
+                ...(requestModePriority ? { requestModePriority, requestModePrioritySource: 'pool' as const } : {})
             }
         ]
     };
 }
 
-function parseNumberedChannel(env: Record<string, string | undefined>, channelIndex: number): ChannelCredential[] {
+function parseNumberedChannel(
+    env: Record<string, string | undefined>,
+    channelIndex: number,
+    globalRequestModePriority?: ChannelRequestMode[]
+): ChannelCredential[] {
     const channelId = readOptionalEnv(env, `OPENAI_CHANNEL_${channelIndex}_ID`) || `channel-${channelIndex}`;
     const rawApiKeys = readRequiredEnv(env, `OPENAI_CHANNEL_${channelIndex}_API_KEYS`);
     const baseUrl = normalizeOptionalString(env[`OPENAI_CHANNEL_${channelIndex}_BASE_URL`]);
@@ -881,6 +1083,16 @@ function parseNumberedChannel(env: Record<string, string | undefined>, channelIn
         env[`OPENAI_CHANNEL_${channelIndex}_REQUEST_MODES`],
         `OPENAI_CHANNEL_${channelIndex}_REQUEST_MODES`
     );
+    const channelRequestModePriority = parseChannelRequestModePriority(
+        env[`OPENAI_CHANNEL_${channelIndex}_REQUEST_MODE_PRIORITY`],
+        `OPENAI_CHANNEL_${channelIndex}_REQUEST_MODE_PRIORITY`
+    );
+    validateChannelRequestModePriority({
+        channelIndex,
+        requestModes: getEffectiveChannelRequestModes({ requestModes }),
+        requestModePriority: channelRequestModePriority
+    });
+    const requestModePriority = channelRequestModePriority ?? globalRequestModePriority;
     if (baseUrl) {
         validateApiBaseUrl(baseUrl, {
             allowedPlainHttpBaseUrls: readPlainHttpApiBaseUrlAllowlist(env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS)
@@ -905,8 +1117,29 @@ function parseNumberedChannel(env: Record<string, string | undefined>, channelIn
         ...(providerManifest ? { providerManifest: createProviderManifestSummary(providerManifest) } : {}),
         ...(providerProfile ? { providerProfile } : {}),
         ...(failureCooldownMs ? { failureCooldownMs } : {}),
-        ...(requestModes ? { requestModes } : {})
+        ...(requestModes ? { requestModes } : {}),
+        ...(requestModePriority
+            ? {
+                  requestModePriority,
+                  requestModePrioritySource: channelRequestModePriority ? ('channel' as const) : ('pool' as const)
+              }
+            : {})
     }));
+}
+
+function validateChannelRequestModePriority(options: {
+    channelIndex: number;
+    requestModes: readonly ChannelRequestMode[];
+    requestModePriority?: readonly ChannelRequestMode[];
+}): void {
+    if (!options.requestModePriority?.length) return;
+    const allowed = new Set(options.requestModes);
+    const unsupported = options.requestModePriority.filter((mode) => !allowed.has(mode));
+    if (unsupported.length === 0) return;
+    throw new RequestValidationError(
+        `OPENAI_CHANNEL_${options.channelIndex}_REQUEST_MODE_PRIORITY 只能包含 OPENAI_CHANNEL_${options.channelIndex}_REQUEST_MODES 允许的请求方式：${unsupported.join(', ')} 不在白名单内。`,
+        500
+    );
 }
 
 const DEFAULT_EFFECTIVE_PROFILE_ID: ImageUpstreamProfileId = 'openai-compatible';

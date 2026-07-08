@@ -166,6 +166,7 @@ export async function persistOpenAiImages(options: {
     outputFormat: ValidOutputFormat;
     storageMode: StorageMode;
     includeBase64: boolean;
+    normalizeOutputFormat?: boolean;
     batchId?: string;
     apiBaseUrl?: string;
     apiKey?: string;
@@ -196,7 +197,10 @@ export async function persistOpenAiImages(options: {
         if (!b64Json) {
             throw new MissingOpenAiImageDataError(index, result);
         }
-        const buffer = Buffer.from(b64Json, 'base64');
+        const sourceBuffer = Buffer.from(b64Json, 'base64');
+        const buffer = options.normalizeOutputFormat
+            ? await normalizeImageBuffer(sourceBuffer, options.outputFormat)
+            : sourceBuffer;
         const detectedFormat = detectImageFormat(buffer, options.outputFormat);
         const filename = createImageFilename(batchId, index, detectedFormat.outputFormat);
         const filepath = path.join(outputDir, filename);
@@ -204,11 +208,17 @@ export async function persistOpenAiImages(options: {
             await writeFileAtomic(filepath, buffer);
         }
         const dimensions = readImageDimensions(buffer);
-        const legacyResult = createImageResult(filename, b64Json, detectedFormat.outputFormat, options.storageMode);
+        const persistedB64Json = buffer.toString('base64');
+        const legacyResult = createImageResult(
+            filename,
+            persistedB64Json,
+            detectedFormat.outputFormat,
+            options.storageMode
+        );
         persisted.push({
             filename,
-            b64Json,
-            ...(options.includeBase64 ? { responseJson: b64Json } : {}),
+            b64Json: persistedB64Json,
+            ...(options.includeBase64 ? { responseJson: persistedB64Json } : {}),
             ...(legacyResult.path ? { path: legacyResult.path } : {}),
             outputFormat: detectedFormat.outputFormat,
             filepath,
@@ -220,6 +230,19 @@ export async function persistOpenAiImages(options: {
     }
 
     return persisted;
+}
+
+async function normalizeImageBuffer(buffer: Buffer, outputFormat: ValidOutputFormat): Promise<Buffer> {
+    const detectedFormat = detectImageFormat(buffer, outputFormat);
+    if (detectedFormat.outputFormat === outputFormat) return buffer;
+    const { default: sharp } = await import('sharp');
+    if (outputFormat === 'webp') {
+        return sharp(buffer).webp({ quality: 100 }).toBuffer();
+    }
+    if (outputFormat === 'jpeg') {
+        return sharp(buffer).jpeg({ quality: 100 }).toBuffer();
+    }
+    return sharp(buffer).png().toBuffer();
 }
 
 export function persistedImageToLegacyResponse(image: PersistedOpenAiImage): {

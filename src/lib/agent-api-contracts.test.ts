@@ -261,6 +261,56 @@ describe('validateAgentGenerateRequest', () => {
         );
     });
 
+    it('accepts explicit force_request for locally unsupported gpt-image-2 sizes', () => {
+        const request = validateAgentGenerateRequest({
+            prompt: 'force a small upstream request',
+            model: 'gpt-image-2',
+            size: '512x512',
+            force_request: true
+        });
+
+        assert.equal(request.size, '512x512');
+        assert.equal(request.force_request, true);
+    });
+
+    it('rejects force_request sizes outside non gpt-image-2 model allowlists', () => {
+        assert.throws(
+            () =>
+                validateAgentGenerateRequest({
+                    prompt: 'force a legacy model size',
+                    model: 'gpt-image-1',
+                    size: '512x512',
+                    force_request: true
+                }),
+            (error) => {
+                assert.ok(error instanceof RequestValidationError);
+                assert.equal(error.status, 422);
+                const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                assert.match(details.fields.size, /gpt-image-1.*1024x1024/);
+                return true;
+            }
+        );
+    });
+
+    it('rejects malformed force_request sizes without returning the bad value', () => {
+        assert.throws(
+            () =>
+                validateAgentGenerateRequest({
+                    prompt: 'force a malformed upstream request',
+                    model: 'gpt-image-2',
+                    size: 'wide',
+                    force_request: true
+                }),
+            (error) => {
+                assert.ok(error instanceof RequestValidationError);
+                assert.equal(error.status, 422);
+                const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                assert.match(details.fields.size, /WxH/);
+                return true;
+            }
+        );
+    });
+
     it('rejects gpt-image-2 sizes that are not positive integer dimensions', () => {
         for (const { size, pattern } of [
             { size: '0x512', pattern: /正数/ },
@@ -417,6 +467,30 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.model_limits['gpt-image-2'].max_aspect, 3);
         assert.equal(capabilities.model_limits['gpt-image-2'].size_policy, 'openai-compatible');
         assert.equal(capabilities.model_limits['gpt-image-2'].allow_transparent_background, false);
+        assert.deepEqual(capabilities.force_request_controls, {
+            field: 'force_request',
+            cli_flag: '--force-request',
+            default: false,
+            effect: 'skip_local_upstream_profile_size_and_background_validation',
+            still_enforced: [
+                'authentication',
+                'idempotency_key',
+                'billable_confirmation',
+                'api_base_url_safety',
+                'channel_request_mode_whitelist',
+                'image_count_limits',
+                'partial_image_limits',
+                'non_gpt_image2_size_allowlist',
+                'positive_integer_size_syntax',
+                'upload_file_size_and_type',
+                'mask_integrity_checks'
+            ],
+            intended_for: [
+                'upstream_compatibility_probe',
+                'administrator_confirmed_provider_contract',
+                'requests_where_real_upstream_should_decide'
+            ]
+        });
         assert.deepEqual(capabilities.model_limits['gpt-image-2'].large_image_risk.applies_to, [
             'max_edge>2048',
             'long_running_upstream'
@@ -569,6 +643,10 @@ describe('buildAgentCapabilities', () => {
             source: 'admin_env_whitelist',
             global_env: 'OPENAI_UPSTREAM_REQUEST_MODES',
             channel_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+            global_priority_env: 'OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY',
+            channel_priority_env_pattern: 'OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY',
+            default_priority: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
+            default_priority_policy: 'lowest_cost_first',
             mutable_at_runtime: false,
             agent_client_policy: 'diagnostics_only',
             final_gate_command:
@@ -636,6 +714,7 @@ describe('buildAgentCapabilities', () => {
             {
                 id: 'images',
                 request_modes: ['images-non-stream', 'images-sse'],
+                request_mode_priority: ['images-non-stream', 'images-sse'],
                 request_headers: {
                     user_agent_effective: 'gpt-image-playground/2.1.0',
                     has_extra_headers: false,
@@ -977,6 +1056,7 @@ describe('buildAgentCapabilities', () => {
         assert.equal(generateProperties.responsesModel.maxLength, 128);
         assert.equal(generateProperties.promptOptimization.type, 'boolean');
         assert.equal(generateProperties.force_web.type, 'boolean');
+        assert.equal(generateProperties.force_request.type, 'boolean');
         assert.deepEqual(generateProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
         assert.deepEqual(generateProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
         assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.partial_images, {
@@ -985,13 +1065,29 @@ describe('buildAgentCapabilities', () => {
             maximum: 3,
             default: 2
         });
-        assert.deepEqual(generateProperties.background.enum, ['opaque', 'auto']);
+        assert.deepEqual(generateProperties.background.enum, ['transparent', 'opaque', 'auto']);
+        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[1], {
+            if: {
+                not: {
+                    properties: {
+                        force_request: { const: true }
+                    },
+                    required: ['force_request']
+                }
+            },
+            then: {
+                properties: {
+                    background: { type: 'string', enum: ['opaque', 'auto'] }
+                }
+            }
+        });
         const editProperties: Record<string, unknown> = document.components.schemas.EditRequest.properties;
         assert.equal('image_backend' in editProperties, false);
         assert.equal('output_format' in editProperties, false);
         assert.equal('output_compression' in editProperties, false);
         assert.equal('background' in editProperties, false);
         assert.equal('moderation' in editProperties, false);
+        assert.equal(editProperties.force_request.type, 'boolean');
         assert.deepEqual(editProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
         assert.deepEqual(editProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
         assert.deepEqual(document.components.schemas.EditRequest.required, ['prompt']);

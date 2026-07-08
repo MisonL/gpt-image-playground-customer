@@ -197,7 +197,7 @@ export function describeInvalidImagesResponse(result: unknown): string {
         return 'Responses API 图片后端不可用：上游返回该分组未启用 image_generation。请从该渠道的 OPENAI_CHANNEL_N_REQUEST_MODES 移除 responses-non-stream 和 responses-sse。';
     }
     if (diagnostics.category === 'missing_image_call_result') {
-        return 'Responses API 未返回已完成的 image_generation_call.result 或 url。请检查上游是否只返回 pending/failed 状态；可用 --page-sse --image-backend responses-image-generation --streaming-strategy responses-sse 验证同一上游的流式路径。';
+        return 'Responses API 未返回可消费的 image_generation_call.result 或 url。请检查上游是否只返回文本、pending 或 failed 状态；不要把未返回最终图片的 responses request mode 写入该渠道白名单。';
     }
     if (diagnostics.category === 'url_only_result') {
         return 'API 返回了远程 URL 形式的图片结果，但不是可直接消费的 OpenAI Images b64_json。请让上游返回 b64_json，或返回可由服务端同源下载的 artifact URL。';
@@ -294,7 +294,14 @@ function inspectResponsesImageOutput(result: unknown): UpstreamResponseDiagnosti
             item && typeof item === 'object' && !Array.isArray(item) ? (item as Record<string, unknown>) : undefined
         )
         .filter((item): item is Record<string, unknown> => item?.type === 'image_generation_call');
-    if (imageCalls.length === 0) return undefined;
+    if (imageCalls.length === 0) {
+        return {
+            category: 'missing_image_call_result',
+            structure: summarizeUpstreamResponseStructure(result),
+            diagnostic_hint:
+                'Responses 返回了 output 但没有 image_generation_call，通常表示上游只兼容文本 Responses 而不支持 image_generation。请不要把该 responses request mode 写入渠道白名单。'
+        };
+    }
     if (imageCalls.some((item) => readStatus(item) === 'failed' && readResponsesDisabledMessage(item))) {
         return {
             category: 'responses_disabled',
@@ -318,7 +325,7 @@ function inspectResponsesImageOutput(result: unknown): UpstreamResponseDiagnosti
         category: 'missing_image_call_result',
         structure: summarizeUpstreamResponseStructure(result),
         diagnostic_hint:
-            'Responses 非流式没有 completed result。建议用 --page-sse --image-backend responses-image-generation --streaming-strategy responses-sse 验证同一上游；若 SSE 可用，渠道配置应移除 responses-non-stream。'
+            'Responses 返回了 image_generation_call 但没有 completed result。建议分别验证 responses-non-stream 和 responses-sse；未返回最终图片的 mode 不应写入渠道白名单。'
     };
 }
 

@@ -92,17 +92,22 @@ export async function GET() {
                 effectiveRequestModes:
                     requestModeHealthSummary?.effectiveRequestModes ??
                     (summary.credentialCount > 0 ? CHANNEL_REQUEST_MODES : []),
+                defaultRequestModePriority:
+                    requestModeHealthSummary?.defaultRequestModePriority ??
+                    CHANNEL_REQUEST_MODE_ADMIN_CONTROL.defaultPriority,
                 requestModeControls: CHANNEL_REQUEST_MODE_ADMIN_CONTROL,
                 requestModeHealth: requestModeHealthSummary?.modes ?? [],
                 requestModesByChannel: summary.channels.map((channel) => ({
                     channelId: channel.id,
-                    requestModes: channel.requestModes
+                    requestModes: channel.requestModes,
+                    requestModePriority: channel.requestModePriority
                 })),
                 effectiveRequestModesByChannel:
                     requestModeHealthSummary?.effectiveRequestModesByChannel ??
                     summary.channels.map((channel) => ({
                         channelId: channel.id,
-                        requestModes: channel.requestModes
+                        requestModes: channel.requestModes,
+                        requestModePriority: channel.requestModePriority
                     }))
             },
             upstreamProfile,

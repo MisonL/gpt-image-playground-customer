@@ -1,4 +1,5 @@
 import {
+    DEFAULT_CHANNEL_REQUEST_MODE_PRIORITY as SHARED_DEFAULT_CHANNEL_REQUEST_MODE_PRIORITY,
     CHANNEL_REQUEST_MODES as SHARED_CHANNEL_REQUEST_MODES,
     CHANNEL_REQUEST_MODE_ADMIN_CONTROL as SHARED_CHANNEL_REQUEST_MODE_ADMIN_CONTROL
 } from './channel-request-mode-values.mjs';
@@ -17,6 +18,8 @@ export type ChannelRequestModeBackend = 'images-api' | 'responses-image-generati
 
 export type ChannelRequestModeDecision = {
     requested_backend: ChannelRequestModeBackend;
+    candidate_channel_request_modes?: readonly ChannelRequestMode[];
+    request_mode_priority?: readonly ChannelRequestMode[];
     preferred_channel_request_mode?: ChannelRequestMode;
     fallback_channel_request_mode?: ChannelRequestMode;
     selected_channel_request_mode?: ChannelRequestMode;
@@ -29,6 +32,7 @@ export type ChannelRequestModeDecision = {
 export type ChannelRequestModeHealthSummary = {
     configuredRequestModes: readonly ChannelRequestMode[];
     effectiveRequestModes: readonly ChannelRequestMode[];
+    defaultRequestModePriority: readonly ChannelRequestMode[];
     modes: Array<{
         mode: ChannelRequestMode;
         configuredCredentialCount: number;
@@ -39,14 +43,25 @@ export type ChannelRequestModeHealthSummary = {
     effectiveRequestModesByChannel: Array<{
         channelId: string;
         requestModes: readonly ChannelRequestMode[];
+        requestModePriority: readonly ChannelRequestMode[];
     }>;
 };
 
 export const DEFAULT_CHANNEL_REQUEST_MODES: readonly ChannelRequestMode[] = ['images-non-stream'];
+export const DEFAULT_CHANNEL_REQUEST_MODE_PRIORITY = SHARED_DEFAULT_CHANNEL_REQUEST_MODE_PRIORITY as readonly [
+    'images-non-stream',
+    'images-sse',
+    'responses-non-stream',
+    'responses-sse'
+];
 export const CHANNEL_REQUEST_MODE_ADMIN_CONTROL = SHARED_CHANNEL_REQUEST_MODE_ADMIN_CONTROL as {
     readonly source: 'admin_env_whitelist';
     readonly globalEnv: 'OPENAI_UPSTREAM_REQUEST_MODES';
     readonly channelEnvPattern: 'OPENAI_CHANNEL_N_REQUEST_MODES';
+    readonly globalPriorityEnv: 'OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY';
+    readonly channelPriorityEnvPattern: 'OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY';
+    readonly defaultPriority: readonly ChannelRequestMode[];
+    readonly defaultPriorityPolicy: 'lowest_cost_first';
     readonly mutableAtRuntime: false;
     readonly finalGateCommand: string;
     readonly smokeGateCommands: Record<ChannelRequestMode, readonly string[]>;
@@ -90,10 +105,39 @@ export function parseChannelRequestModes(
     return modes;
 }
 
+export function parseChannelRequestModePriority(
+    value: string | undefined,
+    fieldName: string
+): ChannelRequestMode[] | undefined {
+    return parseChannelRequestModes(value, fieldName);
+}
+
 export function getEffectiveChannelRequestModes(input: {
     requestModes?: readonly ChannelRequestMode[];
 }): readonly ChannelRequestMode[] {
     return input.requestModes?.length ? input.requestModes : DEFAULT_CHANNEL_REQUEST_MODES;
+}
+
+export function orderChannelRequestModesByPriority(input: {
+    requestModes: readonly ChannelRequestMode[];
+    requestModePriority?: readonly ChannelRequestMode[];
+}): ChannelRequestMode[] {
+    const allowed = new Set(input.requestModes);
+    const ordered: ChannelRequestMode[] = [];
+    appendAllowedRequestModes(ordered, allowed, input.requestModePriority ?? []);
+    appendAllowedRequestModes(ordered, allowed, DEFAULT_CHANNEL_REQUEST_MODE_PRIORITY);
+    appendAllowedRequestModes(ordered, allowed, input.requestModes);
+    return ordered;
+}
+
+function appendAllowedRequestModes(
+    ordered: ChannelRequestMode[],
+    allowed: ReadonlySet<ChannelRequestMode>,
+    modes: readonly ChannelRequestMode[]
+): void {
+    for (const mode of modes) {
+        if (allowed.has(mode) && !ordered.includes(mode)) ordered.push(mode);
+    }
 }
 
 export function channelSupportsRequestMode(

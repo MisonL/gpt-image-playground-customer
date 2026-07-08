@@ -46,6 +46,7 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODE_PRIORITY;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED;
@@ -155,6 +156,71 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
             assert.equal(upstreamJson.stream, false);
             assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
             assert.equal(observedIdempotencyKey, 'client-route-stream');
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('passes force_request through page generation and lets upstream decide small sizes', async () => {
+        const { POST } = await import('./route');
+        const upstreamBodies: string[] = [];
+        const upstream = await startImagesJsonUpstream(async (body, _url, request) => {
+            if (request.method === 'POST') {
+                upstreamBodies.push(body);
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'json-force';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'auto',
+                    size: '512x512',
+                    forceRequest: 'true',
+                    clientRequestId: 'force-small-size'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(upstreamBodies.length, 1);
+            const upstreamJson = JSON.parse(upstreamBodies[0] || '{}') as Record<string, unknown>;
+            assert.equal(upstreamJson.size, '512x512');
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('uses the lower-cost non-streaming channel request mode for page auto streaming by default', async () => {
+        const { POST } = await import('./route');
+        const upstreamBodies: string[] = [];
+        const upstream = await startImagesJsonUpstream(async (body, _url, request) => {
+            if (request.method === 'POST') {
+                upstreamBodies.push(body);
+            }
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'mixed';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream,images-sse';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
+            assert.equal(upstreamBodies.length, 1);
+            const upstreamJson = JSON.parse(upstreamBodies[0] || '{}') as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, false);
+            assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
         } finally {
             await upstream.close();
         }
@@ -518,7 +584,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
-    it('falls back from auto streaming without a final image and skips streaming for the same mark', async () => {
+    it('falls back from force-sse auto streaming without a final image and skips streaming for the same mark', async () => {
         const { POST } = await import('./route');
         const { getServerChannelState } = await import('@/lib/server-channel-router');
         const upstream = await startImagesStreamFallbackUpstream();
@@ -530,6 +596,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     streamMode: 'auto',
+                    imageStreamingStrategy: 'force-sse',
                     clientRequestId: 'client-route-auto-fallback-1'
                 })
             );
@@ -553,6 +620,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     streamMode: 'auto',
+                    imageStreamingStrategy: 'force-sse',
                     clientRequestId: 'client-route-auto-fallback-2'
                 })
             );
@@ -571,6 +639,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: otherUpstream.baseUrl,
                     apiKey: 'test-key',
                     streamMode: 'auto',
+                    imageStreamingStrategy: 'force-sse',
                     clientRequestId: 'client-route-auto-fallback-3'
                 })
             );
@@ -588,7 +657,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
-    it('retries accepted async image tasks after auto stream fallback with the same idempotency key', async () => {
+    it('retries accepted async image tasks after force-sse auto stream fallback with the same idempotency key', async () => {
         const { POST } = await import('./route');
         const upstream = await startImagesAcceptedTaskStreamFallbackUpstream();
 
@@ -598,6 +667,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     streamMode: 'auto',
+                    imageStreamingStrategy: 'force-sse',
                     clientRequestId: 'client-route-auto-fallback-task'
                 })
             );
@@ -627,7 +697,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
         }
     });
 
-    it('does not mark auto streaming unavailable when the page SSE request is aborted', async () => {
+    it('does not mark force-sse auto streaming unavailable when the page SSE request is aborted', async () => {
         const { POST } = await import('./route');
         const { getServerChannelState } = await import('@/lib/server-channel-router');
         const upstream = await startHangingImagesStreamUpstream();
@@ -639,6 +709,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
                     streamMode: 'auto',
+                    imageStreamingStrategy: 'force-sse',
                     clientRequestId: 'client-route-auto-abort',
                     signal: abortController.signal
                 })
@@ -2142,6 +2213,7 @@ describe('POST /api/images streaming', { concurrency: false }, () => {
                     apiKey: 'test-key',
                     mode: 'edit',
                     streamMode: 'auto',
+                    imageStreamingStrategy: 'force-sse',
                     imageBackend: 'responses'
                 })
             );

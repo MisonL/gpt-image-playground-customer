@@ -81,12 +81,14 @@ type StreamResolution = {
 type ChannelRequestModePlan = {
     preferred: ChannelRequestMode;
     fallback?: ChannelRequestMode;
+    candidates: readonly ChannelRequestMode[];
 };
 
 type PageChannelSelection = {
     selectedCredential?: ChannelCredential;
     requestMode: ChannelRequestMode;
     forcedNonStream: boolean;
+    fallbackApplied: boolean;
 };
 
 function readErrorStatus(error: unknown): number | undefined {
@@ -198,13 +200,17 @@ function resolvePageChannelRequestModePlan(input: {
     streamingStrategy: ImageStreamingStrategy;
 }): ChannelRequestModePlan {
     if (input.streamMode === 'non_stream') {
+        const preferred = resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false });
         return {
-            preferred: resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false })
+            preferred,
+            candidates: [preferred]
         };
     }
     if (input.streamMode === 'auto' && input.streamingStrategy === 'off') {
+        const preferred = resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false });
         return {
-            preferred: resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false })
+            preferred,
+            candidates: [preferred]
         };
     }
     const preferred = resolveChannelRequestMode({
@@ -216,11 +222,16 @@ function resolvePageChannelRequestModePlan(input: {
         })
     });
     if (input.streamMode !== 'auto' || !isStreamingChannelRequestMode(preferred)) {
-        return { preferred };
+        return { preferred, candidates: [preferred] };
     }
+    if (input.streamingStrategy !== 'auto') {
+        return { preferred, candidates: [preferred] };
+    }
+    const fallback = resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false });
     return {
-        preferred,
-        fallback: resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false })
+        preferred: fallback,
+        fallback: preferred,
+        candidates: [fallback, preferred]
     };
 }
 
@@ -229,6 +240,18 @@ function selectPageServerCredential(input: {
     affinityKey: string;
     plan: ChannelRequestModePlan;
 }): PageChannelSelection {
+    if (input.plan.candidates.length > 1) {
+        const selection = input.router.selectWithRequestModes({
+            affinityKey: input.affinityKey,
+            requestModes: input.plan.candidates
+        });
+        return {
+            selectedCredential: selection.credential,
+            requestMode: selection.requestMode,
+            forcedNonStream: !isStreamingChannelRequestMode(selection.requestMode),
+            fallbackApplied: selection.requestMode !== selection.preferredRequestMode
+        };
+    }
     try {
         return {
             selectedCredential: input.router.select({
@@ -236,7 +259,8 @@ function selectPageServerCredential(input: {
                 requestMode: input.plan.preferred
             }),
             requestMode: input.plan.preferred,
-            forcedNonStream: false
+            forcedNonStream: !isStreamingChannelRequestMode(input.plan.preferred),
+            fallbackApplied: false
         };
     } catch (error) {
         if (!input.plan.fallback || !(error instanceof RequestValidationError)) {
@@ -248,7 +272,8 @@ function selectPageServerCredential(input: {
                 requestMode: input.plan.fallback
             }),
             requestMode: input.plan.fallback,
-            forcedNonStream: true
+            forcedNonStream: true,
+            fallbackApplied: true
         };
     }
 }
@@ -338,6 +363,20 @@ function reportPersistDiagnosticsFailure(input: {
     );
 }
 
+function readBooleanAlias(formData: FormData, ...fields: string[]): boolean | undefined {
+    for (const field of fields) {
+        const value = formData.get(field);
+        if (value === null || value === '') continue;
+        if (typeof value !== 'string') {
+            throw new RequestValidationError(`${field} 必须是 true 或 false。`);
+        }
+        if (value === 'true') return true;
+        if (value === 'false') return false;
+        throw new RequestValidationError(`${field} 必须是 true 或 false。`);
+    }
+    return undefined;
+}
+
 export async function POST(request: NextRequest) {
     let selectedServerCredential: ChannelCredential | undefined;
     let selectedServerRequestMode: ChannelRequestMode | undefined;
@@ -375,7 +414,8 @@ export async function POST(request: NextRequest) {
                 ? {
                       selectedCredential: undefined,
                       requestMode: requestModePlan.preferred,
-                      forcedNonStream: false
+                      forcedNonStream: !isStreamingChannelRequestMode(requestModePlan.preferred),
+                      fallbackApplied: false
                   }
                 : selectPageServerCredential({
                       router: serverChannelRouter,
@@ -412,7 +452,7 @@ export async function POST(request: NextRequest) {
                 {
                     ...requestLogContext,
                     channelRequestMode: channelSelection.requestMode,
-                    channelRequestModeFallbackApplied: channelSelection.forcedNonStream
+                    channelRequestModeFallbackApplied: channelSelection.fallbackApplied
                 }
             );
         }
@@ -462,6 +502,7 @@ export async function POST(request: NextRequest) {
         const mode = readMode(formData);
         const prompt = readRequiredText(formData, 'prompt');
         const model = readModel(formData);
+        const forceRequest = readBooleanAlias(formData, 'force_request', 'forceRequest') === true;
         const upstreamStartedAtMs = Date.now();
 
         appLogger.info(`开始处理图片请求。模式：${mode}，模型：${model}`, requestLogContext);
@@ -501,7 +542,7 @@ export async function POST(request: NextRequest) {
             streamFallbackEnabled: streamResolution.streamFallbackEnabled,
             streamingMarkedUnavailable: streamResolution.streamingMarkedUnavailable,
             channelRequestMode: channelSelection.requestMode,
-            channelRequestModeFallbackApplied: channelSelection.forcedNonStream,
+            channelRequestModeFallbackApplied: channelSelection.fallbackApplied,
             upstreamProfile: upstreamProfile.id,
             upstreamExtraHeaders: Boolean(upstreamHeaders)
         });
@@ -543,6 +584,7 @@ export async function POST(request: NextRequest) {
                       selectedCredential,
                       channelRequestMode: channelSelection.requestMode,
                       accessCookie,
+                      forceRequest,
                       abortSignal: request.signal,
                       streamFallbackEnabled: streamResolution.streamFallbackEnabled,
                       onStreamUnavailable: (error, reason) =>
@@ -574,6 +616,7 @@ export async function POST(request: NextRequest) {
                       selectedCredential,
                       channelRequestMode: channelSelection.requestMode,
                       accessCookie,
+                      forceRequest,
                       abortSignal: request.signal,
                       streamFallbackEnabled: streamResolution.streamFallbackEnabled,
                       onStreamUnavailable: (error, reason) =>

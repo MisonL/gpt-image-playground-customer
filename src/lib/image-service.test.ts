@@ -11,6 +11,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type OpenAI from 'openai';
 
+const PNG_BASE64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+
 describe('readAcceptedImageTaskDetails', () => {
     it('extracts task metadata from async upstream image payloads', () => {
         assert.deepEqual(
@@ -54,6 +57,24 @@ describe('assertOpenAiImagesResponse', () => {
 });
 
 describe('persistOpenAiImages', () => {
+    it('normalizes upstream image bytes to the requested output format before returning base64', async () => {
+        const [image] = await persistOpenAiImages({
+            result: { data: [{ b64_json: PNG_BASE64 }] } as OpenAI.Images.ImagesResponse,
+            outputFormat: 'webp',
+            storageMode: 'indexeddb',
+            includeBase64: true,
+            normalizeOutputFormat: true
+        });
+
+        assert.equal(image.outputFormat, 'webp');
+        assert.equal(image.mimeType, 'image/webp');
+        assert.equal(image.filename.endsWith('.webp'), true);
+        assert.equal(image.width, 1);
+        assert.equal(image.height, 1);
+        assert.equal(Buffer.from(image.b64Json, 'base64').toString('ascii', 8, 12), 'WEBP');
+        assert.equal(Buffer.from(image.responseJson ?? '', 'base64').toString('ascii', 8, 12), 'WEBP');
+    });
+
     it('preserves the upstream response on missing image data errors', async () => {
         const result = {
             data: [{ status: 'done' }]

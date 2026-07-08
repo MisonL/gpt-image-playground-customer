@@ -28,6 +28,7 @@ export function imageFormRequest(input: {
     gptModel?: string;
     thinking?: string;
     forceWeb?: string;
+    forceRequest?: string;
     mask?: File;
     clientRequestId?: string;
     signal?: AbortSignal;
@@ -63,6 +64,9 @@ export function imageFormRequest(input: {
     }
     if (input.forceWeb) {
         formData.append('forceWeb', input.forceWeb);
+    }
+    if (input.forceRequest) {
+        formData.append('force_request', input.forceRequest);
     }
     if (input.imageBackend) {
         formData.append(input.imageBackendField || 'imageBackend', input.imageBackend);

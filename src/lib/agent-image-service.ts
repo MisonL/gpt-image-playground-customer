@@ -186,6 +186,7 @@ const AGENT_EDIT_UNSUPPORTED_FIELDS = [
     'background',
     'moderation'
 ] as const;
+const AGENT_EDIT_OUTPUT_FORMAT = 'webp' satisfies ValidOutputFormat;
 
 const HTTP_HEADER_VALUE_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -281,7 +282,9 @@ export async function agentBeginResultResponse(
 
 export function prepareAgentGenerate(request: AgentGenerateRequest, headers: Headers): AgentGeneratePreparation {
     const credentialContext = createOpenAiClient(headers, resolveAgentGenerateChannelRequestModePlan(request));
-    validateAgentGenerateAgainstUpstreamProfile(request, credentialContext.upstreamProfile);
+    validateAgentGenerateAgainstUpstreamProfile(request, credentialContext.upstreamProfile, {
+        forceRequest: request.force_request === true
+    });
     return { credentialContext };
 }
 
@@ -304,6 +307,7 @@ function resolveAgentEditChannelRequestModePlan(formData: FormData): AgentChanne
 export async function prepareAgentEdit(formData: FormData, headers: Headers): Promise<AgentEditPreparation> {
     const prompt = readRequiredText(formData, 'prompt');
     const model = readModel(formData);
+    const forceRequest = readAgentEditForceRequest(formData);
     assertImageFilesPresent(formData);
     const credentialContext = createOpenAiClient(headers, resolveAgentEditChannelRequestModePlan(formData));
     const n = readCount(
@@ -313,13 +317,9 @@ export async function prepareAgentEdit(formData: FormData, headers: Headers): Pr
         credentialContext.upstreamProfile.editCount.min,
         credentialContext.upstreamProfile.editCount.max
     );
-    const size = readSize(
-        formData,
-        'size',
-        'auto',
-        model,
-        credentialContext.upstreamProfile
-    ) as OpenAI.Images.ImageEditParams['size'];
+    const size = readSize(formData, 'size', 'auto', model, credentialContext.upstreamProfile, {
+        forceRequest
+    }) as OpenAI.Images.ImageEditParams['size'];
     const quality = readEditQuality(formData) as OpenAI.Images.ImageEditParams['quality'];
     const responseMode = readAgentResponseModeFromForm(formData);
     const streamRequest = readAgentEditStreamRequest(formData, credentialContext.upstreamProfile);
@@ -327,6 +327,17 @@ export async function prepareAgentEdit(formData: FormData, headers: Headers): Pr
     const maskFile = readMaskFile(formData, credentialContext.upstreamProfile);
     await assertMaskCompatibility(maskFile, imageFiles);
     return { credentialContext, prompt, model, n, size, quality, responseMode, streamRequest, imageFiles, maskFile };
+}
+
+function readAgentEditForceRequest(formData: FormData): boolean {
+    const value = formData.get('force_request') ?? formData.get('forceRequest');
+    if (value === null || value === '') return false;
+    if (typeof value !== 'string') {
+        throw new RequestValidationError('force_request 必须是 true 或 false。');
+    }
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    throw new RequestValidationError('force_request 必须是 true 或 false。');
 }
 
 function buildOpenAiRequestOptions(
@@ -562,7 +573,8 @@ async function executeAgentGenerateUpstream(
 
 function validateAgentGenerateAgainstUpstreamProfile(
     request: AgentGenerateRequest,
-    upstreamProfile: ImageUpstreamProfile
+    upstreamProfile: ImageUpstreamProfile,
+    options: { forceRequest?: boolean } = {}
 ): void {
     if (request.n < upstreamProfile.generateCount.min || request.n > upstreamProfile.generateCount.max) {
         throw new RequestValidationError(
@@ -579,6 +591,7 @@ function validateAgentGenerateAgainstUpstreamProfile(
             422
         );
     }
+    if (options.forceRequest) return;
     if (
         request.model === 'gpt-image-2' &&
         request.background === 'transparent' &&
@@ -794,11 +807,7 @@ export async function executeAgentEdit(options: {
                           .withResponse(),
                   {
                       abortSignal: options.abortSignal,
-                      onAcceptedTask: onAgentAcceptedImageTask(
-                          activeCredentialContext,
-                          'edit',
-                          options.idempotencyKey
-                      )
+                      onAcceptedTask: onAgentAcceptedImageTask(activeCredentialContext, 'edit', options.idempotencyKey)
                   }
               );
         channelLease?.release();
@@ -809,8 +818,9 @@ export async function executeAgentEdit(options: {
             mode: 'edit',
             model: preparation.model,
             prompt: preparation.prompt,
-            outputFormat: 'png',
+            outputFormat: AGENT_EDIT_OUTPUT_FORMAT,
             responseMode: preparation.responseMode,
+            normalizeOutputFormat: true,
             requestId: options.requestId,
             idempotencyKey: options.idempotencyKey,
             cached: options.cached,
@@ -1203,6 +1213,7 @@ async function persistOpenAiImages(options: {
     prompt: string;
     outputFormat: ValidOutputFormat;
     responseMode: AgentResponseMode;
+    normalizeOutputFormat?: boolean;
     requestId: string;
     idempotencyKey: string;
     cached: boolean;
@@ -1219,6 +1230,7 @@ async function persistOpenAiImages(options: {
             outputFormat: options.outputFormat,
             storageMode: 'fs',
             includeBase64: shouldIncludeBase64(options.responseMode),
+            normalizeOutputFormat: options.normalizeOutputFormat,
             apiBaseUrl: options.apiBaseUrl,
             apiKey: options.apiKey,
             upstreamHeaders: options.upstreamHeaders,

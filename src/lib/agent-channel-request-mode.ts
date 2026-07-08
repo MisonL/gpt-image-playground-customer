@@ -20,11 +20,14 @@ export type AgentChannelRequestModePlan = {
     imageBackend: ChannelRequestModeBackend;
     preferred: ChannelRequestMode;
     fallback?: ChannelRequestMode;
+    candidates: readonly ChannelRequestMode[];
 };
 
 export type AgentChannelSelection = {
     selectedCredential?: ChannelCredential;
     requestMode: ChannelRequestMode;
+    preferredRequestMode?: ChannelRequestMode;
+    requestModePriority?: readonly ChannelRequestMode[];
     fallbackApplied: boolean;
     noChannelReason?: string;
 };
@@ -39,12 +42,17 @@ export function createAgentChannelRequestModePlan(input: {
         streamEnabled: resolveStaticAgentStreamEnabled(input)
     });
     if (input.streamMode !== 'auto' || !isStreamingChannelRequestMode(preferred)) {
-        return { imageBackend: input.imageBackend, preferred };
+        return { imageBackend: input.imageBackend, preferred, candidates: [preferred] };
     }
+    if (input.streamingStrategy !== 'auto') {
+        return { imageBackend: input.imageBackend, preferred, candidates: [preferred] };
+    }
+    const fallback = resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false });
     return {
         imageBackend: input.imageBackend,
-        preferred,
-        fallback: resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false })
+        preferred: fallback,
+        fallback: preferred,
+        candidates: [fallback, preferred]
     };
 }
 
@@ -53,6 +61,23 @@ export function selectAgentChannelCredential(input: {
     headers: Headers;
     requestModePlan: AgentChannelRequestModePlan;
 }): AgentChannelSelection {
+    if (input.requestModePlan.candidates.length > 1 && input.router) {
+        try {
+            const selection = input.router.selectWithRequestModes({
+                affinityKey: readAffinityKey(input.headers),
+                requestModes: input.requestModePlan.candidates
+            });
+            return {
+                selectedCredential: selection.credential,
+                requestMode: selection.requestMode,
+                preferredRequestMode: selection.preferredRequestMode,
+                requestModePriority: selection.requestModePriority,
+                fallbackApplied: selection.requestMode !== selection.preferredRequestMode
+            };
+        } catch (error) {
+            throw normalizeChannelSelectionError(error, input.requestModePlan, false);
+        }
+    }
     try {
         return selectAgentChannelForMode(input, input.requestModePlan.preferred, false);
     } catch (error) {
@@ -74,10 +99,18 @@ export function buildAgentChannelRequestModeDecision(input: {
     upstreamHost?: string;
 }): ChannelRequestModeDecision {
     const selectedChannelId = input.selectedCredential?.channelId ?? input.selection.selectedCredential?.channelId;
+    const preferredRequestMode = input.selection.preferredRequestMode ?? input.requestModePlan.preferred;
+    const requestModePriority = input.selection.requestModePriority ?? [
+        preferredRequestMode,
+        ...input.requestModePlan.candidates.filter((mode) => mode !== preferredRequestMode)
+    ];
+    const fallbackRequestMode = input.requestModePlan.candidates.find((mode) => mode !== preferredRequestMode);
     return {
         requested_backend: input.requestModePlan.imageBackend,
-        preferred_channel_request_mode: input.requestModePlan.preferred,
-        ...(input.requestModePlan.fallback ? { fallback_channel_request_mode: input.requestModePlan.fallback } : {}),
+        candidate_channel_request_modes: input.requestModePlan.candidates,
+        request_mode_priority: requestModePriority,
+        preferred_channel_request_mode: preferredRequestMode,
+        ...(fallbackRequestMode ? { fallback_channel_request_mode: fallbackRequestMode } : {}),
         selected_channel_request_mode: input.selection.requestMode,
         fallback_applied: input.selection.fallbackApplied,
         ...(selectedChannelId ? { selected_channel_id: selectedChannelId } : {}),
@@ -114,6 +147,8 @@ function selectAgentChannelForMode(
             requestMode
         }),
         requestMode,
+        preferredRequestMode: requestMode,
+        requestModePriority: [requestMode],
         fallbackApplied
     };
 }

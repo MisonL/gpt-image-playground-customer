@@ -152,6 +152,7 @@ export type AgentGenerateRequest = {
     thinking?: 'minimal' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
     promptOptimization?: boolean;
     force_web?: boolean;
+    force_request?: boolean;
 };
 
 export type AgentImageResponseItem = {
@@ -243,6 +244,7 @@ export type AgentCapabilities = {
         channels: Array<{
             id: string;
             request_modes: readonly ChannelRequestMode[];
+            request_mode_priority: readonly ChannelRequestMode[];
             request_headers: UpstreamRequestHeaderSummary;
         }>;
     };
@@ -250,6 +252,10 @@ export type AgentCapabilities = {
         source: 'admin_env_whitelist';
         global_env: string;
         channel_env_pattern: string;
+        global_priority_env: string;
+        channel_priority_env_pattern: string;
+        default_priority: readonly ChannelRequestMode[];
+        default_priority_policy: 'lowest_cost_first';
         mutable_at_runtime: false;
         agent_client_policy: 'diagnostics_only';
         final_gate_command: string;
@@ -276,6 +282,14 @@ export type AgentCapabilities = {
         partial_images_by_backend: Record<ImageGenerationBackend, { min: number; max: number }>;
         upstream_profile: ImageUpstreamProfileId;
         upstream_profile_mixed: boolean;
+    };
+    force_request_controls: {
+        field: 'force_request';
+        cli_flag: '--force-request';
+        default: false;
+        effect: 'skip_local_upstream_profile_size_and_background_validation';
+        still_enforced: readonly string[];
+        intended_for: readonly string[];
     };
     model_limits: {
         'gpt-image-2': {
@@ -515,7 +529,8 @@ function readSize(
     model: GptImageModel,
     fields: FieldErrors,
     fallback: string,
-    upstreamProfile: Pick<ImageUpstreamProfile, 'gptImage2'>
+    upstreamProfile: Pick<ImageUpstreamProfile, 'gptImage2'>,
+    options: { forceRequest?: boolean } = {}
 ): string {
     const value = readStringField(body, 'size', fallback);
     if (!value) {
@@ -530,14 +545,15 @@ function readSize(
         const match = /^(\d+)x(\d+)$/.exec(value);
         if (!match) {
             fields.size = '必须是 auto 或 WxH 格式的尺寸值';
-            return value;
+            return fallback;
         }
         const validation =
-            upstreamProfile.gptImage2.sizePolicy === 'positive-integer'
+            options.forceRequest || upstreamProfile.gptImage2.sizePolicy === 'positive-integer'
                 ? validatePositiveIntegerImageSize(Number(match[1]), Number(match[2]))
                 : validateGptImage2Size(Number(match[1]), Number(match[2]));
         if (!validation.valid) {
             fields.size = validation.reason;
+            return fallback;
         }
     }
     return value;
@@ -760,7 +776,10 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const model = readModel(objectBody, fields);
     const prompt = validatePrompt(objectBody.prompt, fields);
     const n = readIntegerField(objectBody, 'n', 1, 1, MAX_IMAGE_COUNT, fields);
-    const size = readSize(objectBody, model, fields, '1024x1024', upstreamLimits.profile);
+    const forceRequest = readOptionalBooleanField(objectBody, 'force_request', fields);
+    const size = readSize(objectBody, model, fields, '1024x1024', upstreamLimits.profile, {
+        forceRequest: forceRequest === true
+    });
     const quality = readQuality(objectBody, fields);
     const outputFormat = readOutputFormat(objectBody, fields);
     const outputCompression = readOutputCompression(objectBody, outputFormat, fields);
@@ -799,7 +818,8 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
         ...(responsesModel ? { responsesModel } : {}),
         ...(thinking ? { thinking } : {}),
         ...(promptOptimization !== undefined ? { promptOptimization } : {}),
-        ...(forceWeb !== undefined ? { force_web: forceWeb } : {})
+        ...(forceWeb !== undefined ? { force_web: forceWeb } : {}),
+        ...(forceRequest !== undefined ? { force_request: forceRequest } : {})
     };
 }
 
@@ -1022,6 +1042,30 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             partial_images_by_backend: partialImagesByBackend,
             upstream_profile: upstreamLimits.profile.id,
             upstream_profile_mixed: upstreamLimits.summary.serverProfileMixed
+        },
+        force_request_controls: {
+            field: 'force_request',
+            cli_flag: '--force-request',
+            default: false,
+            effect: 'skip_local_upstream_profile_size_and_background_validation',
+            still_enforced: [
+                'authentication',
+                'idempotency_key',
+                'billable_confirmation',
+                'api_base_url_safety',
+                'channel_request_mode_whitelist',
+                'image_count_limits',
+                'partial_image_limits',
+                'non_gpt_image2_size_allowlist',
+                'positive_integer_size_syntax',
+                'upload_file_size_and_type',
+                'mask_integrity_checks'
+            ],
+            intended_for: [
+                'upstream_compatibility_probe',
+                'administrator_confirmed_provider_contract',
+                'requests_where_real_upstream_should_decide'
+            ]
         },
         model_limits: {
             'gpt-image-2': {
@@ -1254,6 +1298,10 @@ function buildAgentRequestModeControlsCapabilities(): AgentCapabilities['request
         source: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.source,
         global_env: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.globalEnv,
         channel_env_pattern: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.channelEnvPattern,
+        global_priority_env: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.globalPriorityEnv,
+        channel_priority_env_pattern: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.channelPriorityEnvPattern,
+        default_priority: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.defaultPriority,
+        default_priority_policy: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.defaultPriorityPolicy,
         mutable_at_runtime: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.mutableAtRuntime,
         agent_client_policy: 'diagnostics_only',
         final_gate_command: CHANNEL_REQUEST_MODE_ADMIN_CONTROL.finalGateCommand,
@@ -1270,6 +1318,7 @@ function buildAgentUpstreamRequestHeadersCapabilities(
         channels: channelSummary.channels.map((channel) => ({
             id: channel.id,
             request_modes: channel.requestModes,
+            request_mode_priority: channel.requestModePriority,
             request_headers: channel.requestHeaders
         }))
     };

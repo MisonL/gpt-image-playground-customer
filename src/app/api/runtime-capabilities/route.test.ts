@@ -34,12 +34,14 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST;
     delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODE_PRIORITY;
     delete process.env.OPENAI_CHANNEL_2_ID;
     delete process.env.OPENAI_CHANNEL_2_API_KEYS;
     delete process.env.OPENAI_CHANNEL_2_BASE_URL;
     delete process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST;
     delete process.env.OPENAI_CHANNEL_2_REQUEST_MODES;
+    delete process.env.OPENAI_CHANNEL_2_REQUEST_MODE_PRIORITY;
     delete process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED;
     delete process.env.OPENAI_CHANNEL_QUEUE_ENABLED;
     delete process.env.OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS;
@@ -453,6 +455,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                 requestModeControls: {
                     globalEnv: string;
                     channelEnvPattern: string;
+                    globalPriorityEnv: string;
+                    channelPriorityEnvPattern: string;
+                    defaultPriority: string[];
+                    defaultPriorityPolicy: string;
                     mutableAtRuntime: boolean;
                     smokeGateCommands: Record<string, string[]>;
                 };
@@ -466,10 +472,12 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                 requestModesByChannel: Array<{
                     channelId: string;
                     requestModes: string[];
+                    requestModePriority: string[];
                 }>;
                 effectiveRequestModesByChannel: Array<{
                     channelId: string;
                     requestModes: string[];
+                    requestModePriority: string[];
                 }>;
             };
         };
@@ -481,10 +489,15 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             supportedRequestModes: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
             configuredRequestModes: ['images-non-stream', 'images-sse'],
             effectiveRequestModes: ['images-non-stream', 'images-sse'],
+            defaultRequestModePriority: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
             requestModeControls: {
                 source: 'admin_env_whitelist',
                 globalEnv: 'OPENAI_UPSTREAM_REQUEST_MODES',
                 channelEnvPattern: 'OPENAI_CHANNEL_N_REQUEST_MODES',
+                globalPriorityEnv: 'OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY',
+                channelPriorityEnvPattern: 'OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY',
+                defaultPriority: ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'],
+                defaultPriorityPolicy: 'lowest_cost_first',
                 mutableAtRuntime: false,
                 finalGateCommand:
                     'npm run smoke:image-upstream-real -- --env-file-if-exists .env.real-smoke.local --require-independent-targets --allow-billable',
@@ -536,13 +549,15 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             requestModesByChannel: [
                 {
                     channelId: 'images',
-                    requestModes: ['images-non-stream', 'images-sse']
+                    requestModes: ['images-non-stream', 'images-sse'],
+                    requestModePriority: ['images-non-stream', 'images-sse']
                 }
             ],
             effectiveRequestModesByChannel: [
                 {
                     channelId: 'images',
-                    requestModes: ['images-non-stream', 'images-sse']
+                    requestModes: ['images-non-stream', 'images-sse'],
+                    requestModePriority: ['images-non-stream', 'images-sse']
                 }
             ]
         });
@@ -566,6 +581,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                 requestModesByChannel: Array<{
                     channelId: string;
                     requestModes: string[];
+                    requestModePriority: string[];
                 }>;
             };
         };
@@ -575,7 +591,8 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.deepEqual(body.channelRouting.requestModesByChannel, [
             {
                 channelId: 'default',
-                requestModes: ['images-non-stream']
+                requestModes: ['images-non-stream'],
+                requestModePriority: ['images-non-stream']
             }
         ]);
         assert.deepEqual(

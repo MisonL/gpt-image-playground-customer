@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Pool } from 'pg';
 
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const PNG_CONVERTIBLE_BASE64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
 
 let originalEnv: NodeJS.ProcessEnv;
 let originalCwd = '';
@@ -54,6 +56,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
     delete process.env.OPENAI_UPSTREAM_REQUEST_MODES;
+    delete process.env.OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY;
     delete process.env.OPENAI_UPSTREAM_USER_AGENT;
     delete process.env.UPSTREAM_USER_AGENT;
     delete process.env.OPENAI_CHANNEL_1_ID;
@@ -61,6 +64,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
+    delete process.env.OPENAI_CHANNEL_1_REQUEST_MODE_PRIORITY;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_1_USER_AGENT;
@@ -70,6 +74,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_CHANNEL_2_BASE_URL;
     delete process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE;
     delete process.env.OPENAI_CHANNEL_2_REQUEST_MODES;
+    delete process.env.OPENAI_CHANNEL_2_REQUEST_MODE_PRIORITY;
     delete process.env.OPENAI_CHANNEL_2_MATSCA_APP_ID;
     delete process.env.OPENAI_CHANNEL_2_MATSCA_APP_SECRET;
     delete process.env.OPENAI_CHANNEL_2_USER_AGENT;
@@ -151,6 +156,7 @@ describe('Agent route integration', () => {
             {
                 id: 'matsca',
                 request_modes: ['images-non-stream'],
+                request_mode_priority: ['images-non-stream'],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -190,6 +196,31 @@ describe('Agent route integration', () => {
         });
     });
 
+    it('reports global request mode priority in deployed capabilities', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = 'https://upstream.example.com/v1';
+        process.env.OPENAI_UPSTREAM_REQUEST_MODES = 'images-non-stream,images-sse';
+        process.env.OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY = 'images-sse,images-non-stream';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.deepEqual(body.upstream_request_headers.channels, [
+            {
+                id: 'default',
+                request_modes: ['images-non-stream', 'images-sse'],
+                request_mode_priority: ['images-sse', 'images-non-stream'],
+                request_headers: {
+                    user_agent_effective: 'gpt-image-playground/2.1.0',
+                    has_extra_headers: false,
+                    allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
+                    configured_header_names: []
+                }
+            }
+        ]);
+    });
+
     it('reports Matsca channel limits from the deployed runtime environment without leaking secrets', async () => {
         const { getCapabilities } = await loadAgentRoutes();
         process.env.OPENAI_CHANNEL_1_ID = 'matsca';
@@ -220,6 +251,7 @@ describe('Agent route integration', () => {
             {
                 id: 'matsca',
                 request_modes: ['images-non-stream'],
+                request_mode_priority: ['images-non-stream'],
                 request_headers: {
                     user_agent_effective: 'configured',
                     has_extra_headers: true,
@@ -270,6 +302,8 @@ describe('Agent route integration', () => {
             assert.equal(firstBody.execution.channel_request_mode_fallback_applied, false);
             assert.deepEqual(firstBody.execution.route_decision, {
                 requested_backend: 'images-api',
+                candidate_channel_request_modes: ['images-non-stream'],
+                request_mode_priority: ['images-non-stream'],
                 preferred_channel_request_mode: 'images-non-stream',
                 selected_channel_request_mode: 'images-non-stream',
                 fallback_applied: false,
@@ -361,7 +395,10 @@ describe('Agent route integration', () => {
             const body = await response.json();
             assert.equal(body.cached, false);
             assert.equal(body.images[0].b64_json, PNG_BASE64);
-            assert.deepEqual(upstreamIdempotencyKeys, ['agent-route-accepted-task-key', 'agent-route-accepted-task-key']);
+            assert.deepEqual(upstreamIdempotencyKeys, [
+                'agent-route-accepted-task-key',
+                'agent-route-accepted-task-key'
+            ]);
             assert.equal(upstreamCalls, 2);
         } finally {
             await upstream.close();
@@ -471,7 +508,7 @@ describe('Agent route integration', () => {
         }
     });
 
-    it('uses Agent auto stream mode as an internal upstream stream by default', async () => {
+    it('uses the lower-cost non-streaming channel request mode for Agent auto streaming by default', async () => {
         const { generateImage } = await loadAgentRoutes();
         const { getServerChannelState } = await import('@/lib/server-channel-router');
         let upstreamBody = '';
@@ -495,10 +532,17 @@ describe('Agent route integration', () => {
             assert.notEqual(response.headers.get('content-type'), 'text/event-stream');
             const body = await response.json();
             assert.equal(body.images[0].content_url.startsWith('/api/agent/artifacts/'), true);
+            assert.equal(body.execution.channel_request_mode, 'images-non-stream');
+            assert.equal(body.execution.channel_request_mode_fallback_applied, false);
+            assert.deepEqual(body.execution.route_decision.candidate_channel_request_modes, [
+                'images-non-stream',
+                'images-sse'
+            ]);
+            assert.deepEqual(body.execution.route_decision.request_mode_priority, ['images-non-stream', 'images-sse']);
             const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
-            assert.equal(upstreamJson.stream, true);
-            assert.equal(upstreamJson.partial_images, 2);
-            assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 1);
+            assert.equal(upstreamJson.stream, false);
+            assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
+            assert.equal(getServerChannelState().streamingAvailability.summary().mark_count, 0);
         } finally {
             await upstream.close();
         }
@@ -527,13 +571,15 @@ describe('Agent route integration', () => {
             assert.equal(response.status, 200);
             const body = await response.json();
             assert.equal(body.execution.channel_request_mode, 'images-non-stream');
-            assert.equal(body.execution.channel_request_mode_fallback_applied, true);
+            assert.equal(body.execution.channel_request_mode_fallback_applied, false);
             assert.deepEqual(body.execution.route_decision, {
                 requested_backend: 'images-api',
-                preferred_channel_request_mode: 'images-sse',
-                fallback_channel_request_mode: 'images-non-stream',
+                candidate_channel_request_modes: ['images-non-stream', 'images-sse'],
+                request_mode_priority: ['images-non-stream'],
+                preferred_channel_request_mode: 'images-non-stream',
+                fallback_channel_request_mode: 'images-sse',
                 selected_channel_request_mode: 'images-non-stream',
-                fallback_applied: true,
+                fallback_applied: false,
                 selected_channel_id: 'json-only',
                 upstream_host: new URL(upstream.baseUrl).host
             });
@@ -574,6 +620,8 @@ describe('Agent route integration', () => {
             assert.equal(body.error.diagnostics.channel_request_mode_fallback_applied, false);
             assert.deepEqual(body.error.diagnostics.route_decision, {
                 requested_backend: 'images-api',
+                candidate_channel_request_modes: ['images-sse'],
+                request_mode_priority: ['images-sse'],
                 preferred_channel_request_mode: 'images-sse',
                 selected_channel_request_mode: 'images-sse',
                 fallback_applied: false,
@@ -1010,6 +1058,39 @@ describe('Agent route integration', () => {
             const body = await response.json();
             assert.equal(body.error.code, 'validation_error');
             assert.match(body.error.details.fields.partial_images, /1 到 3/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('keeps selected upstream image count limits enforced when force_request is enabled', async () => {
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+        process.env.OPENAI_CHANNEL_1_MATSCA_APP_ID = 'app-id';
+        process.env.OPENAI_CHANNEL_1_MATSCA_APP_SECRET = 'app-secret';
+        const { generateImage } = await loadAgentRoutes();
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-force-count-limit-key', {
+                    prompt: 'agent force still respects count limits',
+                    n: 5,
+                    force_request: true
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.details.fields.n, /1 到 4/);
             assert.equal(upstreamCalls, 0);
         } finally {
             await upstream.close();
@@ -2001,9 +2082,11 @@ describe('Agent route integration', () => {
     it('edits through multipart input and replays the cached response for the same idempotency key', async () => {
         const { editImage } = await loadAgentRoutes();
         let upstreamCalls = 0;
-        const upstream = await startImageUpstream(() => {
+        let upstreamBody = '';
+        const upstream = await startImageUpstream((body) => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            upstreamBody = body;
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2012,8 +2095,12 @@ describe('Agent route integration', () => {
         assert.equal(first.status, 200);
         const firstBody = await first.json();
         assert.equal(firstBody.cached, false);
-        assert.equal(firstBody.images[0].output_format, 'png');
+        assert.equal(firstBody.images[0].output_format, 'webp');
+        assert.equal(firstBody.images[0].mime_type, 'image/webp');
+        assert.equal(firstBody.images[0].filename.endsWith('.webp'), true);
         assert.equal('b64_json' in firstBody.images[0], false);
+        assert.doesNotMatch(upstreamBody, /name="output_format"/);
+        assert.doesNotMatch(upstreamBody, /name="response_format"/);
 
         const second = await editImage(agentEditRequest('route-edit-key', 'agent edit success'));
         assert.equal(second.status, 200);
@@ -2032,7 +2119,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2073,7 +2160,7 @@ describe('Agent route integration', () => {
             return [
                 {
                     event: 'image_edit.completed',
-                    data: { type: 'image_edit.completed', b64_json: PNG_BASE64 }
+                    data: { type: 'image_edit.completed', b64_json: PNG_CONVERTIBLE_BASE64 }
                 }
             ];
         });
@@ -2112,6 +2199,7 @@ describe('Agent route integration', () => {
         const upstream = await startHangingImageEditUpstream();
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_UPSTREAM_REQUEST_MODES = 'images-sse';
         const abortController = new AbortController();
 
         try {
@@ -2165,7 +2253,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2196,7 +2284,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2248,7 +2336,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2282,7 +2370,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2318,7 +2406,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2330,7 +2418,48 @@ describe('Agent route integration', () => {
 
             assert.equal(response.status, 200);
             const body = await response.json();
-            assert.equal(body.images[0].output_format, 'png');
+            assert.equal(body.images[0].output_format, 'webp');
+            assert.equal(body.images[0].mime_type, 'image/webp');
+            assert.equal(body.images[0].filename.endsWith('.webp'), true);
+            assert.equal(upstreamCalls, 1);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('allows Agent edit force_request to bypass local fixed-size profile limits', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
+        });
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_UPSTREAM_PROFILE = 'openai-compatible';
+
+        try {
+            const rejected = await editImage(
+                agentEditRequest('route-edit-small-size-rejected-key', 'small edit', {}, { size: '512x512' })
+            );
+            assert.equal(rejected.status, 422);
+            const rejectedBody = await rejected.json();
+            assert.equal(rejectedBody.error.code, 'validation_error');
+            assert.match(rejectedBody.error.details.fields.size, /总像素必须至少/);
+            assert.equal(upstreamCalls, 0);
+
+            const forced = await editImage(
+                agentEditRequest(
+                    'route-edit-small-size-forced-key',
+                    'small edit',
+                    {},
+                    {
+                        size: '512x512',
+                        force_request: 'true'
+                    }
+                )
+            );
+            assert.equal(forced.status, 200);
             assert.equal(upstreamCalls, 1);
         } finally {
             await upstream.close();
@@ -2370,7 +2499,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -2390,7 +2519,9 @@ describe('Agent route integration', () => {
 
             assert.equal(response.status, 200);
             const body = await response.json();
-            assert.equal(body.images[0].output_format, 'png');
+            assert.equal(body.images[0].output_format, 'webp');
+            assert.equal(body.images[0].mime_type, 'image/webp');
+            assert.equal(body.images[0].filename.endsWith('.webp'), true);
             assert.equal(upstreamCalls, 1);
         } finally {
             await upstream.close();
@@ -2485,7 +2616,7 @@ describe('Agent route integration', () => {
         const requestId = 'edit-completion-failure-request';
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_BASE64 }] };
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
