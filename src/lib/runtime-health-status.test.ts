@@ -1,6 +1,6 @@
+import { resolveRuntimeHealthStatus } from './runtime-health-status';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { resolveRuntimeHealthStatus } from './runtime-health-status';
 
 describe('resolveRuntimeHealthStatus', () => {
     it('treats a healthy declared route as ready for the current form request', () => {

@@ -101,7 +101,7 @@ export function WorkbenchStatusStrip({
                         )}
                         {t('app.requestModeHealth')}
                     </summary>
-                    <div className='border-border bg-card text-card-foreground absolute left-0 right-0 z-30 mt-2 grid max-w-full gap-3 rounded-lg border p-3 text-xs shadow-lg sm:left-auto sm:w-[min(88vw,28rem)] sm:max-w-[28rem]'>
+                    <div className='border-border bg-card text-card-foreground absolute right-0 left-0 z-30 mt-2 grid max-w-full gap-3 rounded-lg border p-3 text-xs shadow-lg sm:left-auto sm:w-[min(88vw,28rem)] sm:max-w-[28rem]'>
                         {requestModeHealth.length > 0 && (
                             <div className='grid gap-2'>
                                 {requestModeHealth.map((item) => {
