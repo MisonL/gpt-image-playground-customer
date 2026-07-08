@@ -16,7 +16,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
-import { cn } from '@/lib/utils';
 import type {
     ImageUpstreamFormBackend,
     ImageUpstreamFormPromptOptimization,
@@ -50,6 +49,7 @@ import {
 import type { SizePreset } from '@/lib/size-utils';
 import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
+import { cn } from '@/lib/utils';
 import {
     Square,
     RectangleHorizontal,

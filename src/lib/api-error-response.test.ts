@@ -125,8 +125,8 @@ describe('normalizeAgentError', () => {
             'upstream_timeout'
         );
         assert.equal(
-            normalizeAgentError(new AcceptedImageTaskResponseError({ taskId: 'accepted-non-stream-task' }))
-                .diagnostics?.transport_error_kind,
+            normalizeAgentError(new AcceptedImageTaskResponseError({ taskId: 'accepted-non-stream-task' })).diagnostics
+                ?.transport_error_kind,
             'upstream_timeout'
         );
     });

@@ -33,7 +33,10 @@ describe('page state regressions', () => {
         assert.match(source, /const hasRequestApiOverride = hasRequestApiKey;/);
         assert.match(runtimeStatusCall, /hasRequestApiOverride/);
         assert.match(runtimeStatusCall, /imageBackend: activeWorkbenchBackend/);
-        assert.match(source, /if \(settings\.baseUrl && !settings\.apiKey\) \{\s*throw new Error\(t\('api\.urlPairRequired'\)\);\s*\}/);
+        assert.match(
+            source,
+            /if \(settings\.baseUrl && !settings\.apiKey\) \{\s*throw new Error\(t\('api\.urlPairRequired'\)\);\s*\}/
+        );
         assert.match(source, /if \(apiSettings\.baseUrl && apiSettings\.apiKey\) \{/);
         assert.doesNotMatch(source, /hasPairedRequestApiOverride/);
     });
@@ -41,11 +44,23 @@ describe('page state regressions', () => {
     it('cleans stale local request API overrides that only persisted a base URL', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
 
-        assert.match(source, /function normalizeStoredApiSettings\(settings: Partial<ApiSettings>\): StoredApiSettingsReadResult/);
-        assert.match(source, /if \(!apiKey && baseUrl\) \{\s*return \{ settings: emptyApiSettings, shouldPersist: false, shouldRemove: true \};\s*\}/);
+        assert.match(
+            source,
+            /function normalizeStoredApiSettings\(settings: Partial<ApiSettings>\): StoredApiSettingsReadResult/
+        );
+        assert.match(
+            source,
+            /if \(!apiKey && baseUrl\) \{\s*return \{ settings: emptyApiSettings, shouldPersist: false, shouldRemove: true \};\s*\}/
+        );
         assert.match(source, /const storedApiSettings = readStoredApiSettings\(\);/);
-        assert.match(source, /if \(storedApiSettings\.shouldRemove\) \{\s*window\.localStorage\.removeItem\(apiSettingsLocalStorageKey\);\s*\}/);
-        assert.match(source, /else if \(storedApiSettings\.shouldPersist\) \{\s*window\.localStorage\.setItem\(apiSettingsLocalStorageKey, JSON\.stringify\(storedApiSettings\.settings\)\);\s*\}/);
+        assert.match(
+            source,
+            /if \(storedApiSettings\.shouldRemove\) \{\s*window\.localStorage\.removeItem\(apiSettingsLocalStorageKey\);\s*\}/
+        );
+        assert.match(
+            source,
+            /else if \(storedApiSettings\.shouldPersist\) \{\s*window\.localStorage\.setItem\(apiSettingsLocalStorageKey, JSON\.stringify\(storedApiSettings\.settings\)\);\s*\}/
+        );
     });
 
     it('shows the current form route in the status strip instead of inferring from server capability modes', async () => {

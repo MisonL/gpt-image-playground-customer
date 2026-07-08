@@ -143,7 +143,9 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                             <Input
                                 id='share-page-access-code'
                                 name='accessCode'
-                                aria-describedby={accessCode.trim().length === 0 ? 'share-page-access-code-hint' : undefined}
+                                aria-describedby={
+                                    accessCode.trim().length === 0 ? 'share-page-access-code-hint' : undefined
+                                }
                                 value={accessCode}
                                 onChange={(event) => setAccessCode(event.target.value)}
                                 placeholder={t('share.accessCodePlaceholder')}

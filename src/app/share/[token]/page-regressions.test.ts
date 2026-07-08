@@ -11,7 +11,8 @@ describe('share page regressions', () => {
         assert.match(source, /name='accessCode'/);
         assert.match(source, /autoComplete='current-password'/);
         assert.match(source, /share\.accessCodeRequiredHint/);
-        assert.match(source, /aria-describedby=\{accessCode\.trim\(\)\.length === 0 \? 'share-page-access-code-hint' : undefined\}/);
+        assert.match(source, /aria-describedby=\{/);
+        assert.match(source, /accessCode\.trim\(\)\.length === 0 \? 'share-page-access-code-hint' : undefined/);
         assert.match(source, /id='share-page-access-code-hint'/);
         assert.match(source, /if \(accessCode\.trim\(\)\.length === 0\) \{\s*return;\s*\}/);
     });

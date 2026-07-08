@@ -983,7 +983,7 @@ export function EditingForm({
                                             type='button'
                                             variant='secondary'
                                             size='icon'
-                                            className='border-background/80 absolute top-1.5 right-1.5 min-h-9 min-w-9 rounded-full border bg-[oklch(0.36_0.02_62/0.74)] p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-[oklch(0.32_0.02_62/0.86)] hover:text-white sm:opacity-0 sm:min-h-7 sm:min-w-7 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100'
+                                            className='border-background/80 absolute top-1.5 right-1.5 min-h-9 min-w-9 rounded-full border bg-[oklch(0.36_0.02_62/0.74)] p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-[oklch(0.32_0.02_62/0.86)] hover:text-white sm:min-h-7 sm:min-w-7 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100'
                                             onClick={() => handleRemoveImage(index)}
                                             aria-label={t('edit.removeImage', { index: index + 1 })}>
                                             <X className='h-3 w-3' />
@@ -1071,7 +1071,9 @@ export function EditingForm({
                                 <div className='grid grid-cols-1 gap-4 pt-2'>
                                     <div className='space-y-2'>
                                         <div className='text-foreground flex items-center gap-2 text-sm leading-none font-medium select-none'>
-                                            <span className='ui-stat'>{t('edit.brushSize', { value: editBrushSize[0] })}</span>
+                                            <span className='ui-stat'>
+                                                {t('edit.brushSize', { value: editBrushSize[0] })}
+                                            </span>
                                         </div>
                                         <Slider
                                             id='brush-size-slider'

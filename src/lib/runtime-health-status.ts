@@ -44,7 +44,8 @@ function resolvePreferredRequestMode(input: {
         runtimeCapabilities: input.runtimeCapabilities,
         imageBackend: input.imageBackend
     });
-    const streamEnabled = input.streamMode === 'stream' || (input.streamMode === 'auto' && input.streamingStrategy !== 'off');
+    const streamEnabled =
+        input.streamMode === 'stream' || (input.streamMode === 'auto' && input.streamingStrategy !== 'off');
     if (backend === 'responses-image-generation') {
         return streamEnabled ? 'responses-sse' : 'responses-non-stream';
     }
