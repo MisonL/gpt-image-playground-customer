@@ -157,6 +157,7 @@ describe('WorkbenchStatusStrip', () => {
         assert.match(html, /absolute/);
         assert.match(html, /left-0/);
         assert.match(html, /right-0/);
+        assert.match(html, /w-\[min\(100%,calc\(100vw-2rem\)\)\]/);
         assert.match(html, /sm:left-auto sm:w-\[min\(88vw,28rem\)\]/);
     });
 });

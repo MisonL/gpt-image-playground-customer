@@ -71,4 +71,14 @@ describe('page state regressions', () => {
         assert.match(source, /routeLabel=\{activeRouteLabel\}/);
         assert.doesNotMatch(source, /const activeRequestModeLabel = React\.useMemo/);
     });
+
+    it('reserves mobile viewport space for the fixed action dock and creation drawer', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /\[--mobile-action-dock-height:8\.5rem\]/);
+        assert.match(source, /pb-\[calc\(var\(--mobile-action-dock-height\)\+env\(safe-area-inset-bottom\)\)\]/);
+        assert.match(source, /bottom-\[calc\(var\(--mobile-action-dock-height\)\+env\(safe-area-inset-bottom\)\)\]/);
+        assert.match(source, /scroll-pb-\[calc\(var\(--mobile-action-dock-height\)\+1rem\)\]/);
+        assert.match(source, /min-h-\[var\(--mobile-action-dock-height\)\]/);
+    });
 });

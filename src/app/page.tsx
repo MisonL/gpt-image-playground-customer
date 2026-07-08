@@ -3292,7 +3292,7 @@ export default function HomePage() {
     }
 
     return (
-        <main className='studio-paper text-foreground min-h-screen pb-[calc(6.5rem+env(safe-area-inset-bottom))] xl:h-dvh xl:overflow-hidden xl:pb-0'>
+        <main className='studio-paper text-foreground min-h-screen pb-[calc(var(--mobile-action-dock-height)+env(safe-area-inset-bottom))] [--mobile-action-dock-height:8.5rem] xl:h-dvh xl:overflow-hidden xl:pb-0'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -3412,7 +3412,7 @@ export default function HomePage() {
                                 aria-label={t('app.creationControls')}
                                 className={`order-2 lg:static lg:order-1 lg:block lg:p-0 lg:shadow-none xl:min-h-0 xl:overflow-hidden ${
                                     isMobileCreationDrawerOpen
-                                        ? 'border-border fixed inset-x-0 top-4 bottom-0 z-50 min-h-0 scroll-pb-28 overflow-y-auto rounded-t-lg border-t bg-[oklch(0.986_0.015_84)] px-3 pt-3 pb-[calc(8rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(73,50,25,0.18)] lg:max-h-none lg:rounded-none'
+                                        ? 'border-border fixed inset-x-0 top-4 bottom-[calc(var(--mobile-action-dock-height)+env(safe-area-inset-bottom))] z-50 min-h-0 scroll-pb-[calc(var(--mobile-action-dock-height)+1rem)] overflow-y-auto rounded-t-lg border-t bg-[oklch(0.986_0.015_84)] px-3 pt-3 pb-4 shadow-[0_-16px_36px_rgba(73,50,25,0.18)] lg:max-h-none lg:rounded-none'
                                         : 'hidden min-h-[620px]'
                                 }`}>
                                 {isMobileCreationDrawerOpen && (
@@ -3731,7 +3731,7 @@ export default function HomePage() {
                         </div>
                     </div>
                     {!isMobileCreationDrawerOpen && (
-                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 border-t px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden'>
+                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 min-h-[var(--mobile-action-dock-height)] border-t px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden'>
                             <div
                                 className='mx-auto mb-2 flex h-3 w-24 touch-none items-center justify-center rounded-full select-none'
                                 onPointerDown={beginMobileCreationDrawerGesture}
