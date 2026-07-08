@@ -154,10 +154,15 @@ describe('WorkbenchStatusStrip', () => {
         );
 
         assert.match(html, /basis-full sm:basis-auto/);
+        assert.match(html, /w-full min-w-0 flex-wrap/);
+        assert.match(html, /sm:w-auto/);
+        assert.match(html, /basis-full items-center rounded-full/);
+        assert.match(html, /sm:basis-auto/);
         assert.match(html, /absolute/);
         assert.match(html, /left-0/);
         assert.match(html, /right-0/);
         assert.match(html, /w-\[min\(100%,calc\(100vw-2rem\)\)\]/);
-        assert.match(html, /sm:left-auto sm:w-\[min\(88vw,28rem\)\]/);
+        assert.match(html, /sm:right-auto sm:left-0 sm:w-\[min\(88vw,28rem\)\]/);
+        assert.match(html, /xl:right-0 xl:left-auto/);
     });
 });

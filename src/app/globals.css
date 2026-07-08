@@ -225,6 +225,7 @@
     }
 
     .photo-paper {
+        min-width: 0;
         background: oklch(0.99 0.008 85);
         border-radius: 0.75rem;
         box-shadow:
@@ -274,5 +275,16 @@
         pointer-events: none;
         border: 1px solid oklch(0.79 0.026 74 / 0.16);
         border-radius: 6px;
+    }
+
+    @media (max-width: 380px) {
+        .photo-paper::before {
+            right: 0.75rem;
+            width: min(6rem, 40%);
+        }
+
+        .preview-gallery-board::before {
+            inset: 0.5rem;
+        }
     }
 }
