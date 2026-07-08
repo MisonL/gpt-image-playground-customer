@@ -80,7 +80,7 @@ export function WorkbenchStatusStrip({
     return (
         <div
             className={cn(
-                'text-muted-foreground ui-stat flex flex-wrap items-center gap-1.5 text-xs sm:gap-2 sm:text-sm',
+                'text-muted-foreground ui-stat flex w-full min-w-0 flex-wrap items-center gap-1.5 text-xs sm:w-auto sm:gap-2 sm:text-sm',
                 className
             )}>
             <span className='border-border bg-card/70 inline-flex min-h-6 items-center gap-1.5 rounded-full border px-2 py-0.5 sm:min-h-7 sm:gap-2 sm:px-2.5 sm:py-1'>
@@ -101,7 +101,7 @@ export function WorkbenchStatusStrip({
                         )}
                         {t('app.requestModeHealth')}
                     </summary>
-                    <div className='border-border bg-card text-card-foreground absolute right-0 left-0 z-30 mt-2 grid w-[min(100%,calc(100vw-2rem))] max-w-full gap-3 rounded-lg border p-3 text-xs shadow-lg sm:left-auto sm:w-[min(88vw,28rem)] sm:max-w-[28rem]'>
+                    <div className='border-border bg-card text-card-foreground absolute right-0 left-0 z-30 mt-2 grid w-[min(100%,calc(100vw-2rem))] max-w-full gap-3 rounded-lg border p-3 text-xs shadow-lg sm:right-auto sm:left-0 sm:w-[min(88vw,28rem)] sm:max-w-[28rem] xl:right-0 xl:left-auto'>
                         {requestModeHealth.length > 0 && (
                             <div className='grid gap-2'>
                                 {requestModeHealth.map((item) => {
@@ -160,7 +160,7 @@ export function WorkbenchStatusStrip({
                     {t('streaming.parallelBatchEnabled')}
                 </span>
             )}
-            <span className='border-primary/20 bg-primary/10 text-primary inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 sm:min-h-7 sm:px-2.5 sm:py-1'>
+            <span className='border-primary/20 bg-primary/10 text-primary inline-flex min-h-6 min-w-0 basis-full items-center rounded-full border px-2 py-0.5 sm:min-h-7 sm:basis-auto sm:px-2.5 sm:py-1'>
                 {costLabel}
             </span>
         </div>

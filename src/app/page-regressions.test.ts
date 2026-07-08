@@ -81,4 +81,32 @@ describe('page state regressions', () => {
         assert.match(source, /scroll-pb-\[calc\(var\(--mobile-action-dock-height\)\+1rem\)\]/);
         assert.match(source, /min-h-\[var\(--mobile-action-dock-height\)\]/);
     });
+
+    it('prevents narrow mobile layouts from creating horizontal overflow', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /min-h-screen overflow-x-hidden/);
+        assert.match(source, /w-full max-w-\[1760px\] min-w-0/);
+        assert.match(source, /flex min-w-0 flex-wrap items-center gap-2/);
+        assert.match(source, /order-1 flex min-h-\[380px\] min-w-0/);
+        assert.match(source, /order-3 min-h-\[420px\] min-w-0/);
+    });
+
+    it('keeps the mobile title readable instead of truncating the brand', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /flex-1 flex-wrap items-baseline gap-x-3 gap-y-1/);
+        assert.match(source, /editorial-title shrink-0 text-3xl/);
+        assert.match(source, /text-muted-foreground min-w-0 text-sm/);
+        assert.doesNotMatch(source, /editorial-title truncate text-3xl/);
+    });
+
+    it('keeps preview paper decoration inside very narrow screens', async () => {
+        const source = await readFile(new URL('./globals.css', import.meta.url), 'utf8');
+
+        assert.match(source, /\.photo-paper \{\s*min-width: 0;/);
+        assert.match(source, /@media \(max-width: 380px\) \{/);
+        assert.match(source, /\.photo-paper::before \{[\s\S]*?width: min\(6rem, 40%\);/);
+        assert.match(source, /\.preview-gallery-board::before \{[\s\S]*?inset: 0\.5rem;/);
+    });
 });

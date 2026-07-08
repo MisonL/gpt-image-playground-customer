@@ -3292,7 +3292,7 @@ export default function HomePage() {
     }
 
     return (
-        <main className='studio-paper text-foreground min-h-screen pb-[calc(var(--mobile-action-dock-height)+env(safe-area-inset-bottom))] [--mobile-action-dock-height:8.5rem] xl:h-dvh xl:overflow-hidden xl:pb-0'>
+        <main className='studio-paper text-foreground min-h-screen overflow-x-hidden pb-[calc(var(--mobile-action-dock-height)+env(safe-area-inset-bottom))] [--mobile-action-dock-height:8.5rem] xl:h-dvh xl:pb-0'>
             <PasswordDialog
                 isOpen={isPasswordDialogOpen}
                 onOpenChange={setIsPasswordDialogOpen}
@@ -3360,18 +3360,18 @@ export default function HomePage() {
                             onClick={closeMobileCreationDrawer}
                         />
                     )}
-                    <div className='mx-auto flex min-h-screen w-full max-w-[1760px] flex-col px-4 py-3 lg:px-7 lg:py-5 xl:h-full xl:min-h-0'>
+                    <div className='mx-auto flex min-h-screen w-full max-w-[1760px] min-w-0 flex-col px-4 py-3 lg:px-7 lg:py-5 xl:h-full xl:min-h-0'>
                         <header
                             aria-hidden={isMobileCreationDrawerOpen}
                             inert={isMobileCreationDrawerOpen}
                             className='mb-5 flex shrink-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between'>
                             <div className='flex min-w-0 items-center gap-3'>
-                                <div className='flex min-w-0 items-center gap-3'>
-                                    <h1 className='editorial-title truncate text-3xl font-semibold tracking-normal sm:text-4xl'>
+                                <div className='flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1'>
+                                    <h1 className='editorial-title shrink-0 text-3xl font-semibold tracking-normal sm:text-4xl'>
                                         {t('app.studioTitle')}
                                     </h1>
                                     <Flower2 className='hidden h-7 w-7 rotate-12 text-[oklch(0.68_0.12_64)] sm:block' />
-                                    <p className='text-muted-foreground text-sm'>{t('app.studioSubtitle')}</p>
+                                    <p className='text-muted-foreground min-w-0 text-sm'>{t('app.studioSubtitle')}</p>
                                 </div>
                                 <Button
                                     type='button'
@@ -3383,7 +3383,7 @@ export default function HomePage() {
                                     <Settings2 className='h-4 w-4' />
                                 </Button>
                             </div>
-                            <div className='flex flex-wrap items-center gap-4 sm:justify-end'>
+                            <div className='flex min-w-0 flex-wrap items-center gap-2 sm:justify-end sm:gap-4'>
                                 <WorkbenchStatusStrip
                                     model={activeWorkbenchModel}
                                     routeLabel={activeRouteLabel}
@@ -3621,7 +3621,7 @@ export default function HomePage() {
                                 aria-label={t('app.canvasPreview')}
                                 aria-hidden={isMobileCreationDrawerOpen}
                                 inert={isMobileCreationDrawerOpen}
-                                className='order-1 flex min-h-[380px] scroll-mt-4 flex-col sm:min-h-[460px] lg:order-2 xl:min-h-0'>
+                                className='order-1 flex min-h-[380px] min-w-0 scroll-mt-4 flex-col sm:min-h-[460px] lg:order-2 xl:min-h-0'>
                                 {error && (
                                     <Alert
                                         variant='destructive'
@@ -3705,7 +3705,7 @@ export default function HomePage() {
                                 aria-label={t('history.title')}
                                 aria-hidden={isMobileCreationDrawerOpen}
                                 inert={isMobileCreationDrawerOpen}
-                                className='order-3 min-h-[420px] lg:col-span-2 lg:min-h-[420px] xl:col-span-1 xl:min-h-0 xl:overflow-hidden'>
+                                className='order-3 min-h-[420px] min-w-0 lg:col-span-2 lg:min-h-[420px] xl:col-span-1 xl:min-h-0 xl:overflow-hidden'>
                                 <HistoryPanel
                                     history={history}
                                     inspirations={inspirations}
