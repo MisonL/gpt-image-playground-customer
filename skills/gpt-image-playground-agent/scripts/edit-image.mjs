@@ -83,7 +83,9 @@ if (options.help) {
 
 try {
     validateUpstreamStreamingOptions(options);
-    options.size = assertValidImageSizeForModel(options.size, options.model, '--size');
+    options.size = assertValidImageSizeForModel(options.size, options.model, '--size', {
+        forceRequest: options.forceRequest
+    });
 } catch (error) {
     console.error(errorMessage(error));
     printUsage();
@@ -164,6 +166,7 @@ if (options.dryRun || (!contractCheck && !options.allowBillable)) {
                         ? { promptOptimization: readBooleanOption(options.promptOptimization, '--prompt-optimization') }
                         : {}),
                     ...(options.forceWeb !== undefined ? { force_web: true } : {}),
+                    ...(options.forceRequest ? { force_request: true } : {}),
                     ...(options.dimensionCheck ? { dimension_check: true } : {}),
                     ...(readEditNormalizations(options) ? { normalizations: readEditNormalizations(options) } : {})
                 },
@@ -205,6 +208,7 @@ function parseArgs(argv) {
         thinking: undefined,
         promptOptimization: undefined,
         forceWeb: undefined,
+        forceRequest: false,
         dimensionCheck: false,
         sseLogPath: undefined,
         timeoutMs: undefined,
@@ -243,6 +247,7 @@ function parseArgs(argv) {
         else if (arg === '--thinking') parsed.thinking = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--prompt-optimization') parsed.promptOptimization = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--force-web') parsed.forceWeb = true;
+        else if (arg === '--force-request') parsed.forceRequest = true;
         else if (arg === '--dimension-check') parsed.dimensionCheck = true;
         else if (arg === '--sse-log') parsed.sseLogPath = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
@@ -550,7 +555,7 @@ function printUsage() {
     );
     console.error('默认只输出 dry-run；添加 --allow-billable 才会真实编辑图片。');
     console.error(
-        '常用参数：--image --model --size --quality --response-mode --format --output-compression --moderation --image-backend --responses-model --thinking --prompt-optimization --force-web --stream-mode --streaming-strategy --partial-images --dimension-check --sse-log --timeout-ms --base-url --idempotency-key --page-sse --agent --dry-run --allow-billable'
+        '常用参数：--image --model --size --quality --response-mode --format --output-compression --moderation --image-backend --responses-model --thinking --prompt-optimization --force-web --force-request --stream-mode --streaming-strategy --partial-images --dimension-check --sse-log --timeout-ms --base-url --idempotency-key --page-sse --agent --dry-run --allow-billable'
     );
     console.error('契约检查：GPT_IMAGE_AGENT_CONTRACT_CHECK=1 edit-image.mjs 或 edit-image.mjs --contract-check');
 }
@@ -641,6 +646,7 @@ function buildFormData() {
             String(readPartialImages(capabilities.defaults.partial_images, 'capabilities.defaults.partial_images'))
         );
     }
+    if (options.forceRequest) formData.append('force_request', 'true');
     formData.append('image_0', new Blob([imageBuffer], { type: imageType }), path.basename(imagePath));
     return formData;
 }
@@ -671,6 +677,7 @@ function buildPageSseFormData() {
         );
     }
     if (options.forceWeb !== undefined) formData.append('force_web', 'true');
+    if (options.forceRequest) formData.append('force_request', 'true');
     if (options.streamMode) formData.append('stream_mode', options.streamMode);
     if (options.streamingStrategy) formData.append('image_streaming_strategy', options.streamingStrategy);
     if (options.partialImages !== undefined) {
