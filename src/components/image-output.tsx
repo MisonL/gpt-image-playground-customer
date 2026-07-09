@@ -629,7 +629,7 @@ export function ImageOutput({
                                 )}
                             </div>
                         ) : (
-                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] flex-col justify-between p-5 sm:p-6 2xl:max-w-[860px]'>
+                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[680px] flex-col justify-center gap-8 p-5 sm:p-6 2xl:max-w-[720px]'>
                                 <div className='space-y-3'>
                                     <div className='text-muted-foreground text-xs'>{t('output.previewEyebrow')}</div>
                                     <div className='space-y-2'>

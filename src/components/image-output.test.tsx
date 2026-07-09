@@ -69,6 +69,10 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /还没有生成图像/);
         assert.match(html, /写下灵感后点击生成/);
+        assert.match(html, /max-w-\[680px\]/);
+        assert.match(html, /flex-col justify-center gap-8/);
+        assert.match(html, /2xl:max-w-\[720px\]/);
+        assert.doesNotMatch(html, /max-w-\[780px\] flex-col justify-between/);
         assert.doesNotMatch(html, /<img/);
         assert.doesNotMatch(html, /workbench-sample/);
         assert.doesNotMatch(html, /灵感样张/);
