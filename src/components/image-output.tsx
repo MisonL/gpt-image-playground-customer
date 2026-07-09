@@ -466,7 +466,7 @@ export function ImageOutput({
                 className={cn(
                     'preview-gallery-board relative flex items-center justify-center overflow-hidden px-3 py-5 sm:px-6',
                     isGenerateEmptyState
-                        ? 'min-h-[260px] shrink-0 sm:min-h-[320px] lg:min-h-[360px]'
+                        ? 'min-h-[260px] shrink-0 sm:min-h-[320px] lg:min-h-[360px] xl:min-h-[464px]'
                         : 'min-h-[300px] flex-1 sm:min-h-[420px] lg:min-h-[520px]'
                 )}>
                 {isLoading ? (
