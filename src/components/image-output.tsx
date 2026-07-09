@@ -437,7 +437,7 @@ export function ImageOutput({
         <div
             className={cn(
                 'workbench-panel text-card-foreground border-border flex min-h-[300px] w-full flex-col overflow-hidden rounded-lg border',
-                isGenerateEmptyState ? 'h-fit' : 'h-full'
+                isGenerateEmptyState ? 'h-fit xl:h-full' : 'h-full'
             )}>
             <div className='border-border/70 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3'>
                 <h2 className='editorial-title text-xl font-semibold'>{t('output.previewTitle')}</h2>
@@ -466,7 +466,7 @@ export function ImageOutput({
                 className={cn(
                     'preview-gallery-board relative flex items-center justify-center overflow-hidden px-3 py-5 sm:px-6',
                     isGenerateEmptyState
-                        ? 'min-h-[260px] shrink-0 sm:min-h-[320px] lg:min-h-[360px] xl:min-h-[464px]'
+                        ? 'min-h-[260px] shrink-0 sm:min-h-[320px] lg:min-h-[360px] xl:min-h-0 xl:flex-1'
                         : 'min-h-[300px] flex-1 sm:min-h-[420px] lg:min-h-[520px]'
                 )}>
                 {isLoading ? (

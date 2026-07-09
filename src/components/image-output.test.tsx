@@ -69,8 +69,8 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /还没有生成图像/);
         assert.match(html, /写下灵感后点击生成/);
-        assert.match(html, /workbench-panel[^"]*h-fit[\s\S]*preview-gallery-board/);
-        assert.match(html, /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\] xl:min-h-\[464px\]/);
+        assert.match(html, /workbench-panel[^"]*h-fit xl:h-full[\s\S]*preview-gallery-board/);
+        assert.match(html, /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\] xl:min-h-0 xl:flex-1/);
         assert.match(html, /min-h-\[20rem\]/);
         assert.match(html, /max-w-\[32rem\]/);
         assert.match(html, /items-center justify-center/);
@@ -97,7 +97,10 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /workbench-panel[^"]*h-full[\s\S]*preview-gallery-board/);
         assert.match(html, /min-h-\[300px\] flex-1 sm:min-h-\[420px\] lg:min-h-\[520px\]/);
-        assert.doesNotMatch(html, /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\] xl:min-h-\[464px\]/);
+        assert.doesNotMatch(
+            html,
+            /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\] xl:min-h-0 xl:flex-1/
+        );
     });
 
     it('uses an edit reference placeholder instead of the sample image in edit mode', () => {
