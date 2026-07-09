@@ -243,6 +243,7 @@ export function ImageOutput({
     const selectedImageDimensions = selectedImage ? imageDimensions[selectedImage.filename] : null;
     const hasFailure = !isLoading && !hasSelectedImageBatch && Boolean(failureMessage);
     const hasEditReferencePreview = currentMode === 'edit' && Boolean(baseImagePreviewUrl);
+    const isGenerateEmptyState = !isLoading && !hasFailure && !hasSelectedImageBatch && currentMode === 'generate';
     const previewStateLabel = isLoading
         ? t('output.progressDeveloping')
         : hasFailure
@@ -457,7 +458,13 @@ export function ImageOutput({
                     ))}
                 </div>
             </div>
-            <div className='preview-gallery-board relative flex min-h-[300px] flex-1 items-center justify-center overflow-hidden px-3 py-5 sm:min-h-[420px] sm:px-6 lg:min-h-[520px]'>
+            <div
+                className={cn(
+                    'preview-gallery-board relative flex items-center justify-center overflow-hidden px-3 py-5 sm:px-6',
+                    isGenerateEmptyState
+                        ? 'min-h-[260px] shrink-0 sm:min-h-[320px] lg:min-h-[360px]'
+                        : 'min-h-[300px] flex-1 sm:min-h-[420px] lg:min-h-[520px]'
+                )}>
                 {isLoading ? (
                     streamingPreviewImages && streamingPreviewImages.size > 0 ? (
                         // 展示流式预览图，单图时和最终视图一样居中。

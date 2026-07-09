@@ -69,6 +69,7 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /还没有生成图像/);
         assert.match(html, /写下灵感后点击生成/);
+        assert.match(html, /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\]/);
         assert.match(html, /min-h-\[20rem\]/);
         assert.match(html, /max-w-\[32rem\]/);
         assert.match(html, /items-center justify-center/);
@@ -88,6 +89,13 @@ describe('ImageOutput result actions', () => {
                 )
             );
         }
+    });
+
+    it('keeps the full preview stage height after images exist', () => {
+        const html = renderImageOutput(0);
+
+        assert.match(html, /min-h-\[300px\] flex-1 sm:min-h-\[420px\] lg:min-h-\[520px\]/);
+        assert.doesNotMatch(html, /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\]/);
     });
 
     it('uses an edit reference placeholder instead of the sample image in edit mode', () => {
