@@ -434,7 +434,11 @@ export function ImageOutput({
     }, [canOpenLogs, openLogsSignal]);
 
     return (
-        <div className='workbench-panel text-card-foreground border-border flex h-full min-h-[300px] w-full flex-col overflow-hidden rounded-lg border'>
+        <div
+            className={cn(
+                'workbench-panel text-card-foreground border-border flex min-h-[300px] w-full flex-col overflow-hidden rounded-lg border',
+                isGenerateEmptyState ? 'h-fit' : 'h-full'
+            )}>
             <div className='border-border/70 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3'>
                 <h2 className='editorial-title text-xl font-semibold'>{t('output.previewTitle')}</h2>
                 <div className='text-muted-foreground ui-stat flex flex-wrap items-center gap-3 text-xs'>
