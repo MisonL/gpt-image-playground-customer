@@ -109,4 +109,15 @@ describe('page state regressions', () => {
         assert.match(source, /\.photo-paper::before \{[\s\S]*?width: min\(6rem, 40%\);/);
         assert.match(source, /\.preview-gallery-board::before \{[\s\S]*?inset: 0\.5rem;/);
     });
+
+    it('keeps the pro dock adjacent to the empty preview state', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /const shouldExpandOutputStage =/);
+        assert.match(source, /Boolean\(latestImageBatch\)/);
+        assert.match(source, /Boolean\(outputFailureMessage\)/);
+        assert.match(source, /mode === 'edit' && Boolean\(editSourceImagePreviewUrls\[0\]\)/);
+        assert.match(source, /shouldExpandOutputStage \? 'min-h-0 flex-1' : 'min-h-0 shrink-0'/);
+        assert.doesNotMatch(source, /<div className='min-h-0 flex-1'>\s*<ImageOutput/);
+    });
 });
