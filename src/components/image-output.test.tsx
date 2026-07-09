@@ -69,11 +69,12 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /还没有生成图像/);
         assert.match(html, /写下灵感后点击生成/);
-        assert.match(html, /aspect-\[8\/5\]/);
-        assert.match(html, /max-w-\[620px\]/);
+        assert.match(html, /min-h-\[20rem\]/);
+        assert.match(html, /max-w-\[32rem\]/);
         assert.match(html, /items-center justify-center/);
         assert.match(html, /text-center/);
-        assert.match(html, /2xl:max-w-\[660px\]/);
+        assert.match(html, /2xl:max-w-\[34rem\]/);
+        assert.doesNotMatch(html, /photo-paper relative flex aspect-\[8\/5\]/);
         assert.doesNotMatch(html, /max-w-\[780px\] flex-col justify-between/);
         assert.doesNotMatch(html, /<img/);
         assert.doesNotMatch(html, /workbench-sample/);

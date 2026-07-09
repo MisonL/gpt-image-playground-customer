@@ -629,23 +629,19 @@ export function ImageOutput({
                                 )}
                             </div>
                         ) : (
-                            <div className='photo-paper relative flex aspect-[8/5] w-full max-w-[620px] items-center justify-center p-6 text-center sm:p-8 2xl:max-w-[660px]'>
-                                <div className='mx-auto flex max-w-[26rem] flex-col items-center gap-5'>
-                                    <div className='border-border/70 bg-muted/30 text-muted-foreground flex h-20 w-20 items-center justify-center rounded-md border'>
-                                        <ImageIcon className='h-7 w-7' />
-                                    </div>
-                                    <div className='space-y-3'>
-                                        <div className='text-muted-foreground text-xs'>
-                                            {t('output.previewEyebrow')}
-                                        </div>
-                                        <div className='space-y-2'>
-                                            <h3 className='editorial-title text-2xl font-semibold'>
-                                                {t('output.emptyTitle')}
-                                            </h3>
-                                            <p className='text-muted-foreground text-sm leading-6'>
-                                                {t('output.emptyDescription')}
-                                            </p>
-                                        </div>
+                            <div className='relative mx-auto flex min-h-[20rem] w-full max-w-[32rem] flex-col items-center justify-center gap-5 px-6 py-10 text-center sm:min-h-[22rem] 2xl:max-w-[34rem]'>
+                                <div className='border-border/70 bg-background/70 text-muted-foreground flex h-16 w-16 items-center justify-center rounded-md border shadow-sm'>
+                                    <ImageIcon className='h-7 w-7' />
+                                </div>
+                                <div className='space-y-3'>
+                                    <div className='text-muted-foreground text-xs'>{t('output.previewEyebrow')}</div>
+                                    <div className='space-y-2'>
+                                        <h3 className='editorial-title text-2xl font-semibold'>
+                                            {t('output.emptyTitle')}
+                                        </h3>
+                                        <p className='text-muted-foreground text-sm leading-6'>
+                                            {t('output.emptyDescription')}
+                                        </p>
                                     </div>
                                 </div>
                             </div>
