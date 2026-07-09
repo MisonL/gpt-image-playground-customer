@@ -146,6 +146,14 @@ describe('GenerationForm submit footer', () => {
 });
 
 describe('GenerationForm advanced groups', () => {
+    it('keeps compact desktop preset controls text-first to avoid clipped labels', () => {
+        const html = renderGenerationForm();
+
+        assert.match(html, /grid grid-cols-5 gap-1.5/);
+        assert.doesNotMatch(html, /lg:hidden 2xl:block/);
+        assert.doesNotMatch(html, /2xl:grid-cols-6/);
+    });
+
     it('shows task-specific descriptions in the mode segmented control', () => {
         const html = renderGenerationForm();
 

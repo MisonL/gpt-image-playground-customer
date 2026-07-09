@@ -210,7 +210,7 @@ const RadioItemWithIcon = ({
             disabled={disabled}
             aria-label={label}
             className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-8 [&_[data-slot=radio-group-indicator]]:hidden'>
-            <Icon className='h-3 w-3 text-current opacity-50' />
+            <Icon className='h-3 w-3 shrink-0 text-current opacity-50 lg:hidden' />
             <span className='max-w-full min-w-0 truncate text-center leading-4'>{label}</span>
         </RadioGroupItem>
     );

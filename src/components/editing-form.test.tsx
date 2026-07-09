@@ -167,6 +167,12 @@ describe('EditingForm submit footer', () => {
 });
 
 describe('EditingForm advanced upstream controls', () => {
+    it('keeps compact desktop preset controls text-first to avoid clipped labels', () => {
+        const html = renderEditingForm({ backend: 'server-default' });
+
+        assert.doesNotMatch(html, /lg:hidden 2xl:block/);
+    });
+
     it('keeps the full professional accordion available on desktop and mobile', () => {
         const html = renderEditingForm({ backend: 'server-default', advancedTab: 'route' });
 

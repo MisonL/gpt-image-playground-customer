@@ -39,7 +39,7 @@ export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
                                 : 'bg-muted/30 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground border-transparent'
                         } `}>
                         <span className='flex w-full items-center justify-center gap-0.5 2xl:gap-1'>
-                            <Icon className='hidden h-3.5 w-3.5 shrink-0 opacity-75 2xl:block' />
+                            <Icon className='hidden h-3.5 w-3.5 shrink-0 opacity-75' />
                             <span className='min-w-0'>
                                 <span className='block truncate text-[13px] leading-4 font-medium 2xl:text-sm'>
                                     {t(labelKey)}
