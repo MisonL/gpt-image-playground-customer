@@ -3285,6 +3285,12 @@ export default function HomePage() {
         !isLoading && !isSendingToEdit && !latestImageBatch && error?.message === generationFailureMessage
             ? generationFailureMessage
             : null;
+    const shouldExpandOutputStage =
+        isLoading ||
+        isSendingToEdit ||
+        Boolean(latestImageBatch) ||
+        Boolean(outputFailureMessage) ||
+        (mode === 'edit' && Boolean(editSourceImagePreviewUrls[0]));
     const canRetryLastGeneration = Boolean(lastApiCallArgs) && !isLoading && !isSendingToEdit;
     function handleRetryLastGeneration() {
         if (!lastApiCallArgs) return;
@@ -3630,7 +3636,7 @@ export default function HomePage() {
                                         <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                                     </Alert>
                                 )}
-                                <div className='min-h-0 flex-1'>
+                                <div className={shouldExpandOutputStage ? 'min-h-0 flex-1' : 'min-h-0 shrink-0'}>
                                     <ImageOutput
                                         imageBatch={latestImageBatch}
                                         viewMode={imageOutputView}
