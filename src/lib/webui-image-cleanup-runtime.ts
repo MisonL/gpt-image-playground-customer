@@ -1,6 +1,6 @@
 import { ensureAgentStateStoreReady } from './agent-state-runtime';
 import { appLogger } from './app-logger';
-import { outputDir } from './server-runtime';
+import { resolveImageOutputDir } from './server-runtime';
 import {
     cleanupExpiredWebuiImages,
     readWebuiImageCleanupConfig,
@@ -138,7 +138,7 @@ async function performWebuiImageCleanup(
     const store = await ensureAgentStateStoreReady(env, now);
     const protectedArtifactFilepaths = await store.listArtifactFilepaths();
     return await cleanupExpiredWebuiImages({
-        outputDir,
+        outputDir: resolveImageOutputDir(env),
         retentionDays,
         protectedArtifactFilepaths,
         now

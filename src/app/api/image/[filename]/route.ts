@@ -1,6 +1,6 @@
 import { RequestValidationError, isValidImageFilename } from '@/lib/image-request-utils';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
-import { outputDir, verifyAccessToken } from '@/lib/server-runtime';
+import { resolveImageOutputDir, verifyAccessToken } from '@/lib/server-runtime';
 import fs from 'fs/promises';
 import { lookup } from 'mime-types';
 import { NextRequest, NextResponse } from 'next/server';
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         return NextResponse.json({ error: '文件名无效' }, { status: 400 });
     }
 
-    const filepath = path.join(outputDir, filename);
+    const filepath = path.join(resolveImageOutputDir(), filename);
 
     try {
         await fs.access(filepath);

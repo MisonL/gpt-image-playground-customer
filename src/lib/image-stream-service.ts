@@ -5,7 +5,7 @@ import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream
 import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
 import { readImageStreamDataIntervalTimeoutMs } from './openai-image-transport';
-import { createBatchId, createImageFilename, outputDir } from './server-runtime';
+import { createBatchId, createImageFilename, resolveImageOutputDir } from './server-runtime';
 import { withStreamDataIntervalTimeout } from './stream-data-interval-timeout';
 import type { ActualCostDetails } from './upstream-cost/types';
 import type OpenAI from 'openai';
@@ -234,7 +234,7 @@ async function downloadOptionalPartialImage(runtime: StreamRuntime, imageUrl: st
 async function persistStreamedImage(input: { options: ImageStreamResponseOptions; filename: string; b64Json: string }) {
     if (input.options.storageMode !== 'fs') return;
     const buffer = Buffer.from(input.b64Json, 'base64');
-    const filepath = path.join(outputDir, input.filename);
+    const filepath = path.join(resolveImageOutputDir(), input.filename);
     await writeFileAtomic(filepath, buffer);
     appLogger.info(`流式${input.options.modeLabel}：已保存图片 ${input.filename}`, {
         ...input.options.requestLogContext,
