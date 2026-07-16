@@ -9,6 +9,7 @@ import {
     readOutputDirEnv,
     readPositiveIntegerEnv,
     readAffinityKey,
+    resolveImageOutputDir,
     serializeAccessCookie,
     verifyAccessToken,
     verifyPasswordHash,
@@ -16,6 +17,7 @@ import {
 } from './server-runtime';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { describe, it } from 'node:test';
 
 const PAGE_PASSWORD_FIXTURE = ['customer', 'access', 'code'].join('-');
@@ -181,6 +183,16 @@ describe('readOutputDirEnv', () => {
         assert.throws(
             () => readOutputDirEnv({ IMAGE_OUTPUT_DIR: 'generated/../images' }, 'IMAGE_OUTPUT_DIR'),
             /安全的相对路径/
+        );
+    });
+});
+
+describe('resolveImageOutputDir', () => {
+    it('resolves the output directory against the cwd supplied for the current operation', () => {
+        assert.equal(resolveImageOutputDir({}, '/tmp/runtime-a'), path.resolve('/tmp/runtime-a', 'generated-images'));
+        assert.equal(
+            resolveImageOutputDir({ IMAGE_OUTPUT_DIR: 'custom/images' }, '/tmp/runtime-b'),
+            path.resolve('/tmp/runtime-b', 'custom/images')
         );
     });
 });

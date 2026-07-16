@@ -3,7 +3,7 @@ import { detectImageFormat, readImageDimensions, writeFileAtomic } from './agent
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
 import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
-import { createBatchId, createImageFilename, outputDir } from './server-runtime';
+import { createBatchId, createImageFilename, resolveImageOutputDir } from './server-runtime';
 import fs from 'fs/promises';
 import type OpenAI from 'openai';
 import path from 'path';
@@ -175,6 +175,7 @@ export async function persistOpenAiImages(options: {
 }): Promise<PersistedOpenAiImage[]> {
     const result = options.result;
     assertOpenAiImagesResponse(result);
+    const outputDir = resolveImageOutputDir();
     if (options.storageMode === 'fs') {
         await fs.mkdir(outputDir, { recursive: true });
     }

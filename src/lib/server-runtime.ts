@@ -13,12 +13,16 @@ const ONE_DAY_SECONDS = 24 * 60 * 60;
 const ONE_DAY_MS = ONE_DAY_SECONDS * 1000;
 const ACCESS_TOKEN_CLOCK_SKEW_MS = 60 * 1000;
 
-export function readOutputDirEnv(env: Record<string, string | undefined>, fieldName = 'IMAGE_OUTPUT_DIR'): string {
+export function readOutputDirEnv(
+    env: Record<string, string | undefined>,
+    fieldName = 'IMAGE_OUTPUT_DIR',
+    cwd = process.cwd()
+): string {
     const value = env[fieldName]?.trim();
     if (!value) return DEFAULT_OUTPUT_DIR;
-    const cwd = path.resolve(/* turbopackIgnore: true */ process.cwd());
-    const resolvedValue = path.resolve(/* turbopackIgnore: true */ process.cwd(), value);
-    const insideCwd = resolvedValue === cwd || resolvedValue.startsWith(`${cwd}${path.sep}`);
+    const resolvedCwd = path.resolve(/* turbopackIgnore: true */ cwd);
+    const resolvedValue = path.resolve(/* turbopackIgnore: true */ resolvedCwd, value);
+    const insideCwd = resolvedValue === resolvedCwd || resolvedValue.startsWith(`${resolvedCwd}${path.sep}`);
     if (
         value.startsWith('/') ||
         value.startsWith('\\') ||
@@ -32,7 +36,12 @@ export function readOutputDirEnv(env: Record<string, string | undefined>, fieldN
     return value;
 }
 
-export const outputDir = path.resolve(/* turbopackIgnore: true */ process.cwd(), readOutputDirEnv(process.env));
+export function resolveImageOutputDir(
+    env: Record<string, string | undefined> = process.env,
+    cwd = process.cwd()
+): string {
+    return path.resolve(/* turbopackIgnore: true */ cwd, readOutputDirEnv(env, 'IMAGE_OUTPUT_DIR', cwd));
+}
 
 function sha256(data: string): string {
     return crypto.createHash('sha256').update(data).digest('hex');

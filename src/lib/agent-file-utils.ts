@@ -1,5 +1,5 @@
 import { AgentApiError } from './api-error-response';
-import { outputDir } from './server-runtime';
+import { resolveImageOutputDir } from './server-runtime';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
@@ -123,7 +123,7 @@ export function assertArtifactFilepathAllowed(filepath: string): void {
 
 export function isArtifactFilepathAllowed(filepath: string): boolean {
     const resolvedFilepath = path.resolve(filepath);
-    const resolvedOutputDir = path.resolve(outputDir);
+    const resolvedOutputDir = resolveImageOutputDir();
     return resolvedFilepath === resolvedOutputDir || resolvedFilepath.startsWith(`${resolvedOutputDir}${path.sep}`);
 }
 

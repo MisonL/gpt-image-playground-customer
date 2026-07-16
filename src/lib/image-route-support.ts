@@ -12,7 +12,7 @@ import {
 import { RequestValidationError } from './image-request-utils';
 import type { ImageGenerationBackend } from './image-upstream-strategy';
 import { getServerChannelState } from './server-channel-router';
-import { buildAccessCookie, outputDir, readBooleanEnv, serializeAccessCookie } from './server-runtime';
+import { buildAccessCookie, readBooleanEnv, resolveImageOutputDir, serializeAccessCookie } from './server-runtime';
 import { resolveActualCost, type ActualCostDetails } from './upstream-cost/resolve';
 import fs from 'fs/promises';
 import { NextResponse } from 'next/server';
@@ -413,6 +413,7 @@ export function attachAccessCookie<T extends NextResponse>(response: T, accessCo
 }
 
 export async function ensureOutputDirExists() {
+    const outputDir = resolveImageOutputDir();
     try {
         await fs.access(outputDir);
     } catch (error: unknown) {
