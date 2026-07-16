@@ -104,7 +104,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         });
     });
 
-    it('exposes recovery probe settings without API keys', async () => {
+    it('defaults channel failure cooldown to disabled while exposing recovery probe settings', async () => {
         process.env.OPENAI_CHANNEL_1_ID = 'official';
         process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://api.openai.com/v1';
         process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-secret';
@@ -131,7 +131,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         };
 
         assert.deepEqual(body.channelRecovery, {
-            failureCooldownEnabled: true,
+            failureCooldownEnabled: false,
             failureCooldownMs: 30000,
             requireProbeForRecovery: true,
             pendingProbeCredentialCount: 0,
@@ -211,6 +211,25 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         };
 
         assert.equal(body.channelRecovery.failureCooldownEnabled, false);
+        assert.equal(body.channelRecovery.failureCooldownMs, 30000);
+        assert.equal(JSON.stringify(body).includes('sk-secret'), false);
+    });
+
+    it('allows channel failure cooldown to be enabled explicitly', async () => {
+        process.env.OPENAI_CHANNEL_1_ID = 'official';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://api.openai.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-secret';
+        process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED = 'true';
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as {
+            channelRecovery: {
+                failureCooldownEnabled: boolean;
+                failureCooldownMs: number;
+            };
+        };
+
+        assert.equal(body.channelRecovery.failureCooldownEnabled, true);
         assert.equal(body.channelRecovery.failureCooldownMs, 30000);
         assert.equal(JSON.stringify(body).includes('sk-secret'), false);
     });

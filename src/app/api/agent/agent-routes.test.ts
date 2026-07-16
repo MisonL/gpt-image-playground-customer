@@ -882,6 +882,7 @@ describe('Agent route integration', () => {
 
     it('marks Responses image_generation-disabled 403s as unavailable request modes', async () => {
         process.env.AGENT_STATE_BACKEND = 'memory';
+        process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED = 'true';
         delete process.env.AGENT_SQLITE_PATH;
         const { generateImage } = await loadAgentRoutes();
         const upstream = await startResponsesImageJsonUpstream(403, {
@@ -1289,6 +1290,7 @@ describe('Agent route integration', () => {
     });
 
     it('returns sanitized upstream diagnostics for failed generate requests', async () => {
+        process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED = 'true';
         const { generateImage, lookupAgentRequestDiagnostics } = await loadAgentRoutes();
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
