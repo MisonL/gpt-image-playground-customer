@@ -2,7 +2,6 @@ import { WorkbenchStatusStrip } from './workbench-status-strip';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 describe('WorkbenchStatusStrip', () => {
@@ -154,6 +153,8 @@ describe('WorkbenchStatusStrip', () => {
         );
 
         assert.match(html, /basis-full sm:basis-auto/);
+        assert.match(html, /min-h-11 cursor-pointer/);
+        assert.match(html, /lg:min-h-7/);
         assert.match(html, /w-full min-w-0 flex-wrap/);
         assert.match(html, /sm:w-auto/);
         assert.match(html, /basis-full items-center rounded-full/);

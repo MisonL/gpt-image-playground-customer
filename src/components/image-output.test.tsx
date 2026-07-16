@@ -2,7 +2,6 @@ import { buildImageActionTarget, ImageOutput } from './image-output';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const noop = () => {};
@@ -97,10 +96,7 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /workbench-panel[^"]*h-full[\s\S]*preview-gallery-board/);
         assert.match(html, /min-h-\[300px\] flex-1 sm:min-h-\[420px\] lg:min-h-\[520px\]/);
-        assert.doesNotMatch(
-            html,
-            /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\] xl:min-h-0 xl:flex-1/
-        );
+        assert.doesNotMatch(html, /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\]/);
     });
 
     it('uses an edit reference placeholder instead of the sample image in edit mode', () => {

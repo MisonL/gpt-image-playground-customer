@@ -91,6 +91,17 @@ export function buildGenerationActivityItems(options: GenerationActivityOptions)
     return items;
 }
 
+export function selectAnnouncedGenerationActivity(items: GenerationActivityItem[]): GenerationActivityItem | undefined {
+    return (
+        items.find((item) => item.id === 'preparing-edit') ??
+        items.find((item) => item.id === 'failed') ??
+        items.find((item) => item.id === 'batch-progress' && item.tone === 'warning') ??
+        items.find((item) => item.id === 'saved') ??
+        items.find((item) => item.id === 'batch-progress') ??
+        items.at(-1)
+    );
+}
+
 export function advanceGenerationBatchProgress(
     current: GenerationBatchProgress | null,
     total: number,

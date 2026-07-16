@@ -14,9 +14,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         requestModeHealth: [
                             {
                                 mode: 'images-sse',
-                                configuredCredentialCount: 1,
                                 healthyCredentialCount: 1,
-                                configuredChannelCount: 1,
                                 healthyChannelCount: 1
                             }
                         ]
@@ -42,9 +40,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         requestModeHealth: [
                             {
                                 mode: 'responses-non-stream',
-                                configuredCredentialCount: 1,
                                 healthyCredentialCount: 1,
-                                configuredChannelCount: 1,
                                 healthyChannelCount: 1
                             }
                         ]
@@ -83,9 +79,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         requestModeHealth: [
                             {
                                 mode: 'images-non-stream',
-                                configuredCredentialCount: 1,
                                 healthyCredentialCount: 0,
-                                configuredChannelCount: 1,
                                 healthyChannelCount: 0
                             }
                         ]

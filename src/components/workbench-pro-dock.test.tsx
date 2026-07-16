@@ -85,6 +85,8 @@ describe('WorkbenchProDock', () => {
         assert.match(html, /workbench-panel/);
         assert.match(html, /mt-4/);
         assert.match(html, /rounded-lg/);
+        assert.match(html, /xl:max-h-80/);
+        assert.match(html, /xl:overflow-y-auto/);
         assert.match(html, /aria-pressed="true"[^>]*>省心模式/);
         assert.match(html, /输出格式/);
         assert.match(html, /gpt-image-2/);
@@ -469,5 +471,8 @@ describe('WorkbenchProDock', () => {
         assert.match(html, /pro-responses-model-input/);
         assert.match(html, /GPT 顶层模型/);
         assert.match(html, /Responses image_generation 需要填写 GPT 顶层模型/);
+        assert.match(html, /col-span-full grid grid-cols-1 gap-2/);
+        assert.match(html, /sm:grid-cols-2/);
+        assert.doesNotMatch(html, /md:grid-cols-\[auto_1fr_1fr_1fr\]/);
     });
 });

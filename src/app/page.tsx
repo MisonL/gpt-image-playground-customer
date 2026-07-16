@@ -26,6 +26,7 @@ import {
     buildGenerationActivityItems,
     collectFailedBatchPrompts,
     countCompletedBatchResults,
+    selectAnnouncedGenerationActivity,
     type GenerationBatchProgress
 } from '@/lib/generation-activity';
 import { resolveHistoryCompareImage } from '@/lib/history-compare';
@@ -109,10 +110,11 @@ import {
 } from '@/lib/streaming-batch';
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
+import { cn } from '@/lib/utils';
 import { formatEstimatedCredits } from '@/lib/workbench-cost-label';
 import { createZipBlob } from '@/lib/zip-export';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowUp, Flower2, HelpCircle, Loader2, Lock, Pause, PenLine, Settings2, Activity, X } from 'lucide-react';
+import { Activity, ArrowUp, Flower2, HelpCircle, Loader2, Lock, Pause, PenLine, Settings2, X } from 'lucide-react';
 import * as React from 'react';
 
 type DrawnPoint = {
@@ -141,6 +143,10 @@ const resultFeedbackSyncRetryDelaysMs = [1000, 3000] as const;
 const resultFeedbackDeleteMaxAttempts = 3;
 const resultFeedbackDeleteRetryDelaysMs = [1000, 3000] as const;
 const resultFeedbackRequestTimeoutMs = 10_000;
+const mobileCreationDrawerFocusableSelector =
+    'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+const mobileCreationDrawerPortalSelector =
+    '[data-slot="select-content"], [role="listbox"], [role="menu"], [role="dialog"]:not(#mobile-creation-sheet)';
 
 type ApiCallRetryArgs = [
     GenerationFormData | EditingFormData,
@@ -183,6 +189,12 @@ function getWorkbenchRouteLabel(backend: ImageUpstreamFormBackend, t: (key: stri
     if (backend === 'images-api') return t('upstream.backendImages');
     if (backend === 'responses-image-generation') return t('upstream.backendResponses');
     return t('upstream.workbenchDefaultRoute');
+}
+
+function getMobileCreationDrawerFocusableElements(root: ParentNode): HTMLElement[] {
+    return Array.from(root.querySelectorAll<HTMLElement>(mobileCreationDrawerFocusableSelector)).filter(
+        (element) => element.getClientRects().length > 0 && !element.closest('[aria-hidden="true"], [inert]')
+    );
 }
 
 function haveHistoryFeedbackTargetOverlap(left: HistoryFeedbackTarget[], right: HistoryFeedbackTarget[]): boolean {
@@ -550,6 +562,11 @@ export default function HomePage() {
     const [isMobileCreationDrawerOpen, setIsMobileCreationDrawerOpen] = React.useState(false);
     const outputPanelRef = React.useRef<HTMLDivElement | null>(null);
     const mobileCreationDrawerCloseButtonRef = React.useRef<HTMLButtonElement | null>(null);
+    const mobileCreationDrawerTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+    const mobileCreationDrawerFocusTargetRef = React.useRef<'trigger' | 'output' | null>(null);
+    const pendingWorkbenchModeFocusRef = React.useRef<WorkbenchMode | null>(null);
+    const apiSettingsDialogTriggerRef = React.useRef<HTMLButtonElement | null>(null);
+    const sendingToEditRef = React.useRef(false);
     const mobileDrawerPointerStartRef = React.useRef<MobileDrawerPointerStart | null>(null);
     const mobileDrawerGestureHandledAtRef = React.useRef(0);
 
@@ -725,7 +742,6 @@ export default function HomePage() {
         streamMode,
         streamingStrategy: activeEffectiveStreamingStrategy
     }).checked;
-    const mobileCanSaveInspiration = !isLoading && !isSendingToEdit && currentPrompt.trim().length > 0;
     const hasRandomInspirationPrompt = inspirations.some((item) => item.prompt.trim().length > 0);
     const pickRandomInspirationPrompt = React.useCallback(() => {
         const savedPrompts = inspirations.map((item) => item.prompt.trim()).filter((prompt) => prompt.length > 0);
@@ -843,6 +859,7 @@ export default function HomePage() {
             t
         ]
     );
+    const announcedGenerationActivity = selectAnnouncedGenerationActivity(generationActivityItems);
     const mobilePrimaryDisabledReason = resolveMobilePrimaryDisabledReason({
         isLoading,
         isSendingToEdit,
@@ -877,6 +894,13 @@ export default function HomePage() {
 
     const handleWorkbenchModeChange = React.useCallback(
         (nextMode: WorkbenchMode) => {
+            if (
+                typeof document !== 'undefined' &&
+                document.activeElement instanceof HTMLButtonElement &&
+                document.activeElement.matches('[data-workbench-mode]')
+            ) {
+                pendingWorkbenchModeFocusRef.current = nextMode;
+            }
             setWorkbenchMode(nextMode);
             if (nextMode !== 'reuse') {
                 setReuseContext(null);
@@ -896,6 +920,22 @@ export default function HomePage() {
         },
         [genPrompt]
     );
+
+    React.useEffect(() => {
+        const focusMode = pendingWorkbenchModeFocusRef.current;
+        if (!focusMode || workbenchMode !== focusMode || typeof document === 'undefined') return;
+
+        pendingWorkbenchModeFocusRef.current = null;
+        const tab = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-workbench-mode]')).find(
+            (candidate) =>
+                candidate.dataset.workbenchMode === focusMode &&
+                candidate.getClientRects().length > 0 &&
+                !candidate.closest('[aria-hidden="true"], [inert]')
+        );
+        if (tab) {
+            tab.focus();
+        }
+    }, [mode, workbenchMode]);
 
     const scrollToOutput = React.useCallback(() => {
         const outputTop = outputPanelRef.current?.getBoundingClientRect().top;
@@ -919,18 +959,30 @@ export default function HomePage() {
     }, [blurActiveMobileTrigger]);
 
     const closeMobileCreationDrawer = React.useCallback(() => {
+        mobileCreationDrawerFocusTargetRef.current = 'trigger';
         blurActiveMobileTrigger();
         setIsMobileCreationDrawerOpen(false);
     }, [blurActiveMobileTrigger]);
 
+    const closeMobileCreationDrawerAfterSubmit = React.useCallback(() => {
+        if (!isMobileCreationDrawerOpen) {
+            mobileCreationDrawerFocusTargetRef.current = null;
+            blurActiveMobileTrigger();
+            outputPanelRef.current?.focus();
+            return;
+        }
+        mobileCreationDrawerFocusTargetRef.current = 'output';
+        blurActiveMobileTrigger();
+        setIsMobileCreationDrawerOpen(false);
+    }, [blurActiveMobileTrigger, isMobileCreationDrawerOpen]);
+
     const toggleMobileCreationDrawer = React.useCallback(() => {
-        setIsMobileCreationDrawerOpen((isOpen) => {
-            if (!isOpen) {
-                blurActiveMobileTrigger();
-            }
-            return !isOpen;
-        });
-    }, [blurActiveMobileTrigger]);
+        if (isMobileCreationDrawerOpen) {
+            closeMobileCreationDrawer();
+        } else {
+            openMobileCreationDrawer();
+        }
+    }, [closeMobileCreationDrawer, isMobileCreationDrawerOpen, openMobileCreationDrawer]);
 
     const beginMobileCreationDrawerGesture = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return;
@@ -976,6 +1028,44 @@ export default function HomePage() {
         toggleMobileCreationDrawer();
     }, [toggleMobileCreationDrawer]);
 
+    const handleMobileCreationDrawerKeyDown = React.useCallback(
+        (event: React.KeyboardEvent<HTMLElement>) => {
+            if (!isMobileCreationDrawerOpen) return;
+            if (event.key !== 'Tab') return;
+
+            const focusableElements = getMobileCreationDrawerFocusableElements(event.currentTarget);
+            const firstElement = focusableElements[0];
+            const lastElement = focusableElements.at(-1);
+            if (!firstElement || !lastElement) return;
+
+            if (event.shiftKey && document.activeElement === firstElement) {
+                event.preventDefault();
+                lastElement.focus();
+            } else if (!event.shiftKey && document.activeElement === lastElement) {
+                event.preventDefault();
+                firstElement.focus();
+            }
+        },
+        [isMobileCreationDrawerOpen]
+    );
+
+    React.useEffect(() => {
+        if (!isMobileCreationDrawerOpen || typeof document === 'undefined') return;
+        const mobileCreationDrawer = document.getElementById('mobile-creation-sheet');
+        if (!mobileCreationDrawer) return;
+
+        const keepFocusInMobileCreationDrawer = (event: FocusEvent) => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) return;
+            if (mobileCreationDrawer.contains(target) || target.closest(mobileCreationDrawerPortalSelector)) return;
+
+            getMobileCreationDrawerFocusableElements(mobileCreationDrawer)[0]?.focus();
+        };
+
+        document.addEventListener('focusin', keepFocusInMobileCreationDrawer);
+        return () => document.removeEventListener('focusin', keepFocusInMobileCreationDrawer);
+    }, [isMobileCreationDrawerOpen]);
+
     React.useEffect(() => {
         if (!isMobileCreationDrawerOpen || typeof document === 'undefined') return;
 
@@ -991,6 +1081,21 @@ export default function HomePage() {
     }, [isMobileCreationDrawerOpen]);
 
     React.useEffect(() => {
+        if (!isMobileCreationDrawerOpen || typeof document === 'undefined') return;
+
+        const closeDrawerOnEscape = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            if (event.target instanceof Element && event.target.closest(mobileCreationDrawerPortalSelector)) {
+                return;
+            }
+            event.preventDefault();
+            closeMobileCreationDrawer();
+        };
+        document.addEventListener('keydown', closeDrawerOnEscape);
+        return () => document.removeEventListener('keydown', closeDrawerOnEscape);
+    }, [closeMobileCreationDrawer, isMobileCreationDrawerOpen]);
+
+    React.useEffect(() => {
         if (!isMobileCreationDrawerOpen) return;
 
         requestAnimationFrame(() => {
@@ -999,19 +1104,38 @@ export default function HomePage() {
     }, [isMobileCreationDrawerOpen]);
 
     React.useEffect(() => {
+        if (isMobileCreationDrawerOpen || typeof window === 'undefined') return;
+        const focusTarget = mobileCreationDrawerFocusTargetRef.current;
+        if (!focusTarget) return;
+        mobileCreationDrawerFocusTargetRef.current = null;
+
+        if (focusTarget === 'trigger') {
+            const trigger =
+                mobileCreationDrawerTriggerRef.current ??
+                document.querySelector<HTMLButtonElement>('[aria-controls="mobile-creation-sheet"]');
+            trigger?.focus();
+        } else {
+            outputPanelRef.current?.focus();
+        }
+    }, [isMobileCreationDrawerOpen]);
+
+    React.useEffect(() => {
         if (!isMobileCreationDrawerOpen || typeof window === 'undefined') return;
 
         const desktopMediaQuery = window.matchMedia('(min-width: 1024px)');
         const closeDrawerOnDesktop = () => {
             if (desktopMediaQuery.matches) {
+                mobileCreationDrawerFocusTargetRef.current = null;
                 setIsMobileCreationDrawerOpen(false);
             }
         };
 
         closeDrawerOnDesktop();
         desktopMediaQuery.addEventListener('change', closeDrawerOnDesktop);
+        window.addEventListener('resize', closeDrawerOnDesktop);
         return () => {
             desktopMediaQuery.removeEventListener('change', closeDrawerOnDesktop);
+            window.removeEventListener('resize', closeDrawerOnDesktop);
         };
     }, [isMobileCreationDrawerOpen]);
 
@@ -1716,7 +1840,7 @@ export default function HomePage() {
         batchPauseRequestedRef.current = false;
         setIsBatchPauseRequested(false);
         if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
-            setIsMobileCreationDrawerOpen(false);
+            closeMobileCreationDrawerAfterSubmit();
             window.setTimeout(scrollToOutput, 80);
         }
 
@@ -2100,26 +2224,6 @@ export default function HomePage() {
             enableParallelBatch
         };
         void handleApiCall(formData);
-    }
-
-    function handleMobileSaveInspiration() {
-        const trimmedPrompt = currentPrompt.trim();
-        if (!trimmedPrompt) return;
-        handleSaveInspiration(trimmedPrompt);
-    }
-
-    function handleMobileRandomInspiration() {
-        const nextPrompt = pickRandomInspirationPrompt();
-        if (!nextPrompt) return;
-        if (mode === 'edit') {
-            setEditPrompt(nextPrompt);
-            return;
-        }
-        if (workbenchMode === 'batch') {
-            handleBatchPromptTextChange(nextPrompt);
-            return;
-        }
-        setGenPrompt(nextPrompt);
     }
 
     const buildCurrentGenerationFallbackFormData = React.useCallback((): GenerationFormData => {
@@ -3048,13 +3152,13 @@ export default function HomePage() {
         filename: string,
         storageMode: HistoryMetadata['storageModeUsed'] = effectiveStorageModeClient
     ): Promise<boolean> => {
-        if (isSendingToEdit) return false;
+        if (isLoading || sendingToEditRef.current) return false;
+        sendingToEditRef.current = true;
         const sourceStorageMode = storageMode || 'fs';
-        setIsSendingToEdit(true);
-        setError(null);
 
         const alreadyExists = editImageFiles.some((file) => file.name === filename);
         if (mode === 'edit' && alreadyExists) {
+            sendingToEditRef.current = false;
             setIsSendingToEdit(false);
             return true;
         }
@@ -3067,9 +3171,16 @@ export default function HomePage() {
             })
         ) {
             setError(createErrorNotice(t('error.maxEditImages', { count: maxEditSourceImages })));
+            sendingToEditRef.current = false;
             setIsSendingToEdit(false);
             return false;
         }
+
+        setCompletedGenerationCount(null);
+        setStreamingPreviewImages(new Map());
+        setBatchProgress(null);
+        setIsSendingToEdit(true);
+        setError(null);
 
         try {
             let blob: Blob | undefined;
@@ -3131,6 +3242,7 @@ export default function HomePage() {
             setError(createErrorNotice(errorMessage));
             return false;
         } finally {
+            sendingToEditRef.current = false;
             setIsSendingToEdit(false);
         }
     };
@@ -3281,6 +3393,20 @@ export default function HomePage() {
     }, []);
 
     const showEntryLock = isPasswordRequiredByBackend === true && !isEntryAuthenticated;
+    const getApiSettingsDialogFocusTarget = React.useCallback(() => {
+        const trigger = apiSettingsDialogTriggerRef.current;
+        if (trigger && trigger.getClientRects().length > 0 && !trigger.disabled) return trigger;
+        if (typeof document === 'undefined') return null;
+        return (
+            Array.from(document.querySelectorAll<HTMLButtonElement>('[data-api-settings-trigger]')).find(
+                (candidate) => candidate.getClientRects().length > 0 && !candidate.disabled
+            ) ?? null
+        );
+    }, []);
+    const openApiSettingsDialog = (event: React.MouseEvent<HTMLButtonElement>) => {
+        apiSettingsDialogTriggerRef.current = event.currentTarget;
+        setIsApiSettingsDialogOpen(true);
+    };
     const outputFailureMessage =
         !isLoading && !isSendingToEdit && !latestImageBatch && error?.message === generationFailureMessage
             ? generationFailureMessage
@@ -3310,14 +3436,13 @@ export default function HomePage() {
                         : t('password.initialDescription')
                 }
             />
-            {isApiSettingsDialogOpen ? (
-                <ApiSettingsDialog
-                    isOpen={isApiSettingsDialogOpen}
-                    onOpenChange={setIsApiSettingsDialogOpen}
-                    settings={apiSettings}
-                    onSave={handleSaveApiSettings}
-                />
-            ) : null}
+            <ApiSettingsDialog
+                isOpen={isApiSettingsDialogOpen}
+                onOpenChange={setIsApiSettingsDialogOpen}
+                settings={apiSettings}
+                onSave={handleSaveApiSettings}
+                getReturnFocusTarget={getApiSettingsDialogFocusTarget}
+            />
             <ShareDialog
                 key={shareDialogSessionId}
                 open={shareDialogOpen}
@@ -3327,6 +3452,18 @@ export default function HomePage() {
                 error={shareError}
                 onCreate={handleCreateShare}
             />
+            {isMobileCreationDrawerOpen ? (
+                <p
+                    data-mobile-generation-activity-announcer
+                    role='status'
+                    aria-live='polite'
+                    aria-atomic='true'
+                    className='sr-only'>
+                    {announcedGenerationActivity
+                        ? `${announcedGenerationActivity.label} ${announcedGenerationActivity.detail}`
+                        : ''}
+                </p>
+            ) : null}
             {showEntryLock ? (
                 <div className='mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-6 px-4 text-center'>
                     <div className='bg-primary text-primary-foreground border-primary/20 flex size-14 items-center justify-center rounded-full border shadow-sm'>
@@ -3359,9 +3496,8 @@ export default function HomePage() {
             {!showEntryLock && isPasswordRequiredByBackend !== null ? (
                 <>
                     {isMobileCreationDrawerOpen && (
-                        <button
-                            type='button'
-                            aria-label={t('ux.closeCreationSheet')}
+                        <div
+                            aria-hidden='true'
                             className='bg-foreground/25 fixed inset-0 z-40 lg:hidden'
                             onClick={closeMobileCreationDrawer}
                         />
@@ -3383,8 +3519,9 @@ export default function HomePage() {
                                     type='button'
                                     variant='outline'
                                     size='icon'
-                                    onClick={() => setIsApiSettingsDialogOpen(true)}
+                                    onClick={openApiSettingsDialog}
                                     className='bg-card/80 ml-auto h-11 w-11 shrink-0 shadow-sm sm:hidden'
+                                    data-api-settings-trigger
                                     aria-label={t('app.apiSettings')}>
                                     <Settings2 className='h-4 w-4' />
                                 </Button>
@@ -3404,25 +3541,29 @@ export default function HomePage() {
                                     <HelpCircle className='h-4 w-4' aria-hidden='true' />
                                     <button
                                         type='button'
-                                        onClick={() => setIsApiSettingsDialogOpen(true)}
+                                        onClick={openApiSettingsDialog}
                                         aria-label={t('app.apiSettings')}
-                                        className='hover:bg-accent hover:text-foreground focus-visible:ring-ring flex h-9 w-9 items-center justify-center rounded-md transition-[background-color,color,box-shadow] focus-visible:ring-2 focus-visible:outline-none active:scale-[0.98]'>
+                                        data-api-settings-trigger
+                                        className='hover:bg-accent hover:text-foreground focus-visible:ring-ring flex h-11 w-11 items-center justify-center rounded-md transition-[background-color,color,box-shadow] focus-visible:ring-2 focus-visible:outline-none active:scale-[0.98] lg:h-9 lg:w-9'>
                                         <Settings2 className='h-4 w-4' />
                                     </button>
                                 </div>
                             </div>
                         </header>
-                        <div className='grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(300px,340px)_minmax(620px,1fr)_minmax(280px,330px)] 2xl:grid-cols-[minmax(330px,370px)_minmax(760px,1fr)_minmax(330px,380px)]'>
+                        <div className='grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(300px,340px)_minmax(600px,1fr)_minmax(280px,330px)] 2xl:grid-cols-[minmax(300px,340px)_minmax(840px,1fr)_minmax(280px,310px)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
-                                className={`order-2 lg:static lg:order-1 lg:block lg:p-0 lg:shadow-none xl:min-h-0 xl:overflow-hidden ${
+                                role={isMobileCreationDrawerOpen ? 'dialog' : undefined}
+                                aria-modal={isMobileCreationDrawerOpen ? true : undefined}
+                                onKeyDown={handleMobileCreationDrawerKeyDown}
+                                className={`order-2 lg:static lg:order-1 lg:block lg:overflow-visible lg:p-0 lg:shadow-none xl:min-h-0 xl:overflow-hidden ${
                                     isMobileCreationDrawerOpen
-                                        ? 'border-border fixed inset-x-0 top-4 bottom-[calc(var(--mobile-action-dock-height)+env(safe-area-inset-bottom))] z-50 min-h-0 scroll-pb-[calc(var(--mobile-action-dock-height)+1rem)] overflow-y-auto rounded-t-lg border-t bg-[oklch(0.986_0.015_84)] px-3 pt-3 pb-4 shadow-[0_-16px_36px_rgba(73,50,25,0.18)] lg:max-h-none lg:rounded-none'
+                                        ? 'border-border fixed inset-x-0 top-4 bottom-0 z-50 flex min-h-0 flex-col overflow-hidden rounded-t-lg border-t bg-[oklch(0.986_0.015_84)] px-3 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(73,50,25,0.18)] lg:max-h-none lg:rounded-none'
                                         : 'hidden min-h-[620px]'
                                 }`}>
                                 {isMobileCreationDrawerOpen && (
-                                    <div className='sticky top-0 z-10 mb-2 flex items-center justify-center lg:hidden'>
+                                    <div className='mobile-creation-sheet-handle z-10 mb-2 flex shrink-0 items-center justify-center lg:hidden'>
                                         <button
                                             type='button'
                                             className='flex h-11 w-24 touch-none items-center justify-center rounded-full select-none'
@@ -3447,35 +3588,22 @@ export default function HomePage() {
                                         </Button>
                                     </div>
                                 )}
-                                {isMobileCreationDrawerOpen && (
-                                    <div className='mb-3 grid grid-cols-2 gap-2 lg:hidden'>
-                                        <Button
-                                            type='button'
-                                            variant='outline'
-                                            size='sm'
-                                            onClick={handleMobileSaveInspiration}
-                                            disabled={!mobileCanSaveInspiration}
-                                            className='bg-card/80 min-h-11'>
-                                            {t('workbench.saveInspiration')}
-                                        </Button>
-                                        <Button
-                                            type='button'
-                                            variant='outline'
-                                            size='sm'
-                                            onClick={handleMobileRandomInspiration}
-                                            disabled={isLoading || isSendingToEdit || !hasRandomInspirationPrompt}
-                                            className='bg-card/80 min-h-11'>
-                                            {t('workbench.randomInspiration')}
-                                        </Button>
-                                    </div>
-                                )}
-                                <div className={mode === 'generate' ? 'block w-full lg:h-full' : 'hidden'}>
+                                <div
+                                    aria-hidden={mode !== 'generate'}
+                                    inert={mode !== 'generate'}
+                                    className={
+                                        mode === 'generate'
+                                            ? 'mobile-drawer-form-slot flex min-h-0 w-full flex-1 flex-col lg:h-full'
+                                            : 'hidden'
+                                    }>
                                     <GenerationForm
                                         onSubmit={handleApiCall}
                                         onSaveInspiration={handleSaveInspiration}
                                         canApplyRandomInspiration={hasRandomInspirationPrompt}
                                         onPickRandomInspiration={pickRandomInspirationPrompt}
-                                        isLoading={isLoading}
+                                        isLoading={isLoading || isSendingToEdit}
+                                        showLoadingState={isLoading}
+                                        isActive={mode === 'generate'}
                                         currentMode={workbenchMode}
                                         onModeChange={handleWorkbenchModeChange}
                                         reuseContext={reuseContext}
@@ -3538,10 +3666,22 @@ export default function HomePage() {
                                         estimatedCostLabel={activeEstimatedCostLabel}
                                     />
                                 </div>
-                                <div className={mode === 'edit' ? 'block w-full lg:h-full' : 'hidden'}>
+                                <div
+                                    aria-hidden={mode !== 'edit'}
+                                    inert={mode !== 'edit'}
+                                    className={
+                                        mode === 'edit'
+                                            ? 'mobile-drawer-form-slot flex min-h-0 w-full flex-1 flex-col lg:h-full'
+                                            : 'hidden'
+                                    }>
                                     <EditingForm
                                         onSubmit={handleApiCall}
+                                        onSaveInspiration={handleSaveInspiration}
+                                        canApplyRandomInspiration={hasRandomInspirationPrompt}
+                                        onPickRandomInspiration={pickRandomInspirationPrompt}
                                         isLoading={isLoading || isSendingToEdit}
+                                        showLoadingState={isLoading}
+                                        isActive={mode === 'edit'}
                                         currentMode={workbenchMode}
                                         onModeChange={handleWorkbenchModeChange}
                                         reuseContext={editReuseContext}
@@ -3624,6 +3764,7 @@ export default function HomePage() {
                             </section>
                             <section
                                 ref={outputPanelRef}
+                                tabIndex={-1}
                                 aria-label={t('app.canvasPreview')}
                                 aria-hidden={isMobileCreationDrawerOpen}
                                 inert={isMobileCreationDrawerOpen}
@@ -3714,11 +3855,15 @@ export default function HomePage() {
                                 aria-label={t('history.title')}
                                 aria-hidden={isMobileCreationDrawerOpen}
                                 inert={isMobileCreationDrawerOpen}
-                                className='order-3 min-h-[420px] min-w-0 lg:col-span-2 lg:min-h-[420px] xl:col-span-1 xl:min-h-0 xl:overflow-hidden'>
+                                className={cn(
+                                    'order-3 min-h-[420px] min-w-0 lg:col-span-2 lg:min-h-[420px] xl:col-span-1',
+                                    shouldExpandOutputStage ? 'xl:min-h-0 xl:overflow-hidden' : 'xl:min-h-0'
+                                )}>
                                 <HistoryPanel
                                     history={history}
                                     inspirations={inspirations}
                                     activityItems={generationActivityItems}
+                                    isSendingToEdit={isLoading || isSendingToEdit}
                                     onSelectImage={handleHistorySelect}
                                     onApplyPrompt={handleApplyPrompt}
                                     onSaveInspiration={handleSaveInspiration}
@@ -3752,10 +3897,11 @@ export default function HomePage() {
                             </div>
                             <div className='mx-auto flex max-w-screen-sm items-stretch gap-2'>
                                 <Button
+                                    ref={mobileCreationDrawerTriggerRef}
                                     type='button'
                                     variant='outline'
                                     size='icon'
-                                    onClick={toggleMobileCreationDrawer}
+                                    onClick={openMobileCreationDrawer}
                                     className='text-muted-foreground hover:text-foreground h-11 w-11 shrink-0'
                                     aria-label={t('ux.openCreationSheet')}
                                     aria-controls='mobile-creation-sheet'
@@ -3774,7 +3920,7 @@ export default function HomePage() {
                                         ? isLoading
                                             ? t('generate.loading')
                                             : t('generate.submit')
-                                        : isLoading || isSendingToEdit
+                                        : isLoading
                                           ? t('edit.loading')
                                           : t('edit.submit')}
                                 </Button>

@@ -1,7 +1,12 @@
 import { GenerationForm, resolveGenerationFooterPromptTarget } from './generation-form';
 import { I18nProvider } from '@/lib/i18n';
-import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from '@/lib/image-upstream-profile';
+import {
+    IMAGE_UPSTREAM_PROFILES,
+    type ImageUpstreamProfile,
+    type PartialImagesCount
+} from '@/lib/image-upstream-profile';
 import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import { renderInClientDom } from '@/test-utils/react-dom';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
@@ -38,119 +43,301 @@ function assertSubmitFooterAvailable(html: string, submitLabel: string) {
     assert.equal(classNames.includes('border-t'), true);
 }
 
-function renderGenerationForm(
-    options: {
-        currentMode?: 'generate' | 'edit' | 'batch' | 'reuse';
-        defaultAdvancedTab?: 'output' | 'model' | 'stream' | 'route';
-        failedBatchPrompts?: string[];
-        canPauseBatch?: boolean;
-        isBatchPauseRequested?: boolean;
-        defaultAdvancedOpen?: boolean;
-        omitPauseHandler?: boolean;
-        allowStreamingBatch?: boolean;
-        enableParallelBatch?: boolean;
-        streamingStrategy?: React.ComponentProps<typeof GenerationForm>['streamingStrategy'];
-        defaultStreamingStrategy?: ImageStreamingStrategy;
-        prompt?: string;
-        batchPromptText?: string;
-        canApplyRandomInspiration?: boolean;
-        allowResponsesImageBackend?: boolean;
-        hasDefaultResponsesModel?: boolean;
-        responsesModel?: string;
-        imageBackend?: React.ComponentProps<typeof GenerationForm>['imageBackend'];
-        upstreamProfile?: ImageUpstreamProfile;
-        upstreamProfileMixed?: boolean;
-    } = {}
-) {
+type GenerationRenderOptions = {
+    currentMode?: 'generate' | 'edit' | 'batch' | 'reuse';
+    defaultAdvancedTab?: 'output' | 'model' | 'stream' | 'route';
+    failedBatchPrompts?: string[];
+    canPauseBatch?: boolean;
+    isBatchPauseRequested?: boolean;
+    defaultAdvancedOpen?: boolean;
+    omitPauseHandler?: boolean;
+    allowStreamingBatch?: boolean;
+    enableParallelBatch?: boolean;
+    streamingStrategy?: React.ComponentProps<typeof GenerationForm>['streamingStrategy'];
+    defaultStreamingStrategy?: ImageStreamingStrategy;
+    prompt?: string;
+    batchPromptText?: string;
+    canApplyRandomInspiration?: boolean;
+    allowResponsesImageBackend?: boolean;
+    hasDefaultResponsesModel?: boolean;
+    responsesModel?: string;
+    imageBackend?: React.ComponentProps<typeof GenerationForm>['imageBackend'];
+    upstreamProfile?: ImageUpstreamProfile;
+    upstreamProfileMixed?: boolean;
+    isActive?: boolean;
+    n?: number[];
+    partialImages?: PartialImagesCount;
+    streamMode?: React.ComponentProps<typeof GenerationForm>['streamMode'];
+    model?: React.ComponentProps<typeof GenerationForm>['model'];
+    size?: React.ComponentProps<typeof GenerationForm>['size'];
+    isLoading?: boolean;
+    showLoadingState?: boolean;
+};
+
+function createGenerationFormProps(options: GenerationRenderOptions = {}): React.ComponentProps<typeof GenerationForm> {
+    return {
+        onSubmit: noop,
+        onSaveInspiration: noop,
+        canApplyRandomInspiration: options.canApplyRandomInspiration ?? true,
+        onPickRandomInspiration: () => '用户保存的真实提示词',
+        isLoading: options.isLoading ?? false,
+        showLoadingState: options.showLoadingState,
+        isActive: options.isActive ?? true,
+        currentMode: options.currentMode ?? 'generate',
+        onModeChange: noop,
+        reuseContext: null,
+        onClearReuseContext: noop,
+        isPasswordRequiredByBackend: false,
+        clientPasswordHash: null,
+        onOpenPasswordDialog: noop,
+        model: options.model ?? 'gpt-image-2',
+        setModel: noop,
+        prompt: options.prompt ?? '用户真实提示词 A',
+        setPrompt: noop,
+        batchPromptText: options.batchPromptText ?? '用户真实提示词 A\n用户真实提示词 B',
+        setBatchPromptText: noop,
+        failedBatchPrompts: options.failedBatchPrompts,
+        canPauseBatch: options.canPauseBatch,
+        isBatchPauseRequested: options.isBatchPauseRequested,
+        onPauseBatch: options.omitPauseHandler ? undefined : noop,
+        n: options.n ?? [1],
+        setN: noop,
+        size: options.size ?? 'auto',
+        setSize: noop,
+        customWidth: 1024,
+        setCustomWidth: noop,
+        customHeight: 1024,
+        setCustomHeight: noop,
+        quality: 'high',
+        setQuality: noop,
+        outputFormat: 'png',
+        setOutputFormat: noop,
+        compression: [100],
+        setCompression: noop,
+        background: 'auto',
+        setBackground: noop,
+        upstreamProfile: options.upstreamProfile ?? IMAGE_UPSTREAM_PROFILES['openai-compatible'],
+        upstreamProfileMixed: options.upstreamProfileMixed ?? false,
+        moderation: 'auto',
+        setModeration: noop,
+        streamMode: options.streamMode ?? 'auto',
+        setStreamMode: noop,
+        allowStreamingBatch: options.allowStreamingBatch ?? false,
+        enableParallelBatch: options.enableParallelBatch ?? false,
+        setEnableParallelBatch: noop,
+        partialImages: options.partialImages ?? 1,
+        setPartialImages: noop,
+        allowResponsesImageBackend: options.allowResponsesImageBackend ?? true,
+        hasDefaultResponsesModel: options.hasDefaultResponsesModel ?? true,
+        imageBackend: options.imageBackend ?? 'server-default',
+        setImageBackend: noop,
+        streamingStrategy: options.streamingStrategy ?? 'server-default',
+        defaultStreamingStrategy: options.defaultStreamingStrategy ?? 'auto',
+        setStreamingStrategy: noop,
+        responsesModel: options.responsesModel ?? '',
+        setResponsesModel: noop,
+        thinking: 'server-default',
+        setThinking: noop,
+        promptOptimization: 'server-default',
+        setPromptOptimization: noop,
+        forceWeb: false,
+        setForceWeb: noop,
+        estimatedCostLabel: '预计 0.12 积分',
+        defaultAdvancedOpen: options.defaultAdvancedOpen,
+        defaultAdvancedTab: options.defaultAdvancedTab
+    };
+}
+
+function renderGenerationForm(options: GenerationRenderOptions = {}) {
     return renderToStaticMarkup(
         <I18nProvider>
-            <GenerationForm
-                onSubmit={noop}
-                onSaveInspiration={noop}
-                canApplyRandomInspiration={options.canApplyRandomInspiration ?? true}
-                onPickRandomInspiration={() => '用户保存的真实提示词'}
-                isLoading={false}
-                currentMode={options.currentMode ?? 'generate'}
-                onModeChange={noop}
-                reuseContext={null}
-                onClearReuseContext={noop}
-                isPasswordRequiredByBackend={false}
-                clientPasswordHash={null}
-                onOpenPasswordDialog={noop}
-                model='gpt-image-2'
-                setModel={noop}
-                prompt={options.prompt ?? '用户真实提示词 A'}
-                setPrompt={noop}
-                batchPromptText={options.batchPromptText ?? '用户真实提示词 A\n用户真实提示词 B'}
-                setBatchPromptText={noop}
-                failedBatchPrompts={options.failedBatchPrompts}
-                canPauseBatch={options.canPauseBatch}
-                isBatchPauseRequested={options.isBatchPauseRequested}
-                onPauseBatch={options.omitPauseHandler ? undefined : noop}
-                n={[1]}
-                setN={noop}
-                size='auto'
-                setSize={noop}
-                customWidth={1024}
-                setCustomWidth={noop}
-                customHeight={1024}
-                setCustomHeight={noop}
-                quality='high'
-                setQuality={noop}
-                outputFormat='png'
-                setOutputFormat={noop}
-                compression={[100]}
-                setCompression={noop}
-                background='auto'
-                setBackground={noop}
-                upstreamProfile={options.upstreamProfile ?? IMAGE_UPSTREAM_PROFILES['openai-compatible']}
-                upstreamProfileMixed={options.upstreamProfileMixed ?? false}
-                moderation='auto'
-                setModeration={noop}
-                streamMode='auto'
-                setStreamMode={noop}
-                allowStreamingBatch={options.allowStreamingBatch ?? false}
-                enableParallelBatch={options.enableParallelBatch ?? false}
-                setEnableParallelBatch={noop}
-                partialImages={1}
-                setPartialImages={noop}
-                allowResponsesImageBackend={options.allowResponsesImageBackend ?? true}
-                hasDefaultResponsesModel={options.hasDefaultResponsesModel ?? true}
-                imageBackend={options.imageBackend ?? 'server-default'}
-                setImageBackend={noop}
-                streamingStrategy={options.streamingStrategy ?? 'server-default'}
-                defaultStreamingStrategy={options.defaultStreamingStrategy ?? 'auto'}
-                setStreamingStrategy={noop}
-                responsesModel={options.responsesModel ?? ''}
-                setResponsesModel={noop}
-                thinking='server-default'
-                setThinking={noop}
-                promptOptimization='server-default'
-                setPromptOptimization={noop}
-                forceWeb={false}
-                setForceWeb={noop}
-                estimatedCostLabel='预计 0.12 积分'
-                defaultAdvancedOpen={options.defaultAdvancedOpen}
-                defaultAdvancedTab={options.defaultAdvancedTab}
-            />
+            <GenerationForm {...createGenerationFormProps(options)} />
         </I18nProvider>
     );
 }
 
 describe('GenerationForm submit footer', () => {
+    it('keeps the form disabled without showing generation copy for other busy work', () => {
+        const html = renderGenerationForm({ isLoading: true, showLoadingState: false });
+
+        assert.match(html, /disabled=""/);
+        assert.match(html, />生成图像<\/button>/);
+        assert.doesNotMatch(html, /生成中/);
+        assert.doesNotMatch(html, /animate-spin/);
+    });
+
+    it('shows generation loading feedback for a real generation request', () => {
+        const html = renderGenerationForm({ isLoading: true, showLoadingState: true });
+
+        assert.match(html, /disabled=""/);
+        assert.match(html, /animate-spin/);
+        assert.match(html, /生成中\.\.\.<\/button>/);
+        assert.doesNotMatch(html, /生成图像<\/button>/);
+    });
+
     it('keeps the submit footer available outside desktop breakpoints', () => {
         const html = renderGenerationForm();
 
         assertSubmitFooterAvailable(html, '生成图像');
+        assert.match(html, /grid grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)\] gap-1\.5 text-xs/);
+        assert.match(html, /min-w-0 items-center justify-center rounded-full/);
+        assert.match(html, /min-h-11 min-w-0 items-center justify-center/);
+        assert.match(html, /h-3\.5 w-3\.5 shrink-0" aria-hidden="true"/);
+        assert.match(html, /min-w-0 whitespace-normal/);
+        assert.match(html, /focus-visible:ring-2 focus-visible:outline-none/);
+        assert.doesNotMatch(html, /text-center whitespace-nowrap/);
+        assert.doesNotMatch(html, /min-\[1760px\]:flex/);
+    });
+
+    it('lets the scrollable controls use the remaining desktop height without clipping the footer', () => {
+        const html = renderGenerationForm();
+
+        assert.match(html, /flex min-h-0 flex-1 flex-col overflow-hidden/);
+        assert.match(html, /literary-scrollbar min-h-0 flex-1 space-y-2\.5 overflow-y-auto p-4 pb-4/);
+        assert.match(html, /border-border bg-card flex shrink-0 border-t p-3/);
+        assert.doesNotMatch(html, /lg:max-h-\[calc\(100%-9\.75rem\)\]/);
+    });
+});
+
+describe('GenerationForm inactive state', { concurrency: false }, () => {
+    it('only applies profile-driven corrections after the form becomes active', async () => {
+        const countCorrections: number[][] = [];
+        const partialImageCorrections: number[] = [];
+        const streamModeCorrections: string[] = [];
+        const sizeCorrections: string[] = [];
+        const props = createGenerationFormProps({
+            isActive: false,
+            n: [0],
+            model: 'gpt-image-1',
+            size: 'custom',
+            partialImages: 0,
+            streamMode: 'auto',
+            streamingStrategy: 'off'
+        });
+        props.setN = (nextCount) => {
+            countCorrections.push(typeof nextCount === 'function' ? nextCount([]) : nextCount);
+        };
+        props.setPartialImages = (nextPartialImages) => {
+            partialImageCorrections.push(
+                typeof nextPartialImages === 'function' ? nextPartialImages(1) : nextPartialImages
+            );
+        };
+        props.setStreamMode = (nextStreamMode) => {
+            streamModeCorrections.push(typeof nextStreamMode === 'function' ? nextStreamMode('auto') : nextStreamMode);
+        };
+        props.setSize = (nextSize) => {
+            sizeCorrections.push(typeof nextSize === 'function' ? nextSize('custom') : nextSize);
+        };
+
+        const view = await renderInClientDom(
+            <I18nProvider>
+                <GenerationForm {...props} />
+            </I18nProvider>
+        );
+
+        try {
+            assert.deepEqual(countCorrections, []);
+            assert.deepEqual(partialImageCorrections, []);
+            assert.deepEqual(streamModeCorrections, []);
+            assert.deepEqual(sizeCorrections, []);
+
+            await view.render(
+                <I18nProvider>
+                    <GenerationForm {...props} isActive />
+                </I18nProvider>
+            );
+
+            assert.deepEqual(countCorrections, [[1]]);
+            assert.deepEqual(partialImageCorrections, [1]);
+            assert.deepEqual(streamModeCorrections, ['non_stream']);
+            assert.deepEqual(sizeCorrections, ['auto']);
+        } finally {
+            await view.cleanup();
+        }
+    });
+
+    it('runs generation inspiration actions through the rendered footer controls', async () => {
+        const savedPrompts: string[] = [];
+        const appliedPrompts: string[] = [];
+        const props = createGenerationFormProps({ prompt: '  当前生成灵感  ' });
+        props.onSaveInspiration = (prompt) => savedPrompts.push(prompt);
+        props.onPickRandomInspiration = () => '  随机生成灵感  ';
+        props.setPrompt = (nextPrompt) => {
+            appliedPrompts.push(typeof nextPrompt === 'function' ? nextPrompt('') : nextPrompt);
+        };
+
+        const view = await renderInClientDom(
+            <I18nProvider>
+                <GenerationForm {...props} />
+            </I18nProvider>
+        );
+
+        try {
+            const saveButton = [...view.container.querySelectorAll('button')].find((button) =>
+                button.textContent?.includes('存为灵感')
+            );
+            const randomButton = [...view.container.querySelectorAll('button')].find((button) =>
+                button.textContent?.includes('随便来点')
+            );
+
+            assert.ok(saveButton, 'missing generation save inspiration button');
+            assert.ok(randomButton, 'missing generation random inspiration button');
+
+            await view.click(saveButton);
+            await view.click(randomButton);
+
+            assert.deepEqual(savedPrompts, ['  当前生成灵感  ']);
+            assert.deepEqual(appliedPrompts, ['随机生成灵感']);
+        } finally {
+            await view.cleanup();
+        }
+    });
+
+    it('routes random inspiration through the rendered batch footer control', async () => {
+        const appliedBatchPrompts: string[] = [];
+        const props = createGenerationFormProps({
+            currentMode: 'batch',
+            batchPromptText: '当前批量任务'
+        });
+        props.onPickRandomInspiration = () => '  随机批量灵感  ';
+        props.setBatchPromptText = (nextPrompt) => {
+            appliedBatchPrompts.push(typeof nextPrompt === 'function' ? nextPrompt('') : nextPrompt);
+        };
+
+        const view = await renderInClientDom(
+            <I18nProvider>
+                <GenerationForm {...props} />
+            </I18nProvider>
+        );
+
+        try {
+            const randomButton = [...view.container.querySelectorAll('button')].find((button) =>
+                button.textContent?.includes('随便来点')
+            );
+
+            assert.ok(randomButton, 'missing batch random inspiration button');
+            await view.click(randomButton);
+
+            assert.deepEqual(appliedBatchPrompts, ['随机批量灵感']);
+        } finally {
+            await view.cleanup();
+        }
     });
 });
 
 describe('GenerationForm advanced groups', () => {
-    it('keeps compact desktop preset controls text-first to avoid clipped labels', () => {
+    it('keeps translated preset labels inside responsive control cells', () => {
         const html = renderGenerationForm();
 
-        assert.match(html, /grid grid-cols-5 gap-1.5/);
+        assert.match(html, /grid grid-cols-2 gap-1.5/);
+        assert.match(html, /max-w-full min-w-0 text-center leading-4 break-words whitespace-normal/);
+        assert.match(html, /radio-group-item-content\]\]:min-w-0/);
+        assert.match(html, /radio-group-item-content\]\]:overflow-hidden/);
+        assert.doesNotMatch(html, /radio-group-item-content\]\]:overflow-visible/);
+        assert.doesNotMatch(html, /2xl:text-xs/);
+        assert.doesNotMatch(html, /truncate text-center leading-4/);
         assert.doesNotMatch(html, /lg:hidden 2xl:block/);
+        assert.doesNotMatch(html, /2xl:grid-cols-5/);
         assert.doesNotMatch(html, /2xl:grid-cols-6/);
     });
 
@@ -180,6 +367,7 @@ describe('GenerationForm advanced groups', () => {
 
         assert.match(html, /省心模式/);
         assert.match(html, /常用参数已放在基础设置里/);
+        assert.doesNotMatch(html, /block truncate text-xs font-normal/);
     });
 
     it('translates the default backend into a user-facing route label near submit', () => {

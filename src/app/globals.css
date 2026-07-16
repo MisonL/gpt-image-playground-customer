@@ -287,4 +287,26 @@
             inset: 0.5rem;
         }
     }
+
+    @media (max-width: 1023px) and (max-height: 480px) {
+        #mobile-creation-sheet {
+            overflow-y: auto;
+            overscroll-behavior-y: contain;
+        }
+
+        #mobile-creation-sheet .mobile-creation-sheet-handle {
+            position: sticky;
+            top: 0;
+            background: oklch(0.986 0.015 84);
+        }
+
+        #mobile-creation-sheet .mobile-drawer-form-slot,
+        #mobile-creation-sheet .mobile-drawer-form-card,
+        #mobile-creation-sheet .mobile-drawer-form-frame,
+        #mobile-creation-sheet .mobile-drawer-form-content {
+            min-height: auto;
+            flex: none;
+            overflow: visible;
+        }
+    }
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import type { GenerationActivityItem } from '@/lib/generation-activity';
+import { selectAnnouncedGenerationActivity, type GenerationActivityItem } from '@/lib/generation-activity';
 import type { HistoryMetadata } from '@/lib/history-metadata';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
@@ -69,7 +69,7 @@ function GenerationActivityRows({
                         <span className='text-foreground block truncate text-xs font-medium'>{item.label}</span>
                         <span
                             className={cn(
-                                'text-muted-foreground block truncate text-[11px]',
+                                'text-muted-foreground block text-[11px] break-words',
                                 compact ? 'mt-0 leading-4' : 'mt-0.5'
                             )}>
                             {item.detail}
@@ -99,7 +99,7 @@ function PendingActivityLine({ items, t }: { items: GenerationActivityItem[]; t:
                     </span>
                     <span className='min-w-0'>
                         <span className='text-foreground block truncate font-medium'>{item.label}</span>
-                        <span className='text-muted-foreground mt-0.5 block truncate text-[11px] leading-4'>
+                        <span className='text-muted-foreground mt-0.5 block text-[11px] leading-4 break-words'>
                             {item.detail}
                         </span>
                     </span>
@@ -173,7 +173,9 @@ function ActivityHistoryRow({
                 <span className='flex min-w-0 items-center gap-2'>
                     <span className='text-foreground truncate text-xs font-medium'>{activityLabel}</span>
                 </span>
-                <span className='text-muted-foreground mt-0.5 block truncate text-[11px]'>{activityDetail}</span>
+                <span className='text-muted-foreground mt-0.5 block text-[11px] leading-4 break-words'>
+                    {activityDetail}
+                </span>
             </span>
             <span className='hidden shrink-0 gap-1 sm:flex'>
                 {item.images.slice(0, 3).map((image) => {
@@ -213,17 +215,26 @@ export function ActivityTimeline({
     t
 }: ActivityTimelineProps) {
     const hasActivity = activityItems.length > 0 || history.length > 0;
+    const liveActivity = selectAnnouncedGenerationActivity(activityItems);
 
     return (
-        <div className='border-border/60 bg-background/48 shrink-0 border-t p-3 lg:mt-1 lg:min-h-[16.5rem] lg:border-t-0 lg:bg-transparent'>
-            <div className='space-y-2 rounded-md border border-[oklch(0.86_0.035_78)] bg-[oklch(0.982_0.014_84)] p-2.5 shadow-[0_6px_16px_oklch(0.42_0.035_58/0.08)]'>
+        <div
+            className={cn(
+                'border-border/60 bg-background/48 shrink-0 border-t p-3 lg:mt-1 lg:min-h-[16.5rem] lg:border-t-0 lg:bg-transparent xl:min-h-0',
+                hasActivity ? 'xl:flex-1 xl:shrink' : 'xl:mt-auto xl:flex-none'
+            )}>
+            <div
+                className={cn(
+                    'space-y-2 rounded-md border border-[oklch(0.86_0.035_78)] bg-[oklch(0.982_0.014_84)] p-2.5 shadow-[0_6px_16px_oklch(0.42_0.035_58/0.08)]',
+                    hasActivity && 'xl:flex xl:h-full xl:min-h-0 xl:flex-col'
+                )}>
                 <div className='flex items-center justify-between gap-2'>
                     <div className='min-w-0'>
                         <div className='flex items-center gap-2'>
                             <span className='h-2 w-2 rounded-full bg-[oklch(0.62_0.13_38)]' />
                             <p className='text-sm font-medium'>{t('history.generationStatus')}</p>
                         </div>
-                        <p className='text-muted-foreground mt-0.5 truncate text-[11px]'>
+                        <p className='text-muted-foreground mt-0.5 text-[11px] leading-4 break-words'>
                             {t('history.generationStatusHint')}
                         </p>
                     </div>
@@ -236,8 +247,11 @@ export function ActivityTimeline({
                         </button>
                     ) : null}
                 </div>
+                <p role='status' aria-live='polite' aria-atomic='true' className='sr-only'>
+                    {liveActivity ? `${liveActivity.label} ${liveActivity.detail}` : ''}
+                </p>
                 {hasActivity ? (
-                    <div className='max-h-56 space-y-2 overflow-y-auto pr-1 text-xs lg:max-h-[12.5rem]'>
+                    <div className='max-h-56 space-y-2 overflow-y-auto pr-1 text-xs lg:max-h-[12.5rem] xl:max-h-none xl:min-h-0 xl:flex-1'>
                         <GenerationActivityRows items={activityItems} t={t} compact />
                         {history.slice(0, 4).map((item, index) => (
                             <ActivityHistoryRow
@@ -254,7 +268,7 @@ export function ActivityTimeline({
                         ))}
                     </div>
                 ) : (
-                    <div className='space-y-1.5'>
+                    <div className='space-y-1.5 xl:min-h-0 xl:flex-1'>
                         <p className='text-muted-foreground px-1 text-[11px]'>{t('history.statusEmpty')}</p>
                         <PendingActivityLine items={pendingActivityItems} t={t} />
                     </div>

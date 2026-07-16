@@ -9,7 +9,6 @@ import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
-import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const noop = () => {};
@@ -54,7 +53,8 @@ const inspirationItem: InspirationItem = {
 function renderHistoryPanel(
     history: HistoryMetadata[],
     inspirations: InspirationItem[] = [],
-    activityItems: GenerationActivityItem[] = []
+    activityItems: GenerationActivityItem[] = [],
+    isSendingToEdit = false
 ): string {
     return renderToStaticMarkup(
         <I18nProvider>
@@ -62,6 +62,7 @@ function renderHistoryPanel(
                 history={history}
                 inspirations={inspirations}
                 activityItems={activityItems}
+                isSendingToEdit={isSendingToEdit}
                 onSelectImage={noop}
                 onApplyPrompt={noop}
                 onSaveInspiration={noop}
@@ -127,6 +128,17 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /未标记/);
         assert.match(html, /aria-label="标记本次结果可用"/);
         assert.match(html, /aria-label="标记本次结果需要修改"/);
+        assert.doesNotMatch(html, /2xl:grid-cols-2/);
+    });
+
+    it('disables continue-edit actions while an image is being prepared for editing', () => {
+        const html = renderHistoryPanel([historyItem], [], [], true);
+        const continueEditButton =
+            html.match(
+                /<button(?=[^>]*aria-label="用这条历史记录的首张图片继续编辑")(?=[^>]*disabled="")[^>]*>/
+            )?.[0] ?? '';
+
+        assert.ok(continueEditButton, 'missing continue-edit action');
     });
 
     it('formats summary and token counters with the active locale', async () => {
@@ -224,10 +236,26 @@ describe('HistoryPanel recent history actions', () => {
         assert.doesNotMatch(html, />管理</);
     });
 
+    it('centers a completely empty collection while keeping short desktop panels scrollable', () => {
+        const html = renderHistoryPanel([]);
+
+        assert.match(html, /lg:overflow-y-auto/);
+        assert.match(html, /xl:flex xl:max-h-none xl:flex-1 xl:flex-col/);
+        assert.doesNotMatch(html, /xl:overflow-hidden/);
+        assert.match(html, /xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0/);
+        assert.match(html, /text-center text-sm xl:my-auto/);
+        assert.match(html, /items-center justify-between rounded-md px-1 text-sm xl:mt-auto/);
+    });
+
     it('renders a non-fake pending activity timeline before the first generation', () => {
         const html = renderHistoryPanel([], [inspirationItem]);
 
         assert.match(html, /activity-feed/);
+        assert.match(html, /role="status"/);
+        assert.match(html, /aria-live="polite"/);
+        assert.match(html, /aria-atomic="true"/);
+        assert.match(html, /xl:mt-auto xl:flex-none/);
+        assert.doesNotMatch(html, /xl:flex xl:h-full xl:min-h-0 xl:flex-col/);
         assert.match(html, /aria-label="待开始生成动态"/);
         assert.match(html, /点击生成后，这里会记录创作过程。/);
         assert.match(html, /准备/);
@@ -238,6 +266,8 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /等待流式预览/);
         assert.match(html, /等待保存结果/);
         assert.match(html, /失败时显示原因/);
+        assert.match(html, /text-\[11px\] leading-4 break-words/);
+        assert.doesNotMatch(html, /block truncate text-\[11px\] leading-4/);
         assert.doesNotMatch(html, /新图已入册/);
     });
 
@@ -257,7 +287,94 @@ describe('HistoryPanel recent history actions', () => {
 
         assert.match(html, /正在生成/);
         assert.match(html, /正在把当前创作单送去生成/);
+        assert.match(html, /text-\[11px\] break-words mt-0 leading-4/);
+        assert.match(html, /role="status"/);
+        assert.match(html, /aria-live="polite"/);
+        assert.match(html, /aria-atomic="true"/);
+        assert.match(html, /xl:flex-1 xl:shrink/);
+        assert.match(html, /xl:flex xl:h-full xl:min-h-0 xl:flex-col/);
+        assert.match(html, /xl:max-h-none/);
+        assert.match(html, /xl:min-h-0/);
+        assert.match(html, /xl:flex-1/);
         assert.match(html, /新图已入册/);
+    });
+
+    it('announces saved completion after retained streaming preview activity', () => {
+        const html = renderHistoryPanel(
+            [historyItem],
+            [inspirationItem],
+            [
+                {
+                    id: 'streaming-preview',
+                    label: '流式预览已更新',
+                    detail: '已收到 1 张过程预览。',
+                    tone: 'progress'
+                },
+                {
+                    id: 'saved',
+                    label: '图片保存完成',
+                    detail: '本次结果共 1 张，已可继续编辑或下载。',
+                    tone: 'success'
+                }
+            ]
+        );
+        const liveStatus = html.match(/<p role="status"[^>]*>(.*?)<\/p>/)?.[1];
+
+        assert.equal(liveStatus, '图片保存完成 本次结果共 1 张，已可继续编辑或下载。');
+    });
+
+    it('announces changing batch progress instead of the initial generating activity', () => {
+        const html = renderHistoryPanel(
+            [historyItem],
+            [inspirationItem],
+            [
+                {
+                    id: 'generating',
+                    label: '正在生成',
+                    detail: '正在把当前创作单送去生成。',
+                    tone: 'progress'
+                },
+                {
+                    id: 'batch-progress',
+                    label: '批量进度',
+                    detail: '已完成 2/3 条任务。',
+                    tone: 'progress'
+                }
+            ]
+        );
+        const liveStatus = html.match(/<p role="status"[^>]*>(.*?)<\/p>/)?.[1];
+
+        assert.equal(liveStatus, '批量进度 已完成 2/3 条任务。');
+    });
+
+    it('announces a partial batch failure ahead of a saved partial result', () => {
+        const html = renderHistoryPanel(
+            [historyItem],
+            [inspirationItem],
+            [
+                {
+                    id: 'batch-progress',
+                    label: '批量进度',
+                    detail: '已完成 3/3 条任务，失败 1 条。',
+                    tone: 'warning'
+                },
+                {
+                    id: 'failed',
+                    label: '生成失败',
+                    detail: '一条任务失败，请检查后重试。',
+                    tone: 'warning'
+                },
+                {
+                    id: 'saved',
+                    label: '图片保存完成',
+                    detail: '本次结果共 2 张，已可继续编辑或下载。',
+                    tone: 'success'
+                }
+            ]
+        );
+        const liveStatus = html.match(/<p role="status"[^>]*>(.*?)<\/p>/)?.[1];
+
+        assert.equal(liveStatus, '生成失败 一条任务失败，请检查后重试。');
     });
 
     it('keeps generation activity visible outside the inspiration tab content', () => {
@@ -269,6 +386,7 @@ describe('HistoryPanel recent history actions', () => {
         assert.ok(activityIndex > tabContentIndex);
         assert.match(html, /最近生成/);
         assert.match(html, /新图已入册/);
+        assert.match(html, /text-\[11px\] leading-4 break-words/);
     });
 
     it('renders batch progress activity as user-facing copy', () => {
