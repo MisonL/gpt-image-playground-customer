@@ -59,6 +59,12 @@ describe('PostgresAgentStateStore schema contract', () => {
         assert.doesNotMatch(listFeedbackSource, /for \(const target of targets\)/);
     });
 
+    it('lists distinct artifact filepaths in stable order for cleanup protection', () => {
+        const source = readFileSync(new URL('./agent-state-postgres.ts', import.meta.url), 'utf8');
+
+        assert.match(source, /SELECT DISTINCT filepath FROM agent_artifacts ORDER BY filepath ASC/);
+    });
+
     it('removes feedback rows when deleting expired requests or artifact metadata', () => {
         const source = readFileSync(new URL('./agent-state-postgres.ts', import.meta.url), 'utf8');
 

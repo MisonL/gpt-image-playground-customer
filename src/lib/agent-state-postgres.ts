@@ -304,6 +304,13 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
         return (result.rows as PostgresArtifactRow[]).map((row) => this.mapArtifactRow(row));
     }
 
+    async listArtifactFilepaths(): Promise<string[]> {
+        const result = await this.pool.query(
+            'SELECT DISTINCT filepath FROM agent_artifacts ORDER BY filepath ASC'
+        );
+        return (result.rows as Array<{ filepath: string }>).map((row) => row.filepath);
+    }
+
     async deleteArtifact(id: string): Promise<boolean> {
         const client = await this.pool.connect();
         try {

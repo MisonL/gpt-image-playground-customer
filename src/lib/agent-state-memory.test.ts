@@ -140,6 +140,39 @@ describe('MemoryAgentStateStore', () => {
         );
     });
 
+    it('lists sorted artifact filepaths for cleanup protection', async () => {
+        const store = new MemoryAgentStateStore();
+        await store.init();
+        const requestJson = { prompt: 'memory cleanup protection' };
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-memory-cleanup-protection',
+            requestHash: hashAgentPayload(requestJson),
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+        const firstPath = path.join(process.cwd(), 'generated-images', 'cleanup-a.png');
+        const secondPath = path.join(process.cwd(), 'generated-images', 'cleanup-b.png');
+
+        await store.saveArtifacts([
+            buildArtifact({
+                id: 'artifact-memory-cleanup-b',
+                requestId: begin.record.requestId,
+                filepath: secondPath
+            }),
+            buildArtifact({
+                id: 'artifact-memory-cleanup-a',
+                requestId: begin.record.requestId,
+                filepath: firstPath
+            })
+        ]);
+
+        assert.deepEqual(await store.listArtifactFilepaths(), [firstPath, secondPath]);
+    });
+
     it('upserts and reads result feedback for page requests', async () => {
         const store = new MemoryAgentStateStore();
         await store.init();

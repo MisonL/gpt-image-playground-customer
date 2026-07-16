@@ -257,6 +257,9 @@ function createFakeStore(options: { failFirstRecovery?: boolean; failInit?: () =
         async listArtifactsForRequest() {
             return [];
         },
+        async listArtifactFilepaths() {
+            return [];
+        },
         async deleteArtifact() {
             return false;
         },
