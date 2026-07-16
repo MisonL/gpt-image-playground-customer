@@ -32,6 +32,7 @@ export type WebuiImageCleanupFileOperations = {
     mkdir(directory: string): Promise<void>;
     readdir(directory: string): Promise<CleanupDirEntry[]>;
     lstat(filepath: string): Promise<CleanupFileStats>;
+    realpath(filepath: string): Promise<string>;
     unlink(filepath: string): Promise<void>;
 };
 
@@ -65,6 +66,9 @@ const defaultFileOperations: WebuiImageCleanupFileOperations = {
     async lstat(filepath) {
         return await fs.lstat(filepath);
     },
+    async realpath(filepath) {
+        return await fs.realpath(filepath);
+    },
     async unlink(filepath) {
         await fs.unlink(filepath);
     }
@@ -97,19 +101,28 @@ export async function cleanupExpiredWebuiImages(input: CleanupInput): Promise<We
         ...input.fileOperations
     };
     const outputDir = path.resolve(input.outputDir);
-    const protectedPaths = new Set(input.protectedArtifactFilepaths.map((filepath) => path.resolve(filepath)));
     const failures: Array<{ filename: string; message: string }> = [];
     let scannedCount = 0;
     let protectedCount = 0;
     let deletedCount = 0;
 
     await operations.mkdir(outputDir);
-    const entries = (await operations.readdir(outputDir)).sort((left, right) => left.name.localeCompare(right.name));
+    const canonicalOutputDir = path.resolve(await operations.realpath(outputDir));
+    const protectedPaths = new Set(
+        await Promise.all(
+            input.protectedArtifactFilepaths.map((filepath) =>
+                canonicalizeProtectedPath(filepath, operations.realpath)
+            )
+        )
+    );
+    const entries = (await operations.readdir(canonicalOutputDir)).sort((left, right) =>
+        left.name.localeCompare(right.name)
+    );
 
     for (const entry of entries) {
         if (!isValidImageFilename(entry.name)) continue;
-        const filepath = path.resolve(outputDir, entry.name);
-        if (path.dirname(filepath) !== outputDir) continue;
+        const filepath = path.resolve(canonicalOutputDir, entry.name);
+        if (path.dirname(filepath) !== canonicalOutputDir) continue;
 
         let stats: CleanupFileStats;
         try {
@@ -146,6 +159,23 @@ export async function cleanupExpiredWebuiImages(input: CleanupInput): Promise<We
         failedCount: failures.length,
         failures
     };
+}
+
+async function canonicalizeProtectedPath(
+    filepath: string,
+    resolveRealPath: WebuiImageCleanupFileOperations['realpath']
+): Promise<string> {
+    const resolvedPath = path.resolve(filepath);
+    try {
+        return path.resolve(await resolveRealPath(resolvedPath));
+    } catch (error) {
+        if (isMissingPathError(error)) return resolvedPath;
+        throw error;
+    }
+}
+
+function isMissingPathError(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
 
 function readStrictBoolean(value: string | undefined, fieldName: string): boolean {
