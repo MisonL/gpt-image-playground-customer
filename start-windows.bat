@@ -20,19 +20,19 @@ if not exist "package.json" (
 where node >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] Node.js was not found.
-    echo Please install Node.js 20 or later: https://nodejs.org/
+    echo Please install Node.js 20.10.0 or later: https://nodejs.org/
     echo Then run this file again.
     echo.
     pause
     exit /b 1
 )
 
-node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 20 ? 0 : 1)" >nul 2>nul
+node -e "import('./scripts/node-version.mjs').then(function(module){process.exit(module.isSupportedNodeVersion()?0:1)})"
 if errorlevel 1 (
     echo [ERROR] Node.js version is too old.
     echo Current version:
     node -v
-    echo Required: Node.js 20 or later. Download: https://nodejs.org/
+    echo Required: Node.js 20.10.0 or later. Download: https://nodejs.org/
     echo.
     pause
     exit /b 1
@@ -40,7 +40,7 @@ if errorlevel 1 (
 
 where npm >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] npm was not found. Please reinstall Node.js 20 or later.
+    echo [ERROR] npm was not found. Please reinstall Node.js 20.10.0 or later.
     echo.
     pause
     exit /b 1

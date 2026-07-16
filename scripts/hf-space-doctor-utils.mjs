@@ -1,3 +1,4 @@
+import { MIN_NODE_VERSION_RANGE } from './node-version.mjs';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -111,15 +112,24 @@ export function classifyRequiredAndRecommendedNames(names, requiredNames, recomm
 }
 
 const NEXT_ACTIONS = new Map([
-    ['node', 'Install Node.js >=20.9.0, then reopen the terminal.'],
-    ['npm', 'Install Node.js >=20.9.0 with npm.'],
-    ['hf-cli', 'Install the Hugging Face CLI from the official documentation; avoid piping remote install scripts directly to a shell.'],
-    ['hf-auth', 'Check network/proxy access to Hugging Face, then run hf auth login if the token is missing or expired.'],
+    ['node', `Install Node.js ${MIN_NODE_VERSION_RANGE}, then reopen the terminal.`],
+    ['npm', `Install Node.js ${MIN_NODE_VERSION_RANGE} with npm.`],
+    [
+        'hf-cli',
+        'Install the Hugging Face CLI from the official documentation; avoid piping remote install scripts directly to a shell.'
+    ],
+    [
+        'hf-auth',
+        'Check network/proxy access to Hugging Face, then run hf auth login if the token is missing or expired.'
+    ],
     ['node-modules', 'Run npm install.'],
     ['remote-variables', 'Configure the required and recommended Space Variables with hf spaces variables add.'],
     ['remote-variable-values', 'Set required Space Variable values with hf spaces variables add.'],
     ['remote-secrets', 'Configure required Space Secrets with hf spaces secrets add.'],
-    ['remote-generation-secret', 'Configure OPENAI_API_KEY or OPENAI_CHANNEL_1_API_KEYS in Space Secrets before real image generation.']
+    [
+        'remote-generation-secret',
+        'Configure OPENAI_API_KEY or OPENAI_CHANNEL_1_API_KEYS in Space Secrets before real image generation.'
+    ]
 ]);
 
 export function buildNextActions(checks) {
