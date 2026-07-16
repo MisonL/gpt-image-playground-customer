@@ -1,4 +1,4 @@
-import { runAgentStateStartupRecovery } from '../instrumentation';
+import { runAgentStateStartupRecovery, runServerStartup } from '../instrumentation';
 import { MemoryAgentStateStore } from './agent-state-memory';
 import {
     ensureAgentStateStoreReady,
@@ -149,6 +149,54 @@ describe('runAgentStateStartupRecovery', () => {
         assert.equal(logs.length, 2);
         assert.equal(logs[0]?.message, '开始执行 Agent 状态启动恢复。');
         assert.equal(logs[1]?.message, 'Agent 状态启动恢复完成。');
+    });
+});
+
+describe('runServerStartup', () => {
+    it('starts WebUI cleanup only after Agent state recovery completes', async () => {
+        const events: string[] = [];
+
+        await runServerStartup({
+            recoverAgentStateOnStartup: async () => {
+                events.push('agent-recovery');
+                return 0;
+            },
+            startWebuiImageCleanupScheduler: async () => {
+                events.push('webui-cleanup-start');
+            },
+            appLogger: {
+                info() {},
+                error() {}
+            }
+        });
+
+        assert.deepEqual(events, ['agent-recovery', 'webui-cleanup-start']);
+    });
+
+    it('logs and rejects WebUI cleanup startup failures', async () => {
+        const logs: Array<{ level: 'info' | 'error'; message: string; context?: unknown }> = [];
+
+        await assert.rejects(
+            () =>
+                runServerStartup({
+                    recoverAgentStateOnStartup: async () => 0,
+                    startWebuiImageCleanupScheduler: async () => {
+                        throw new Error('cleanup startup failed');
+                    },
+                    appLogger: {
+                        info(message, context) {
+                            logs.push({ level: 'info', message, context });
+                        },
+                        error(message, context) {
+                            logs.push({ level: 'error', message, context });
+                        }
+                    }
+                }),
+            /cleanup startup failed/
+        );
+
+        assert.equal(logs.at(-1)?.level, 'error');
+        assert.equal(logs.at(-1)?.message, 'WebUI 图片自动清理启动失败。');
     });
 });
 

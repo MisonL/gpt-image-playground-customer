@@ -10,6 +10,7 @@ import { summarizeOpenAIImageTransport } from '@/lib/openai-image-transport';
 import { getServerChannelState } from '@/lib/server-channel-router';
 import { readBooleanEnv, readPositiveIntegerEnv } from '@/lib/server-runtime';
 import { computeStreamingBatchRecommendation } from '@/lib/streaming-batch';
+import { getWebuiImageCleanupSummary } from '@/lib/webui-image-cleanup-runtime';
 import { NextResponse } from 'next/server';
 
 const RESPONSES_IMAGE_BACKEND_REQUIRED_ENV = ['ENABLE_RESPONSES_IMAGE_BACKEND'] as const;
@@ -113,6 +114,7 @@ export async function GET() {
             upstreamProfile,
             imageTransport: summarizeOpenAIImageTransport(process.env),
             providerManifests,
+            webuiImageCleanup: getWebuiImageCleanupSummary(process.env),
             responsesImageBackend: {
                 enabled: responsesImageBackendEnabled,
                 mode: 'experimental',

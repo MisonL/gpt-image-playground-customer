@@ -53,11 +53,15 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_RECOVERY_PROBE_MAX_PER_TICK;
     delete process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY;
     delete process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS;
+    delete process.env.WEBUI_IMAGE_AUTO_CLEANUP_ENABLED;
+    delete process.env.WEBUI_IMAGE_RETENTION_DAYS;
 });
 
 afterEach(async () => {
     const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+    const { resetWebuiImageCleanupRuntimeForTests } = await import('@/lib/webui-image-cleanup-runtime');
     resetServerChannelStateForTests();
+    resetWebuiImageCleanupRuntimeForTests();
     restoreProcessEnv(originalEnv);
 });
 
@@ -72,6 +76,114 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
 
         assert.equal(body.streamingBatch.enabled, true);
         assert.equal(typeof body.streamingBatch.recommendedConcurrency, 'number');
+    });
+
+    it('exposes WebUI image cleanup as disabled with a 30 day default', async () => {
+        const { GET } = await import('./route');
+
+        const response = await GET();
+        const body = (await response.json()) as {
+            webuiImageCleanup: {
+                enabled: boolean;
+                retentionDays: number;
+                intervalMs: number;
+                running: boolean;
+            };
+        };
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body.webuiImageCleanup, {
+            enabled: false,
+            retentionDays: 30,
+            intervalMs: 21_600_000,
+            running: false
+        });
+    });
+
+    it('exposes explicitly enabled WebUI image cleanup settings', async () => {
+        process.env.WEBUI_IMAGE_AUTO_CLEANUP_ENABLED = 'true';
+        process.env.WEBUI_IMAGE_RETENTION_DAYS = '45';
+        const { GET } = await import('./route');
+
+        const response = await GET();
+        const body = (await response.json()) as {
+            webuiImageCleanup: {
+                enabled: boolean;
+                retentionDays: number;
+                intervalMs: number;
+                running: boolean;
+            };
+        };
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body.webuiImageCleanup, {
+            enabled: true,
+            retentionDays: 45,
+            intervalMs: 21_600_000,
+            running: false
+        });
+    });
+
+    it('rejects invalid enabled WebUI image cleanup configuration', async () => {
+        process.env.WEBUI_IMAGE_AUTO_CLEANUP_ENABLED = 'true';
+        process.env.WEBUI_IMAGE_RETENTION_DAYS = '0';
+        const { GET } = await import('./route');
+
+        const response = await GET();
+        const body = (await response.json()) as { error: string };
+
+        assert.equal(response.status, 500);
+        assert.match(body.error, /WEBUI_IMAGE_RETENTION_DAYS/);
+    });
+
+    it('exposes cleanup counts without leaking per-file failure details', async () => {
+        process.env.WEBUI_IMAGE_AUTO_CLEANUP_ENABLED = 'true';
+        const { startWebuiImageCleanupScheduler } = await import('@/lib/webui-image-cleanup-runtime');
+        await startWebuiImageCleanupScheduler({
+            env: process.env,
+            runCleanup: async () => ({
+                status: 'failed',
+                startedAt: '2026-07-16T00:00:00.000Z',
+                completedAt: '2026-07-16T00:00:01.000Z',
+                cutoffAt: '2026-06-16T00:00:00.000Z',
+                scannedCount: 4,
+                protectedCount: 1,
+                deletedCount: 2,
+                failedCount: 1,
+                failures: [
+                    {
+                        filename: '1781567999000-aaaaaaaaaaaaaaaa-0.png',
+                        message: 'permission denied at /private/generated-images'
+                    }
+                ]
+            }),
+            setInterval: () => ({ unref() {} }),
+            clearInterval() {},
+            logger: {
+                info() {},
+                error() {}
+            }
+        });
+        const { GET } = await import('./route');
+
+        const response = await GET();
+        const body = (await response.json()) as {
+            webuiImageCleanup: Record<string, unknown>;
+        };
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body.webuiImageCleanup.lastRun, {
+            status: 'failed',
+            startedAt: '2026-07-16T00:00:00.000Z',
+            completedAt: '2026-07-16T00:00:01.000Z',
+            cutoffAt: '2026-06-16T00:00:00.000Z',
+            scannedCount: 4,
+            protectedCount: 1,
+            deletedCount: 2,
+            failedCount: 1
+        });
+        assert.equal(JSON.stringify(body).includes('/private/generated-images'), false);
+        assert.equal(JSON.stringify(body).includes('1781567999000-aaaaaaaaaaaaaaaa-0.png'), false);
     });
 
     it('exposes the runtime default streaming settings for client-side fanout decisions', async () => {
