@@ -41,7 +41,7 @@ function createServerChannelState() {
         'OPENAI_CHANNEL_QUEUE_MAX_SIZE',
         DEFAULT_CHANNEL_QUEUE_MAX_SIZE
     );
-    const failureCooldownEnabled = readBooleanEnvDefault(process.env, 'OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED', true);
+    const failureCooldownEnabled = readBooleanEnvDefault(process.env, 'OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED', false);
     const failureCooldownMs = readPositiveIntegerEnv(
         process.env,
         'OPENAI_CHANNEL_FAILURE_COOLDOWN_MS',
