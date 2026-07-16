@@ -33,15 +33,16 @@ export function ModeToggle({ currentMode, onModeChange }: ModeToggleProps) {
                     <TabsTrigger
                         key={value}
                         value={value}
-                        className={`min-h-11 rounded-md border px-1 py-1 text-center transition-colors lg:min-h-10 2xl:px-1.5 ${
+                        data-workbench-mode={value}
+                        className={`min-h-11 rounded-md border px-1 py-1 text-center whitespace-normal transition-colors lg:min-h-10 ${
                             currentMode === value
                                 ? 'border-primary/35 bg-primary text-primary-foreground data-[state=active]:bg-primary data-[state=active]:text-primary-foreground shadow-sm'
                                 : 'bg-muted/30 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground border-transparent'
                         } `}>
-                        <span className='flex w-full items-center justify-center gap-0.5 2xl:gap-1'>
+                        <span className='flex w-full min-w-0 items-center justify-center gap-0.5'>
                             <Icon className='hidden h-3.5 w-3.5 shrink-0 opacity-75' />
-                            <span className='min-w-0'>
-                                <span className='block truncate text-[13px] leading-4 font-medium 2xl:text-sm'>
+                            <span className='max-w-full min-w-0'>
+                                <span className='block max-w-full min-w-0 text-[13px] leading-4 font-medium break-words whitespace-normal'>
                                     {t(labelKey)}
                                 </span>
                                 <span className='sr-only'>{t(descriptionKey)}</span>

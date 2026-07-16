@@ -133,7 +133,7 @@ describe('resolveAcceptedImageTaskResponse', () => {
 
         assert.equal(calls.length, 2);
         assert.deepEqual(sleeps, [1000]);
-        assert.equal(result.data[0]?.b64_json, 'final-base64');
+        assert.equal(result.data?.[0]?.b64_json, 'final-base64');
     });
 
     it('throws a structured error after exhausting accepted-task retries', async () => {
@@ -192,7 +192,7 @@ describe('resolveAcceptedImageTaskResponse', () => {
         );
 
         assert.deepEqual(sleeps, [2500]);
-        assert.equal(result.data[0]?.b64_json, 'final-base64');
+        assert.equal(result.data?.[0]?.b64_json, 'final-base64');
     });
 
     it('caps fallback retry delays for accepted task responses', async () => {
@@ -226,7 +226,7 @@ describe('resolveAcceptedImageTaskResponse', () => {
         );
 
         assert.deepEqual(sleeps, [15_000]);
-        assert.equal(result.data[0]?.b64_json, 'final-base64');
+        assert.equal(result.data?.[0]?.b64_json, 'final-base64');
     });
 
     it('respects whole-second Retry-After values above the fallback cap', async () => {
@@ -259,7 +259,7 @@ describe('resolveAcceptedImageTaskResponse', () => {
         );
 
         assert.deepEqual(sleeps, [30_000]);
-        assert.equal(result.data[0]?.b64_json, 'final-base64');
+        assert.equal(result.data?.[0]?.b64_json, 'final-base64');
     });
 
     it('caps excessive Retry-After values for accepted task responses', async () => {
@@ -292,7 +292,7 @@ describe('resolveAcceptedImageTaskResponse', () => {
         );
 
         assert.deepEqual(sleeps, [300_000]);
-        assert.equal(result.data[0]?.b64_json, 'final-base64');
+        assert.equal(result.data?.[0]?.b64_json, 'final-base64');
     });
 
     it('stops accepted-task backoff when the caller aborts', async () => {

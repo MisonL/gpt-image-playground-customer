@@ -336,10 +336,11 @@ describe('appLogger', { concurrency: false }, () => {
         console.info = () => {
             throw new Error('filtered info should not be written');
         };
+        const entriesBefore = readAppLogEntries();
 
         appLogger.info('hidden info');
 
-        assert.deepEqual(readAppLogEntries(), []);
+        assert.deepEqual(readAppLogEntries(), entriesBefore);
     });
 
     it('continues notifying subscribers when one subscriber throws', () => {

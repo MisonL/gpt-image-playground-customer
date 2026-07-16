@@ -4,6 +4,7 @@ import {
     buildGenerationActivityItems,
     collectFailedBatchPrompts,
     countCompletedBatchResults,
+    selectAnnouncedGenerationActivity,
     type GenerationActivityItem
 } from './generation-activity';
 import assert from 'node:assert/strict';
@@ -126,6 +127,67 @@ describe('buildGenerationActivityItems', () => {
         const detail = buildFailureActivityDetail('API 请求失败。建议：稍后重试。', t);
 
         assert.equal(detail, 'API 请求失败。建议：稍后重试。');
+    });
+
+    it('does not replay a saved result after preparation for editing finishes', () => {
+        const buildItems = (isSendingToEdit: boolean, completedGenerationCount: number | null) =>
+            buildGenerationActivityItems({
+                isLoading: false,
+                isSendingToEdit,
+                mode: 'generate',
+                streamingPreviewCount: 0,
+                completedGenerationCount,
+                t
+            });
+
+        assert.deepEqual(ids(buildItems(false, 1)), ['saved']);
+        assert.deepEqual(ids(buildItems(true, null)), ['preparing-edit']);
+        assert.deepEqual(buildItems(false, null), []);
+    });
+});
+
+describe('selectAnnouncedGenerationActivity', () => {
+    it('prioritizes current edit preparation over stale generation activity', () => {
+        const items = buildGenerationActivityItems({
+            isLoading: false,
+            isSendingToEdit: true,
+            mode: 'generate',
+            streamingPreviewCount: 1,
+            completedGenerationCount: null,
+            batchProgress: {
+                completed: 3,
+                failed: 1,
+                total: 3
+            },
+            t
+        });
+
+        assert.deepEqual(ids(items), ['preparing-edit', 'batch-progress', 'streaming-preview']);
+        assert.equal(selectAnnouncedGenerationActivity(items)?.id, 'preparing-edit');
+    });
+
+    it('prioritizes terminal and changing batch states over stale activity', () => {
+        const items: GenerationActivityItem[] = [
+            { id: 'generating', label: '正在生成', detail: '请求中', tone: 'progress' },
+            { id: 'streaming-preview', label: '流式预览', detail: '1 张', tone: 'progress' },
+            { id: 'saved', label: '保存完成', detail: '1 张', tone: 'success' }
+        ];
+
+        assert.equal(selectAnnouncedGenerationActivity(items)?.id, 'saved');
+        assert.equal(
+            selectAnnouncedGenerationActivity([
+                ...items,
+                { id: 'batch-progress', label: '批量进度', detail: '失败 1 条', tone: 'warning' }
+            ])?.id,
+            'batch-progress'
+        );
+        assert.equal(
+            selectAnnouncedGenerationActivity([
+                ...items,
+                { id: 'failed', label: '生成失败', detail: '上游错误', tone: 'warning' }
+            ])?.id,
+            'failed'
+        );
     });
 });
 

@@ -1,7 +1,12 @@
 import { EditingForm, type EditingFormData } from './editing-form';
 import { I18nProvider } from '@/lib/i18n';
-import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from '@/lib/image-upstream-profile';
+import {
+    IMAGE_UPSTREAM_PROFILES,
+    type ImageUpstreamProfile,
+    type PartialImagesCount
+} from '@/lib/image-upstream-profile';
 import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import { renderInClientDom } from '@/test-utils/react-dom';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
@@ -22,9 +27,17 @@ type RenderOptions = {
     hasDefaultResponsesModel?: boolean;
     editResponsesModel?: string;
     editPrompt?: string;
+    editModel?: React.ComponentProps<typeof EditingForm>['editModel'];
+    editSize?: React.ComponentProps<typeof EditingForm>['editSize'];
+    canApplyRandomInspiration?: boolean;
     imageFiles?: File[];
     upstreamProfile?: ImageUpstreamProfile;
     upstreamProfileMixed?: boolean;
+    isActive?: boolean;
+    partialImages?: PartialImagesCount;
+    streamMode?: React.ComponentProps<typeof EditingForm>['streamMode'];
+    isLoading?: boolean;
+    showLoadingState?: boolean;
 };
 
 const noop = () => {};
@@ -52,7 +65,14 @@ function assertSubmitFooterAvailable(html: string, submitLabel: string) {
     assert.equal(classNames.includes('border-t'), true);
 }
 
-function renderEditingForm({
+function assertButtonDisabled(html: string, label: string) {
+    const button = html.match(/<button[^>]*>[\s\S]*?<\/button>/g)?.find((candidate) => candidate.includes(label));
+
+    assert.ok(button, `missing button for ${label}`);
+    assert.match(button, /^<button[^>]*disabled=""/);
+}
+
+function createEditingFormProps({
     backend,
     outputFormat = 'png',
     advancedOpen = true,
@@ -67,94 +87,111 @@ function renderEditingForm({
     hasDefaultResponsesModel = true,
     editResponsesModel = '',
     editPrompt = '',
+    editModel = 'gpt-image-2',
+    editSize = 'auto',
+    canApplyRandomInspiration = true,
     imageFiles = [],
     upstreamProfile = IMAGE_UPSTREAM_PROFILES['openai-compatible'],
-    upstreamProfileMixed = false
-}: RenderOptions): string {
+    upstreamProfileMixed = false,
+    isActive = true,
+    partialImages = 1,
+    streamMode = 'auto',
+    isLoading = false,
+    showLoadingState = isLoading
+}: RenderOptions): React.ComponentProps<typeof EditingForm> {
+    return {
+        onSubmit: noop,
+        onSaveInspiration: noop,
+        canApplyRandomInspiration,
+        onPickRandomInspiration: () => '用户保存的编辑提示词',
+        isLoading,
+        showLoadingState,
+        isActive,
+        currentMode: 'edit',
+        onModeChange: noop,
+        reuseContext,
+        onClearReuseContext: noop,
+        isPasswordRequiredByBackend: false,
+        clientPasswordHash: null,
+        onOpenPasswordDialog: noop,
+        editModel,
+        setEditModel: noop,
+        imageFiles,
+        sourceImagePreviewUrls: [],
+        setImageFiles: noop,
+        setSourceImagePreviewUrls: noop,
+        maxImages: upstreamProfile.upload.maxImages,
+        editPrompt,
+        setEditPrompt: noop,
+        editN,
+        setEditN: noop,
+        editSize,
+        setEditSize: noop,
+        editCustomWidth: 1024,
+        setEditCustomWidth: noop,
+        editCustomHeight: 1024,
+        setEditCustomHeight: noop,
+        editQuality: 'auto',
+        setEditQuality: noop,
+        editOutputFormat: outputFormat,
+        setEditOutputFormat: noop,
+        editCompression: [85],
+        setEditCompression: noop,
+        upstreamProfile,
+        upstreamProfileMixed,
+        editModeration: 'auto',
+        setEditModeration: noop,
+        editBrushSize: [20],
+        setEditBrushSize: noop,
+        editShowMaskEditor: false,
+        setEditShowMaskEditor: noop,
+        editGeneratedMaskFile: null,
+        setEditGeneratedMaskFile: noop,
+        editIsMaskSaved: false,
+        setEditIsMaskSaved: noop,
+        editOriginalImageSize: null,
+        setEditOriginalImageSize: noop,
+        editDrawnPoints: [],
+        setEditDrawnPoints: noop,
+        editMaskPreviewUrl: null,
+        setEditMaskPreviewUrl: noop,
+        streamMode,
+        setStreamMode: noop,
+        allowStreamingBatch,
+        enableParallelBatch,
+        setEnableParallelBatch: noop,
+        partialImages,
+        setPartialImages: noop,
+        allowResponsesImageBackend,
+        hasDefaultResponsesModel,
+        editImageBackend: backend,
+        setEditImageBackend: noop,
+        editStreamingStrategy: streamingStrategy,
+        defaultStreamingStrategy,
+        setEditStreamingStrategy: noop,
+        editResponsesModel,
+        setEditResponsesModel: noop,
+        editThinking: 'server-default',
+        setEditThinking: noop,
+        editPromptOptimization: 'server-default',
+        setEditPromptOptimization: noop,
+        editForceWeb: false,
+        setEditForceWeb: noop,
+        estimatedCostLabel: '预计 0.12 积分',
+        initialAdvancedOpen: advancedOpen,
+        initialAdvancedTab: advancedTab
+    };
+}
+
+function renderEditingForm(options: RenderOptions): string {
     return renderToStaticMarkup(
         <I18nProvider>
-            <EditingForm
-                onSubmit={noop}
-                isLoading={false}
-                currentMode='edit'
-                onModeChange={noop}
-                reuseContext={reuseContext}
-                onClearReuseContext={noop}
-                isPasswordRequiredByBackend={false}
-                clientPasswordHash={null}
-                onOpenPasswordDialog={noop}
-                editModel='gpt-image-2'
-                setEditModel={noop}
-                imageFiles={imageFiles}
-                sourceImagePreviewUrls={[]}
-                setImageFiles={noop}
-                setSourceImagePreviewUrls={noop}
-                maxImages={upstreamProfile.upload.maxImages}
-                editPrompt={editPrompt}
-                setEditPrompt={noop}
-                editN={editN}
-                setEditN={noop}
-                editSize='auto'
-                setEditSize={noop}
-                editCustomWidth={1024}
-                setEditCustomWidth={noop}
-                editCustomHeight={1024}
-                setEditCustomHeight={noop}
-                editQuality='auto'
-                setEditQuality={noop}
-                editOutputFormat={outputFormat}
-                setEditOutputFormat={noop}
-                editCompression={[85]}
-                setEditCompression={noop}
-                upstreamProfile={upstreamProfile}
-                upstreamProfileMixed={upstreamProfileMixed}
-                editModeration='auto'
-                setEditModeration={noop}
-                editBrushSize={[20]}
-                setEditBrushSize={noop}
-                editShowMaskEditor={false}
-                setEditShowMaskEditor={noop}
-                editGeneratedMaskFile={null}
-                setEditGeneratedMaskFile={noop}
-                editIsMaskSaved={false}
-                setEditIsMaskSaved={noop}
-                editOriginalImageSize={null}
-                setEditOriginalImageSize={noop}
-                editDrawnPoints={[]}
-                setEditDrawnPoints={noop}
-                editMaskPreviewUrl={null}
-                setEditMaskPreviewUrl={noop}
-                streamMode='auto'
-                setStreamMode={noop}
-                allowStreamingBatch={allowStreamingBatch}
-                enableParallelBatch={enableParallelBatch}
-                setEnableParallelBatch={noop}
-                partialImages={1}
-                setPartialImages={noop}
-                allowResponsesImageBackend={allowResponsesImageBackend}
-                hasDefaultResponsesModel={hasDefaultResponsesModel}
-                editImageBackend={backend}
-                setEditImageBackend={noop}
-                editStreamingStrategy={streamingStrategy}
-                defaultStreamingStrategy={defaultStreamingStrategy}
-                setEditStreamingStrategy={noop}
-                editResponsesModel={editResponsesModel}
-                setEditResponsesModel={noop}
-                editThinking='server-default'
-                setEditThinking={noop}
-                editPromptOptimization='server-default'
-                setEditPromptOptimization={noop}
-                editForceWeb={false}
-                setEditForceWeb={noop}
-                estimatedCostLabel='预计 0.12 积分'
-                initialAdvancedOpen={advancedOpen}
-                initialAdvancedTab={advancedTab}
-            />
+            <EditingForm {...createEditingFormProps(options)} />
         </I18nProvider>
     );
 }
 
-describe('EditingForm submit footer', () => {
+describe('EditingForm submit footer', { concurrency: false }, () => {
     it('keeps the submit footer available outside desktop breakpoints', () => {
         const html = renderEditingForm({
             backend: 'server-default',
@@ -163,13 +200,149 @@ describe('EditingForm submit footer', () => {
         });
 
         assertSubmitFooterAvailable(html, '编辑图像');
+        assert.match(html, /grid grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)\] gap-1\.5 text-xs/);
+        assert.match(html, /min-w-0 items-center justify-center rounded-full/);
+        assert.doesNotMatch(html, /text-center whitespace-nowrap/);
+        assert.doesNotMatch(html, /min-\[1760px\]:flex/);
+        assert.match(html, /存为灵感/);
+        assert.match(html, /随便来点/);
+        assert.match(html, /min-h-11 min-w-0 items-center justify-center/);
+        assert.match(html, /focus-visible:ring-2 focus-visible:outline-none/);
+        assert.match(html, /flex min-h-0 flex-1 flex-col overflow-hidden/);
+        assert.match(html, /min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pb-4/);
+        assert.match(html, /border-border bg-card flex shrink-0 border-t p-4/);
+    });
+
+    it('keeps submit copy while another busy action disables the form', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            isLoading: true,
+            showLoadingState: false
+        });
+
+        assert.match(html, /编辑图像/);
+        assert.doesNotMatch(html, /编辑中\.\.\./);
+    });
+
+    it('disables edit inspiration actions when the prompt or saved inspirations are unavailable', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            editPrompt: '',
+            canApplyRandomInspiration: false
+        });
+
+        assertButtonDisabled(html, '存为灵感');
+        assertButtonDisabled(html, '随便来点');
+        assert.doesNotMatch(html, /用户保存的编辑提示词/);
+    });
+
+    it('runs edit inspiration actions through the rendered footer controls', async () => {
+        const savedPrompts: string[] = [];
+        const appliedPrompts: string[] = [];
+        const props = createEditingFormProps({
+            backend: 'server-default',
+            editPrompt: '  当前编辑灵感  '
+        });
+        props.onSaveInspiration = (prompt) => savedPrompts.push(prompt);
+        props.onPickRandomInspiration = () => '  随机编辑灵感  ';
+        props.setEditPrompt = (nextPrompt) => {
+            appliedPrompts.push(typeof nextPrompt === 'function' ? nextPrompt('') : nextPrompt);
+        };
+
+        const view = await renderInClientDom(
+            <I18nProvider>
+                <EditingForm {...props} />
+            </I18nProvider>
+        );
+
+        try {
+            const saveButton = [...view.container.querySelectorAll('button')].find((button) =>
+                button.textContent?.includes('存为灵感')
+            );
+            const randomButton = [...view.container.querySelectorAll('button')].find((button) =>
+                button.textContent?.includes('随便来点')
+            );
+
+            assert.ok(saveButton, 'missing edit save inspiration button');
+            assert.ok(randomButton, 'missing edit random inspiration button');
+
+            await view.click(saveButton);
+            await view.click(randomButton);
+
+            assert.deepEqual(savedPrompts, ['  当前编辑灵感  ']);
+            assert.deepEqual(appliedPrompts, ['随机编辑灵感']);
+        } finally {
+            await view.cleanup();
+        }
+    });
+
+    it('only applies edit profile corrections after the form becomes active', async () => {
+        const countCorrections: number[][] = [];
+        const partialImageCorrections: number[] = [];
+        const streamModeCorrections: string[] = [];
+        const sizeCorrections: string[] = [];
+        const props = createEditingFormProps({
+            backend: 'server-default',
+            isActive: false,
+            editN: [0],
+            editModel: 'gpt-image-1',
+            editSize: 'custom',
+            partialImages: 0,
+            streamMode: 'auto',
+            streamingStrategy: 'off'
+        });
+        props.setEditN = (nextCount) => {
+            countCorrections.push(typeof nextCount === 'function' ? nextCount([]) : nextCount);
+        };
+        props.setPartialImages = (nextPartialImages) => {
+            partialImageCorrections.push(
+                typeof nextPartialImages === 'function' ? nextPartialImages(1) : nextPartialImages
+            );
+        };
+        props.setStreamMode = (nextStreamMode) => {
+            streamModeCorrections.push(typeof nextStreamMode === 'function' ? nextStreamMode('auto') : nextStreamMode);
+        };
+        props.setEditSize = (nextSize) => {
+            sizeCorrections.push(typeof nextSize === 'function' ? nextSize('custom') : nextSize);
+        };
+
+        const view = await renderInClientDom(
+            <I18nProvider>
+                <EditingForm {...props} />
+            </I18nProvider>
+        );
+
+        try {
+            assert.deepEqual(countCorrections, []);
+            assert.deepEqual(partialImageCorrections, []);
+            assert.deepEqual(streamModeCorrections, []);
+            assert.deepEqual(sizeCorrections, []);
+
+            await view.render(
+                <I18nProvider>
+                    <EditingForm {...props} isActive />
+                </I18nProvider>
+            );
+
+            assert.deepEqual(countCorrections, [[1]]);
+            assert.deepEqual(partialImageCorrections, [1]);
+            assert.deepEqual(streamModeCorrections, ['non_stream']);
+            assert.deepEqual(sizeCorrections, ['auto']);
+        } finally {
+            await view.cleanup();
+        }
     });
 });
 
 describe('EditingForm advanced upstream controls', () => {
-    it('keeps compact desktop preset controls text-first to avoid clipped labels', () => {
+    it('keeps translated preset labels inside responsive control cells', () => {
         const html = renderEditingForm({ backend: 'server-default' });
 
+        assert.match(html, /radio-group-item-content\]\]:min-w-0/);
+        assert.match(html, /radio-group-item-content\]\]:overflow-hidden/);
+        assert.match(html, /max-w-full min-w-0 text-center leading-4 break-words whitespace-normal/);
+        assert.doesNotMatch(html, /radio-group-item-content\]\]:overflow-visible/);
+        assert.doesNotMatch(html, /2xl:grid-cols-5/);
         assert.doesNotMatch(html, /lg:hidden 2xl:block/);
     });
 
@@ -192,6 +365,7 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(html, /参考图/);
         assert.match(html, /修改想法/);
         assert.match(html, /专业模式/);
+        assert.doesNotMatch(html, /block truncate text-xs font-normal/);
         assert.doesNotMatch(html, /edit-model-select/);
         assert.doesNotMatch(html, /edit-stream-mode-select/);
     });

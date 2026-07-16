@@ -91,7 +91,7 @@ export function WorkbenchStatusStrip({
                 <details className='group relative max-w-full basis-full sm:basis-auto'>
                     <summary
                         className={cn(
-                            'border-border bg-card/70 inline-flex min-h-6 cursor-pointer list-none items-center gap-1.5 rounded-full border px-2 py-0.5 sm:min-h-7 sm:px-2.5 sm:py-1',
+                            'border-border bg-card/70 inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 rounded-full border px-2 py-0.5 sm:px-2.5 sm:py-1 lg:min-h-7',
                             hasRouteWarnings ? 'text-[oklch(0.48_0.11_72)]' : 'text-[oklch(0.42_0.09_150)]'
                         )}>
                         {hasRouteWarnings ? (

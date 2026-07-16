@@ -70,7 +70,7 @@ export function WorkbenchProRoutePanel({
         imageBackend === 'responses-image-generation' && !hasDefaultResponsesModel && !responsesModel.trim();
 
     return (
-        <TabsContent value='route' className='mt-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3'>
+        <TabsContent value='route' className='mt-0 grid grid-cols-1 gap-3 sm:grid-cols-2'>
             <div className='space-y-1'>
                 <p className='text-muted-foreground'>{t('upstream.backend')}</p>
                 <Select
@@ -125,8 +125,8 @@ export function WorkbenchProRoutePanel({
                     </SelectContent>
                 </Select>
             </div>
-            <div className='border-border bg-muted/20 text-muted-foreground col-span-2 grid gap-2 rounded-md border px-3 py-2 leading-5 md:grid-cols-[auto_1fr_1fr_1fr]'>
-                <p className='text-foreground font-medium'>{t('upstream.routeImpactTitle')}</p>
+            <div className='border-border bg-muted/20 text-muted-foreground col-span-full grid grid-cols-1 gap-2 rounded-md border px-3 py-2 leading-5 sm:grid-cols-2'>
+                <p className='text-foreground font-medium sm:col-span-2'>{t('upstream.routeImpactTitle')}</p>
                 {getImageUpstreamRouteImpactKeys({
                     backend: imageBackend,
                     streamingStrategy,
@@ -138,7 +138,7 @@ export function WorkbenchProRoutePanel({
                 ))}
             </div>
             {imageBackend === 'responses-image-generation' && (
-                <div className='border-border bg-muted/20 col-span-2 grid gap-2 rounded-md border px-3 py-2'>
+                <div className='border-border bg-muted/20 col-span-full grid gap-2 rounded-md border px-3 py-2'>
                     <label htmlFor='pro-responses-model-input' className='text-foreground text-xs font-medium'>
                         {t('upstream.gptModel')}
                     </label>

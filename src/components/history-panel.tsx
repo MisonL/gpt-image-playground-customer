@@ -51,6 +51,7 @@ type HistoryPanelProps = {
     history: HistoryMetadata[];
     inspirations: InspirationItem[];
     activityItems?: GenerationActivityItem[];
+    isSendingToEdit?: boolean;
     onSelectImage: (item: HistoryMetadata) => void;
     onApplyPrompt: (prompt: string, source: PromptApplySource) => void;
     onSaveInspiration: (prompt: string) => void;
@@ -221,6 +222,7 @@ function HistoryPanelImpl({
     history,
     inspirations,
     activityItems = [],
+    isSendingToEdit = false,
     onSelectImage,
     onApplyPrompt,
     onSaveInspiration,
@@ -255,6 +257,8 @@ function HistoryPanelImpl({
         historyCount: history.length,
         inspirationCount: inspirations.length
     });
+    const isActiveCollectionEmpty =
+        effectiveActiveTab === 'inspiration' ? inspirations.length === 0 : history.length === 0;
 
     const { totalCost, totalImages } = React.useMemo(() => {
         let cost = 0;
@@ -447,11 +451,19 @@ function HistoryPanelImpl({
                     </Button>
                 )}
             </CardHeader>
-            <CardContent className='literary-scrollbar min-h-0 p-3 lg:max-h-[calc(100%-17.5rem)] lg:overflow-y-auto lg:p-3 xl:flex-none'>
+            <CardContent
+                className={cn(
+                    'literary-scrollbar min-h-0 p-3 lg:max-h-[calc(100%-17.5rem)] lg:overflow-y-auto lg:p-3 xl:flex-none',
+                    isActiveCollectionEmpty && 'xl:flex xl:max-h-none xl:flex-1 xl:flex-col'
+                )}>
                 {effectiveActiveTab === 'inspiration' ? (
-                    <div className='space-y-3 lg:space-y-2'>
+                    <div
+                        className={cn(
+                            'space-y-3 lg:space-y-2',
+                            inspirations.length === 0 && 'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0'
+                        )}>
                         {inspirations.length === 0 ? (
-                            <div className='text-muted-foreground border-border bg-muted/20 flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 text-center text-sm'>
+                            <div className='text-muted-foreground border-border bg-muted/20 flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 text-center text-sm xl:my-auto'>
                                 <WandSparkles className='h-5 w-5 opacity-70' />
                                 <p>{t('history.inspirationEmpty')}</p>
                             </div>
@@ -522,7 +534,11 @@ function HistoryPanelImpl({
                                 })}
                             </div>
                         )}
-                        <div className='flex items-center justify-between rounded-md px-1 text-sm'>
+                        <div
+                            className={cn(
+                                'flex items-center justify-between rounded-md px-1 text-sm',
+                                inspirations.length === 0 && 'xl:mt-auto'
+                            )}>
                             <button
                                 type='button'
                                 className='text-muted-foreground hover:text-primary focus-visible:ring-ring -ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 transition-[color,box-shadow] focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 lg:ml-0 lg:min-h-8 lg:px-0'
@@ -543,11 +559,11 @@ function HistoryPanelImpl({
                         </div>
                     </div>
                 ) : history.length === 0 ? (
-                    <div className='text-muted-foreground border-border flex min-h-24 items-center justify-center rounded-md border border-dashed px-4 text-center text-sm'>
+                    <div className='text-muted-foreground border-border flex min-h-24 items-center justify-center rounded-md border border-dashed px-4 text-center text-sm xl:flex-1'>
                         <p>{t('history.empty')}</p>
                     </div>
                 ) : (
-                    <div className='-mx-3 flex snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-1 lg:mx-0 lg:grid lg:grid-cols-1 lg:overflow-visible lg:px-0 lg:pb-0 2xl:grid-cols-2'>
+                    <div className='-mx-3 flex snap-x snap-mandatory gap-3 overflow-x-auto px-3 pb-1 lg:mx-0 lg:grid lg:grid-cols-1 lg:overflow-visible lg:px-0 lg:pb-0'>
                         {[...history].map((item) => {
                             const firstImage = item.images?.[0];
                             const imageCount = item.images?.length ?? 0;
@@ -1042,7 +1058,7 @@ function HistoryPanelImpl({
                                                 variant='outline'
                                                 size='sm'
                                                 className='min-h-11 min-w-0 px-2 text-[11px] lg:h-7 lg:min-h-0 lg:px-1'
-                                                disabled={!firstImage || isFailedItem}
+                                                disabled={!firstImage || isFailedItem || isSendingToEdit}
                                                 onClick={() => onSendHistoryToEdit(item)}
                                                 aria-label={t('history.continueHistoryEdit')}>
                                                 <Pencil className='h-3.5 w-3.5' />

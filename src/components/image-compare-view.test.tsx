@@ -1,7 +1,6 @@
 import { ImageCompareView, resolveCompareTargetIndex } from './image-compare-view';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 describe('resolveCompareTargetIndex', () => {

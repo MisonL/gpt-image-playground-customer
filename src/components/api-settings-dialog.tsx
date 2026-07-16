@@ -24,14 +24,22 @@ type ApiSettingsDialogProps = {
     onOpenChange: (isOpen: boolean) => void;
     settings: ApiSettings;
     onSave: (settings: ApiSettings) => void;
+    getReturnFocusTarget: () => HTMLButtonElement | null;
 };
 
-export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: ApiSettingsDialogProps) {
+export function ApiSettingsDialog({
+    isOpen,
+    onOpenChange,
+    settings,
+    onSave,
+    getReturnFocusTarget
+}: ApiSettingsDialogProps) {
     const { t } = useI18n();
     const [draft, setDraft] = React.useState<ApiSettings>(settings);
     const [saveStatus, setSaveStatus] = React.useState<'idle' | 'saved' | 'error'>('idle');
     const [validationMessage, setValidationMessage] = React.useState<string | null>(null);
     const closeTimerRef = React.useRef<number | null>(null);
+    const wasOpenRef = React.useRef(false);
 
     const clearCloseTimer = React.useCallback(() => {
         if (closeTimerRef.current === null) return;
@@ -41,13 +49,23 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
 
     React.useEffect(() => clearCloseTimer, [clearCloseTimer]);
 
-    const handleOpenChange = (open: boolean) => {
-        if (open) {
+    React.useEffect(() => {
+        const wasOpen = wasOpenRef.current;
+        wasOpenRef.current = isOpen;
+        if (!isOpen) {
             clearCloseTimer();
-            setSaveStatus('idle');
-            setValidationMessage(null);
-            setDraft(settings);
+            return;
         }
+        if (wasOpen) return;
+
+        clearCloseTimer();
+        setSaveStatus('idle');
+        setValidationMessage(null);
+        setDraft(settings);
+    }, [clearCloseTimer, isOpen, settings]);
+
+    const handleOpenChange = (open: boolean) => {
+        if (!open) clearCloseTimer();
         onOpenChange(open);
     };
 
@@ -104,7 +122,12 @@ export function ApiSettingsDialog({ isOpen, onOpenChange, settings, onSave }: Ap
 
     return (
         <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-            <DialogContent className='sm:max-w-[520px]'>
+            <DialogContent
+                className='sm:max-w-[520px]'
+                onCloseAutoFocus={(event) => {
+                    event.preventDefault();
+                    getReturnFocusTarget()?.focus();
+                }}>
                 <form onSubmit={handleSubmit} className='grid gap-4'>
                     <DialogHeader>
                         <DialogTitle>{t('api.title')}</DialogTitle>

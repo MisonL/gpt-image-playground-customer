@@ -1087,7 +1087,9 @@ describe('buildAgentCapabilities', () => {
         assert.equal('output_compression' in editProperties, false);
         assert.equal('background' in editProperties, false);
         assert.equal('moderation' in editProperties, false);
-        assert.equal(editProperties.force_request.type, 'boolean');
+        const forceRequestProperty = editProperties.force_request;
+        assert.ok(forceRequestProperty && typeof forceRequestProperty === 'object' && 'type' in forceRequestProperty);
+        assert.equal(forceRequestProperty.type, 'boolean');
         assert.deepEqual(editProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
         assert.deepEqual(editProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
         assert.deepEqual(document.components.schemas.EditRequest.required, ['prompt']);

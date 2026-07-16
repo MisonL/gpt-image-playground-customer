@@ -44,6 +44,7 @@ import type { SizePreset } from '@/lib/size-utils';
 import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import {
+    Bookmark,
     Eraser,
     Save,
     Square,
@@ -104,7 +105,12 @@ export type EditingFormData = {
 
 type EditingFormProps = {
     onSubmit: (data: EditingFormData) => void;
+    onSaveInspiration: (prompt: string) => void;
+    canApplyRandomInspiration: boolean;
+    onPickRandomInspiration: () => string;
     isLoading: boolean;
+    showLoadingState?: boolean;
+    isActive: boolean;
     currentMode: WorkbenchMode;
     onModeChange: (mode: WorkbenchMode) => void;
     reuseContext: EditingReuseContext | null;
@@ -209,9 +215,9 @@ const RadioItemWithIcon = ({
             id={id}
             disabled={disabled}
             aria-label={label}
-            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-8 [&_[data-slot=radio-group-indicator]]:hidden'>
+            className='border-border bg-background/58 text-muted-foreground enabled:hover:border-primary/25 enabled:hover:bg-accent/45 enabled:hover:text-foreground data-[state=checked]:border-primary/55 data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary flex aspect-auto h-auto min-h-11 w-full flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-xs shadow-none transition-[background-color,border-color,color,box-shadow,transform] enabled:active:translate-y-0 enabled:motion-safe:hover:-translate-y-0.5 enabled:motion-safe:hover:scale-100 enabled:motion-safe:active:scale-100 lg:min-h-8 lg:text-[11px] [&_[data-slot=radio-group-indicator]]:hidden [&_[data-slot=radio-group-item-content]]:max-w-full [&_[data-slot=radio-group-item-content]]:min-w-0 [&_[data-slot=radio-group-item-content]]:justify-center [&_[data-slot=radio-group-item-content]]:overflow-hidden'>
             <Icon className='h-3 w-3 shrink-0 text-current opacity-50 lg:hidden' />
-            <span className='max-w-full min-w-0 truncate text-center leading-4'>{label}</span>
+            <span className='max-w-full min-w-0 text-center leading-4 break-words whitespace-normal'>{label}</span>
         </RadioGroupItem>
     );
 
@@ -303,7 +309,12 @@ function getOutputFormatLabel(format: EditingFormData['output_format'], t: (key:
 
 export function EditingForm({
     onSubmit,
+    onSaveInspiration,
+    canApplyRandomInspiration,
+    onPickRandomInspiration,
     isLoading,
+    showLoadingState = isLoading,
+    isActive,
     currentMode,
     onModeChange,
     reuseContext,
@@ -464,28 +475,28 @@ export function EditingForm({
 
     // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
-        if (!isGptImage2 && editSize === 'custom') {
+        if (isActive && !isGptImage2 && editSize === 'custom') {
             setEditSize('auto');
         }
-    }, [isGptImage2, editSize, setEditSize]);
+    }, [editSize, isActive, isGptImage2, setEditSize]);
 
     React.useEffect(() => {
-        if (streamingDisabledByStrategy && streamMode !== 'non_stream') {
+        if (isActive && streamingDisabledByStrategy && streamMode !== 'non_stream') {
             setStreamMode('non_stream');
         }
-    }, [streamingDisabledByStrategy, streamMode, setStreamMode]);
+    }, [isActive, streamingDisabledByStrategy, streamMode, setStreamMode]);
 
     React.useEffect(() => {
-        if (partialImages < partialImagesRange.min || partialImages > partialImagesRange.max) {
+        if (isActive && (partialImages < partialImagesRange.min || partialImages > partialImagesRange.max)) {
             setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
         }
-    }, [partialImages, partialImagesRange, setPartialImages]);
+    }, [isActive, partialImages, partialImagesRange, setPartialImages]);
 
     React.useEffect(() => {
-        if (editN[0] < upstreamProfile.editCount.min || editN[0] > upstreamProfile.editCount.max) {
+        if (isActive && (editN[0] < upstreamProfile.editCount.min || editN[0] > upstreamProfile.editCount.max)) {
             setEditN([Math.min(upstreamProfile.editCount.max, Math.max(upstreamProfile.editCount.min, editN[0]))]);
         }
-    }, [editN, setEditN, upstreamProfile.editCount.max, upstreamProfile.editCount.min]);
+    }, [editN, isActive, setEditN, upstreamProfile.editCount.max, upstreamProfile.editCount.min]);
 
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
     const visualFeedbackCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
@@ -841,12 +852,12 @@ export function EditingForm({
     };
 
     return (
-        <Card className='workbench-panel text-card-foreground border-border flex w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 lg:h-full'>
-            <CardHeader className='border-border/70 border-b px-3 pt-2 !pb-2'>
+        <Card className='mobile-drawer-form-card workbench-panel text-card-foreground border-border flex min-h-0 w-full flex-1 flex-col gap-0 overflow-hidden rounded-lg border py-0 lg:h-full'>
+            <CardHeader className='border-border/70 shrink-0 border-b px-3 pt-2 !pb-2'>
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
-            <div className='flex flex-1 flex-col lg:h-full lg:overflow-hidden'>
-                <CardContent className='space-y-3 p-4 pb-28 lg:flex-1 lg:overflow-y-auto lg:pb-4'>
+            <div className='mobile-drawer-form-frame flex min-h-0 flex-1 flex-col overflow-hidden'>
+                <CardContent className='mobile-drawer-form-content min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pb-4'>
                     <div className='space-y-1'>
                         <div className='flex items-center'>
                             <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
@@ -1176,7 +1187,7 @@ export function EditingForm({
                             disabled={isLoading}
                             name='edit-size'
                             aria-label={t('form.size')}
-                            className='grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-5'>
+                            className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
                             {editSizePresetOptions.map((option) => (
                                 <RadioItemWithIcon
                                     key={option.value}
@@ -1254,7 +1265,7 @@ export function EditingForm({
                                 <SlidersHorizontal className='h-4 w-4 shrink-0' />
                                 <span className='min-w-0'>
                                     <span className='text-foreground block'>{t('ux.professionalMode')}</span>
-                                    <span className='text-muted-foreground block truncate text-xs font-normal'>
+                                    <span className='text-muted-foreground block text-xs leading-4 font-normal'>
                                         {advancedSummary}
                                     </span>
                                 </span>
@@ -1847,24 +1858,24 @@ export function EditingForm({
                         )}
                     </div>
                 </CardContent>
-                <CardFooter className='border-border bg-card/80 flex shrink-0 border-t p-4'>
+                <CardFooter className='border-border bg-card flex shrink-0 border-t p-4'>
                     <div className='w-full space-y-2'>
-                        <div className='flex flex-wrap items-center gap-1.5 text-xs'>
-                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
+                        <div className='grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-1.5 text-xs'>
+                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {editModel}
                             </span>
-                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
+                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {workbenchBackendLabel}
                             </span>
-                            <span className='border-border bg-background/65 text-muted-foreground rounded-full border px-2 py-1'>
+                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {streamStatusLabel}
                             </span>
                             {parallelBatchChecked && (
-                                <span className='rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-[oklch(0.38_0.075_148)]'>
+                                <span className='inline-flex min-w-0 items-center justify-center rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-center leading-4 break-words whitespace-normal text-[oklch(0.38_0.075_148)]'>
                                     {t('streaming.parallelBatchEnabled')}
                                 </span>
                             )}
-                            <span className='border-primary/20 bg-primary/10 text-primary rounded-full border px-2 py-1'>
+                            <span className='border-primary/20 bg-primary/10 text-primary col-span-2 inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {estimatedCostLabel}
                             </span>
                         </div>
@@ -1875,10 +1886,32 @@ export function EditingForm({
                             type='button'
                             onClick={handleSubmit}
                             disabled={isLoading || !!submitDisabledReason}
-                            className='flex w-full items-center justify-center gap-2 rounded-md border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white'>
-                            {isLoading && <Loader2 className='h-4 w-4 animate-spin' />}
-                            {isLoading ? t('edit.loading') : t('edit.submit')}
+                            className='flex min-h-11 w-full items-center justify-center gap-2 rounded-md border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white lg:min-h-9'>
+                            {showLoadingState && <Loader2 className='h-4 w-4 animate-spin' />}
+                            {showLoadingState ? t('edit.loading') : t('edit.submit')}
                         </Button>
+                        <div className='grid grid-cols-2 gap-2'>
+                            <button
+                                type='button'
+                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground focus-visible:ring-ring flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-md border px-2 text-xs transition-[background-color,border-color,color,box-shadow,transform] focus-visible:ring-2 focus-visible:outline-none enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
+                                disabled={!editPrompt.trim() || isLoading}
+                                onClick={() => onSaveInspiration(editPrompt)}>
+                                <Bookmark className='h-3.5 w-3.5 shrink-0' aria-hidden='true' />
+                                <span className='min-w-0 whitespace-normal'>{t('workbench.saveInspiration')}</span>
+                            </button>
+                            <button
+                                type='button'
+                                className='border-border bg-background/70 text-muted-foreground hover:border-primary/25 hover:bg-accent/45 hover:text-foreground focus-visible:ring-ring flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-md border px-2 text-xs transition-[background-color,border-color,color,box-shadow,transform] focus-visible:ring-2 focus-visible:outline-none enabled:hover:-translate-y-0.5 enabled:active:translate-y-0 disabled:opacity-50 lg:min-h-9'
+                                disabled={isLoading || !canApplyRandomInspiration}
+                                onClick={() => {
+                                    const nextPrompt = onPickRandomInspiration().trim();
+                                    if (!nextPrompt) return;
+                                    setEditPrompt(nextPrompt);
+                                }}>
+                                <WandSparkles className='h-3.5 w-3.5 shrink-0' aria-hidden='true' />
+                                <span className='min-w-0 whitespace-normal'>{t('workbench.randomInspiration')}</span>
+                            </button>
+                        </div>
                     </div>
                 </CardFooter>
             </div>

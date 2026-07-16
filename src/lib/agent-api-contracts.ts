@@ -668,7 +668,7 @@ function readQuality(body: Record<string, unknown>, fields: FieldErrors): AgentQ
     return value;
 }
 
-function readBackground(body: Record<string, unknown>, model: GptImageModel, fields: FieldErrors): AgentBackground {
+function readBackground(body: Record<string, unknown>, fields: FieldErrors): AgentBackground {
     const value = readStringField(body, 'background', 'auto');
     if (!value || !isOneOf(value, AGENT_BACKGROUNDS)) {
         fields.background = `必须是以下值之一：${AGENT_BACKGROUNDS.join(', ')}`;
@@ -783,7 +783,7 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const quality = readQuality(objectBody, fields);
     const outputFormat = readOutputFormat(objectBody, fields);
     const outputCompression = readOutputCompression(objectBody, outputFormat, fields);
-    const background = readBackground(objectBody, model, fields);
+    const background = readBackground(objectBody, fields);
     const moderation = readModeration(objectBody, fields);
     const responseMode = readResponseMode(objectBody, fields);
     const imageBackend = readAgentImageBackend(objectBody, fields);

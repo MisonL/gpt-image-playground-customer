@@ -69,7 +69,7 @@ export function WorkbenchProDock({ defaultMode = 'easy', defaultProTab = 'output
     const isProMode = dockMode === 'pro';
 
     return (
-        <div className='workbench-panel border-border/70 mt-4 hidden shrink-0 overflow-hidden rounded-lg border lg:block'>
+        <div className='workbench-panel border-border/70 mt-4 hidden shrink-0 overflow-hidden rounded-lg border lg:block xl:max-h-80 xl:overflow-y-auto'>
             <div className='border-border/60 flex items-center gap-4 border-b px-5 pt-3 text-sm'>
                 <DockModeButton active={!isProMode} onClick={() => setDockMode('easy')}>
                     {t('ux.easyMode')}

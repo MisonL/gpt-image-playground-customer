@@ -190,6 +190,8 @@ const AGENT_EDIT_OUTPUT_FORMAT = 'webp' satisfies ValidOutputFormat;
 
 const HTTP_HEADER_VALUE_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/;
 
+type ExistingAgentRequestResult = Exclude<BeginAgentRequestResult, { type: 'acquired' }>;
+
 export function readIdempotencyKey(headers: Headers): string {
     const value = headers.get('idempotency-key')?.trim();
     if (!value) {
@@ -229,7 +231,7 @@ export function resolveExistingAgentRequest(
     record: AgentRequestRecord | undefined,
     requestHash: string,
     now = new Date()
-): BeginAgentRequestResult | undefined {
+): ExistingAgentRequestResult | undefined {
     if (!record) return undefined;
     if (record.requestHash !== requestHash) return { type: 'conflict', record };
     if (record.status === 'succeeded' && record.responseJson) {
@@ -245,6 +247,14 @@ export function resolveExistingAgentRequest(
     return undefined;
 }
 
+export function agentBeginResultResponse(
+    beginResult: ExistingAgentRequestResult,
+    store: AgentStateStore
+): Promise<NextResponse>;
+export function agentBeginResultResponse(
+    beginResult: BeginAgentRequestResult | undefined,
+    store: AgentStateStore
+): Promise<NextResponse | undefined>;
 export async function agentBeginResultResponse(
     beginResult: BeginAgentRequestResult | undefined,
     store: AgentStateStore
