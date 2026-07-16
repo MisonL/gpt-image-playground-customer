@@ -52,5 +52,8 @@ generated-images/
 # generated verification artifacts
 /artifacts/
 
+# local temporary artifacts
+/tmp/
+
 # local agent/tool configuration
 .antigravitycli/
