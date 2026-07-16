@@ -360,6 +360,13 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         return this.listArtifactsForRequestSync(requestId);
     }
 
+    async listArtifactFilepaths(): Promise<string[]> {
+        const rows = this.requireDb()
+            .prepare('SELECT DISTINCT filepath FROM agent_artifacts ORDER BY filepath ASC')
+            .all() as Array<{ filepath: string }>;
+        return rows.map((row) => row.filepath);
+    }
+
     async deleteArtifact(id: string): Promise<boolean> {
         const result = this.requireDb().transaction(() => {
             const deleteResult = this.requireDb().prepare('DELETE FROM agent_artifacts WHERE id = ?').run(id);

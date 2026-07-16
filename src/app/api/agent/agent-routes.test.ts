@@ -1947,6 +1947,9 @@ describe('Agent route integration', () => {
             async listArtifactsForRequest() {
                 return [];
             },
+            async listArtifactFilepaths() {
+                return [];
+            },
             async deleteArtifact() {
                 return false;
             }
@@ -2066,6 +2069,9 @@ describe('Agent route integration', () => {
                 return undefined;
             },
             async listArtifactsForRequest() {
+                return [];
+            },
+            async listArtifactFilepaths() {
                 return [];
             },
             async deleteArtifact() {
@@ -2668,6 +2674,9 @@ describe('Agent route integration', () => {
                 return undefined;
             },
             async listArtifactsForRequest() {
+                return [];
+            },
+            async listArtifactFilepaths() {
                 return [];
             },
             async deleteArtifact() {
@@ -3362,6 +3371,9 @@ describe('Agent route integration', () => {
             async listArtifactsForRequest() {
                 return [];
             },
+            async listArtifactFilepaths() {
+                return [];
+            },
             async deleteArtifact() {
                 return false;
             }
@@ -3441,6 +3453,9 @@ describe('Agent route integration', () => {
                 return undefined;
             },
             async listArtifactsForRequest() {
+                return [];
+            },
+            async listArtifactFilepaths() {
                 return [];
             },
             async deleteArtifact() {

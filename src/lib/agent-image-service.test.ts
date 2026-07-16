@@ -177,6 +177,9 @@ function createReplayStore(artifacts: AgentArtifactRecord[]): AgentStateStore {
         async listArtifactsForRequest() {
             return artifacts;
         },
+        async listArtifactFilepaths() {
+            return artifacts.map((artifact) => artifact.filepath);
+        },
         async deleteArtifact() {
             return false;
         }

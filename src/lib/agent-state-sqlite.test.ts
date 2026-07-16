@@ -115,6 +115,46 @@ describe('SqliteAgentStateStore', () => {
         );
     });
 
+    it('lists sorted artifact filepaths for cleanup protection', async () => {
+        const requestJson = { prompt: 'sqlite cleanup protection' };
+        const begin = await store.beginRequest({
+            idempotencyKey: 'idem-sqlite-cleanup-protection',
+            requestHash: hashAgentPayload(requestJson),
+            mode: 'generate',
+            requestJson,
+            leaseMs: 1000,
+            ttlSeconds: 60
+        });
+        assert.equal(begin.type, 'acquired');
+        if (begin.type !== 'acquired') throw new Error('expected acquired');
+        const firstPath = path.join(tempDir, 'generated-images', 'cleanup-a.png');
+        const secondPath = path.join(tempDir, 'generated-images', 'cleanup-b.png');
+
+        await store.saveArtifacts([
+            {
+                ...buildArtifact({
+                    id: 'artifact-sqlite-cleanup-b',
+                    requestId: begin.record.requestId,
+                    filename: 'cleanup-b.png'
+                }),
+                filepath: secondPath
+            },
+            {
+                ...buildArtifact({
+                    id: 'artifact-sqlite-cleanup-a',
+                    requestId: begin.record.requestId,
+                    filename: 'cleanup-a.png'
+                }),
+                filepath: firstPath
+            }
+        ]);
+
+        const protectedPaths = (await store.listArtifactFilepaths()).filter(
+            (filepath) => filepath === firstPath || filepath === secondPath
+        );
+        assert.deepEqual(protectedPaths, [firstPath, secondPath]);
+    });
+
     it('upserts feedback rows by target type and id', async () => {
         const first = {
             targetType: 'page_request' as const,

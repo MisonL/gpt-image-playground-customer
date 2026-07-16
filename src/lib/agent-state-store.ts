@@ -85,6 +85,7 @@ export type AgentStateStore = {
     getRequestByIdempotencyKey(idempotencyKey: string): Promise<AgentRequestRecord | undefined>;
     getArtifact(id: string): Promise<AgentArtifactRecord | undefined>;
     listArtifactsForRequest(requestId: string): Promise<AgentArtifactRecord[]>;
+    listArtifactFilepaths(): Promise<string[]>;
     deleteArtifact(id: string): Promise<boolean>;
 };
 

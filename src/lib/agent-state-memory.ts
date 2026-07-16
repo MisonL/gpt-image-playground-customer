@@ -238,6 +238,10 @@ export class MemoryAgentStateStore implements AgentStateStore, ImageShareStateSt
         return this.listArtifactsForRequestSync(requestId);
     }
 
+    async listArtifactFilepaths(): Promise<string[]> {
+        return [...new Set([...this.artifactsById.values()].map((artifact) => artifact.filepath))].sort();
+    }
+
     async deleteArtifact(id: string): Promise<boolean> {
         const deleted = this.artifactsById.delete(id);
         if (deleted) this.feedbackByTarget.delete(feedbackKey('agent_artifact', id));
