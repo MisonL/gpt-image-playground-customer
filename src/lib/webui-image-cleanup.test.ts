@@ -4,7 +4,7 @@ import {
     type WebuiImageCleanupFileOperations
 } from './webui-image-cleanup';
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, realpath, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -143,9 +143,10 @@ describe('cleanupExpiredWebuiImages', () => {
         const outputDir = await createTempDirectory();
         const failingPath = await createFile(outputDir, OLD_WEBUI_FILENAME, OLD_TIME);
         const deletedPath = await createFile(outputDir, SECOND_OLD_FILENAME, OLD_TIME);
+        const canonicalFailingPath = await realpath(failingPath);
         const fileOperations: Partial<WebuiImageCleanupFileOperations> = {
             async unlink(filepath) {
-                if (filepath === failingPath) {
+                if (filepath === canonicalFailingPath) {
                     throw new Error('permission denied');
                 }
                 await unlink(filepath);
@@ -173,6 +174,47 @@ describe('cleanupExpiredWebuiImages', () => {
         ]);
         await access(failingPath);
         await assert.rejects(() => access(deletedPath));
+    });
+
+    it('protects artifacts when output and artifact paths use different realpath aliases', async () => {
+        const outputDir = await createTempDirectory();
+        const filename = PROTECTED_AGENT_FILENAME;
+        const filepath = await createFile(outputDir, filename, OLD_TIME);
+        const canonicalPath = path.join(await realpath(outputDir), filename);
+
+        const result = await cleanupExpiredWebuiImages({
+            outputDir,
+            retentionDays: 30,
+            protectedArtifactFilepaths: [canonicalPath],
+            now: NOW
+        });
+
+        assert.equal(result.protectedCount, 1);
+        assert.equal(result.deletedCount, 0);
+        await access(filepath);
+    });
+
+    it('fails visibly when a protected artifact path cannot be canonicalized', async () => {
+        const outputDir = await createTempDirectory();
+        const protectedPath = path.join(outputDir, PROTECTED_AGENT_FILENAME);
+        const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+
+        await assert.rejects(
+            () =>
+                cleanupExpiredWebuiImages({
+                    outputDir,
+                    retentionDays: 30,
+                    protectedArtifactFilepaths: [protectedPath],
+                    now: NOW,
+                    fileOperations: {
+                        async realpath(filepath) {
+                            if (filepath === protectedPath) throw permissionError;
+                            return await realpath(filepath);
+                        }
+                    }
+                }),
+            /permission denied/
+        );
     });
 });
 
