@@ -13,7 +13,7 @@
 
 - 项目是 Next.js 16 + React 19 的本地图片服务，默认端口 `4783`。
 - 包管理工具是 `npm`，锁文件是 `package-lock.json`。
-- Node 版本要求是 `>=20.9.0`。
+- Node 版本要求是 `>=20.10.0`。
 - 主要页面入口是 `src/app/page.tsx`。
 - 图片 API 入口是 `src/app/api/images/route.ts`。
 - Agent API 位于 `src/app/api/agent/`。
