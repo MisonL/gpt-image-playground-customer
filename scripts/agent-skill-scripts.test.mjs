@@ -2404,6 +2404,7 @@ describe('Agent skill script argument validation', () => {
     });
 
     it('enforces timeout while waiting for page SSE body events', async () => {
+        let pageSseRequestReceived = false;
         await withServer(
             (request, response) => {
                 if (request.url === '/api/agent/capabilities') {
@@ -2423,6 +2424,7 @@ describe('Agent skill script argument validation', () => {
                     return;
                 }
                 if (request.url === '/api/images') {
+                    pageSseRequestReceived = true;
                     response.writeHead(200, { 'content-type': 'text/event-stream' });
                     response.write(': keepalive\n\n');
                     return;
@@ -2437,7 +2439,7 @@ describe('Agent skill script argument validation', () => {
                         '--allow-billable',
                         '--page-sse',
                         '--timeout-ms',
-                        '250',
+                        '1000',
                         '--size',
                         '1024x1024',
                         '--quality',
@@ -2445,12 +2447,13 @@ describe('Agent skill script argument validation', () => {
                         'prompt'
                     ],
                     { GPT_IMAGE_PLAYGROUND_URL: baseUrl },
-                    { timeoutMs: 3_000 }
+                    { timeoutMs: 10_000 }
                 );
 
                 assert.equal(result.timedOut, false);
                 assert.equal(result.status, 1);
                 assert.equal(result.stdout.trim(), '');
+                assert.equal(pageSseRequestReceived, true);
                 const body = JSON.parse(result.stderr);
                 assert.equal(body.error.code, 'page_sse_failed');
                 assert.match(body.error.message, /\/api\/images/);

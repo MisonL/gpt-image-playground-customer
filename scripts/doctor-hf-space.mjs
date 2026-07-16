@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-
-import { existsSync } from 'node:fs';
 import {
     assertKnownOptions,
     buildNextActions,
@@ -13,8 +11,9 @@ import {
     runDoctorCommand,
     validateSpaceUrl
 } from './hf-space-doctor-utils.mjs';
+import { isSupportedNodeVersion, MIN_NODE_VERSION_RANGE } from './node-version.mjs';
+import { existsSync } from 'node:fs';
 
-const MIN_NODE_VERSION = '>=20.9.0';
 const REQUIRED_SPACE_VARIABLES = ['AGENT_STATE_BACKEND', 'NEXT_PUBLIC_IMAGE_STORAGE_MODE'];
 const RECOMMENDED_SPACE_VARIABLES = ['APP_LOG_LEVEL'];
 const REQUIRED_SPACE_VARIABLE_VALUES = new Map([
@@ -46,14 +45,16 @@ function addCheck(checks, status, name, message, details = {}) {
 }
 
 function checkNode(checks) {
-    const match = process.version.match(/^v(\d+)\.(\d+)\./);
-    const major = match ? Number(match[1]) : 0;
-    const minor = match ? Number(match[2]) : 0;
-    if (major > 20 || (major === 20 && minor >= 9)) {
+    if (isSupportedNodeVersion()) {
         addCheck(checks, 'pass', 'node', `Node.js ${process.version} is supported.`);
         return;
     }
-    addCheck(checks, 'fail', 'node', `Node.js ${process.version} is too old. Install Node.js ${MIN_NODE_VERSION} or newer.`);
+    addCheck(
+        checks,
+        'fail',
+        'node',
+        `Node.js ${process.version} is too old. Install Node.js ${MIN_NODE_VERSION_RANGE} or newer.`
+    );
 }
 
 function checkCommand(checks, name, command, args, failureAction) {
@@ -139,7 +140,12 @@ function checkRemoteVariableValues(checks, jsonText) {
         if (actual !== expected) mismatches.push(`${key}=${actual ?? '<missing>'} expected ${expected}`);
     }
     if (mismatches.length) {
-        addCheck(checks, 'fail', 'remote-variable-values', `Remote variable values are not Space-free compatible: ${mismatches.join(', ')}.`);
+        addCheck(
+            checks,
+            'fail',
+            'remote-variable-values',
+            `Remote variable values are not Space-free compatible: ${mismatches.join(', ')}.`
+        );
         return;
     }
     addCheck(checks, 'pass', 'remote-variable-values', 'Remote variable values match the Space-free runtime contract.');
@@ -148,7 +154,9 @@ function checkRemoteVariableValues(checks, jsonText) {
 function checkRemoteSecrets(checks, spaceId) {
     const result = runDoctorCommand('hf', ['spaces', 'secrets', 'list', spaceId, '--json']);
     if (!result.ok) {
-        addCheck(checks, 'warn', 'remote-secrets', `Cannot list remote secrets for ${spaceId}.`, { error: result.error });
+        addCheck(checks, 'warn', 'remote-secrets', `Cannot list remote secrets for ${spaceId}.`, {
+            error: result.error
+        });
         return;
     }
     try {
@@ -163,7 +171,12 @@ function checkRemoteSecrets(checks, spaceId) {
         if (hasGenerationSecret) {
             addCheck(checks, 'pass', 'remote-generation-secret', 'Remote generation credential is configured.');
         } else {
-            addCheck(checks, 'warn', 'remote-generation-secret', 'No OPENAI_API_KEY or OPENAI_CHANNEL_1_API_KEYS secret found; server-side generation may be unavailable.');
+            addCheck(
+                checks,
+                'warn',
+                'remote-generation-secret',
+                'No OPENAI_API_KEY or OPENAI_CHANNEL_1_API_KEYS secret found; server-side generation may be unavailable.'
+            );
         }
     } catch (error) {
         addCheck(checks, 'warn', 'remote-secrets', 'Cannot parse remote secrets JSON output.', {
@@ -181,8 +194,20 @@ function main() {
 
     const checks = [];
     checkNode(checks);
-    checkCommand(checks, 'npm', 'npm', ['--version'], `npm is missing. Install Node.js ${MIN_NODE_VERSION} or newer with npm.`);
-    const hfAvailable = checkCommand(checks, 'hf-cli', 'hf', ['version'], 'hf CLI is missing. Install the Hugging Face CLI.');
+    checkCommand(
+        checks,
+        'npm',
+        'npm',
+        ['--version'],
+        `npm is missing. Install Node.js ${MIN_NODE_VERSION_RANGE} or newer with npm.`
+    );
+    const hfAvailable = checkCommand(
+        checks,
+        'hf-cli',
+        'hf',
+        ['version'],
+        'hf CLI is missing. Install the Hugging Face CLI.'
+    );
     const hfAuth = hfAvailable ? runDoctorCommand('hf', ['auth', 'whoami']) : { ok: false };
     if (hfAvailable && hfAuth.ok) {
         addCheck(checks, 'pass', 'hf-auth', 'hf CLI is authenticated.');
@@ -195,9 +220,20 @@ function main() {
     if (existsSync('node_modules')) {
         addCheck(checks, 'pass', 'node-modules', 'node_modules exists.');
     } else {
-        addCheck(checks, 'warn', 'node-modules', 'node_modules is missing; build, lint, test, and smoke commands require npm install.');
+        addCheck(
+            checks,
+            'warn',
+            'node-modules',
+            'node_modules is missing; build, lint, test, and smoke commands require npm install.'
+        );
     }
-    checkCommand(checks, 'git', 'git', ['--version'], 'git is missing; install git before cloning or pushing Space repos.');
+    checkCommand(
+        checks,
+        'git',
+        'git',
+        ['--version'],
+        'git is missing; install git before cloning or pushing Space repos.'
+    );
     const docker = runDoctorCommand('docker', ['version', '--format', '{{.Server.Version}}']);
     if (docker.ok) {
         addCheck(checks, 'pass', 'docker', 'docker is available.', { version: docker.stdout.split(/\r?\n/)[0] });
@@ -206,7 +242,8 @@ function main() {
             error: docker.error
         });
         const dockerCli = runDoctorCommand('docker', ['--version']);
-        if (dockerCli.ok) addCheck(checks, 'warn', 'docker-daemon', 'Docker CLI exists but the daemon is not reachable.');
+        if (dockerCli.ok)
+            addCheck(checks, 'warn', 'docker-daemon', 'Docker CLI exists but the daemon is not reachable.');
     }
 
     checkConfiguredTarget(checks);
@@ -222,6 +259,8 @@ try {
         main();
     }
 } catch (error) {
-    console.error(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }, null, 2));
+    console.error(
+        JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }, null, 2)
+    );
     process.exit(1);
 }

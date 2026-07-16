@@ -1,18 +1,16 @@
 #!/usr/bin/env node
-
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-import { isMainModule, printJson, redactBaseUrl } from './command-center-utils.mjs';
-import { summarizeEnvFile } from './env-summary.mjs';
 import {
     loadPrivateAgentEnvFile,
     resolvePlaygroundBaseUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import { isMainModule, printJson, redactBaseUrl } from './command-center-utils.mjs';
+import { summarizeEnvFile } from './env-summary.mjs';
+import { isSupportedNodeVersion, MIN_NODE_VERSION_RANGE } from './node-version.mjs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_ENV_FILES = ['.env.local', '.env.agent.local'];
-const MIN_NODE_VERSION = '>=20.9.0';
 
 function parseArgs(argv) {
     const parsed = {
@@ -26,7 +24,8 @@ function parseArgs(argv) {
         if (arg === '--help' || arg === '-h') parsed.help = true;
         else if (arg === '--json') parsed.json = true;
         else if (arg === '--base-url') parsed.baseUrl = readOptionValue(argv, (index += 1), arg);
-        else if (arg === '--timeout-ms') parsed.timeoutMs = readPositiveInteger(readOptionValue(argv, (index += 1), arg), arg);
+        else if (arg === '--timeout-ms')
+            parsed.timeoutMs = readPositiveInteger(readOptionValue(argv, (index += 1), arg), arg);
         else throw new Error(`未知参数：${arg}`);
     }
     return parsed;
@@ -88,7 +87,9 @@ export async function buildFirstRunReport(options = {}, env = process.env) {
 
 async function probeService(baseUrl, options) {
     const capabilities = await readJsonEndpoint(`${baseUrl}/api/agent/capabilities`, options);
-    const runtime = capabilities.ok ? await readJsonEndpoint(`${baseUrl}/api/runtime-capabilities`, options) : undefined;
+    const runtime = capabilities.ok
+        ? await readJsonEndpoint(`${baseUrl}/api/runtime-capabilities`, options)
+        : undefined;
     return {
         ok: capabilities.ok && (!runtime || runtime.ok),
         capabilities,
@@ -145,7 +146,7 @@ function buildChecks({ cwd, env, envSummary, service, base, validationError }) {
     const currentAgentAuth = hasAnyConfiguredAgentAuth(env, agentAuthSchemes);
     const fileAgentAuth = envSummary.some((source) => hasAnyConfiguredAgentAuthSource(source, agentAuthSchemes));
     return [
-        { name: 'node_version', ok: node.ok, current: node.current, required: MIN_NODE_VERSION },
+        { name: 'node_version', ok: node.ok, current: node.current, required: MIN_NODE_VERSION_RANGE },
         { name: 'package_lock', ok: packageLock },
         {
             name: 'dependencies_installed',
@@ -228,7 +229,9 @@ function readAgentAuthState(env, envSummary, service) {
         privateEnv: {
             exists: privateSource?.exists === true,
             has_token: privateSource ? sourceHasSetVariable(privateSource, 'GPT_IMAGE_AGENT_TOKEN') : false,
-            has_password_hash: privateSource ? sourceHasSetVariable(privateSource, 'GPT_IMAGE_APP_PASSWORD_HASH') : false
+            has_password_hash: privateSource
+                ? sourceHasSetVariable(privateSource, 'GPT_IMAGE_APP_PASSWORD_HASH')
+                : false
         }
     };
 }
@@ -238,7 +241,7 @@ function buildNextActions({ checks, base, service, env, envSummary, validationEr
     const agentAuthSchemes = readAgentAuthSchemes(service);
     const hasCurrentAgentAuth = hasAnyConfiguredAgentAuth(env, agentAuthSchemes);
     const hasFileAgentAuth = envSummary.some((source) => hasAnyConfiguredAgentAuthSource(source, agentAuthSchemes));
-    if (!findCheck(checks, 'node_version').ok) actions.push(`安装 Node.js ${MIN_NODE_VERSION} 或更新版本。`);
+    if (!findCheck(checks, 'node_version').ok) actions.push(`安装 Node.js ${MIN_NODE_VERSION_RANGE} 或更新版本。`);
     if (!findCheck(checks, 'dependencies_installed').ok) actions.push('运行 npm install。');
     if (!findCheck(checks, 'env_files').ok) {
         actions.push('复制 .env.example 为 .env.local，或在页面设置里配置默认上游。');
@@ -256,13 +259,17 @@ function buildNextActions({ checks, base, service, env, envSummary, validationEr
         );
     }
     if (!service.ok && !requiresAgentAuth(service)) {
-        actions.push('先用 npm run dev 或 docker compose up -d --build --remove-orphans 启动服务，再重新运行 npm run first-run。');
+        actions.push(
+            '先用 npm run dev 或 docker compose up -d --build --remove-orphans 启动服务，再重新运行 npm run first-run。'
+        );
     }
     if (base.interactive_confirmation_required) {
         actions.push('在交互式 Agent 任务里，先和用户确认探测到的服务地址，再发真实请求。');
     }
     if (!hasCurrentAgentAuth && hasFileAgentAuth) {
-        actions.push('Agent 脚本会自动读取 .env.agent.local；如果仍提示缺少鉴权，请确认文件位于当前仓库根目录且变量名正确。');
+        actions.push(
+            'Agent 脚本会自动读取 .env.agent.local；如果仍提示缺少鉴权，请确认文件位于当前仓库根目录且变量名正确。'
+        );
     }
     if (service.ok && hasCurrentAgentAuth) {
         actions.push('运行 npm run agent:doctor 做完整的非计费 Agent 合同检查。');
@@ -296,7 +303,8 @@ function hasAnyConfiguredAgentAuthSource(source, schemes) {
     if (schemes.includes('bearer')) return sourceHasSetVariable(source, 'GPT_IMAGE_AGENT_TOKEN');
     if (schemes.includes('x-app-password-hash')) return sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH');
     return (
-        sourceHasSetVariable(source, 'GPT_IMAGE_AGENT_TOKEN') || sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH')
+        sourceHasSetVariable(source, 'GPT_IMAGE_AGENT_TOKEN') ||
+        sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH')
     );
 }
 
@@ -394,10 +402,7 @@ function findCheck(checks, name) {
 }
 
 function readNodeCheck() {
-    const match = process.version.match(/^v(\d+)\.(\d+)\./);
-    const major = match ? Number(match[1]) : 0;
-    const minor = match ? Number(match[2]) : 0;
-    return { ok: major > 20 || (major === 20 && minor >= 9), current: process.version };
+    return { ok: isSupportedNodeVersion(), current: process.version };
 }
 
 function readPackageJson(cwd) {
@@ -428,7 +433,11 @@ function resolveFirstRunBaseUrl(explicitBaseUrl, env) {
     } catch (error) {
         return {
             baseUrl: '',
-            source: explicitBaseUrl ? 'user_provided' : env.GPT_IMAGE_PLAYGROUND_URL ? 'GPT_IMAGE_PLAYGROUND_URL' : 'default_local_probe',
+            source: explicitBaseUrl
+                ? 'user_provided'
+                : env.GPT_IMAGE_PLAYGROUND_URL
+                  ? 'GPT_IMAGE_PLAYGROUND_URL'
+                  : 'default_local_probe',
             interactive_confirmation_required: explicitBaseUrl ? false : true,
             error: error instanceof Error ? error.message : String(error)
         };
@@ -468,7 +477,9 @@ export function formatFirstRunText(report) {
         lines.push(
             `- Responses 后端：声明${capability.responses_image_backend_declared_supported ? '支持' : '未支持'}，启用=${capability.responses_image_backend_enabled ? '是' : '否'}，实测=${formatSmokeState(capability.responses_image_backend_real_smoke)}`
         );
-        lines.push(`- 状态后端：${capability.state_backend || '未知'}，图片存储：${capability.image_storage_mode || '未知'}`);
+        lines.push(
+            `- 状态后端：${capability.state_backend || '未知'}，图片存储：${capability.image_storage_mode || '未知'}`
+        );
     }
     const runtime = report.service?.runtime || {};
     if (runtime.ok) {
@@ -607,6 +618,11 @@ async function main() {
 try {
     if (isMainModule(import.meta.url, process.argv[1])) await main();
 } catch (error) {
-    printJson({ ok: false, command: 'first-run', billable: false, error: error instanceof Error ? error.message : String(error) });
+    printJson({
+        ok: false,
+        command: 'first-run',
+        billable: false,
+        error: error instanceof Error ? error.message : String(error)
+    });
     process.exit(1);
 }
