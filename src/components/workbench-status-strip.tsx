@@ -56,6 +56,7 @@ export function WorkbenchStatusStrip({
         .filter((item) => item.healthyCredentialCount > 0 && item.healthyChannelCount > 0)
         .map((item) => item.mode);
     const suggestedRequestModes = configuredHealthyModes.length ? configuredHealthyModes : effectiveRequestModes;
+    const hasRequestModeDetails = requestModeHealth.length > 0 || Boolean(runtimeLastFailure);
     const hasRouteWarnings =
         runtimeHealthStatus !== 'runtime-ready' ||
         requestModeHealth.some((item) => item.configuredCredentialCount > 0 && item.healthyCredentialCount === 0);
@@ -87,7 +88,7 @@ export function WorkbenchStatusStrip({
                 <RuntimeStatusIcon className={cn('h-3.5 w-3.5', runtimeStatusColorClass)} />
                 {runtimeStatusLabel}
             </span>
-            {(requestModeHealth.length > 0 || runtimeLastFailure) && (
+            {hasRequestModeDetails ? (
                 <details className='group relative max-w-full basis-full sm:basis-auto'>
                     <summary
                         className={cn(
@@ -145,6 +146,16 @@ export function WorkbenchStatusStrip({
                         </p>
                     </div>
                 </details>
+            ) : (
+                <span
+                    data-request-mode-placeholder='true'
+                    aria-hidden='true'
+                    className='relative max-w-full basis-full sm:basis-auto'>
+                    <span className='border-border bg-card/70 text-muted-foreground inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 py-0.5 sm:px-2.5 sm:py-1 lg:min-h-7'>
+                        <CircleAlert className='h-3.5 w-3.5' />
+                        {t('app.requestModeHealth')}
+                    </span>
+                </span>
             )}
             <span className='border-border bg-card/70 inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 sm:min-h-7 sm:px-2.5 sm:py-1'>
                 {model}

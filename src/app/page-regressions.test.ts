@@ -275,6 +275,17 @@ describe('page state regressions', () => {
         assert.match(source, /order-3 min-h-\[420px\] min-w-0/);
     });
 
+    it('lets keyboard users skip the workbench header', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /href='#workbench-content'/);
+        assert.match(source, /focus:not-sr-only/);
+        assert.match(source, /id='workbench-content'/);
+        assert.match(source, /tabIndex=\{-1\}/);
+        assert.match(source, /focus:outline-none/);
+        assert.match(source, /t\('app\.skipToMainContent'\)/);
+    });
+
     it('keeps the mobile title readable instead of truncating the brand', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
 

@@ -3495,6 +3495,11 @@ export default function HomePage() {
             ) : null}
             {!showEntryLock && isPasswordRequiredByBackend !== null ? (
                 <>
+                    <a
+                        href='#workbench-content'
+                        className='bg-background text-foreground focus-visible:ring-ring sr-only z-[70] rounded-md px-4 py-2 shadow-lg focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus-visible:ring-2 focus-visible:outline-none'>
+                        {t('app.skipToMainContent')}
+                    </a>
                     {isMobileCreationDrawerOpen && (
                         <div
                             aria-hidden='true'
@@ -3550,7 +3555,10 @@ export default function HomePage() {
                                 </div>
                             </div>
                         </header>
-                        <div className='grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(300px,340px)_minmax(600px,1fr)_minmax(280px,330px)] 2xl:grid-cols-[minmax(300px,340px)_minmax(840px,1fr)_minmax(280px,310px)]'>
+                        <div
+                            id='workbench-content'
+                            tabIndex={-1}
+                            className='grid flex-1 grid-cols-1 gap-5 focus:outline-none lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(300px,340px)_minmax(600px,1fr)_minmax(280px,330px)] 2xl:grid-cols-[minmax(300px,340px)_minmax(840px,1fr)_minmax(280px,310px)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
