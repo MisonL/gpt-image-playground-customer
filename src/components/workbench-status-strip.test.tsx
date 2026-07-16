@@ -40,6 +40,24 @@ describe('WorkbenchStatusStrip', () => {
         assert.match(html, /并发已启用/);
     });
 
+    it('reserves the request mode slot before runtime details arrive', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchStatusStrip
+                    model='gpt-image-2'
+                    routeLabel='默认线路'
+                    streamStatus='普通生成'
+                    costLabel='预计 0.12 积分'
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /data-request-mode-placeholder="true"/);
+        assert.match(html, /aria-hidden="true"/);
+        assert.match(html, /请求方式/);
+        assert.doesNotMatch(html, /invisible/);
+    });
+
     it('renders disconnected, route-limited, and custom override runtime states explicitly', () => {
         const disconnectedHtml = renderToStaticMarkup(
             <I18nProvider>
