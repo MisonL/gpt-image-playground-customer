@@ -1,9 +1,10 @@
 import type { AgentErrorCode } from '@/lib/api-error-response';
 import { isFeedbackStateStore } from '@/lib/feedback-store';
+import { cleanupExpiredWebuiImages } from '@/lib/webui-image-cleanup';
 import Database from 'better-sqlite3';
 import type { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm, utimes } from 'node:fs/promises';
 import http from 'node:http';
 import type { Socket } from 'node:net';
 import os from 'node:os';
@@ -51,6 +52,7 @@ beforeEach(async () => {
     delete process.env.APP_PASSWORD;
     delete process.env.AGENT_API_TOKEN;
     delete process.env.AGENT_PUBLIC_BASE_URL;
+    delete process.env.AGENT_REQUEST_TTL_SECONDS;
     delete process.env.AGENT_ARTIFACT_SHARE_DEFAULT_EXPIRES_MINUTES;
     delete process.env.AGENT_ARTIFACT_SHARE_MAX_EXPIRES_MINUTES;
     delete process.env.OPENAI_API_KEY;
@@ -219,6 +221,143 @@ describe('Agent route integration', () => {
                 }
             }
         ]);
+    });
+
+    it('registers cleanup-managed artifacts for every request mode', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        const { getAgentStateStore } = await import('@/lib/agent-state-runtime');
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        process.env.AGENT_REQUEST_TTL_SECONDS = String(60 * 24 * 60 * 60);
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+
+        const cases = [
+            {
+                mode: 'images-non-stream',
+                startUpstream: () => startImageUpstream(() => ({ data: [{ b64_json: PNG_BASE64 }] })),
+                request: {
+                    prompt: 'cleanup lifecycle images non stream',
+                    stream_mode: 'non_stream',
+                    streaming_strategy: 'off'
+                }
+            },
+            {
+                mode: 'images-sse',
+                startUpstream: () =>
+                    startStreamingImageUpstream(() => [
+                        {
+                            event: 'image_generation.completed',
+                            data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                        }
+                    ]),
+                request: {
+                    prompt: 'cleanup lifecycle images sse',
+                    stream_mode: 'stream',
+                    streaming_strategy: 'force-sse',
+                    partial_images: 1
+                }
+            },
+            {
+                mode: 'responses-non-stream',
+                startUpstream: () =>
+                    startResponsesImageJsonUpstream(200, {
+                        id: 'response-cleanup-json',
+                        object: 'response',
+                        status: 'completed',
+                        output: [
+                            {
+                                id: 'image-cleanup-json',
+                                type: 'image_generation_call',
+                                status: 'completed',
+                                result: PNG_BASE64
+                            }
+                        ]
+                    }),
+                request: {
+                    prompt: 'cleanup lifecycle responses non stream',
+                    image_backend: 'responses-image-generation',
+                    stream_mode: 'non_stream',
+                    streaming_strategy: 'off'
+                }
+            },
+            {
+                mode: 'responses-sse',
+                startUpstream: () =>
+                    startStreamingResponsesImageUpstream(() => [
+                        {
+                            event: 'response.output_item.done',
+                            data: {
+                                type: 'response.output_item.done',
+                                item: {
+                                    id: 'image-cleanup-sse',
+                                    type: 'image_generation_call',
+                                    status: 'completed',
+                                    result: PNG_BASE64
+                                }
+                            }
+                        }
+                    ]),
+                request: {
+                    prompt: 'cleanup lifecycle responses sse',
+                    image_backend: 'responses-image-generation',
+                    stream_mode: 'stream',
+                    streaming_strategy: 'responses-sse',
+                    partial_images: 1
+                }
+            }
+        ] as const;
+        const artifacts: Array<{ id: string; filepath: string }> = [];
+
+        for (const testCase of cases) {
+            const upstream = await testCase.startUpstream();
+            process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+            process.env.OPENAI_UPSTREAM_REQUEST_MODES = testCase.mode;
+            process.env.ENABLE_RESPONSES_IMAGE_BACKEND = testCase.mode.startsWith('responses-') ? 'true' : 'false';
+            resetServerChannelStateForTests();
+
+            try {
+                const response = await generateImage(
+                    agentJsonRequest('cleanup-lifecycle-' + testCase.mode, testCase.request)
+                );
+                assert.equal(response.status, 200, testCase.mode);
+                const body = await response.json();
+                assert.equal(body.execution.channel_request_mode, testCase.mode);
+                const artifactId = body.images[0].content_url.split('/').at(-2);
+                assert.equal(typeof artifactId, 'string');
+                const filepath = readStoredArtifactFilepath(artifactId);
+                await access(filepath);
+                artifacts.push({ id: artifactId, filepath });
+            } finally {
+                await upstream.close();
+            }
+        }
+
+        const store = getAgentStateStore(process.env);
+        const protectedPaths = await store.listArtifactFilepaths();
+        assert.deepEqual(artifacts.map((artifact) => artifact.filepath).sort(), protectedPaths.sort());
+        const cleanupNow = new Date();
+        const expiredWebuiTime = new Date(cleanupNow.getTime() - 31 * 24 * 60 * 60 * 1000);
+        await Promise.all(artifacts.map((artifact) => utimes(artifact.filepath, expiredWebuiTime, expiredWebuiTime)));
+
+        const cleanupResult = await cleanupExpiredWebuiImages({
+            outputDir: path.dirname(artifacts[0].filepath),
+            retentionDays: 30,
+            protectedArtifactFilepaths: protectedPaths,
+            now: cleanupNow
+        });
+
+        assert.equal(cleanupResult.deletedCount, 0);
+        assert.equal(cleanupResult.protectedCount, 4);
+        await Promise.all(artifacts.map((artifact) => access(artifact.filepath)));
+
+        const purged = await store.purgeExpiredRequests(
+            new Date(cleanupNow.getTime() + 60 * 24 * 60 * 60 * 1000 + 1000)
+        );
+        assert.equal(purged, 4);
+        for (const artifact of artifacts) {
+            assert.equal(await store.getArtifact(artifact.id), undefined);
+            await assert.rejects(() => access(artifact.filepath));
+        }
     });
 
     it('reports Matsca channel limits from the deployed runtime environment without leaking secrets', async () => {
