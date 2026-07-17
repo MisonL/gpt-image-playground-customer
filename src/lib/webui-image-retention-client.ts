@@ -3,7 +3,9 @@ export type WebuiImageRetentionAction = 'preserve' | 'release';
 export type WebuiImageFileOperationResult = {
     filename: string;
     success: boolean;
+    fileDeleted?: boolean;
     fileAbsent?: boolean;
+    markerRemoved?: boolean;
     error?: string;
 };
 
@@ -28,7 +30,9 @@ export function readWebuiImageFileOperationResults(value: unknown): WebuiImageFi
         return {
             filename: result.filename,
             success: result.success,
+            ...(typeof result.fileDeleted === 'boolean' ? { fileDeleted: result.fileDeleted } : {}),
             ...(typeof result.fileAbsent === 'boolean' ? { fileAbsent: result.fileAbsent } : {}),
+            ...(typeof result.markerRemoved === 'boolean' ? { markerRemoved: result.markerRemoved } : {}),
             ...(typeof result.error === 'string' ? { error: result.error } : {})
         };
     });
@@ -45,7 +49,7 @@ export function mergeWebuiImageRetentionResults(
 ): Set<string> {
     const next = new Set(current);
     for (const result of results) {
-        if (!result.success && !(action === 'release' && result.fileAbsent === true)) continue;
+        if (!result.success && !(action === 'release' && result.markerRemoved === true)) continue;
         if (action === 'preserve') {
             next.add(result.filename);
         } else {

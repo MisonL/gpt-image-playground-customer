@@ -34,8 +34,10 @@ describe('page state regressions', () => {
         assert.match(source, /webuiImageCleanup\?\.enabled/);
         assert.match(source, /fetch\('\/api\/image-retention'/);
         assert.match(source, /onUpdatePermanentSave=/);
-        assert.match(source, /const storageModeUsed = item\.storageModeUsed;/);
-        assert.match(source, /item\.storageModeUsed === 'fs'/);
+        assert.match(source, /const storageModeUsed = item\.storageModeUsed \?\? 'fs';/);
+        assert.match(source, /webui-image-retention:\$\{isPasswordRequiredByBackend \? 'authenticated' : 'public'\}/);
+        assert.doesNotMatch(source, /filesystemRetentionScopeKey/);
+        assert.match(source, /resultItem\.fileDeleted === true/);
         assert.match(source, /resultItem\.fileAbsent === true/);
         assert.match(
             source,

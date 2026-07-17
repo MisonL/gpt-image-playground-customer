@@ -211,7 +211,7 @@ describe('HistoryPanel recent history actions', () => {
             cleanupEnabled: true,
             onUpdatePermanentSave: async () => {}
         });
-        assert.doesNotMatch(legacyHtml, /aria-label="选择最近生成图片"/);
+        assert.match(legacyHtml, /aria-label="选择最近生成图片"/);
     });
 
     it('selects an fs image and forwards the batch retention action', async () => {
@@ -240,6 +240,55 @@ describe('HistoryPanel recent history actions', () => {
                 (button) => button.textContent === '永久保存'
             );
             assert.ok(preserveButton, 'missing preserve action');
+            await view.click(preserveButton);
+
+            assert.deepEqual(updates, [
+                {
+                    action: 'preserve',
+                    filenames: [singleFsHistoryItem.images[0].filename]
+                }
+            ]);
+        } finally {
+            await view.cleanup();
+        }
+    });
+
+    it('keeps selected filesystem images when new history arrives', async () => {
+        const updates: Array<{ action: 'preserve' | 'release'; filenames: string[] }> = [];
+        const addedFsHistoryItem: HistoryMetadata = {
+            ...singleFsHistoryItem,
+            timestamp: singleFsHistoryItem.timestamp + 1,
+            images: [{ filename: '1781567999002-cccccccccccccccc-2.png', clientRequestId: 'fs-request-3' }]
+        };
+        const retention = {
+            cleanupEnabled: true,
+            permanentlySavedFilenames: new Set<string>(),
+            onUpdatePermanentSave: async (action: 'preserve' | 'release', filenames: string[]) => {
+                updates.push({ action, filenames });
+            }
+        };
+        const view = await renderInClientDom(historyPanelNode([singleFsHistoryItem], retention));
+        try {
+            const selectButton = view.container.querySelector<HTMLButtonElement>('[aria-label="选择最近生成图片"]');
+            assert.ok(selectButton, 'missing retention selection entry');
+            await view.click(selectButton);
+
+            const checkbox = view.container.querySelector<HTMLElement>(
+                `[data-retention-image="${singleFsHistoryItem.images[0].filename}"]`
+            );
+            assert.ok(checkbox, 'missing fs image retention checkbox');
+            await view.click(checkbox);
+
+            await view.render(historyPanelNode([addedFsHistoryItem, singleFsHistoryItem], retention));
+
+            const retainedCheckbox = view.container.querySelector<HTMLElement>(
+                `[data-retention-image="${singleFsHistoryItem.images[0].filename}"]`
+            );
+            assert.equal(retainedCheckbox?.getAttribute('data-state'), 'checked');
+            const preserveButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+                (button) => button.textContent === '永久保存'
+            );
+            assert.ok(preserveButton, 'missing preserve action after history update');
             await view.click(preserveButton);
 
             assert.deepEqual(updates, [

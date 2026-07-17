@@ -1,5 +1,7 @@
 import {
     SqliteWebuiImageRetentionStore,
+    WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE,
+    WEBUI_IMAGE_CLEANUP_FAILURE_STATUS,
     type PersistedWebuiImageCleanupStatus
 } from './webui-image-retention-store';
 import Database from 'better-sqlite3';
@@ -53,9 +55,32 @@ describe('SqliteWebuiImageRetentionStore', () => {
         await store.init();
         await store.preserve([firstFilename]);
 
+        assert.equal(await store.hasPermanentFilename(firstFilename), true);
+        assert.equal(await store.hasPermanentFilename(secondFilename), false);
+
         await store.release([firstFilename]);
 
         assert.deepEqual(await store.listPermanentFilenames(), []);
+    });
+
+    it('writes a stable cleanup failure status while accepting the previous stored message', async () => {
+        const store = new SqliteWebuiImageRetentionStore(dbPath);
+        await store.init();
+        await store.writeCleanupStatus({ lastError: 'private cleanup failure details' });
+
+        const database = new Database(dbPath);
+        const statusRow = database.prepare('SELECT last_error FROM webui_image_cleanup_status WHERE id = 1').get() as {
+            last_error: string;
+        };
+        assert.equal(statusRow.last_error, WEBUI_IMAGE_CLEANUP_FAILURE_STATUS);
+        database
+            .prepare('UPDATE webui_image_cleanup_status SET last_error = ? WHERE id = 1')
+            .run(WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE);
+        database.close();
+
+        assert.deepEqual(await store.readCleanupStatus(), {
+            lastError: WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE
+        });
     });
 
     it('does not persist failure filenames or absolute paths in cleanup status', async () => {
@@ -75,9 +100,9 @@ describe('SqliteWebuiImageRetentionStore', () => {
         });
 
         const database = new Database(dbPath, { readonly: true });
-        const row = database
-            .prepare('SELECT last_run_json FROM webui_image_cleanup_status WHERE id = 1')
-            .get() as { last_run_json: string };
+        const row = database.prepare('SELECT last_run_json FROM webui_image_cleanup_status WHERE id = 1').get() as {
+            last_run_json: string;
+        };
         database.close();
 
         assert.equal(row.last_run_json.includes(firstFilename), false);

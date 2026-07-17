@@ -36,6 +36,8 @@ export type WebuiImageCleanupFileOperations = {
     unlink(filepath: string): Promise<void>;
 };
 
+export type WebuiImageCleanupFilenameLock = <T>(filename: string, operation: () => Promise<T>) => Promise<T>;
+
 export type WebuiImageCleanupRun = {
     status: 'succeeded' | 'failed';
     startedAt: string;
@@ -54,6 +56,8 @@ type CleanupInput = {
     protectedArtifactFilepaths: readonly string[];
     now?: Date;
     fileOperations?: Partial<WebuiImageCleanupFileOperations>;
+    isFilenameProtected?: (filename: string) => Promise<boolean>;
+    withFilenameLock?: WebuiImageCleanupFilenameLock;
 };
 
 const defaultFileOperations: WebuiImageCleanupFileOperations = {
@@ -110,9 +114,7 @@ export async function cleanupExpiredWebuiImages(input: CleanupInput): Promise<We
     const canonicalOutputDir = path.resolve(await operations.realpath(outputDir));
     const protectedPaths = new Set(
         await Promise.all(
-            input.protectedArtifactFilepaths.map((filepath) =>
-                canonicalizeProtectedPath(filepath, operations.realpath)
-            )
+            input.protectedArtifactFilepaths.map((filepath) => canonicalizeProtectedPath(filepath, operations.realpath))
         )
     );
     const entries = (await operations.readdir(canonicalOutputDir)).sort((left, right) =>
@@ -140,9 +142,23 @@ export async function cleanupExpiredWebuiImages(input: CleanupInput): Promise<We
         }
         if (stats.mtimeMs >= cutoff.getTime()) continue;
 
-        try {
+        const deleteCandidate = async (): Promise<'deleted' | 'protected'> => {
+            if (input.isFilenameProtected && (await input.isFilenameProtected(entry.name))) {
+                return 'protected';
+            }
             await operations.unlink(filepath);
-            deletedCount += 1;
+            return 'deleted';
+        };
+
+        try {
+            const outcome = input.withFilenameLock
+                ? await input.withFilenameLock(entry.name, deleteCandidate)
+                : await deleteCandidate();
+            if (outcome === 'protected') {
+                protectedCount += 1;
+            } else {
+                deletedCount += 1;
+            }
         } catch (error) {
             failures.push({ filename: entry.name, message: readErrorMessage(error) });
         }

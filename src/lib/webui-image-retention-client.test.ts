@@ -17,12 +17,24 @@ describe('WebUI image retention client contract', () => {
             readWebuiImageFileOperationResults({
                 results: [
                     { filename: 'one.png', success: true },
-                    { filename: 'two.png', success: false, fileAbsent: true, error: '文件不存在。' }
+                    {
+                        filename: 'two.png',
+                        success: false,
+                        fileAbsent: true,
+                        markerRemoved: true,
+                        error: '文件不存在。'
+                    }
                 ]
             }),
             [
                 { filename: 'one.png', success: true },
-                { filename: 'two.png', success: false, fileAbsent: true, error: '文件不存在。' }
+                {
+                    filename: 'two.png',
+                    success: false,
+                    fileAbsent: true,
+                    markerRemoved: true,
+                    error: '文件不存在。'
+                }
             ]
         );
         assert.equal(readApiErrorMessage({ error: '未授权。' }), '未授权。');
@@ -34,10 +46,23 @@ describe('WebUI image retention client contract', () => {
         assert.equal(readApiErrorMessage({ message: 'not an error field' }), undefined);
     });
 
-    it('merges only successful file operations into the permanent filename set', () => {
+    it('merges only confirmed permanent-state changes into the filename set', () => {
         const results = [
             { filename: 'kept.png', success: true },
-            { filename: 'failed.png', success: false, fileAbsent: true, error: '文件不存在。' }
+            {
+                filename: 'released.png',
+                success: false,
+                fileAbsent: true,
+                markerRemoved: true,
+                error: '文件不存在。'
+            },
+            {
+                filename: 'marker-failed.png',
+                success: false,
+                fileDeleted: true,
+                markerRemoved: false,
+                error: '图片已删除，但永久保存状态清理失败。'
+            }
         ];
 
         assert.deepEqual([...mergeWebuiImageRetentionResults(new Set(['existing.png']), 'preserve', results)].sort(), [
@@ -45,8 +70,14 @@ describe('WebUI image retention client contract', () => {
             'kept.png'
         ]);
         assert.deepEqual(
-            [...mergeWebuiImageRetentionResults(new Set(['kept.png', 'failed.png']), 'release', results)].sort(),
-            []
+            [
+                ...mergeWebuiImageRetentionResults(
+                    new Set(['kept.png', 'released.png', 'marker-failed.png']),
+                    'release',
+                    results
+                )
+            ].sort(),
+            ['marker-failed.png']
         );
     });
 });

@@ -52,12 +52,25 @@ describe('POST /api/image-delete', { concurrency: false }, () => {
 
         const response = await POST(jsonRequest({ filenames: [missingFilename] }));
         const body = (await response.json()) as {
-            results: Array<{ filename: string; success: boolean; fileAbsent?: boolean; error?: string }>;
+            results: Array<{
+                filename: string;
+                success: boolean;
+                fileDeleted?: boolean;
+                fileAbsent?: boolean;
+                markerRemoved?: boolean;
+                error?: string;
+            }>;
         };
 
         assert.equal(response.status, 207);
         assert.deepEqual(body.results, [
-            { filename: missingFilename, success: false, fileAbsent: true, error: '文件不存在。' }
+            {
+                filename: missingFilename,
+                success: false,
+                fileAbsent: true,
+                markerRemoved: true,
+                error: '文件不存在。'
+            }
         ]);
         assert.deepEqual(await store.listPermanentFilenames(), []);
     });
@@ -74,7 +87,14 @@ describe('POST /api/image-delete', { concurrency: false }, () => {
         try {
             const response = await POST(jsonRequest({ filenames: [validFilename] }));
             const body = (await response.json()) as {
-                results: Array<{ filename: string; success: boolean; fileAbsent?: boolean; error?: string }>;
+                results: Array<{
+                    filename: string;
+                    success: boolean;
+                    fileDeleted?: boolean;
+                    fileAbsent?: boolean;
+                    markerRemoved?: boolean;
+                    error?: string;
+                }>;
             };
 
             assert.equal(response.status, 207);
@@ -82,12 +102,50 @@ describe('POST /api/image-delete', { concurrency: false }, () => {
                 {
                     filename: validFilename,
                     success: false,
-                    fileAbsent: true,
+                    fileDeleted: true,
+                    markerRemoved: false,
                     error: '图片已删除，但永久保存状态清理失败。'
                 }
             ]);
             await assert.rejects(() => access(filepath));
             assert.deepEqual(await store.listPermanentFilenames(), [validFilename]);
+        } finally {
+            store.remove = originalRemove;
+        }
+    });
+
+    it('does not report a stale marker as released when its cleanup fails for an absent file', async () => {
+        const store = await getWebuiImageRetentionStore();
+        await store.preserve([missingFilename]);
+        const originalRemove = store.remove.bind(store);
+        store.remove = async () => {
+            throw new Error('expected retention state failure');
+        };
+
+        try {
+            const response = await POST(jsonRequest({ filenames: [missingFilename] }));
+            const body = (await response.json()) as {
+                results: Array<{
+                    filename: string;
+                    success: boolean;
+                    fileDeleted?: boolean;
+                    fileAbsent?: boolean;
+                    markerRemoved?: boolean;
+                    error?: string;
+                }>;
+            };
+
+            assert.equal(response.status, 207);
+            assert.deepEqual(body.results, [
+                {
+                    filename: missingFilename,
+                    success: false,
+                    fileAbsent: true,
+                    markerRemoved: false,
+                    error: '图片已不存在，但永久保存状态清理失败。'
+                }
+            ]);
+            assert.deepEqual(await store.listPermanentFilenames(), [missingFilename]);
         } finally {
             store.remove = originalRemove;
         }
