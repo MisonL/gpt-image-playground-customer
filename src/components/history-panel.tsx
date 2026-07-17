@@ -229,7 +229,7 @@ function getHistoryStorageMode(item: HistoryMetadata): NonNullable<HistoryMetada
 }
 
 function isRetentionManagedHistoryItem(item: HistoryMetadata): boolean {
-    return item.status !== 'failed' && item.storageModeUsed === 'fs' && item.images.length > 0;
+    return item.status !== 'failed' && getHistoryStorageMode(item) === 'fs' && item.images.length > 0;
 }
 
 function HistoryPanelImpl({
@@ -271,7 +271,6 @@ function HistoryPanelImpl({
     const [expandedBatchTimestamp, setExpandedBatchTimestamp] = React.useState<number | null>(null);
     const [isSelectingRetention, setIsSelectingRetention] = React.useState(false);
     const [selectedRetentionFilenames, setSelectedRetentionFilenames] = React.useState<Set<string>>(() => new Set());
-    const [retentionSelectionHistoryKey, setRetentionSelectionHistoryKey] = React.useState<string | null>(null);
     const [isUpdatingRetention, setIsUpdatingRetention] = React.useState(false);
     const [retentionError, setRetentionError] = React.useState<string | null>(null);
     const effectiveActiveTab = resolveHistoryPanelTabSync({
@@ -283,12 +282,16 @@ function HistoryPanelImpl({
         effectiveActiveTab === 'inspiration' ? inspirations.length === 0 : history.length === 0;
     const hasRetentionManagedHistory = React.useMemo(() => history.some(isRetentionManagedHistoryItem), [history]);
     const canManageRetention = cleanupEnabled && hasRetentionManagedHistory && !!onUpdatePermanentSave;
-    const retentionHistoryKey = React.useMemo(() => history.map((item) => item.timestamp).join('|'), [history]);
-    const isRetentionSelectionActive =
-        isSelectingRetention &&
-        canManageRetention &&
-        effectiveActiveTab === 'history' &&
-        retentionSelectionHistoryKey === retentionHistoryKey;
+    const retentionManagedFilenames = React.useMemo(
+        () =>
+            new Set(
+                history
+                    .filter(isRetentionManagedHistoryItem)
+                    .flatMap((item) => item.images.map((image) => image.filename))
+            ),
+        [history]
+    );
+    const isRetentionSelectionActive = isSelectingRetention && canManageRetention && effectiveActiveTab === 'history';
 
     const { totalCost, totalImages } = React.useMemo(() => {
         let cost = 0;
@@ -307,7 +310,6 @@ function HistoryPanelImpl({
 
     const clearRetentionSelection = React.useCallback(() => {
         setIsSelectingRetention(false);
-        setRetentionSelectionHistoryKey(null);
         setSelectedRetentionFilenames(new Set());
         setRetentionError(null);
     }, []);
@@ -318,10 +320,16 @@ function HistoryPanelImpl({
             return;
         }
         setIsSelectingRetention(true);
-        setRetentionSelectionHistoryKey(retentionHistoryKey);
         setSelectedRetentionFilenames(new Set());
         setRetentionError(null);
-    }, [clearRetentionSelection, isRetentionSelectionActive, retentionHistoryKey]);
+    }, [clearRetentionSelection, isRetentionSelectionActive]);
+
+    React.useEffect(() => {
+        setSelectedRetentionFilenames((current) => {
+            const next = new Set([...current].filter((filename) => retentionManagedFilenames.has(filename)));
+            return next.size === current.size ? current : next;
+        });
+    }, [retentionManagedFilenames]);
 
     const handleRetentionImageSelection = React.useCallback((filename: string, isSelected: boolean) => {
         setSelectedRetentionFilenames((current) => {

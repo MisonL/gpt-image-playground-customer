@@ -2,15 +2,16 @@ import { ensureAgentStateStoreReady } from './agent-state-runtime';
 import { appLogger } from './app-logger';
 import { resolveImageOutputDir } from './server-runtime';
 import {
-    getWebuiImageRetentionStore,
-    resolveWebuiImageRetentionDatabasePath,
-    WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE
-} from './webui-image-retention-store';
-import {
     cleanupExpiredWebuiImages,
     readWebuiImageCleanupConfig,
     type WebuiImageCleanupRun
 } from './webui-image-cleanup';
+import { withWebuiImageFilenameLock } from './webui-image-retention-lock';
+import {
+    getWebuiImageRetentionStore,
+    resolveWebuiImageRetentionDatabasePath,
+    WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE
+} from './webui-image-retention-store';
 import path from 'node:path';
 
 type CleanupLogger = {
@@ -160,7 +161,9 @@ async function performWebuiImageCleanup(
         outputDir,
         retentionDays,
         protectedArtifactFilepaths: [...agentArtifactFilepaths, ...permanentFilepaths],
-        now
+        now,
+        isFilenameProtected: async (filename) => await retentionStore.hasPermanentFilename(filename),
+        withFilenameLock: withWebuiImageFilenameLock
     });
 }
 
@@ -200,10 +203,7 @@ async function executeCleanup(
     }
 }
 
-async function persistCleanupFailure(
-    env: Record<string, string | undefined>,
-    logger: CleanupLogger
-): Promise<void> {
+async function persistCleanupFailure(env: Record<string, string | undefined>, logger: CleanupLogger): Promise<void> {
     const databasePath = resolveWebuiImageRetentionDatabasePath(env);
     const currentRun = runtimeStatusDatabasePath === databasePath ? lastRun : undefined;
     setRuntimeStatus(databasePath, {
@@ -223,10 +223,7 @@ async function persistCleanupFailure(
     }
 }
 
-function setRuntimeStatus(
-    databasePath: string,
-    status: Pick<WebuiImageCleanupSummary, 'lastRun' | 'lastError'>
-): void {
+function setRuntimeStatus(databasePath: string, status: Pick<WebuiImageCleanupSummary, 'lastRun' | 'lastError'>): void {
     runtimeStatusDatabasePath = databasePath;
     lastRun = status.lastRun;
     lastError = status.lastError;

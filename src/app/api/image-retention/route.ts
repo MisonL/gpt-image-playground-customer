@@ -2,10 +2,11 @@ import { appLogger } from '@/lib/app-logger';
 import { isValidImageFilename } from '@/lib/image-request-utils';
 import { PAGE_PASSWORD_AUTH_ERROR_CODES } from '@/lib/page-password-auth';
 import { resolveImageOutputDir, verifyAccessToken, verifyPasswordHash } from '@/lib/server-runtime';
+import { withWebuiImageFilenameLocks } from '@/lib/webui-image-retention-lock';
 import { getWebuiImageRetentionStore, type WebuiImageRetentionAction } from '@/lib/webui-image-retention-store';
+import { NextRequest, NextResponse } from 'next/server';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { NextRequest, NextResponse } from 'next/server';
 
 export const MAX_RETENTION_BATCH_SIZE = 100;
 
@@ -48,10 +49,7 @@ export async function POST(request: NextRequest) {
 
     try {
         const results = await applyRetentionRequest(body);
-        return NextResponse.json(
-            { results },
-            { status: results.every((result) => result.success) ? 200 : 207 }
-        );
+        return NextResponse.json({ results }, { status: results.every((result) => result.success) ? 200 : 207 });
     } catch (error) {
         appLogger.error('更新永久保存图片状态失败。', error);
         return NextResponse.json({ error: '更新永久保存图片状态失败。' }, { status: 500 });
@@ -110,12 +108,32 @@ function readRetentionRequest(value: unknown): RetentionRequestBody {
 
 async function applyRetentionRequest(body: RetentionRequestBody): Promise<RetentionResult[]> {
     const outputDir = resolveImageOutputDir();
+    if (body.action === 'preserve') {
+        return await withWebuiImageFilenameLocks(body.filenames, async () => {
+            const successfulFilenames: string[] = [];
+            const results: RetentionResult[] = [];
+
+            for (const filename of body.filenames) {
+                const validationError = await validatePreservedFile(filename, outputDir);
+                if (validationError) {
+                    results.push({ filename, success: false, error: validationError });
+                    continue;
+                }
+                successfulFilenames.push(filename);
+                results.push({ filename, success: true });
+            }
+
+            if (successfulFilenames.length > 0) {
+                await (await getWebuiImageRetentionStore()).preserve(successfulFilenames);
+            }
+            return results;
+        });
+    }
+
     const successfulFilenames: string[] = [];
     const results: RetentionResult[] = [];
-
     for (const filename of body.filenames) {
-        const validationError =
-            body.action === 'preserve' ? await validatePreservedFile(filename, outputDir) : validateReleaseFilename(filename);
+        const validationError = validateReleaseFilename(filename);
         if (validationError) {
             results.push({ filename, success: false, error: validationError });
             continue;
@@ -124,13 +142,8 @@ async function applyRetentionRequest(body: RetentionRequestBody): Promise<Retent
         results.push({ filename, success: true });
     }
 
-    if (successfulFilenames.length === 0) return results;
-
-    const store = await getWebuiImageRetentionStore();
-    if (body.action === 'preserve') {
-        await store.preserve(successfulFilenames);
-    } else {
-        await store.release(successfulFilenames);
+    if (successfulFilenames.length > 0) {
+        await (await getWebuiImageRetentionStore()).release(successfulFilenames);
     }
     return results;
 }

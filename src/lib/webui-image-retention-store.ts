@@ -8,6 +8,7 @@ import path from 'node:path';
 export const WEBUI_IMAGE_RETENTION_STATE_DIRECTORY = '.webui-state';
 export const WEBUI_IMAGE_RETENTION_DATABASE_FILENAME = 'webui-image-retention.sqlite';
 export const WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE = 'WebUI 图片自动清理执行失败。';
+export const WEBUI_IMAGE_CLEANUP_FAILURE_STATUS = 'cleanup_failed';
 
 export const WEBUI_IMAGE_RETENTION_SCHEMA = `
     CREATE TABLE IF NOT EXISTS webui_image_retention (
@@ -91,6 +92,14 @@ export class SqliteWebuiImageRetentionStore {
         return rows.map((row) => row.filename);
     }
 
+    async hasPermanentFilename(filename: string): Promise<boolean> {
+        const [normalizedFilename] = normalizeFilenames([filename]);
+        const row = this.requireDb()
+            .prepare('SELECT 1 FROM webui_image_retention WHERE filename = ?')
+            .get(normalizedFilename);
+        return row !== undefined;
+    }
+
     async writeCleanupStatus(status: PersistedWebuiImageCleanupStatus, now = new Date()): Promise<void> {
         const publicRun = status.lastRun ? normalizePublicRun(status.lastRun) : undefined;
         this.requireDb()
@@ -104,7 +113,7 @@ export class SqliteWebuiImageRetentionStore {
             )
             .run(
                 publicRun ? JSON.stringify(publicRun) : null,
-                status.lastError ? WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE : null,
+                status.lastError ? WEBUI_IMAGE_CLEANUP_FAILURE_STATUS : null,
                 now.toISOString()
             );
     }
@@ -131,9 +140,7 @@ export class SqliteWebuiImageRetentionStore {
 
 const cachedStores = new Map<string, Promise<SqliteWebuiImageRetentionStore>>();
 
-export function resolveWebuiImageRetentionDatabasePath(
-    env: Record<string, string | undefined> = process.env
-): string {
+export function resolveWebuiImageRetentionDatabasePath(env: Record<string, string | undefined> = process.env): string {
     return path.join(
         resolveImageOutputDir(env),
         WEBUI_IMAGE_RETENTION_STATE_DIRECTORY,
@@ -216,10 +223,10 @@ function normalizePublicRun(value: unknown): PublicWebuiImageCleanupRun {
 }
 
 function readCleanupError(value: string): string {
-    if (value !== WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE) {
+    if (value !== WEBUI_IMAGE_CLEANUP_FAILURE_STATUS && value !== WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE) {
         throw new Error('WebUI 图片清理状态格式无效。');
     }
-    return value;
+    return WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE;
 }
 
 function isNonEmptyString(value: unknown): value is string {

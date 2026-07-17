@@ -1,9 +1,6 @@
 import { GET, POST } from './route';
-import {
-    getWebuiImageRetentionStore,
-    resetWebuiImageRetentionStoresForTests
-} from '@/lib/webui-image-retention-store';
 import { createAccessToken } from '@/lib/server-runtime';
+import { getWebuiImageRetentionStore, resetWebuiImageRetentionStoresForTests } from '@/lib/webui-image-retention-store';
 import { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -82,9 +79,7 @@ describe('GET and POST /api/image-retention', { concurrency: false }, () => {
         };
 
         assert.equal(response.status, 207);
-        assert.deepEqual(body.results, [
-            { filename: symlinkFilename, success: false, error: '文件必须是常规文件。' }
-        ]);
+        assert.deepEqual(body.results, [{ filename: symlinkFilename, success: false, error: '文件必须是常规文件。' }]);
     });
 
     it('releases stale markers without requiring the source file to exist', async () => {
@@ -110,11 +105,15 @@ describe('GET and POST /api/image-retention', { concurrency: false }, () => {
         const malformed = await POST(jsonRequest({ action: 'preserve', filenames: [1] }));
         assert.equal(malformed.status, 400);
 
+        const invalidAction = await POST(jsonRequest({ action: 'delete', filenames: [validFilename] }));
+        assert.equal(invalidAction.status, 400);
+
         const oversized = await POST(
             jsonRequest({
                 action: 'preserve',
-                filenames: Array.from({ length: 101 }, (_, index) =>
-                    `1781567999${String(index).padStart(3, '0')}-aaaaaaaaaaaaaaaa-0.png`
+                filenames: Array.from(
+                    { length: 101 },
+                    (_, index) => `1781567999${String(index).padStart(3, '0')}-aaaaaaaaaaaaaaaa-0.png`
                 )
             })
         );
@@ -122,6 +121,23 @@ describe('GET and POST /api/image-retention', { concurrency: false }, () => {
 
         const store = await getWebuiImageRetentionStore();
         assert.deepEqual(await store.listPermanentFilenames(), []);
+    });
+
+    it('deduplicates repeated filenames before preserving them', async () => {
+        await writeOutputFile(validFilename);
+
+        const response = await POST(
+            jsonRequest({
+                action: 'preserve',
+                filenames: [validFilename, validFilename]
+            })
+        );
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            results: [{ filename: validFilename, success: true }]
+        });
+        assert.deepEqual(await (await getWebuiImageRetentionStore()).listPermanentFilenames(), [validFilename]);
     });
 
     it('requires a valid password hash for POST and an access cookie for GET', async () => {

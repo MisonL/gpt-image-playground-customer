@@ -678,20 +678,9 @@ export default function HomePage() {
     const [isBatchPauseRequested, setIsBatchPauseRequested] = React.useState(false);
     const batchPauseRequestedRef = React.useRef(false);
     const cleanupEnabled = runtimeCapabilities?.webuiImageCleanup?.enabled === true;
-    const filesystemRetentionScopeKey = React.useMemo(
-        () =>
-            history
-                .filter((item) => item.status !== 'failed' && item.storageModeUsed === 'fs')
-                .flatMap((item) => item.images.map((image) => `${item.timestamp}:${image.filename}`))
-                .join('|'),
-        [history]
-    );
     const retentionScopeKey =
-        cleanupEnabled &&
-        filesystemRetentionScopeKey.length > 0 &&
-        isPasswordRequiredByBackend !== null &&
-        (!isPasswordRequiredByBackend || isEntryAuthenticated)
-            ? filesystemRetentionScopeKey
+        cleanupEnabled && isPasswordRequiredByBackend !== null && (!isPasswordRequiredByBackend || isEntryAuthenticated)
+            ? `webui-image-retention:${isPasswordRequiredByBackend ? 'authenticated' : 'public'}`
             : null;
     const permanentlySavedFilenames =
         loadedWebuiImageRetentionState?.scopeKey === retentionScopeKey
@@ -3434,7 +3423,7 @@ export default function HomePage() {
             setError(null);
 
             const { images: imagesInEntry, timestamp } = item;
-            const storageModeUsed = item.storageModeUsed;
+            const storageModeUsed = item.storageModeUsed ?? 'fs';
             const filenamesToDelete = imagesInEntry.map((img) => img.filename);
 
             try {
@@ -3478,12 +3467,17 @@ export default function HomePage() {
                               }
                             : current
                     );
-                    const fileAbsentFilenames = new Set(
+                    const unavailableFilenames = new Set(
                         deletionResults
-                            .filter((resultItem) => resultItem.success || resultItem.fileAbsent === true)
+                            .filter(
+                                (resultItem) =>
+                                    resultItem.success ||
+                                    resultItem.fileDeleted === true ||
+                                    resultItem.fileAbsent === true
+                            )
                             .map((resultItem) => resultItem.filename)
                     );
-                    const remainingImages = imagesInEntry.filter((image) => !fileAbsentFilenames.has(image.filename));
+                    const remainingImages = imagesInEntry.filter((image) => !unavailableFilenames.has(image.filename));
                     if (remainingImages.length !== imagesInEntry.length) {
                         setHistory((prevHistory) =>
                             remainingImages.length === 0
@@ -3496,7 +3490,7 @@ export default function HomePage() {
                         );
                         setLatestImageBatch((prev) => {
                             if (!prev) return prev;
-                            const remainingBatch = prev.filter((image) => !fileAbsentFilenames.has(image.filename));
+                            const remainingBatch = prev.filter((image) => !unavailableFilenames.has(image.filename));
                             return remainingBatch.length > 0 ? remainingBatch : null;
                         });
                         setActiveResultSource((current) =>

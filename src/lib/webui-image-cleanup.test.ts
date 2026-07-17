@@ -194,6 +194,32 @@ describe('cleanupExpiredWebuiImages', () => {
         await access(filepath);
     });
 
+    it('rechecks permanent protection inside the filename lock before deleting an expired file', async () => {
+        const outputDir = await createTempDirectory();
+        const filepath = await createFile(outputDir, OLD_WEBUI_FILENAME, OLD_TIME);
+        const events: string[] = [];
+
+        const result = await cleanupExpiredWebuiImages({
+            outputDir,
+            retentionDays: 30,
+            protectedArtifactFilepaths: [],
+            now: NOW,
+            withFilenameLock: async (filename, operation) => {
+                events.push(`lock:${filename}`);
+                return await operation();
+            },
+            isFilenameProtected: async (filename) => {
+                events.push(`check:${filename}`);
+                return filename === OLD_WEBUI_FILENAME;
+            }
+        });
+
+        assert.equal(result.protectedCount, 1);
+        assert.equal(result.deletedCount, 0);
+        assert.deepEqual(events, [`lock:${OLD_WEBUI_FILENAME}`, `check:${OLD_WEBUI_FILENAME}`]);
+        await access(filepath);
+    });
+
     it('fails visibly when a protected artifact path cannot be canonicalized', async () => {
         const outputDir = await createTempDirectory();
         const protectedPath = path.join(outputDir, PROTECTED_AGENT_FILENAME);

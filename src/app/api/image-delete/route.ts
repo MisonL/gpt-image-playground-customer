@@ -1,6 +1,7 @@
 import { appLogger } from '@/lib/app-logger';
 import { isValidImageFilename } from '@/lib/image-request-utils';
 import { resolveImageOutputDir, verifyPasswordHash } from '@/lib/server-runtime';
+import { withWebuiImageFilenameLock } from '@/lib/webui-image-retention-lock';
 import { getWebuiImageRetentionStore } from '@/lib/webui-image-retention-store';
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
@@ -14,7 +15,9 @@ type DeleteRequestBody = {
 type FileDeletionResult = {
     filename: string;
     success: boolean;
+    fileDeleted?: boolean;
     fileAbsent?: boolean;
+    markerRemoved?: boolean;
     error?: string;
 };
 
@@ -51,8 +54,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ message: '未提供要删除的文件名。', results: [] }, { status: 200 });
     }
 
+    const outputDir = resolveImageOutputDir();
     const deletionResults: FileDeletionResult[] = [];
-    const fileAbsentFilenames: string[] = [];
 
     for (const filename of filenames) {
         if (!isValidImageFilename(filename)) {
@@ -60,51 +63,56 @@ export async function POST(request: NextRequest) {
             deletionResults.push({ filename, success: false, error: '文件名格式无效。' });
             continue;
         }
-
-        const filepath = path.join(resolveImageOutputDir(), filename);
-
-        try {
-            await fs.unlink(filepath);
-            fileAbsentFilenames.push(filename);
-            deletionResults.push({ filename, success: true });
-        } catch (error: unknown) {
-            appLogger.error(`删除图片失败 ${filepath}：`, error);
-            if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-                fileAbsentFilenames.push(filename);
-                deletionResults.push({ filename, success: false, fileAbsent: true, error: '文件不存在。' });
-            } else {
-                deletionResults.push({ filename, success: false, error: '删除文件失败。' });
-            }
-        }
-    }
-
-    if (fileAbsentFilenames.length > 0) {
-        try {
-            const retentionStore = await getWebuiImageRetentionStore();
-            await retentionStore.remove(fileAbsentFilenames);
-        } catch (error) {
-            appLogger.error('删除图片后清理永久保存标记失败。', error);
-            const fileAbsentFilenameSet = new Set(fileAbsentFilenames);
-            for (const result of deletionResults) {
-                if (fileAbsentFilenameSet.has(result.filename)) {
-                    const wasMissing = result.fileAbsent === true;
-                    result.success = false;
-                    result.fileAbsent = true;
-                    result.error = wasMissing
-                        ? '图片已不存在，但永久保存状态清理失败。'
-                        : '图片已删除，但永久保存状态清理失败。';
-                }
-            }
-        }
+        deletionResults.push(
+            await withWebuiImageFilenameLock(
+                filename,
+                async () => await deleteImageAndRetentionMarker(filename, outputDir)
+            )
+        );
     }
 
     const allSucceeded = deletionResults.every((r) => r.success);
 
     return NextResponse.json(
         {
-            message: allSucceeded ? '所有文件已删除。' : '部分文件未能删除。',
+            message: allSucceeded ? '所有文件已删除。' : '部分文件未能完整删除或清理永久保存状态。',
             results: deletionResults
         },
         { status: allSucceeded ? 200 : 207 } // 部分失败时返回 207 Multi-Status。
     );
+}
+
+async function deleteImageAndRetentionMarker(filename: string, outputDir: string): Promise<FileDeletionResult> {
+    const filepath = path.join(outputDir, filename);
+    let fileDeleted = false;
+
+    try {
+        await fs.unlink(filepath);
+        fileDeleted = true;
+    } catch (error) {
+        if (!isMissingFileError(error)) {
+            appLogger.error(`删除图片失败 ${filepath}：`, error);
+            return { filename, success: false, error: '删除文件失败。' };
+        }
+    }
+
+    try {
+        await (await getWebuiImageRetentionStore()).remove([filename]);
+    } catch (error) {
+        appLogger.error('删除图片后清理永久保存标记失败。', error);
+        return {
+            filename,
+            success: false,
+            ...(fileDeleted ? { fileDeleted: true } : { fileAbsent: true }),
+            markerRemoved: false,
+            error: fileDeleted ? '图片已删除，但永久保存状态清理失败。' : '图片已不存在，但永久保存状态清理失败。'
+        };
+    }
+
+    if (fileDeleted) return { filename, success: true };
+    return { filename, success: false, fileAbsent: true, markerRemoved: true, error: '文件不存在。' };
+}
+
+function isMissingFileError(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
