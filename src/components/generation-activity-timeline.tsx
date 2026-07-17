@@ -8,7 +8,6 @@ import Image from 'next/image';
 type ActivityTimelineProps = {
     activityItems: GenerationActivityItem[];
     history: HistoryMetadata[];
-    pendingActivityItems: GenerationActivityItem[];
     onSelectImage: (item: HistoryMetadata) => void;
     onClearHistory: () => void;
     getImageSrc: (filename: string) => string | undefined;
@@ -28,14 +27,6 @@ function getActivityToneLabel(tone: GenerationActivityItem['tone'], t: ActivityT
     if (tone === 'progress') return t('history.activityToneProgress');
     if (tone === 'success') return t('history.activityToneSuccess');
     if (tone === 'warning') return t('history.activityToneWarning');
-    return t('history.activityToneNeutral');
-}
-
-function getPendingStageLabel(id: string, t: ActivityTimelineProps['t']): string {
-    if (id === 'pending-request') return t('history.pendingRequestStage');
-    if (id === 'pending-streaming') return t('history.pendingStreamingStage');
-    if (id === 'pending-saved') return t('history.pendingSavedStage');
-    if (id === 'pending-failed') return t('history.pendingFailedStage');
     return t('history.activityToneNeutral');
 }
 
@@ -78,34 +69,6 @@ function GenerationActivityRows({
                 </div>
             ))}
         </>
-    );
-}
-
-function PendingActivityLine({ items, t }: { items: GenerationActivityItem[]; t: ActivityTimelineProps['t'] }) {
-    return (
-        <div className='activity-feed grid gap-1.5' aria-label={t('history.pendingActivityFeed')}>
-            {items.map((item, index) => (
-                <div
-                    key={item.id}
-                    className={cn(
-                        'grid grid-cols-[auto_auto_1fr] items-start gap-2 rounded-md px-2 py-1.5 text-xs',
-                        index === 1 ? 'bg-[oklch(0.955_0.04_86)]' : 'bg-background/58'
-                    )}>
-                    <span className='text-muted-foreground mt-0.5 w-10 shrink-0 text-right text-[10px] leading-4 tabular-nums'>
-                        {getPendingStageLabel(item.id, t)}
-                    </span>
-                    <span className='flex h-full w-3 justify-center pt-1'>
-                        <span className={cn('h-1.5 w-1.5 rounded-full', getActivityToneClass(item.tone))} />
-                    </span>
-                    <span className='min-w-0'>
-                        <span className='text-foreground block truncate font-medium'>{item.label}</span>
-                        <span className='text-muted-foreground mt-0.5 block text-[11px] leading-4 break-words'>
-                            {item.detail}
-                        </span>
-                    </span>
-                </div>
-            ))}
-        </div>
     );
 }
 
@@ -206,7 +169,6 @@ function ActivityHistoryRow({
 export function ActivityTimeline({
     activityItems,
     history,
-    pendingActivityItems,
     onSelectImage,
     onClearHistory,
     getImageSrc,
@@ -217,17 +179,13 @@ export function ActivityTimeline({
     const hasActivity = activityItems.length > 0 || history.length > 0;
     const liveActivity = selectAnnouncedGenerationActivity(activityItems);
 
+    if (!hasActivity) return null;
+
     return (
         <div
-            className={cn(
-                'border-border/60 bg-background/48 shrink-0 border-t p-3 lg:mt-1 lg:min-h-[16.5rem] lg:border-t-0 lg:bg-transparent xl:min-h-0',
-                hasActivity ? 'xl:flex-1 xl:shrink' : 'xl:mt-auto xl:flex-none'
-            )}>
+            className='border-border/60 bg-background/48 shrink-0 border-t p-3 lg:mt-1 lg:min-h-[16.5rem] lg:border-t-0 lg:bg-transparent xl:min-h-0 xl:flex-1 xl:shrink'>
             <div
-                className={cn(
-                    'space-y-2 rounded-md border border-[oklch(0.86_0.035_78)] bg-[oklch(0.982_0.014_84)] p-2.5 shadow-[0_6px_16px_oklch(0.42_0.035_58/0.08)]',
-                    hasActivity && 'xl:flex xl:h-full xl:min-h-0 xl:flex-col'
-                )}>
+                className='space-y-2 rounded-md border border-[oklch(0.86_0.035_78)] bg-[oklch(0.982_0.014_84)] p-2.5 shadow-[0_6px_16px_oklch(0.42_0.035_58/0.08)] xl:flex xl:h-full xl:min-h-0 xl:flex-col'>
                 <div className='flex items-center justify-between gap-2'>
                     <div className='min-w-0'>
                         <div className='flex items-center gap-2'>
@@ -250,29 +208,22 @@ export function ActivityTimeline({
                 <p role='status' aria-live='polite' aria-atomic='true' className='sr-only'>
                     {liveActivity ? `${liveActivity.label} ${liveActivity.detail}` : ''}
                 </p>
-                {hasActivity ? (
-                    <div className='max-h-56 space-y-2 overflow-y-auto pr-1 text-xs lg:max-h-[12.5rem] xl:max-h-none xl:min-h-0 xl:flex-1'>
-                        <GenerationActivityRows items={activityItems} t={t} compact />
-                        {history.slice(0, 4).map((item, index) => (
-                            <ActivityHistoryRow
-                                key={item.timestamp}
-                                item={item}
-                                index={index}
-                                hasLiveActivity={activityItems.length > 0}
-                                onSelectImage={onSelectImage}
-                                getImageSrc={getImageSrc}
-                                formatStatusTime={formatStatusTime}
-                                formatDuration={formatDuration}
-                                t={t}
-                            />
-                        ))}
-                    </div>
-                ) : (
-                    <div className='space-y-1.5 xl:min-h-0 xl:flex-1'>
-                        <p className='text-muted-foreground px-1 text-[11px]'>{t('history.statusEmpty')}</p>
-                        <PendingActivityLine items={pendingActivityItems} t={t} />
-                    </div>
-                )}
+                <div className='max-h-56 space-y-2 overflow-y-auto pr-1 text-xs lg:max-h-[12.5rem] xl:max-h-none xl:min-h-0 xl:flex-1'>
+                    <GenerationActivityRows items={activityItems} t={t} compact />
+                    {history.slice(0, 4).map((item, index) => (
+                        <ActivityHistoryRow
+                            key={item.timestamp}
+                            item={item}
+                            index={index}
+                            hasLiveActivity={activityItems.length > 0}
+                            onSelectImage={onSelectImage}
+                            getImageSrc={getImageSrc}
+                            formatStatusTime={formatStatusTime}
+                            formatDuration={formatDuration}
+                            t={t}
+                        />
+                    ))}
+                </div>
             </div>
         </div>
     );

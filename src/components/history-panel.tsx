@@ -184,35 +184,6 @@ function getHistoryClientRequestIds(item: HistoryMetadata): string[] {
     );
 }
 
-function buildPendingActivityItems(t: (key: string) => string): GenerationActivityItem[] {
-    return [
-        {
-            id: 'pending-request',
-            label: t('history.pendingRequest'),
-            detail: t('history.pendingRequestDetail'),
-            tone: 'neutral'
-        },
-        {
-            id: 'pending-streaming',
-            label: t('history.pendingStreaming'),
-            detail: t('history.pendingStreamingDetail'),
-            tone: 'neutral'
-        },
-        {
-            id: 'pending-saved',
-            label: t('history.pendingSaved'),
-            detail: t('history.pendingSavedDetail'),
-            tone: 'neutral'
-        },
-        {
-            id: 'pending-failed',
-            label: t('history.pendingFailed'),
-            detail: t('history.pendingFailedDetail'),
-            tone: 'neutral'
-        }
-    ];
-}
-
 function getCostStatusLabel(
     item: HistoryMetadata,
     labels: { actual: string; pending: string; unavailable: string; estimated: string }
@@ -258,7 +229,6 @@ function HistoryPanelImpl({
     onUpdatePermanentSave
 }: HistoryPanelProps) {
     const { locale, t } = useI18n();
-    const pendingActivityItems = React.useMemo(() => buildPendingActivityItems(t), [t]);
     const [activeTab, setActiveTab] = React.useState<HistoryPanelTab>(() =>
         history.length > 0 && inspirations.length === 0 ? 'history' : 'inspiration'
     );
@@ -280,6 +250,7 @@ function HistoryPanelImpl({
     });
     const isActiveCollectionEmpty =
         effectiveActiveTab === 'inspiration' ? inspirations.length === 0 : history.length === 0;
+    const isPanelIdle = history.length === 0 && inspirations.length === 0 && activityItems.length === 0;
     const hasRetentionManagedHistory = React.useMemo(() => history.some(isRetentionManagedHistoryItem), [history]);
     const canManageRetention = cleanupEnabled && hasRetentionManagedHistory && !!onUpdatePermanentSave;
     const retentionManagedFilenames = React.useMemo(
@@ -412,7 +383,11 @@ function HistoryPanelImpl({
     );
 
     return (
-        <Card className='workbench-panel text-card-foreground border-border flex h-full w-full flex-col gap-0 overflow-hidden rounded-lg border py-0'>
+        <Card
+            className={cn(
+                'workbench-panel text-card-foreground border-border flex h-full w-full flex-col gap-0 overflow-hidden rounded-lg border py-0',
+                isPanelIdle && 'xl:h-auto xl:self-start'
+            )}>
             <CardHeader className='border-border/70 flex flex-col gap-2 border-b px-4 pt-3 !pb-3'>
                 {totalCost > 0 ? (
                     <div className='flex items-center justify-end gap-3'>
@@ -569,16 +544,18 @@ function HistoryPanelImpl({
             <CardContent
                 className={cn(
                     'literary-scrollbar min-h-0 p-3 lg:max-h-[calc(100%-17.5rem)] lg:overflow-y-auto lg:p-3 xl:flex-none',
-                    isActiveCollectionEmpty && 'xl:flex xl:max-h-none xl:flex-1 xl:flex-col'
+                    isActiveCollectionEmpty && !isPanelIdle && 'xl:flex xl:max-h-none xl:flex-1 xl:flex-col'
                 )}>
                 {effectiveActiveTab === 'inspiration' ? (
                     <div
                         className={cn(
                             'space-y-3 lg:space-y-2',
-                            inspirations.length === 0 && 'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0'
+                            inspirations.length === 0 &&
+                                !isPanelIdle &&
+                                'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0'
                         )}>
                         {inspirations.length === 0 ? (
-                            <div className='text-muted-foreground border-border bg-muted/20 flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 text-center text-sm xl:my-auto'>
+                            <div className='text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm xl:my-auto'>
                                 <WandSparkles className='h-5 w-5 opacity-70' />
                                 <p>{t('history.inspirationEmpty')}</p>
                             </div>
@@ -674,7 +651,12 @@ function HistoryPanelImpl({
                         </div>
                     </div>
                 ) : history.length === 0 ? (
-                    <div className='text-muted-foreground border-border flex min-h-24 items-center justify-center rounded-md border border-dashed px-4 text-center text-sm xl:flex-1'>
+                    <div
+                        className={cn(
+                            'text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm',
+                            !isPanelIdle && 'xl:flex-1'
+                        )}>
+                        <FileImage className='h-5 w-5 opacity-70' aria-hidden='true' />
                         <p>{t('history.empty')}</p>
                     </div>
                 ) : (
@@ -1702,7 +1684,6 @@ function HistoryPanelImpl({
             <ActivityTimeline
                 activityItems={activityItems}
                 history={history}
-                pendingActivityItems={pendingActivityItems}
                 onSelectImage={onSelectImage}
                 onClearHistory={onClearHistory}
                 getImageSrc={getImageSrc}
