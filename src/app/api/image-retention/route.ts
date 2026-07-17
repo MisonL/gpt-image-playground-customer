@@ -130,22 +130,24 @@ async function applyRetentionRequest(body: RetentionRequestBody): Promise<Retent
         });
     }
 
-    const successfulFilenames: string[] = [];
-    const results: RetentionResult[] = [];
-    for (const filename of body.filenames) {
-        const validationError = validateReleaseFilename(filename);
-        if (validationError) {
-            results.push({ filename, success: false, error: validationError });
-            continue;
+    return await withWebuiImageFilenameLocks(body.filenames, async () => {
+        const successfulFilenames: string[] = [];
+        const results: RetentionResult[] = [];
+        for (const filename of body.filenames) {
+            const validationError = validateReleaseFilename(filename);
+            if (validationError) {
+                results.push({ filename, success: false, error: validationError });
+                continue;
+            }
+            successfulFilenames.push(filename);
+            results.push({ filename, success: true });
         }
-        successfulFilenames.push(filename);
-        results.push({ filename, success: true });
-    }
 
-    if (successfulFilenames.length > 0) {
-        await (await getWebuiImageRetentionStore()).release(successfulFilenames);
-    }
-    return results;
+        if (successfulFilenames.length > 0) {
+            await (await getWebuiImageRetentionStore()).release(successfulFilenames);
+        }
+        return results;
+    });
 }
 
 async function validatePreservedFile(filename: string, outputDir: string): Promise<string | undefined> {

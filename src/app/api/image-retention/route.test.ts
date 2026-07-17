@@ -140,6 +140,40 @@ describe('GET and POST /api/image-retention', { concurrency: false }, () => {
         assert.deepEqual(await (await getWebuiImageRetentionStore()).listPermanentFilenames(), [validFilename]);
     });
 
+    it('serializes a release behind an in-flight preserve for the same filename', { timeout: 5_000 }, async () => {
+        await writeOutputFile(validFilename);
+        const store = await getWebuiImageRetentionStore();
+        const originalPreserve = store.preserve.bind(store);
+        let releasePreserve: (() => void) | undefined;
+        const preserveGate = new Promise<void>((resolve) => {
+            releasePreserve = resolve;
+        });
+        let markPreserveEntered: (() => void) | undefined;
+        const preserveEntered = new Promise<void>((resolve) => {
+            markPreserveEntered = resolve;
+        });
+
+        store.preserve = async (filenames, now) => {
+            markPreserveEntered?.();
+            await preserveGate;
+            await originalPreserve(filenames, now);
+        };
+
+        try {
+            const preserve = POST(jsonRequest({ action: 'preserve', filenames: [validFilename] }));
+            await preserveEntered;
+            const release = POST(jsonRequest({ action: 'release', filenames: [validFilename] }));
+            releasePreserve?.();
+
+            assert.equal((await preserve).status, 200);
+            assert.equal((await release).status, 200);
+            assert.deepEqual(await store.listPermanentFilenames(), []);
+        } finally {
+            releasePreserve?.();
+            store.preserve = originalPreserve;
+        }
+    });
+
     it('requires a valid password hash for POST and an access cookie for GET', async () => {
         await writeOutputFile(validFilename);
         process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
