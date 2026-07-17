@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 let originalEnv: NodeJS.ProcessEnv;
+let originalCwd = '';
+let testCwd = '';
 
 function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
     for (const key of Object.keys(process.env)) {
@@ -15,8 +20,11 @@ function restoreProcessEnv(snapshot: NodeJS.ProcessEnv) {
     }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
     originalEnv = { ...process.env };
+    originalCwd = process.cwd();
+    testCwd = await mkdtemp(path.join(os.tmpdir(), 'runtime-capabilities-'));
+    process.chdir(testCwd);
     process.env.npm_lifecycle_event = 'test';
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
     delete process.env.OPENAI_RESPONSES_API_MODEL;
@@ -60,8 +68,12 @@ beforeEach(() => {
 afterEach(async () => {
     const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
     const { resetWebuiImageCleanupRuntimeForTests } = await import('@/lib/webui-image-cleanup-runtime');
+    const { resetWebuiImageRetentionStoresForTests } = await import('@/lib/webui-image-retention-store');
     resetServerChannelStateForTests();
     resetWebuiImageCleanupRuntimeForTests();
+    resetWebuiImageRetentionStoresForTests();
+    process.chdir(originalCwd);
+    await rm(testCwd, { recursive: true, force: true });
     restoreProcessEnv(originalEnv);
 });
 

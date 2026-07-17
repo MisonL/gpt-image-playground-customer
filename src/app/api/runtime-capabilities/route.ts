@@ -114,7 +114,7 @@ export async function GET() {
             upstreamProfile,
             imageTransport: summarizeOpenAIImageTransport(process.env),
             providerManifests,
-            webuiImageCleanup: getWebuiImageCleanupSummary(process.env),
+            webuiImageCleanup: await getWebuiImageCleanupSummary(process.env),
             responsesImageBackend: {
                 enabled: responsesImageBackendEnabled,
                 mode: 'experimental',

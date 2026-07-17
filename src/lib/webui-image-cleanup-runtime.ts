@@ -2,12 +2,16 @@ import { ensureAgentStateStoreReady } from './agent-state-runtime';
 import { appLogger } from './app-logger';
 import { resolveImageOutputDir } from './server-runtime';
 import {
+    getWebuiImageRetentionStore,
+    resolveWebuiImageRetentionDatabasePath,
+    WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE
+} from './webui-image-retention-store';
+import {
     cleanupExpiredWebuiImages,
     readWebuiImageCleanupConfig,
     type WebuiImageCleanupRun
 } from './webui-image-cleanup';
-
-const CLEANUP_FAILURE_MESSAGE = 'WebUI 图片自动清理执行失败。';
+import path from 'node:path';
 
 type CleanupLogger = {
     info(message: string, context?: unknown): void;
@@ -47,6 +51,7 @@ let startPromise: Promise<WebuiImageCleanupSummary> | undefined;
 let running = false;
 let lastRun: PublicWebuiImageCleanupRun | undefined;
 let lastError: string | undefined;
+let runtimeStatusDatabasePath: string | undefined;
 
 export async function runWebuiImageCleanupNow(
     env: Record<string, string | undefined> = process.env,
@@ -54,7 +59,7 @@ export async function runWebuiImageCleanupNow(
 ): Promise<WebuiImageCleanupRun | undefined> {
     const config = readWebuiImageCleanupConfig(env);
     if (!config.enabled) return undefined;
-    return await executeCleanup(() => performWebuiImageCleanup(env, config.retentionDays, now), appLogger);
+    return await executeCleanup(() => performWebuiImageCleanup(env, config.retentionDays, now), appLogger, env);
 }
 
 export async function startWebuiImageCleanupScheduler(
@@ -62,8 +67,8 @@ export async function startWebuiImageCleanupScheduler(
 ): Promise<WebuiImageCleanupSummary> {
     const env = options.env ?? process.env;
     const config = readWebuiImageCleanupConfig(env);
-    if (!config.enabled) return getWebuiImageCleanupSummary(env);
-    if (timerRegistration) return getWebuiImageCleanupSummary(env);
+    if (!config.enabled) return await getWebuiImageCleanupSummary(env);
+    if (timerRegistration) return await getWebuiImageCleanupSummary(env);
     if (startPromise) return await startPromise;
 
     const logger = options.logger ?? appLogger;
@@ -72,10 +77,10 @@ export async function startWebuiImageCleanupScheduler(
     const clearRegisteredInterval = options.clearInterval ?? defaultClearInterval;
 
     startPromise = (async () => {
-        await executeCleanup(runCleanup, logger);
+        await executeCleanup(runCleanup, logger, env);
         try {
             const handle = registerInterval(() => {
-                void executeCleanup(runCleanup, logger).catch(() => {});
+                void executeCleanup(runCleanup, logger, env).catch(() => {});
             }, config.intervalMs);
             handle.unref?.();
             timerRegistration = {
@@ -83,15 +88,15 @@ export async function startWebuiImageCleanupScheduler(
                 clearInterval: clearRegisteredInterval
             };
         } catch (error) {
-            lastError = CLEANUP_FAILURE_MESSAGE;
             logger.error('WebUI 图片自动清理调度启动失败。', error);
+            await persistCleanupFailure(env, logger);
             throw error;
         }
         logger.info('WebUI 图片自动清理调度已启动。', {
             retentionDays: config.retentionDays,
             intervalMs: config.intervalMs
         });
-        return getWebuiImageCleanupSummary(env);
+        return await getWebuiImageCleanupSummary(env);
     })();
 
     try {
@@ -101,9 +106,9 @@ export async function startWebuiImageCleanupScheduler(
     }
 }
 
-export function getWebuiImageCleanupSummary(
+export async function getWebuiImageCleanupSummary(
     env: Record<string, string | undefined> = process.env
-): WebuiImageCleanupSummary {
+): Promise<WebuiImageCleanupSummary> {
     const config = readWebuiImageCleanupConfig(env);
     const summary: WebuiImageCleanupSummary = {
         enabled: config.enabled,
@@ -112,10 +117,15 @@ export function getWebuiImageCleanupSummary(
         running
     };
     if (!config.enabled) return summary;
+    const databasePath = resolveWebuiImageRetentionDatabasePath(env);
+    const persistedStatus = await (await getWebuiImageRetentionStore(env)).readCleanupStatus();
+    const runtimeStatus = runtimeStatusDatabasePath === databasePath ? { lastRun, lastError } : {};
+    const summaryLastRun = runtimeStatus.lastRun ?? persistedStatus.lastRun;
+    const summaryLastError = runtimeStatus.lastError ?? persistedStatus.lastError;
     return {
         ...summary,
-        ...(lastRun ? { lastRun } : {}),
-        ...(lastError ? { lastError } : {})
+        ...(summaryLastRun ? { lastRun: summaryLastRun } : {}),
+        ...(summaryLastError ? { lastError: summaryLastError } : {})
     };
 }
 
@@ -128,6 +138,7 @@ export function resetWebuiImageCleanupRuntimeForTests(): void {
     running = false;
     lastRun = undefined;
     lastError = undefined;
+    runtimeStatusDatabasePath = undefined;
 }
 
 async function performWebuiImageCleanup(
@@ -135,26 +146,37 @@ async function performWebuiImageCleanup(
     retentionDays: number,
     now: Date
 ): Promise<WebuiImageCleanupRun> {
-    const store = await ensureAgentStateStoreReady(env, now);
-    const protectedArtifactFilepaths = await store.listArtifactFilepaths();
+    const outputDir = resolveImageOutputDir(env);
+    const [agentStore, retentionStore] = await Promise.all([
+        ensureAgentStateStoreReady(env, now),
+        getWebuiImageRetentionStore(env)
+    ]);
+    const [agentArtifactFilepaths, permanentFilenames] = await Promise.all([
+        agentStore.listArtifactFilepaths(),
+        retentionStore.listPermanentFilenames()
+    ]);
+    const permanentFilepaths = permanentFilenames.map((filename) => path.join(outputDir, filename));
     return await cleanupExpiredWebuiImages({
-        outputDir: resolveImageOutputDir(env),
+        outputDir,
         retentionDays,
-        protectedArtifactFilepaths,
+        protectedArtifactFilepaths: [...agentArtifactFilepaths, ...permanentFilepaths],
         now
     });
 }
 
 async function executeCleanup(
     runCleanup: () => Promise<WebuiImageCleanupRun | undefined>,
-    logger: CleanupLogger
+    logger: CleanupLogger,
+    env: Record<string, string | undefined>
 ): Promise<WebuiImageCleanupRun | undefined> {
+    const databasePath = resolveWebuiImageRetentionDatabasePath(env);
     running = true;
     try {
         const result = await runCleanup();
         if (!result) return undefined;
-        lastRun = toPublicRun(result);
-        lastError = undefined;
+        const publicRun = toPublicRun(result);
+        await (await getWebuiImageRetentionStore(env)).writeCleanupStatus({ lastRun: publicRun });
+        setRuntimeStatus(databasePath, { lastRun: publicRun });
         if (result.status === 'failed') {
             logger.error('WebUI 图片自动清理存在文件删除失败。', {
                 scannedCount: result.scannedCount,
@@ -170,12 +192,44 @@ async function executeCleanup(
         }
         return result;
     } catch (error) {
-        lastError = CLEANUP_FAILURE_MESSAGE;
-        logger.error(CLEANUP_FAILURE_MESSAGE, error);
+        logger.error(WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE, error);
+        await persistCleanupFailure(env, logger);
         throw error;
     } finally {
         running = false;
     }
+}
+
+async function persistCleanupFailure(
+    env: Record<string, string | undefined>,
+    logger: CleanupLogger
+): Promise<void> {
+    const databasePath = resolveWebuiImageRetentionDatabasePath(env);
+    const currentRun = runtimeStatusDatabasePath === databasePath ? lastRun : undefined;
+    setRuntimeStatus(databasePath, {
+        ...(currentRun ? { lastRun: currentRun } : {}),
+        lastError: WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE
+    });
+    try {
+        const store = await getWebuiImageRetentionStore(env);
+        const persistedStatus = await store.readCleanupStatus();
+        await store.writeCleanupStatus({
+            lastRun: currentRun ?? persistedStatus.lastRun,
+            lastError: WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE
+        });
+    } catch (error) {
+        logger.error(WEBUI_IMAGE_CLEANUP_FAILURE_MESSAGE, error);
+        throw error;
+    }
+}
+
+function setRuntimeStatus(
+    databasePath: string,
+    status: Pick<WebuiImageCleanupSummary, 'lastRun' | 'lastError'>
+): void {
+    runtimeStatusDatabasePath = databasePath;
+    lastRun = status.lastRun;
+    lastError = status.lastError;
 }
 
 function toPublicRun(result: WebuiImageCleanupRun): PublicWebuiImageCleanupRun {

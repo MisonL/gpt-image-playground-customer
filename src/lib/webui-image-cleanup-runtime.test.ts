@@ -2,14 +2,36 @@ import type { WebuiImageCleanupRun } from './webui-image-cleanup';
 import {
     getWebuiImageCleanupSummary,
     resetWebuiImageCleanupRuntimeForTests,
+    runWebuiImageCleanupNow,
     startWebuiImageCleanupScheduler,
     type WebuiImageCleanupSchedulerOptions
 } from './webui-image-cleanup-runtime';
+import { resetAgentStateStoreForTests } from './agent-state-runtime';
+import {
+    resetWebuiImageRetentionStoresForTests,
+    resolveWebuiImageRetentionDatabasePath,
+    SqliteWebuiImageRetentionStore
+} from './webui-image-retention-store';
 import assert from 'node:assert/strict';
-import { afterEach, describe, it } from 'node:test';
+import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
-afterEach(() => {
+const originalCwd = process.cwd();
+let testCwd = '';
+
+beforeEach(async () => {
+    testCwd = await mkdtemp(path.join(os.tmpdir(), 'webui-image-cleanup-runtime-'));
+    process.chdir(testCwd);
+});
+
+afterEach(async () => {
+    resetAgentStateStoreForTests();
     resetWebuiImageCleanupRuntimeForTests();
+    resetWebuiImageRetentionStoresForTests();
+    process.chdir(originalCwd);
+    await rm(testCwd, { recursive: true, force: true });
 });
 
 describe('webui image cleanup runtime', () => {
@@ -117,10 +139,11 @@ describe('webui image cleanup runtime', () => {
         assert.ok(scheduledCallback);
         scheduledCallback();
         await waitFor(() => cleanupCalls === 2);
+        await waitFor(() => errorLogs.length === 1);
 
         assert.equal(errorLogs.length, 1);
         assert.match(errorLogs[0].message, /失败/);
-        assert.deepEqual(getWebuiImageCleanupSummary(options.env).lastRun?.failedCount, 1);
+        assert.deepEqual((await getWebuiImageCleanupSummary(options.env)).lastRun?.failedCount, 1);
     });
 
     it('rethrows startup failures without exposing filesystem paths in the summary', async () => {
@@ -145,7 +168,7 @@ describe('webui image cleanup runtime', () => {
         assert.equal(errorLogs.length, 1);
         assert.ok(errorLogs[0].context instanceof Error);
         assert.match(errorLogs[0].context.message, /\/private\/agent\.sqlite/);
-        assert.deepEqual(getWebuiImageCleanupSummary(options.env), {
+        assert.deepEqual(await getWebuiImageCleanupSummary(options.env), {
             enabled: true,
             retentionDays: 30,
             intervalMs: 21_600_000,
@@ -160,6 +183,7 @@ describe('webui image cleanup runtime', () => {
             env: {
                 WEBUI_IMAGE_AUTO_CLEANUP_ENABLED: 'true'
             },
+            runCleanup: async () => createCleanupRun(),
             setInterval: () => {
                 throw new Error('timer registration failed');
             },
@@ -174,7 +198,65 @@ describe('webui image cleanup runtime', () => {
         await assert.rejects(() => startWebuiImageCleanupScheduler(options), /timer registration failed/);
 
         assert.equal(errorLogs.at(-1)?.message, 'WebUI 图片自动清理调度启动失败。');
-        assert.equal(getWebuiImageCleanupSummary(options.env).lastError, 'WebUI 图片自动清理执行失败。');
+        assert.equal((await getWebuiImageCleanupSummary(options.env)).lastError, 'WebUI 图片自动清理执行失败。');
+
+        resetWebuiImageCleanupRuntimeForTests();
+        resetWebuiImageRetentionStoresForTests();
+        const persistedSummary = await getWebuiImageCleanupSummary(options.env);
+        assert.deepEqual(persistedSummary.lastRun, createPublicCleanupRun());
+        assert.equal(persistedSummary.lastError, 'WebUI 图片自动清理执行失败。');
+    });
+
+    it('reads a persisted cleanup summary after runtime memory is reset', async () => {
+        const cwd = await mkdtemp(path.join(os.tmpdir(), 'webui-cleanup-summary-'));
+        try {
+            process.chdir(cwd);
+            const env = {
+                WEBUI_IMAGE_AUTO_CLEANUP_ENABLED: 'true'
+            };
+            const store = new SqliteWebuiImageRetentionStore(resolveWebuiImageRetentionDatabasePath(env));
+            await store.init();
+            await store.writeCleanupStatus({
+                lastRun: createPublicCleanupRun()
+            });
+
+            const summary = await getWebuiImageCleanupSummary(env);
+
+            assert.deepEqual(summary.lastRun, createPublicCleanupRun());
+        } finally {
+            process.chdir(originalCwd);
+            await rm(cwd, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps permanently saved files in the cleanup protection set', async () => {
+        const cwd = await mkdtemp(path.join(os.tmpdir(), 'webui-cleanup-permanent-'));
+        const now = new Date('2026-07-17T00:00:00.000Z');
+        const filename = '1781567999000-aaaaaaaaaaaaaaaa-0.png';
+        const env = {
+            AGENT_STATE_BACKEND: 'memory',
+            WEBUI_IMAGE_AUTO_CLEANUP_ENABLED: 'true'
+        };
+        try {
+            process.chdir(cwd);
+            const outputDir = path.join(cwd, 'generated-images');
+            const filepath = path.join(outputDir, filename);
+            await mkdir(outputDir, { recursive: true });
+            await writeFile(filepath, 'image');
+            await utimes(filepath, new Date('2026-06-15T00:00:00.000Z'), new Date('2026-06-15T00:00:00.000Z'));
+
+            const store = new SqliteWebuiImageRetentionStore(resolveWebuiImageRetentionDatabasePath(env));
+            await store.init();
+            await store.preserve([filename]);
+
+            const result = await runWebuiImageCleanupNow(env, now);
+
+            assert.equal(result?.protectedCount, 1);
+            await access(filepath);
+        } finally {
+            process.chdir(originalCwd);
+            await rm(cwd, { recursive: true, force: true });
+        }
     });
 });
 
@@ -212,6 +294,11 @@ function createCleanupRun(): WebuiImageCleanupRun {
         failedCount: 0,
         failures: []
     };
+}
+
+function createPublicCleanupRun() {
+    const { failures: _failures, ...publicRun } = createCleanupRun();
+    return publicRun;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
