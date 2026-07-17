@@ -42,7 +42,8 @@ import {
     ChevronDown,
     AlertTriangle,
     ThumbsUp,
-    ThumbsDown
+    ThumbsDown,
+    X
 } from 'lucide-react';
 import Image from 'next/image';
 import * as React from 'react';
@@ -68,6 +69,9 @@ type HistoryPanelProps = {
     onCancelDeletion: () => void;
     deletePreferenceDialogValue: boolean;
     onDeletePreferenceDialogChange: (isChecked: boolean) => void;
+    cleanupEnabled?: boolean;
+    permanentlySavedFilenames?: ReadonlySet<string>;
+    onUpdatePermanentSave?: (action: 'preserve' | 'release', filenames: string[]) => Promise<void>;
 };
 
 type HistoryPanelTab = 'inspiration' | 'history';
@@ -103,6 +107,8 @@ export type PromptApplySource =
           type: 'history';
           item: HistoryMetadata;
       };
+
+const emptyPermanentFilenames: ReadonlySet<string> = new Set();
 
 const formatDuration = (ms: number): string => {
     if (ms < 1000) {
@@ -218,6 +224,14 @@ function getCostStatusLabel(
     return '-';
 }
 
+function getHistoryStorageMode(item: HistoryMetadata): NonNullable<HistoryMetadata['storageModeUsed']> {
+    return item.storageModeUsed ?? 'fs';
+}
+
+function isRetentionManagedHistoryItem(item: HistoryMetadata): boolean {
+    return item.status !== 'failed' && getHistoryStorageMode(item) === 'fs' && item.images.length > 0;
+}
+
 function HistoryPanelImpl({
     history,
     inspirations,
@@ -238,7 +252,10 @@ function HistoryPanelImpl({
     onConfirmDeletion,
     onCancelDeletion,
     deletePreferenceDialogValue,
-    onDeletePreferenceDialogChange
+    onDeletePreferenceDialogChange,
+    cleanupEnabled = false,
+    permanentlySavedFilenames = emptyPermanentFilenames,
+    onUpdatePermanentSave
 }: HistoryPanelProps) {
     const { locale, t } = useI18n();
     const pendingActivityItems = React.useMemo(() => buildPendingActivityItems(t), [t]);
@@ -252,6 +269,11 @@ function HistoryPanelImpl({
     const [imageResolutions, setImageResolutions] = React.useState<Record<string, string>>({});
     const [failedThumbnails, setFailedThumbnails] = React.useState<Record<string, boolean>>({});
     const [expandedBatchTimestamp, setExpandedBatchTimestamp] = React.useState<number | null>(null);
+    const [isSelectingRetention, setIsSelectingRetention] = React.useState(false);
+    const [selectedRetentionFilenames, setSelectedRetentionFilenames] = React.useState<Set<string>>(() => new Set());
+    const [retentionSelectionHistoryKey, setRetentionSelectionHistoryKey] = React.useState<string | null>(null);
+    const [isUpdatingRetention, setIsUpdatingRetention] = React.useState(false);
+    const [retentionError, setRetentionError] = React.useState<string | null>(null);
     const effectiveActiveTab = resolveHistoryPanelTabSync({
         activeTab,
         historyCount: history.length,
@@ -259,6 +281,14 @@ function HistoryPanelImpl({
     });
     const isActiveCollectionEmpty =
         effectiveActiveTab === 'inspiration' ? inspirations.length === 0 : history.length === 0;
+    const hasRetentionManagedHistory = React.useMemo(() => history.some(isRetentionManagedHistoryItem), [history]);
+    const canManageRetention = cleanupEnabled && hasRetentionManagedHistory && !!onUpdatePermanentSave;
+    const retentionHistoryKey = React.useMemo(() => history.map((item) => item.timestamp).join('|'), [history]);
+    const isRetentionSelectionActive =
+        isSelectingRetention &&
+        canManageRetention &&
+        effectiveActiveTab === 'history' &&
+        retentionSelectionHistoryKey === retentionHistoryKey;
 
     const { totalCost, totalImages } = React.useMemo(() => {
         let cost = 0;
@@ -274,6 +304,56 @@ function HistoryPanelImpl({
     }, [history]);
 
     const averageCost = totalImages > 0 ? totalCost / totalImages : 0;
+
+    const clearRetentionSelection = React.useCallback(() => {
+        setIsSelectingRetention(false);
+        setRetentionSelectionHistoryKey(null);
+        setSelectedRetentionFilenames(new Set());
+        setRetentionError(null);
+    }, []);
+
+    const handleRetentionSelectionModeChange = React.useCallback(() => {
+        if (isRetentionSelectionActive) {
+            clearRetentionSelection();
+            return;
+        }
+        setIsSelectingRetention(true);
+        setRetentionSelectionHistoryKey(retentionHistoryKey);
+        setSelectedRetentionFilenames(new Set());
+        setRetentionError(null);
+    }, [clearRetentionSelection, isRetentionSelectionActive, retentionHistoryKey]);
+
+    const handleRetentionImageSelection = React.useCallback((filename: string, isSelected: boolean) => {
+        setSelectedRetentionFilenames((current) => {
+            const next = new Set(current);
+            if (isSelected) {
+                next.add(filename);
+            } else {
+                next.delete(filename);
+            }
+            return next;
+        });
+        setRetentionError(null);
+    }, []);
+
+    const submitRetentionUpdate = React.useCallback(
+        async (action: 'preserve' | 'release') => {
+            if (!onUpdatePermanentSave || selectedRetentionFilenames.size === 0 || isUpdatingRetention) return;
+            const filenames = [...selectedRetentionFilenames];
+            setIsUpdatingRetention(true);
+            setRetentionError(null);
+            try {
+                await onUpdatePermanentSave(action, filenames);
+                setSelectedRetentionFilenames(new Set());
+            } catch (error) {
+                console.error('更新图片永久保存状态失败：', error);
+                setRetentionError(t('retention.updateFailed'));
+            } finally {
+                setIsUpdatingRetention(false);
+            }
+        },
+        [isUpdatingRetention, onUpdatePermanentSave, selectedRetentionFilenames, t]
+    );
 
     const handleCopy = async (text: string | null | undefined, timestamp: number) => {
         if (!text) return;
@@ -424,7 +504,11 @@ function HistoryPanelImpl({
                 ) : null}
                 <Tabs
                     value={effectiveActiveTab}
-                    onValueChange={(value) => setActiveTab(value as 'inspiration' | 'history')}
+                    onValueChange={(value) => {
+                        const nextTab = value as HistoryPanelTab;
+                        setActiveTab(nextTab);
+                        if (nextTab !== 'history') clearRetentionSelection();
+                    }}
                     className='gap-0'>
                     <TabsList className='border-border grid h-auto w-full grid-cols-2 rounded-none border-0 border-b bg-transparent p-0'>
                         <TabsTrigger
@@ -441,15 +525,36 @@ function HistoryPanelImpl({
                     <TabsContent value='inspiration' forceMount className='hidden' />
                     <TabsContent value='history' forceMount className='hidden' />
                 </Tabs>
-                {history.length > 0 && effectiveActiveTab === 'history' && (
-                    <Button
-                        variant='ghost'
-                        size='sm'
-                        onClick={onClearHistory}
-                        className='text-muted-foreground hover:text-foreground min-h-11 rounded-md px-2 py-1 lg:min-h-8'>
-                        {t('history.clear')}
-                    </Button>
-                )}
+                {history.length > 0 && effectiveActiveTab === 'history' ? (
+                    <div className='flex items-center justify-between gap-2'>
+                        {canManageRetention ? (
+                            <Button
+                                type='button'
+                                variant='ghost'
+                                size='sm'
+                                onClick={handleRetentionSelectionModeChange}
+                                className='text-muted-foreground hover:text-foreground min-h-11 px-2 text-xs lg:min-h-8'
+                                aria-label={
+                                    isRetentionSelectionActive
+                                        ? t('retention.exitSelection')
+                                        : t('retention.selectHistory')
+                                }
+                                title={t('retention.hint')}>
+                                {isRetentionSelectionActive ? <X className='h-3.5 w-3.5' /> : null}
+                                {isRetentionSelectionActive ? t('retention.exitSelection') : t('retention.select')}
+                            </Button>
+                        ) : (
+                            <span />
+                        )}
+                        <Button
+                            variant='ghost'
+                            size='sm'
+                            onClick={onClearHistory}
+                            className='text-muted-foreground hover:text-foreground min-h-11 rounded-md px-2 py-1 lg:min-h-8'>
+                            {t('history.clear')}
+                        </Button>
+                    </div>
+                ) : null}
             </CardHeader>
             <CardContent
                 className={cn(
@@ -579,7 +684,12 @@ function HistoryPanelImpl({
                                     ? t('history.resultFeedbackUsable')
                                     : t('history.resultFeedbackNeedsRevision')
                                 : t('history.resultFeedbackEmpty');
-                            const originalStorageMode = item.storageModeUsed || 'fs';
+                            const originalStorageMode = getHistoryStorageMode(item);
+                            const isRetentionManagedItem = cleanupEnabled && isRetentionManagedHistoryItem(item);
+                            const firstImageIsPermanentlySaved =
+                                !!firstImage && permanentlySavedFilenames.has(firstImage.filename);
+                            const isFirstImageSelected =
+                                !!firstImage && selectedRetentionFilenames.has(firstImage.filename);
                             const outputFormat = item.output_format || 'png';
                             const costBadge = getCostBadge(item, {
                                 actual: t('history.actualCostShort'),
@@ -614,11 +724,17 @@ function HistoryPanelImpl({
                                     <div className='group relative'>
                                         <button
                                             type='button'
-                                            onClick={() => onSelectImage(item)}
-                                            disabled={isFailedItem}
+                                            onClick={() => {
+                                                if (!isRetentionSelectionActive || !isRetentionManagedItem) {
+                                                    onSelectImage(item);
+                                                }
+                                            }}
+                                            disabled={
+                                                isFailedItem || (isRetentionSelectionActive && isRetentionManagedItem)
+                                            }
                                             className={cn(
                                                 'focus:ring-ring focus:ring-offset-background border-border relative block aspect-square w-full overflow-hidden rounded-t-md border transition-[border-color,filter,transform,box-shadow] duration-150 focus:ring-2 focus:ring-offset-2 focus:outline-none active:translate-y-0',
-                                                isFailedItem
+                                                isFailedItem || (isRetentionSelectionActive && isRetentionManagedItem)
                                                     ? 'cursor-default'
                                                     : 'hover:border-foreground/20 cursor-pointer hover:-translate-y-0.5 hover:brightness-110'
                                             )}
@@ -703,6 +819,33 @@ function HistoryPanelImpl({
                                                 )}
                                             </div>
                                         </button>
+                                        {isRetentionManagedItem && firstImageIsPermanentlySaved ? (
+                                            <span
+                                                className='bg-background/92 text-primary border-primary/25 pointer-events-none absolute top-1 right-1 z-20 flex h-7 w-7 items-center justify-center rounded-sm border shadow-sm'
+                                                aria-label={t('retention.permanentlySaved')}
+                                                role='img'>
+                                                <Bookmark className='h-3.5 w-3.5 fill-current' aria-hidden='true' />
+                                            </span>
+                                        ) : null}
+                                        {isRetentionManagedItem &&
+                                        isRetentionSelectionActive &&
+                                        firstImage &&
+                                        !isMultiImage ? (
+                                            <div className='bg-background/92 border-border absolute top-1 right-1 z-30 flex h-9 w-9 items-center justify-center rounded-sm border shadow-sm'>
+                                                <Checkbox
+                                                    checked={isFirstImageSelected}
+                                                    onCheckedChange={(checked) =>
+                                                        handleRetentionImageSelection(
+                                                            firstImage.filename,
+                                                            checked === true
+                                                        )
+                                                    }
+                                                    disabled={isUpdatingRetention}
+                                                    data-retention-image={firstImage.filename}
+                                                    aria-label={t('retention.selectImage')}
+                                                />
+                                            </div>
+                                        ) : null}
                                         {costBadge && (
                                             <Dialog
                                                 open={openCostDialogTimestamp === itemKey}
@@ -1078,34 +1221,36 @@ function HistoryPanelImpl({
                                         </Button>
                                         {isMultiImage && (
                                             <div className='mt-2 space-y-1.5'>
-                                                <Button
-                                                    type='button'
-                                                    variant='ghost'
-                                                    size='sm'
-                                                    className='text-muted-foreground hover:text-foreground min-h-11 w-full justify-between px-2 text-[11px] lg:h-7 lg:min-h-0'
-                                                    aria-expanded={isBatchExpanded}
-                                                    aria-controls={`history-batch-${item.timestamp}`}
-                                                    onClick={() =>
-                                                        setExpandedBatchTimestamp((current) =>
-                                                            current === item.timestamp ? null : item.timestamp
-                                                        )
-                                                    }>
-                                                    <span>
-                                                        {isBatchExpanded
-                                                            ? t('history.collapseBatch')
-                                                            : t('history.expandBatch')}
-                                                    </span>
-                                                    <span className='inline-flex items-center gap-1'>
-                                                        {t('history.batchImageCount', { count: imageCount })}
-                                                        <ChevronDown
-                                                            className={cn(
-                                                                'h-3.5 w-3.5 transition-transform',
-                                                                isBatchExpanded && 'rotate-180'
-                                                            )}
-                                                        />
-                                                    </span>
-                                                </Button>
-                                                {isBatchExpanded && (
+                                                {!isRetentionSelectionActive ? (
+                                                    <Button
+                                                        type='button'
+                                                        variant='ghost'
+                                                        size='sm'
+                                                        className='text-muted-foreground hover:text-foreground min-h-11 w-full justify-between px-2 text-[11px] lg:h-7 lg:min-h-0'
+                                                        aria-expanded={isBatchExpanded}
+                                                        aria-controls={`history-batch-${item.timestamp}`}
+                                                        onClick={() =>
+                                                            setExpandedBatchTimestamp((current) =>
+                                                                current === item.timestamp ? null : item.timestamp
+                                                            )
+                                                        }>
+                                                        <span>
+                                                            {isBatchExpanded
+                                                                ? t('history.collapseBatch')
+                                                                : t('history.expandBatch')}
+                                                        </span>
+                                                        <span className='inline-flex items-center gap-1'>
+                                                            {t('history.batchImageCount', { count: imageCount })}
+                                                            <ChevronDown
+                                                                className={cn(
+                                                                    'h-3.5 w-3.5 transition-transform',
+                                                                    isBatchExpanded && 'rotate-180'
+                                                                )}
+                                                            />
+                                                        </span>
+                                                    </Button>
+                                                ) : null}
+                                                {(isBatchExpanded || isRetentionSelectionActive) && (
                                                     <div
                                                         id={`history-batch-${item.timestamp}`}
                                                         className='batch-thumbnail-strip grid grid-cols-3 gap-1.5'
@@ -1118,15 +1263,26 @@ function HistoryPanelImpl({
                                                             const unavailable =
                                                                 !imageSrc || failedThumbnails[image.filename];
 
+                                                            const isPermanentlySaved = permanentlySavedFilenames.has(
+                                                                image.filename
+                                                            );
+                                                            const isSelectedForRetention =
+                                                                selectedRetentionFilenames.has(image.filename);
+
                                                             return (
-                                                                <button
+                                                                <div
                                                                     key={`${item.timestamp}-${image.filename}`}
-                                                                    type='button'
-                                                                    onClick={() => onSelectImage(item)}
-                                                                    className='border-border bg-muted image-edge relative aspect-square overflow-hidden rounded-sm border'
-                                                                    aria-label={t('history.batchThumbnail', {
-                                                                        index: index + 1
-                                                                    })}>
+                                                                    className='border-border bg-muted image-edge relative aspect-square overflow-hidden rounded-sm border'>
+                                                                    {!isRetentionSelectionActive ? (
+                                                                        <button
+                                                                            type='button'
+                                                                            onClick={() => onSelectImage(item)}
+                                                                            className='focus-visible:ring-ring absolute inset-0 z-10 rounded-sm focus-visible:ring-2 focus-visible:outline-none'
+                                                                            aria-label={t('history.batchThumbnail', {
+                                                                                index: index + 1
+                                                                            })}
+                                                                        />
+                                                                    ) : null}
                                                                     {!unavailable ? (
                                                                         <Image
                                                                             src={imageSrc}
@@ -1152,7 +1308,35 @@ function HistoryPanelImpl({
                                                                             {t('history.previewUnavailable')}
                                                                         </span>
                                                                     )}
-                                                                </button>
+                                                                    {isRetentionManagedItem && isPermanentlySaved ? (
+                                                                        <span
+                                                                            className='bg-background/92 text-primary border-primary/25 pointer-events-none absolute top-1 right-1 z-20 flex h-6 w-6 items-center justify-center rounded-sm border shadow-sm'
+                                                                            aria-label={t('retention.permanentlySaved')}
+                                                                            role='img'>
+                                                                            <Bookmark
+                                                                                className='h-3 w-3 fill-current'
+                                                                                aria-hidden='true'
+                                                                            />
+                                                                        </span>
+                                                                    ) : null}
+                                                                    {isRetentionManagedItem &&
+                                                                    isRetentionSelectionActive ? (
+                                                                        <div className='bg-background/92 border-border absolute top-1 right-1 z-30 flex h-7 w-7 items-center justify-center rounded-sm border shadow-sm'>
+                                                                            <Checkbox
+                                                                                checked={isSelectedForRetention}
+                                                                                onCheckedChange={(checked) =>
+                                                                                    handleRetentionImageSelection(
+                                                                                        image.filename,
+                                                                                        checked === true
+                                                                                    )
+                                                                                }
+                                                                                disabled={isUpdatingRetention}
+                                                                                data-retention-image={image.filename}
+                                                                                aria-label={t('retention.selectImage')}
+                                                                            />
+                                                                        </div>
+                                                                    ) : null}
+                                                                </div>
                                                             );
                                                         })}
                                                     </div>
@@ -1472,6 +1656,38 @@ function HistoryPanelImpl({
                         })}
                     </div>
                 )}
+                {isRetentionSelectionActive ? (
+                    <div className='bg-background/96 border-border sticky bottom-0 z-40 mt-3 flex min-h-14 items-center gap-2 border-t px-3 py-2 shadow-[0_-8px_16px_rgba(73,50,25,0.08)] backdrop-blur-sm'>
+                        <div className='mr-auto min-w-0'>
+                            <p className='text-muted-foreground text-xs'>
+                                {t('retention.selectedCount', { count: selectedRetentionFilenames.size })}
+                            </p>
+                            {retentionError ? (
+                                <p className='text-destructive mt-0.5 text-[11px]' role='status'>
+                                    {retentionError}
+                                </p>
+                            ) : null}
+                        </div>
+                        <Button
+                            type='button'
+                            size='sm'
+                            disabled={selectedRetentionFilenames.size === 0 || isUpdatingRetention}
+                            onClick={() => void submitRetentionUpdate('preserve')}
+                            className='min-h-10 px-3 text-xs lg:min-h-8'>
+                            <Bookmark className='h-3.5 w-3.5' />
+                            {t('retention.preserve')}
+                        </Button>
+                        <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            disabled={selectedRetentionFilenames.size === 0 || isUpdatingRetention}
+                            onClick={() => void submitRetentionUpdate('release')}
+                            className='min-h-10 px-3 text-xs lg:min-h-8'>
+                            {t('retention.release')}
+                        </Button>
+                    </div>
+                ) : null}
             </CardContent>
             <ActivityTimeline
                 activityItems={activityItems}
