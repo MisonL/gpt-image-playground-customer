@@ -29,10 +29,10 @@ generated-images/.webui-state/webui-image-retention.sqlite
 表：
 
 - `webui_image_retention`
-  - `filename`：有效图片文件名，主键。
-  - `saved_at`：用户设置永久保存的 ISO 时间。
+    - `filename`：有效图片文件名，主键。
+    - `saved_at`：用户设置永久保存的 ISO 时间。
 - `webui_image_cleanup_status`
-  - 单行状态，保存 `last_run_json`、`last_error` 和 `updated_at`。
+    - 单行状态，保存 `last_run_json`、`last_error` 和 `updated_at`。
 
 每次批量更新使用 SQLite transaction；启用 WAL 和合理的 busy timeout，避免 Next 多工作进程并发读写时丢失标记。状态库位于隐藏子目录，不属于自动清理扫描范围。
 
@@ -41,14 +41,14 @@ generated-images/.webui-state/webui-image-retention.sqlite
 新增页面 API：
 
 - `GET /api/image-retention`
-  - 返回当前永久保存的文件名集合。
+    - 返回当前永久保存的文件名集合。
 - `POST /api/image-retention`
-  - 请求体：`{ "action": "preserve" | "release", "filenames": string[] }`。
-  - 单次最多 100 张，去重后处理。
-  - `preserve` 仅接受存在、常规文件、位于输出目录顶层且文件名合法的 WebUI 图片。
-  - `release` 可清理有效文件名的已有标记，即使对应文件已不存在。
-  - 使用与页面图片删除相同的访问控制。
-  - 返回已变更文件名、未变更文件名和被拒绝项的结构化摘要；不返回绝对路径。
+    - 请求体：`{ "action": "preserve" | "release", "filenames": string[] }`。
+    - 单次最多 100 张，去重后处理。
+    - `preserve` 仅接受存在、常规文件、位于输出目录顶层且文件名合法的 WebUI 图片。
+    - `release` 可清理有效文件名的已有标记，即使对应文件已不存在。
+    - 使用与页面图片删除相同的访问控制。
+    - 返回已变更文件名、未变更文件名和被拒绝项的结构化摘要；不返回绝对路径。
 
 现有 `POST /api/image-delete` 在文件删除成功后移除对应永久保存标记。
 
@@ -62,7 +62,7 @@ generated-images/.webui-state/webui-image-retention.sqlite
 
 ## 前端交互
 
-入口位于右侧“最近生成”标题栏，仅当运行时能力声明 WebUI 文件系统自动清理已启用时显示。
+入口位于右侧“最近生成”标题栏，仅当运行时能力声明 WebUI 文件系统自动清理已启用、页面访问控制已完成且当前文件系统历史的永久标记已成功读取时显示。页面切换历史文件集合、退出登录或取消请求时不会复用旧集合。
 
 1. 点击“选择”进入选择模式。
 2. 每个可管理的文件系统缩略图显示勾选框；已永久保存图片显示低干扰标记。
@@ -86,5 +86,6 @@ generated-images/.webui-state/webui-image-retention.sqlite
 - 清理测试覆盖永久保存、Agent artifact、二者重叠、手动删除清理标记和 30 天边界。
 - 页面 API 测试覆盖访问控制、批量上限、部分成功和路径安全。
 - `HistoryPanel` 测试覆盖选择模式、单图选择、批量操作可达性、已永久保存标记和移动端渲染。
+- 页面与客户端契约测试覆盖运行时开关、文件系统默认值、批量响应的成功项合并、手动删除后的标记同步和畸形 API 响应拒绝。
 - 运行时能力测试覆盖在内存状态重置后仍从 SQLite 读取已脱敏的最近清理摘要。
 - Docker 验证：启动清理摘要可从 `GET /api/runtime-capabilities` 读取；永久保存的过期图片不会被删除；取消保存后按清理规则可删除。
