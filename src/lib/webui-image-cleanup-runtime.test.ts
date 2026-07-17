@@ -297,8 +297,17 @@ function createCleanupRun(): WebuiImageCleanupRun {
 }
 
 function createPublicCleanupRun() {
-    const { failures: _failures, ...publicRun } = createCleanupRun();
-    return publicRun;
+    const run = createCleanupRun();
+    return {
+        status: run.status,
+        startedAt: run.startedAt,
+        completedAt: run.completedAt,
+        cutoffAt: run.cutoffAt,
+        scannedCount: run.scannedCount,
+        protectedCount: run.protectedCount,
+        deletedCount: run.deletedCount,
+        failedCount: run.failedCount
+    };
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
