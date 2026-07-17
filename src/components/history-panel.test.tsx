@@ -206,6 +206,12 @@ describe('HistoryPanel recent history actions', () => {
             onUpdatePermanentSave: async () => {}
         });
         assert.doesNotMatch(disabledHtml, /aria-label="选择最近生成图片"/);
+
+        const legacyHtml = renderHistoryPanel([{ ...fsHistoryItem, storageModeUsed: undefined }], [], [], false, {
+            cleanupEnabled: true,
+            onUpdatePermanentSave: async () => {}
+        });
+        assert.doesNotMatch(legacyHtml, /aria-label="选择最近生成图片"/);
     });
 
     it('selects an fs image and forwards the batch retention action', async () => {

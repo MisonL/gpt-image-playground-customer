@@ -34,10 +34,20 @@ describe('page state regressions', () => {
         assert.match(source, /webuiImageCleanup\?\.enabled/);
         assert.match(source, /fetch\('\/api\/image-retention'/);
         assert.match(source, /onUpdatePermanentSave=/);
-        assert.match(source, /const storageModeUsed = item\.storageModeUsed \?\? 'fs';/);
+        assert.match(source, /const storageModeUsed = item\.storageModeUsed;/);
+        assert.match(source, /item\.storageModeUsed === 'fs'/);
+        assert.match(source, /resultItem\.fileAbsent === true/);
         assert.match(
             source,
             /mergeWebuiImageRetentionResults\(\s*current\.filenames,\s*'release',\s*deletionResults\s*\)/
+        );
+        assert.match(
+            source,
+            /if \(deletionResults\.some\(\(resultItem\) => !resultItem\.success\)\) \{\s*setError\(createErrorNotice\(t\('error\.deletePartial'\)\)\);\s*\}/
+        );
+        assert.doesNotMatch(
+            source,
+            /if \(deletionResults\.some\(\(resultItem\) => !resultItem\.success\)\) \{\s*throw new Error/
         );
     });
 

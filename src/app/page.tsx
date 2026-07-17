@@ -681,7 +681,7 @@ export default function HomePage() {
     const filesystemRetentionScopeKey = React.useMemo(
         () =>
             history
-                .filter((item) => item.status !== 'failed' && item.storageModeUsed !== 'indexeddb')
+                .filter((item) => item.status !== 'failed' && item.storageModeUsed === 'fs')
                 .flatMap((item) => item.images.map((image) => `${item.timestamp}:${image.filename}`))
                 .join('|'),
         [history]
@@ -3434,7 +3434,7 @@ export default function HomePage() {
             setError(null);
 
             const { images: imagesInEntry, timestamp } = item;
-            const storageModeUsed = item.storageModeUsed ?? 'fs';
+            const storageModeUsed = item.storageModeUsed;
             const filenamesToDelete = imagesInEntry.map((img) => img.filename);
 
             try {
@@ -3445,7 +3445,7 @@ export default function HomePage() {
                         if (url) URL.revokeObjectURL(url);
                         blobUrlCacheRef.current.delete(fn);
                     });
-                } else {
+                } else if (storageModeUsed === 'fs') {
                     const apiPayload: { filenames: string[]; passwordHash?: string } = {
                         filenames: filenamesToDelete
                     };
@@ -3478,9 +3478,42 @@ export default function HomePage() {
                               }
                             : current
                     );
-                    if (deletionResults.some((resultItem) => !resultItem.success)) {
-                        throw new Error(t('error.deleteUnexpected'));
+                    const fileAbsentFilenames = new Set(
+                        deletionResults
+                            .filter((resultItem) => resultItem.success || resultItem.fileAbsent === true)
+                            .map((resultItem) => resultItem.filename)
+                    );
+                    const remainingImages = imagesInEntry.filter((image) => !fileAbsentFilenames.has(image.filename));
+                    if (remainingImages.length !== imagesInEntry.length) {
+                        setHistory((prevHistory) =>
+                            remainingImages.length === 0
+                                ? prevHistory.filter((historyItem) => historyItem.timestamp !== timestamp)
+                                : prevHistory.map((historyItem) =>
+                                      historyItem.timestamp === timestamp
+                                          ? { ...historyItem, images: remainingImages }
+                                          : historyItem
+                                  )
+                        );
+                        setLatestImageBatch((prev) => {
+                            if (!prev) return prev;
+                            const remainingBatch = prev.filter((image) => !fileAbsentFilenames.has(image.filename));
+                            return remainingBatch.length > 0 ? remainingBatch : null;
+                        });
+                        setActiveResultSource((current) =>
+                            current?.timestamp !== timestamp
+                                ? current
+                                : remainingImages.length === 0
+                                  ? null
+                                  : { ...current, images: remainingImages }
+                        );
+                        if (remainingImages.length === 0) {
+                            scheduleResultFeedbackDeleteTargets(buildHistoryFeedbackDeleteTargets([item]));
+                        }
                     }
+                    if (deletionResults.some((resultItem) => !resultItem.success)) {
+                        setError(createErrorNotice(t('error.deletePartial')));
+                    }
+                    return;
                 }
 
                 setHistory((prevHistory) => prevHistory.filter((h) => h.timestamp !== timestamp));

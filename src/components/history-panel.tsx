@@ -229,7 +229,7 @@ function getHistoryStorageMode(item: HistoryMetadata): NonNullable<HistoryMetada
 }
 
 function isRetentionManagedHistoryItem(item: HistoryMetadata): boolean {
-    return item.status !== 'failed' && getHistoryStorageMode(item) === 'fs' && item.images.length > 0;
+    return item.status !== 'failed' && item.storageModeUsed === 'fs' && item.images.length > 0;
 }
 
 function HistoryPanelImpl({
