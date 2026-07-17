@@ -532,6 +532,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'error.retrieveImage': '无法读取图片数据：{filename}。',
         'error.sendToEdit': '发送到编辑表单失败。',
         'error.deleteUnexpected': '删除时发生未知错误。',
+        'error.deletePartial': '部分图片未能删除，或其永久保存状态未能完整清理。',
         'confirm.clearHistoryFs': '确定要清空全部图片历史吗？此操作无法撤销。',
         'confirm.clearHistoryIndexedDb':
             '确定要清空全部图片历史吗？IndexedDB 模式下也会永久删除已存储图片。此操作无法撤销。',
@@ -1104,6 +1105,8 @@ const messages: Record<Locale, Record<string, string>> = {
         'error.retrieveImage': 'Could not retrieve image data for {filename}.',
         'error.sendToEdit': 'Failed to send image to edit form.',
         'error.deleteUnexpected': 'An unexpected error occurred during deletion.',
+        'error.deletePartial':
+            'Some images could not be deleted, or their cleanup-protection state could not be fully cleared.',
         'confirm.clearHistoryFs': 'Are you sure you want to clear the entire image history? This cannot be undone.',
         'confirm.clearHistoryIndexedDb':
             'Are you sure you want to clear the entire image history? In IndexedDB mode, this will also permanently delete all stored images. This cannot be undone.',

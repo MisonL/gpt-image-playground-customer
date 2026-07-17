@@ -14,6 +14,7 @@ type DeleteRequestBody = {
 type FileDeletionResult = {
     filename: string;
     success: boolean;
+    fileAbsent?: boolean;
     error?: string;
 };
 
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
     }
 
     const deletionResults: FileDeletionResult[] = [];
-    const deletedFilenames: string[] = [];
+    const fileAbsentFilenames: string[] = [];
 
     for (const filename of filenames) {
         if (!isValidImageFilename(filename)) {
@@ -64,29 +65,34 @@ export async function POST(request: NextRequest) {
 
         try {
             await fs.unlink(filepath);
-            deletedFilenames.push(filename);
+            fileAbsentFilenames.push(filename);
             deletionResults.push({ filename, success: true });
         } catch (error: unknown) {
             appLogger.error(`删除图片失败 ${filepath}：`, error);
             if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-                deletionResults.push({ filename, success: false, error: '文件不存在。' });
+                fileAbsentFilenames.push(filename);
+                deletionResults.push({ filename, success: false, fileAbsent: true, error: '文件不存在。' });
             } else {
                 deletionResults.push({ filename, success: false, error: '删除文件失败。' });
             }
         }
     }
 
-    if (deletedFilenames.length > 0) {
+    if (fileAbsentFilenames.length > 0) {
         try {
             const retentionStore = await getWebuiImageRetentionStore();
-            await retentionStore.remove(deletedFilenames);
+            await retentionStore.remove(fileAbsentFilenames);
         } catch (error) {
             appLogger.error('删除图片后清理永久保存标记失败。', error);
-            const deletedFilenameSet = new Set(deletedFilenames);
+            const fileAbsentFilenameSet = new Set(fileAbsentFilenames);
             for (const result of deletionResults) {
-                if (result.success && deletedFilenameSet.has(result.filename)) {
+                if (fileAbsentFilenameSet.has(result.filename)) {
+                    const wasMissing = result.fileAbsent === true;
                     result.success = false;
-                    result.error = '图片已删除，但永久保存状态清理失败。';
+                    result.fileAbsent = true;
+                    result.error = wasMissing
+                        ? '图片已不存在，但永久保存状态清理失败。'
+                        : '图片已删除，但永久保存状态清理失败。';
                 }
             }
         }

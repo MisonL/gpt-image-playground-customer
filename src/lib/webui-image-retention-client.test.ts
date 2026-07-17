@@ -17,12 +17,12 @@ describe('WebUI image retention client contract', () => {
             readWebuiImageFileOperationResults({
                 results: [
                     { filename: 'one.png', success: true },
-                    { filename: 'two.png', success: false, error: '文件不存在。' }
+                    { filename: 'two.png', success: false, fileAbsent: true, error: '文件不存在。' }
                 ]
             }),
             [
                 { filename: 'one.png', success: true },
-                { filename: 'two.png', success: false, error: '文件不存在。' }
+                { filename: 'two.png', success: false, fileAbsent: true, error: '文件不存在。' }
             ]
         );
         assert.equal(readApiErrorMessage({ error: '未授权。' }), '未授权。');
@@ -37,7 +37,7 @@ describe('WebUI image retention client contract', () => {
     it('merges only successful file operations into the permanent filename set', () => {
         const results = [
             { filename: 'kept.png', success: true },
-            { filename: 'failed.png', success: false, error: '文件不存在。' }
+            { filename: 'failed.png', success: false, fileAbsent: true, error: '文件不存在。' }
         ];
 
         assert.deepEqual([...mergeWebuiImageRetentionResults(new Set(['existing.png']), 'preserve', results)].sort(), [
@@ -46,7 +46,7 @@ describe('WebUI image retention client contract', () => {
         ]);
         assert.deepEqual(
             [...mergeWebuiImageRetentionResults(new Set(['kept.png', 'failed.png']), 'release', results)].sort(),
-            ['failed.png']
+            []
         );
     });
 });
