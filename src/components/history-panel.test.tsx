@@ -6,6 +6,7 @@ import {
 } from './history-panel';
 import type { HistoryMetadata } from '@/lib/history-metadata';
 import { I18nProvider } from '@/lib/i18n';
+import { renderInClientDom } from '@/test-utils/react-dom';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
@@ -35,6 +36,20 @@ const batchHistoryItem: HistoryMetadata = {
         { filename: 'batch-card-3.png', clientRequestId: 'batch-request-3' }
     ]
 };
+const fsHistoryItem: HistoryMetadata = {
+    ...historyItem,
+    timestamp: Date.UTC(2026, 4, 31, 12, 25),
+    images: [
+        { filename: '1781567999000-aaaaaaaaaaaaaaaa-0.png', clientRequestId: 'fs-request-1' },
+        { filename: '1781567999001-bbbbbbbbbbbbbbbb-1.webp', clientRequestId: 'fs-request-2' }
+    ],
+    storageModeUsed: 'fs'
+};
+const singleFsHistoryItem: HistoryMetadata = {
+    ...fsHistoryItem,
+    timestamp: Date.UTC(2026, 4, 31, 12, 27),
+    images: [fsHistoryItem.images[0]]
+};
 const failedHistoryItem: HistoryMetadata = {
     ...historyItem,
     timestamp: Date.UTC(2026, 4, 31, 12, 35),
@@ -49,12 +64,19 @@ const inspirationItem: InspirationItem = {
     createdAt: Date.UTC(2026, 4, 31, 12, 20),
     prompt: '用户保存的真实灵感提示词'
 };
+const clientDomLayoutStyles =
+    '.relative{position:relative}.h-7{display:block;height:1.75rem}.w-7{display:block;width:1.75rem}.aspect-square{aspect-ratio:1/1}';
 
 function renderHistoryPanel(
     history: HistoryMetadata[],
     inspirations: InspirationItem[] = [],
     activityItems: GenerationActivityItem[] = [],
-    isSendingToEdit = false
+    isSendingToEdit = false,
+    retention: {
+        cleanupEnabled?: boolean;
+        permanentlySavedFilenames?: ReadonlySet<string>;
+        onUpdatePermanentSave?: (action: 'preserve' | 'release', filenames: string[]) => Promise<void>;
+    } = {}
 ): string {
     return renderToStaticMarkup(
         <I18nProvider>
@@ -79,6 +101,43 @@ function renderHistoryPanel(
                 onCancelDeletion={noop}
                 deletePreferenceDialogValue={false}
                 onDeletePreferenceDialogChange={noop}
+                {...retention}
+            />
+        </I18nProvider>
+    );
+}
+
+function historyPanelNode(
+    history: HistoryMetadata[],
+    retention: {
+        cleanupEnabled: boolean;
+        permanentlySavedFilenames: ReadonlySet<string>;
+        onUpdatePermanentSave: (action: 'preserve' | 'release', filenames: string[]) => Promise<void>;
+    }
+) {
+    return (
+        <I18nProvider>
+            <style>{clientDomLayoutStyles}</style>
+            <HistoryPanel
+                history={history}
+                inspirations={[]}
+                onSelectImage={noop}
+                onApplyPrompt={noop}
+                onSaveInspiration={noop}
+                onSendHistoryToEdit={noop}
+                onMarkResultFeedback={noop}
+                onUpdateResultFeedbackNote={noop}
+                onDeleteInspiration={noop}
+                onDownloadHistoryItem={noop}
+                onClearHistory={noop}
+                getImageSrc={() => '/api/image/history-card.png'}
+                onDeleteItemRequest={noop}
+                itemPendingDeleteConfirmation={null}
+                onConfirmDeletion={noop}
+                onCancelDeletion={noop}
+                deletePreferenceDialogValue={false}
+                onDeletePreferenceDialogChange={noop}
+                {...retention}
             />
         </I18nProvider>
     );
@@ -129,6 +188,83 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /aria-label="标记本次结果可用"/);
         assert.match(html, /aria-label="标记本次结果需要修改"/);
         assert.doesNotMatch(html, /2xl:grid-cols-2/);
+    });
+
+    it('renders permanent-save selection controls only for fs history when cleanup is enabled', () => {
+        const html = renderHistoryPanel([fsHistoryItem, historyItem], [], [], false, {
+            cleanupEnabled: true,
+            permanentlySavedFilenames: new Set([fsHistoryItem.images[0].filename]),
+            onUpdatePermanentSave: async () => {}
+        });
+
+        assert.match(html, /aria-label="选择最近生成图片"/);
+        assert.match(html, /aria-label="已永久保存"/);
+        assert.doesNotMatch(html, /data-retention-image="history-card\.png"/);
+
+        const disabledHtml = renderHistoryPanel([fsHistoryItem], [], [], false, {
+            permanentlySavedFilenames: new Set([fsHistoryItem.images[0].filename]),
+            onUpdatePermanentSave: async () => {}
+        });
+        assert.doesNotMatch(disabledHtml, /aria-label="选择最近生成图片"/);
+    });
+
+    it('selects an fs image and forwards the batch retention action', async () => {
+        const updates: Array<{ action: 'preserve' | 'release'; filenames: string[] }> = [];
+        const view = await renderInClientDom(
+            historyPanelNode([singleFsHistoryItem], {
+                cleanupEnabled: true,
+                permanentlySavedFilenames: new Set(),
+                onUpdatePermanentSave: async (action, filenames) => {
+                    updates.push({ action, filenames });
+                }
+            })
+        );
+        try {
+            const selectButton = view.container.querySelector<HTMLButtonElement>('[aria-label="选择最近生成图片"]');
+            assert.ok(selectButton, 'missing retention selection entry');
+            await view.click(selectButton);
+
+            const checkbox = view.container.querySelector<HTMLElement>(
+                `[data-retention-image="${singleFsHistoryItem.images[0].filename}"]`
+            );
+            assert.ok(checkbox, 'missing fs image retention checkbox');
+            await view.click(checkbox);
+
+            const preserveButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+                (button) => button.textContent === '永久保存'
+            );
+            assert.ok(preserveButton, 'missing preserve action');
+            await view.click(preserveButton);
+
+            assert.deepEqual(updates, [
+                {
+                    action: 'preserve',
+                    filenames: [singleFsHistoryItem.images[0].filename]
+                }
+            ]);
+        } finally {
+            await view.cleanup();
+        }
+    });
+
+    it('renders one retention checkbox for every image in an fs batch without exposing indexeddb images', async () => {
+        const view = await renderInClientDom(
+            historyPanelNode([fsHistoryItem, historyItem], {
+                cleanupEnabled: true,
+                permanentlySavedFilenames: new Set(),
+                onUpdatePermanentSave: async () => {}
+            })
+        );
+        try {
+            const selectButton = view.container.querySelector<HTMLButtonElement>('[aria-label="选择最近生成图片"]');
+            assert.ok(selectButton, 'missing retention selection entry');
+            await view.click(selectButton);
+
+            assert.equal(view.container.querySelectorAll('[data-retention-image]').length, fsHistoryItem.images.length);
+            assert.equal(view.container.querySelector('[data-retention-image="history-card.png"]'), null);
+        } finally {
+            await view.cleanup();
+        }
     });
 
     it('disables continue-edit actions while an image is being prepared for editing', () => {
