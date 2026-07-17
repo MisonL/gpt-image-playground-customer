@@ -28,6 +28,19 @@ describe('page state regressions', () => {
         );
     });
 
+    it('loads permanent filenames only when filesystem cleanup is enabled and forwards batch actions to HistoryPanel', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /webuiImageCleanup\?\.enabled/);
+        assert.match(source, /fetch\('\/api\/image-retention'/);
+        assert.match(source, /onUpdatePermanentSave=/);
+        assert.match(source, /const storageModeUsed = item\.storageModeUsed \?\? 'fs';/);
+        assert.match(
+            source,
+            /mergeWebuiImageRetentionResults\(\s*current\.filenames,\s*'release',\s*deletionResults\s*\)/
+        );
+    });
+
     it('treats request-level API key as an override while rejecting base URL-only settings', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
         const runtimeStatusCall = source.match(/resolveRuntimeHealthStatus\(\{([\s\S]*?)\n\s*\}\)/)?.[1] ?? '';

@@ -111,6 +111,13 @@ import {
 import { getStreamingStatusLabel } from '@/lib/streaming-status-label';
 import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { cn } from '@/lib/utils';
+import {
+    mergeWebuiImageRetentionResults,
+    readApiErrorMessage,
+    readWebuiImageFileOperationResults,
+    readWebuiImageRetentionFilenames,
+    type WebuiImageRetentionAction
+} from '@/lib/webui-image-retention-client';
 import { formatEstimatedCredits } from '@/lib/workbench-cost-label';
 import { createZipBlob } from '@/lib/zip-export';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -143,6 +150,7 @@ const resultFeedbackSyncRetryDelaysMs = [1000, 3000] as const;
 const resultFeedbackDeleteMaxAttempts = 3;
 const resultFeedbackDeleteRetryDelaysMs = [1000, 3000] as const;
 const resultFeedbackRequestTimeoutMs = 10_000;
+const emptyPermanentFilenames: ReadonlySet<string> = new Set();
 const mobileCreationDrawerFocusableSelector =
     'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
 const mobileCreationDrawerPortalSelector =
@@ -403,6 +411,16 @@ type RuntimeCapabilities = {
         requestProfile: ImageUpstreamProfileId;
         activeConstraints?: ImageUpstreamProfile;
     };
+    webuiImageCleanup?: {
+        enabled: boolean;
+        retentionDays?: number;
+        intervalMs?: number;
+    };
+};
+
+type LoadedWebuiImageRetentionState = {
+    scopeKey: string;
+    filenames: Set<string>;
 };
 
 class ApiRequestError extends Error {
@@ -546,6 +564,8 @@ export default function HomePage() {
     const [isApiSettingsDialogOpen, setIsApiSettingsDialogOpen] = React.useState(false);
     const [apiSettings, setApiSettings] = React.useState<ApiSettings>(emptyApiSettings);
     const [runtimeCapabilities, setRuntimeCapabilities] = React.useState<RuntimeCapabilities | null>(null);
+    const [loadedWebuiImageRetentionState, setLoadedWebuiImageRetentionState] =
+        React.useState<LoadedWebuiImageRetentionState | null>(null);
     const [passwordDialogContext, setPasswordDialogContext] = React.useState<'initial' | 'retry'>('initial');
     const [lastApiCallArgs, setLastApiCallArgs] = React.useState<ApiCallRetryArgs | null>(null);
     const [skipDeleteConfirmation, setSkipDeleteConfirmation] = React.useState<boolean>(false);
@@ -657,6 +677,27 @@ export default function HomePage() {
     const [batchProgress, setBatchProgress] = React.useState<GenerationBatchProgress | null>(null);
     const [isBatchPauseRequested, setIsBatchPauseRequested] = React.useState(false);
     const batchPauseRequestedRef = React.useRef(false);
+    const cleanupEnabled = runtimeCapabilities?.webuiImageCleanup?.enabled === true;
+    const filesystemRetentionScopeKey = React.useMemo(
+        () =>
+            history
+                .filter((item) => item.status !== 'failed' && item.storageModeUsed !== 'indexeddb')
+                .flatMap((item) => item.images.map((image) => `${item.timestamp}:${image.filename}`))
+                .join('|'),
+        [history]
+    );
+    const retentionScopeKey =
+        cleanupEnabled &&
+        filesystemRetentionScopeKey.length > 0 &&
+        isPasswordRequiredByBackend !== null &&
+        (!isPasswordRequiredByBackend || isEntryAuthenticated)
+            ? filesystemRetentionScopeKey
+            : null;
+    const permanentlySavedFilenames =
+        loadedWebuiImageRetentionState?.scopeKey === retentionScopeKey
+            ? loadedWebuiImageRetentionState.filenames
+            : null;
+    const retentionControlsEnabled = cleanupEnabled && permanentlySavedFilenames !== null;
     const defaultStreamingStrategy = runtimeCapabilities?.streaming?.defaultStrategy ?? 'auto';
     const activeUpstreamProfileSummary = summarizeImageUpstreamProfile({
         requestApiBaseUrl: apiSettings.baseUrl,
@@ -1343,6 +1384,76 @@ export default function HomePage() {
             refreshRuntimeCapabilities();
         });
     }, [refreshRuntimeCapabilities]);
+
+    React.useEffect(() => {
+        if (!retentionScopeKey) return;
+
+        const controller = new AbortController();
+        const loadPermanentlySavedFilenames = async () => {
+            try {
+                const response = await fetch('/api/image-retention', { signal: controller.signal });
+                const body: unknown = await response.json();
+                if (!response.ok) {
+                    throw new Error(readApiErrorMessage(body) ?? t('retention.loadFailed'));
+                }
+                const filenames = readWebuiImageRetentionFilenames(body);
+                if (!controller.signal.aborted) {
+                    setLoadedWebuiImageRetentionState({
+                        scopeKey: retentionScopeKey,
+                        filenames: new Set(filenames)
+                    });
+                }
+            } catch (error) {
+                if (controller.signal.aborted) return;
+                console.error('读取永久保存图片状态失败：', error);
+                setError((current) => current ?? createErrorNotice(t('retention.loadFailed')));
+            }
+        };
+
+        void loadPermanentlySavedFilenames();
+        return () => controller.abort();
+    }, [createErrorNotice, retentionScopeKey, t]);
+
+    const updatePermanentSave = React.useCallback(
+        async (action: WebuiImageRetentionAction, filenames: string[]) => {
+            if (!retentionScopeKey) {
+                throw new Error(t('retention.updateFailed'));
+            }
+
+            const response = await fetch('/api/image-retention', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action,
+                    filenames,
+                    ...(clientPasswordHash ? { passwordHash: clientPasswordHash } : {})
+                })
+            });
+            let body: unknown;
+            try {
+                body = await response.json();
+            } catch {
+                throw new Error(t('retention.updateFailed'));
+            }
+            if (!response.ok && response.status !== 207) {
+                throw new Error(readApiErrorMessage(body) ?? t('retention.updateFailed'));
+            }
+
+            const results = readWebuiImageFileOperationResults(body);
+            setLoadedWebuiImageRetentionState((current) =>
+                current?.scopeKey === retentionScopeKey
+                    ? {
+                          ...current,
+                          filenames: mergeWebuiImageRetentionResults(current.filenames, action, results)
+                      }
+                    : current
+            );
+            if (results.some((result) => !result.success)) {
+                throw new Error(t('retention.partialUpdateFailed'));
+            }
+        },
+        [clientPasswordHash, retentionScopeKey, t]
+    );
 
     React.useEffect(() => {
         if (!hasLoadedStoredHistoryRef.current) return;
@@ -3322,7 +3433,8 @@ export default function HomePage() {
             if (!item) return;
             setError(null);
 
-            const { images: imagesInEntry, storageModeUsed, timestamp } = item;
+            const { images: imagesInEntry, timestamp } = item;
+            const storageModeUsed = item.storageModeUsed ?? 'fs';
             const filenamesToDelete = imagesInEntry.map((img) => img.filename);
 
             try {
@@ -3333,7 +3445,7 @@ export default function HomePage() {
                         if (url) URL.revokeObjectURL(url);
                         blobUrlCacheRef.current.delete(fn);
                     });
-                } else if (storageModeUsed === 'fs') {
+                } else {
                     const apiPayload: { filenames: string[]; passwordHash?: string } = {
                         filenames: filenamesToDelete
                     };
@@ -3347,9 +3459,27 @@ export default function HomePage() {
                         body: JSON.stringify(apiPayload)
                     });
 
-                    const result = await response.json();
+                    const result: unknown = await response.json();
                     if (!response.ok) {
-                        throw new Error(result.error || `API deletion failed with status ${response.status}`);
+                        throw new Error(
+                            readApiErrorMessage(result) ?? `API deletion failed with status ${response.status}`
+                        );
+                    }
+                    const deletionResults = readWebuiImageFileOperationResults(result);
+                    setLoadedWebuiImageRetentionState((current) =>
+                        current?.scopeKey === retentionScopeKey
+                            ? {
+                                  ...current,
+                                  filenames: mergeWebuiImageRetentionResults(
+                                      current.filenames,
+                                      'release',
+                                      deletionResults
+                                  )
+                              }
+                            : current
+                    );
+                    if (deletionResults.some((resultItem) => !resultItem.success)) {
+                        throw new Error(t('error.deleteUnexpected'));
                     }
                 }
 
@@ -3366,7 +3496,14 @@ export default function HomePage() {
                 setItemToDeleteConfirm(null);
             }
         },
-        [clientPasswordHash, createErrorNotice, isPasswordRequiredByBackend, scheduleResultFeedbackDeleteTargets, t]
+        [
+            clientPasswordHash,
+            createErrorNotice,
+            isPasswordRequiredByBackend,
+            retentionScopeKey,
+            scheduleResultFeedbackDeleteTargets,
+            t
+        ]
     );
 
     const handleRequestDeleteItem = React.useCallback(
@@ -3888,6 +4025,9 @@ export default function HomePage() {
                                     onCancelDeletion={handleCancelDeletion}
                                     deletePreferenceDialogValue={dialogCheckboxStateSkipConfirm}
                                     onDeletePreferenceDialogChange={setDialogCheckboxStateSkipConfirm}
+                                    cleanupEnabled={retentionControlsEnabled}
+                                    permanentlySavedFilenames={permanentlySavedFilenames ?? emptyPermanentFilenames}
+                                    onUpdatePermanentSave={updatePermanentSave}
                                 />
                             </aside>
                         </div>
