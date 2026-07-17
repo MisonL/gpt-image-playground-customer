@@ -1,6 +1,7 @@
 import { appLogger } from '@/lib/app-logger';
 import { isValidImageFilename } from '@/lib/image-request-utils';
 import { resolveImageOutputDir, verifyPasswordHash } from '@/lib/server-runtime';
+import { getWebuiImageRetentionStore } from '@/lib/webui-image-retention-store';
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
@@ -50,6 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     const deletionResults: FileDeletionResult[] = [];
+    const deletedFilenames: string[] = [];
 
     for (const filename of filenames) {
         if (!isValidImageFilename(filename)) {
@@ -62,6 +64,7 @@ export async function POST(request: NextRequest) {
 
         try {
             await fs.unlink(filepath);
+            deletedFilenames.push(filename);
             deletionResults.push({ filename, success: true });
         } catch (error: unknown) {
             appLogger.error(`删除图片失败 ${filepath}：`, error);
@@ -69,6 +72,22 @@ export async function POST(request: NextRequest) {
                 deletionResults.push({ filename, success: false, error: '文件不存在。' });
             } else {
                 deletionResults.push({ filename, success: false, error: '删除文件失败。' });
+            }
+        }
+    }
+
+    if (deletedFilenames.length > 0) {
+        try {
+            const retentionStore = await getWebuiImageRetentionStore();
+            await retentionStore.remove(deletedFilenames);
+        } catch (error) {
+            appLogger.error('删除图片后清理永久保存标记失败。', error);
+            const deletedFilenameSet = new Set(deletedFilenames);
+            for (const result of deletionResults) {
+                if (result.success && deletedFilenameSet.has(result.filename)) {
+                    result.success = false;
+                    result.error = '图片已删除，但永久保存状态清理失败。';
+                }
             }
         }
     }
