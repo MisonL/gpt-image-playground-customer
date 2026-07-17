@@ -65,7 +65,7 @@ const inspirationItem: InspirationItem = {
     prompt: '用户保存的真实灵感提示词'
 };
 const clientDomLayoutStyles =
-    '.relative{position:relative}.h-7{display:block;height:1.75rem}.w-7{display:block;width:1.75rem}.aspect-square{aspect-ratio:1/1}';
+    '.relative{position:relative}.h-7{display:block;height:1.75rem}.w-7{display:block;width:1.75rem}.aspect-square{height:8rem;width:8rem}';
 
 function renderHistoryPanel(
     history: HistoryMetadata[],
@@ -244,6 +244,44 @@ describe('HistoryPanel recent history actions', () => {
             ]);
         } finally {
             await view.cleanup();
+        }
+    });
+
+    it('keeps the selection and displays the concrete retention update failure', async () => {
+        const originalConsoleError = console.error;
+        console.error = () => {};
+        let view: Awaited<ReturnType<typeof renderInClientDom>> | undefined;
+        try {
+            view = await renderInClientDom(
+                historyPanelNode([singleFsHistoryItem], {
+                    cleanupEnabled: true,
+                    permanentlySavedFilenames: new Set(),
+                    onUpdatePermanentSave: async () => {
+                        throw new Error('部分图片的永久保存状态未更新。');
+                    }
+                })
+            );
+            const selectButton = view.container.querySelector<HTMLButtonElement>('[aria-label="选择最近生成图片"]');
+            assert.ok(selectButton, 'missing retention selection entry');
+            await view.click(selectButton);
+
+            const checkbox = view.container.querySelector<HTMLElement>(
+                `[data-retention-image="${singleFsHistoryItem.images[0].filename}"]`
+            );
+            assert.ok(checkbox, 'missing fs image retention checkbox');
+            await view.click(checkbox);
+
+            const preserveButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+                (button) => button.textContent === '永久保存'
+            );
+            assert.ok(preserveButton, 'missing preserve action');
+            await view.click(preserveButton);
+
+            assert.match(view.container.textContent ?? '', /部分图片的永久保存状态未更新。/);
+            assert.equal(checkbox.getAttribute('data-state'), 'checked');
+        } finally {
+            await view?.cleanup();
+            console.error = originalConsoleError;
         }
     });
 

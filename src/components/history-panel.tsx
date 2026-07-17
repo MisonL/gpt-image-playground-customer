@@ -347,7 +347,9 @@ function HistoryPanelImpl({
                 setSelectedRetentionFilenames(new Set());
             } catch (error) {
                 console.error('更新图片永久保存状态失败：', error);
-                setRetentionError(t('retention.updateFailed'));
+                setRetentionError(
+                    error instanceof Error && error.message ? error.message : t('retention.updateFailed')
+                );
             } finally {
                 setIsUpdatingRetention(false);
             }
