@@ -465,39 +465,40 @@ describe('HistoryPanel recent history actions', () => {
         assert.doesNotMatch(html, />管理</);
     });
 
-    it('centers a completely empty collection while keeping short desktop panels scrollable', () => {
+    it('keeps a completely empty side panel compact without placeholder activity rows', () => {
         const html = renderHistoryPanel([]);
 
         assert.match(html, /lg:overflow-y-auto/);
-        assert.match(html, /xl:flex xl:max-h-none xl:flex-1 xl:flex-col/);
+        assert.match(html, /xl:h-auto xl:self-start/);
+        assert.doesNotMatch(html, /xl:flex xl:max-h-none xl:flex-1 xl:flex-col/);
         assert.doesNotMatch(html, /xl:overflow-hidden/);
-        assert.match(html, /xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0/);
-        assert.match(html, /text-center text-sm xl:my-auto/);
-        assert.match(html, /items-center justify-between rounded-md px-1 text-sm xl:mt-auto/);
+        assert.doesNotMatch(html, /border-dashed/);
+        assert.match(html, /暂无已保存的灵感/);
+        assert.doesNotMatch(html, /activity-feed/);
+        assert.doesNotMatch(html, /生成动态/);
     });
 
-    it('renders a non-fake pending activity timeline before the first generation', () => {
+    it('renders the activity timeline only after real generation activity exists', () => {
         const html = renderHistoryPanel([], [inspirationItem]);
 
-        assert.match(html, /activity-feed/);
-        assert.match(html, /role="status"/);
-        assert.match(html, /aria-live="polite"/);
-        assert.match(html, /aria-atomic="true"/);
-        assert.match(html, /xl:mt-auto xl:flex-none/);
-        assert.doesNotMatch(html, /xl:flex xl:h-full xl:min-h-0 xl:flex-col/);
-        assert.match(html, /aria-label="待开始生成动态"/);
-        assert.match(html, /点击生成后，这里会记录创作过程。/);
-        assert.match(html, /准备/);
-        assert.match(html, /预览/);
-        assert.match(html, /保存/);
-        assert.match(html, /失败/);
-        assert.match(html, /等待请求开始/);
-        assert.match(html, /等待流式预览/);
-        assert.match(html, /等待保存结果/);
-        assert.match(html, /失败时显示原因/);
-        assert.match(html, /text-\[11px\] leading-4 break-words/);
-        assert.doesNotMatch(html, /block truncate text-\[11px\] leading-4/);
-        assert.doesNotMatch(html, /新图已入册/);
+        assert.doesNotMatch(html, /activity-feed/);
+        assert.doesNotMatch(html, /role="status"/);
+        assert.doesNotMatch(html, /生成动态/);
+        assert.doesNotMatch(html, /点击生成后，这里会记录创作过程。/);
+
+        const activeHtml = renderHistoryPanel([], [inspirationItem], [
+            {
+                id: 'generating',
+                label: '正在生成',
+                detail: '正在提交创作单。',
+                tone: 'progress'
+            }
+        ]);
+
+        assert.match(activeHtml, /role="status"/);
+        assert.match(activeHtml, /aria-live="polite"/);
+        assert.match(activeHtml, /aria-atomic="true"/);
+        assert.match(activeHtml, /正在生成/);
     });
 
     it('renders live generation activity before completed history', () => {
