@@ -17,10 +17,10 @@ type ActivityTimelineProps = {
 };
 
 function getActivityToneClass(tone: GenerationActivityItem['tone']): string {
-    if (tone === 'progress') return 'bg-[oklch(0.58_0.1_220)]';
-    if (tone === 'success') return 'bg-[oklch(0.58_0.1_145)]';
-    if (tone === 'warning') return 'bg-[oklch(0.62_0.13_38)]';
-    return 'bg-[oklch(0.72_0.05_86)]';
+    if (tone === 'progress') return 'bg-sky-500';
+    if (tone === 'success') return 'bg-emerald-500';
+    if (tone === 'warning') return 'bg-amber-500';
+    return 'bg-slate-400';
 }
 
 function getActivityToneLabel(tone: GenerationActivityItem['tone'], t: ActivityTimelineProps['t']): string {
@@ -46,7 +46,7 @@ function GenerationActivityRows({
                     key={item.id}
                     className={cn(
                         'grid grid-cols-[auto_auto_1fr] items-start gap-2 rounded-md px-2 text-left transition-[background-color]',
-                        index === 0 ? 'bg-[oklch(0.96_0.035_82)]' : 'bg-background/58',
+                        index === 0 ? 'bg-muted/70' : 'bg-background/58',
                         compact ? 'py-1.5' : 'py-2',
                         item.tone === 'warning' && 'bg-destructive/5'
                     )}>
@@ -111,11 +111,11 @@ function ActivityHistoryRow({
             onClick={() => onSelectImage(item)}
             disabled={isFailedItem}
             className={cn(
-                'grid w-full grid-cols-[auto_auto_1fr_auto] items-start gap-2 rounded-md px-2 py-2 text-left transition-[background-color,color,transform] hover:-translate-y-0.5 active:translate-y-0',
+                'grid w-full grid-cols-[auto_auto_1fr_auto] items-start gap-2 rounded-md px-2 py-2 text-left transition-[background-color,color]',
                 isLatestQuietActivity
-                    ? 'text-foreground bg-[oklch(0.95_0.04_86)]'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-[oklch(0.965_0.025_84)]',
-                isFailedItem && 'cursor-default hover:translate-y-0'
+                    ? 'text-foreground bg-muted'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/70',
+                isFailedItem && 'cursor-default'
             )}>
             <span className='text-muted-foreground mt-0.5 w-10 shrink-0 text-right text-[10px] leading-4 tabular-nums'>
                 {formatStatusTime(item.timestamp)}
@@ -124,11 +124,7 @@ function ActivityHistoryRow({
                 <span
                     className={cn(
                         'h-2 w-2 rounded-full',
-                        isFailedItem
-                            ? 'bg-destructive'
-                            : isLatestQuietActivity
-                              ? 'bg-[oklch(0.62_0.13_38)]'
-                              : 'bg-[oklch(0.66_0.08_145)]'
+                        isFailedItem ? 'bg-destructive' : isLatestQuietActivity ? 'bg-amber-500' : 'bg-emerald-500'
                     )}
                 />
             </span>
@@ -153,9 +149,10 @@ function ActivityHistoryRow({
                             <Image
                                 src={source}
                                 alt={image.filename}
-                                fill
+                                width={28}
+                                height={28}
                                 sizes='28px'
-                                className='image-edge object-cover'
+                                className='image-edge h-full w-full object-cover'
                                 unoptimized
                             />
                         </span>
@@ -182,14 +179,12 @@ export function ActivityTimeline({
     if (!hasActivity) return null;
 
     return (
-        <div
-            className='border-border/60 bg-background/48 shrink-0 border-t p-3 lg:mt-1 lg:min-h-[16.5rem] lg:border-t-0 lg:bg-transparent xl:min-h-0 xl:flex-1 xl:shrink'>
-            <div
-                className='space-y-2 rounded-md border border-[oklch(0.86_0.035_78)] bg-[oklch(0.982_0.014_84)] p-2.5 shadow-[0_6px_16px_oklch(0.42_0.035_58/0.08)] xl:flex xl:h-full xl:min-h-0 xl:flex-col'>
+        <div className='border-border/60 bg-background/48 shrink-0 border-t p-3 lg:mt-1 lg:min-h-[16.5rem] lg:border-t-0 lg:bg-transparent xl:min-h-0 xl:flex-1 xl:shrink'>
+            <div className='border-border bg-card space-y-2 rounded-md border p-2.5 shadow-[0_6px_16px_rgb(15,23,42,0.06)] xl:flex xl:h-full xl:min-h-0 xl:flex-col'>
                 <div className='flex items-center justify-between gap-2'>
                     <div className='min-w-0'>
                         <div className='flex items-center gap-2'>
-                            <span className='h-2 w-2 rounded-full bg-[oklch(0.62_0.13_38)]' />
+                            <span className='h-2 w-2 rounded-full bg-amber-500' />
                             <p className='text-sm font-medium'>{t('history.generationStatus')}</p>
                         </div>
                         <p className='text-muted-foreground mt-0.5 text-[11px] leading-4 break-words'>

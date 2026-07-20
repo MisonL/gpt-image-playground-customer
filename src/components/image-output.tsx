@@ -449,9 +449,7 @@ export function ImageOutput({
                             <span
                                 className={cn(
                                     'h-2 w-2 rounded-full',
-                                    imageBatch && imageBatch.length > 0
-                                        ? 'bg-[oklch(0.5_0.12_150)]'
-                                        : 'bg-muted-foreground/45'
+                                    imageBatch && imageBatch.length > 0 ? 'bg-emerald-500' : 'bg-muted-foreground/45'
                                 )}
                             />
                         )}
@@ -466,7 +464,7 @@ export function ImageOutput({
                 className={cn(
                     'preview-gallery-board relative flex items-center justify-center overflow-hidden px-3 py-5 sm:px-6',
                     isGenerateEmptyState
-                        ? 'min-h-[260px] shrink-0 sm:min-h-[320px] lg:min-h-[360px] xl:min-h-0 xl:flex-1'
+                        ? 'min-h-[220px] shrink-0 sm:min-h-[248px] lg:min-h-[272px] xl:min-h-0 xl:flex-1'
                         : 'min-h-[300px] flex-1 sm:min-h-[420px] lg:min-h-[520px]'
                 )}>
                 {isLoading ? (
@@ -600,64 +598,49 @@ export function ImageOutput({
                             <p>{t('output.error')}</p>
                         </div>
                     )
+                ) : currentMode === 'edit' ? (
+                    baseImagePreviewUrl ? (
+                        <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] items-center justify-center p-3 2xl:max-w-[860px]'>
+                            <Image
+                                src={baseImagePreviewUrl}
+                                alt={t('output.editReferenceAlt')}
+                                fill
+                                sizes='(max-width: 768px) 92vw, (max-width: 1536px) 44vw, 860px'
+                                className='image-edge rounded-md object-contain p-3'
+                                unoptimized
+                            />
+                            <div className='border-border/70 bg-background/86 text-muted-foreground absolute bottom-5 left-6 rounded-md border px-3 py-1 text-xs shadow-sm'>
+                                {t('output.editReferenceReadyLabel')}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className='relative mx-auto flex w-full max-w-[30rem] flex-col items-center justify-center gap-3 px-6 py-7 text-center'>
+                            <div className='border-border/70 bg-background/70 text-muted-foreground flex h-11 w-11 items-center justify-center rounded-md border shadow-sm'>
+                                <ImageIcon className='h-5 w-5' />
+                            </div>
+                            <div className='space-y-2'>
+                                <h3 className='editorial-title text-lg font-semibold'>
+                                    {t('output.editReferenceNeeded')}
+                                </h3>
+                                <p className='text-muted-foreground max-w-[36rem] text-sm leading-6'>
+                                    {t('output.editReferenceDescription')}
+                                </p>
+                            </div>
+                            <span className='border-border bg-card text-muted-foreground rounded-md border px-3 py-1 text-xs'>
+                                {t('output.editReferenceWaitingLabel')}
+                            </span>
+                        </div>
+                    )
                 ) : (
-                    <>
-                        {currentMode === 'edit' ? (
-                            <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] flex-col justify-between p-5 sm:p-6 2xl:max-w-[860px]'>
-                                {baseImagePreviewUrl ? (
-                                    <>
-                                        <Image
-                                            src={baseImagePreviewUrl}
-                                            alt={t('output.editReferenceAlt')}
-                                            fill
-                                            sizes='(max-width: 768px) 92vw, (max-width: 1536px) 44vw, 860px'
-                                            className='image-edge rounded-md object-contain p-3'
-                                            unoptimized
-                                        />
-                                        <div className='border-border/70 bg-background/86 text-muted-foreground absolute bottom-5 left-6 rounded-full border px-3 py-1 text-xs shadow-sm'>
-                                            {t('output.editReferenceReadyLabel')}
-                                        </div>
-                                    </>
-                                ) : (
-                                    <>
-                                        <div className='space-y-3'>
-                                            <div className='text-muted-foreground text-xs'>
-                                                {t('output.editReferenceKicker')}
-                                            </div>
-                                            <div className='space-y-2'>
-                                                <h3 className='editorial-title text-2xl font-semibold'>
-                                                    {t('output.editReferenceNeeded')}
-                                                </h3>
-                                                <p className='text-muted-foreground max-w-[36rem] text-sm leading-6'>
-                                                    {t('output.editReferenceDescription')}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className='border-border/70 bg-background/78 text-muted-foreground w-fit rounded-full border px-3 py-1 text-xs shadow-sm'>
-                                            {t('output.editReferenceWaitingLabel')}
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        ) : (
-                            <div className='relative mx-auto flex min-h-[20rem] w-full max-w-[32rem] flex-col items-center justify-center gap-5 px-6 py-10 text-center sm:min-h-[22rem] 2xl:max-w-[34rem]'>
-                                <div className='border-border/70 bg-background/70 text-muted-foreground flex h-16 w-16 items-center justify-center rounded-md border shadow-sm'>
-                                    <ImageIcon className='h-7 w-7' />
-                                </div>
-                                <div className='space-y-3'>
-                                    <div className='text-muted-foreground text-xs'>{t('output.previewEyebrow')}</div>
-                                    <div className='space-y-2'>
-                                        <h3 className='editorial-title text-2xl font-semibold'>
-                                            {t('output.emptyTitle')}
-                                        </h3>
-                                        <p className='text-muted-foreground text-sm leading-6'>
-                                            {t('output.emptyDescription')}
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </>
+                    <div className='relative mx-auto flex w-full max-w-[30rem] flex-col items-center justify-center gap-3 px-6 py-7 text-center'>
+                        <div className='border-border/70 bg-background/70 text-muted-foreground flex h-11 w-11 items-center justify-center rounded-md border shadow-sm'>
+                            <ImageIcon className='h-5 w-5' />
+                        </div>
+                        <div className='space-y-2'>
+                            <h3 className='editorial-title text-lg font-semibold'>{t('output.emptyTitle')}</h3>
+                            <p className='text-muted-foreground text-sm leading-6'>{t('output.emptyDescription')}</p>
+                        </div>
+                    </div>
                 )}
             </div>
 

@@ -857,7 +857,7 @@ export function EditingForm({
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='mobile-drawer-form-frame flex min-h-0 flex-1 flex-col overflow-hidden'>
-                <CardContent className='mobile-drawer-form-content min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pb-4'>
+                <CardContent className='mobile-drawer-form-content literary-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pb-4 lg:px-5 lg:py-3'>
                     <div className='space-y-1'>
                         <div className='flex items-center'>
                             <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
@@ -880,7 +880,7 @@ export function EditingForm({
                         </div>
                     </div>
                     {reuseContext && (
-                        <div className='border-primary/25 dark:bg-muted/40 rounded-md border bg-[oklch(0.965_0.03_76)] px-3 py-2 text-xs leading-5 shadow-sm'>
+                        <div className='border-primary/25 bg-primary/5 rounded-md border px-3 py-2 text-xs leading-5 shadow-sm'>
                             <div className='space-y-2'>
                                 <div className='flex items-start justify-between gap-3'>
                                     <div className='min-w-0'>
@@ -935,7 +935,7 @@ export function EditingForm({
                             disabled={!canAddSourceImage}
                             aria-label={t('edit.referenceAction')}
                             aria-describedby='source-image-upload-description'
-                            className={`group hover:border-primary/35 focus-visible:ring-ring flex w-full cursor-pointer rounded-md border border-dashed border-[oklch(0.78_0.035_75)] bg-[oklch(0.982_0.016_84)] text-center shadow-inner transition-[background-color,border-color,box-shadow,transform] hover:bg-[oklch(0.99_0.018_82)] focus-visible:ring-2 focus-visible:outline-none enabled:active:scale-[0.995] disabled:cursor-not-allowed disabled:opacity-60 ${
+                            className={`group hover:border-primary/35 focus-visible:ring-ring border-input bg-muted/35 hover:bg-muted/55 flex w-full cursor-pointer rounded-md border border-dashed text-center shadow-inner transition-[background-color,border-color,box-shadow,transform] focus-visible:ring-2 focus-visible:outline-none enabled:active:scale-[0.995] disabled:cursor-not-allowed disabled:opacity-60 ${
                                 hasSourceImages
                                     ? 'min-h-11 flex-row items-center justify-start gap-2 px-3 py-2 text-left'
                                     : 'min-h-[116px] flex-col items-center justify-center gap-2 px-4 py-4'
@@ -967,7 +967,7 @@ export function EditingForm({
                             className='hidden'
                         />
                         {!hasSourceImages && (
-                            <div className='rounded-md border border-[oklch(0.88_0.05_86)] bg-[oklch(0.975_0.055_88)] px-3 py-2 text-xs leading-5 text-[oklch(0.43_0.055_68)]'>
+                            <div className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/35 dark:text-amber-200'>
                                 {t('edit.referenceRequiredNote')}
                             </div>
                         )}
@@ -981,7 +981,7 @@ export function EditingForm({
                                 {sourceImagePreviewUrls.map((url, index) => (
                                     <div
                                         key={url}
-                                        className='group relative shrink-0 rounded-sm border border-[oklch(0.86_0.03_78)] bg-white p-1 shadow-[0_6px_14px_oklch(0.42_0.035_58/0.1)]'>
+                                        className='group border-border bg-card relative shrink-0 rounded-sm border p-1 shadow-[0_6px_14px_rgb(15,23,42,0.1)]'>
                                         <Image
                                             src={url}
                                             alt={t('edit.sourcePreview', { index: index + 1 })}
@@ -994,7 +994,7 @@ export function EditingForm({
                                             type='button'
                                             variant='secondary'
                                             size='icon'
-                                            className='border-background/80 absolute top-1.5 right-1.5 min-h-9 min-w-9 rounded-full border bg-[oklch(0.36_0.02_62/0.74)] p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-[oklch(0.32_0.02_62/0.86)] hover:text-white sm:min-h-7 sm:min-w-7 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100'
+                                            className='border-background/80 absolute top-1.5 right-1.5 min-h-9 min-w-9 rounded-full border bg-slate-800/80 p-0 text-white opacity-100 shadow-sm transition-opacity hover:bg-slate-900 hover:text-white sm:min-h-7 sm:min-w-7 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100'
                                             onClick={() => handleRemoveImage(index)}
                                             aria-label={t('edit.removeImage', { index: index + 1 })}>
                                             <X className='h-3 w-3' />
@@ -1016,7 +1016,7 @@ export function EditingForm({
                                 onChange={(e) => setEditPrompt(e.target.value)}
                                 required
                                 disabled={isLoading}
-                                className='min-h-[118px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-9 leading-7 shadow-inner'
+                                className='bg-muted/45 min-h-[118px] rounded-md px-4 py-3 pb-9 leading-7 shadow-inner'
                             />
                             <span className='text-muted-foreground ui-stat pointer-events-none absolute bottom-3 left-4 text-xs'>
                                 {editPrompt.trim().length} / 1000
@@ -1861,21 +1861,21 @@ export function EditingForm({
                 <CardFooter className='border-border bg-card flex shrink-0 border-t p-4'>
                     <div className='w-full space-y-2'>
                         <div className='grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-1.5 text-xs'>
-                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
+                            <span className='border-border bg-muted/45 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {editModel}
                             </span>
-                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
+                            <span className='border-border bg-muted/45 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {workbenchBackendLabel}
                             </span>
-                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
+                            <span className='border-border bg-muted/45 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {streamStatusLabel}
                             </span>
                             {parallelBatchChecked && (
-                                <span className='inline-flex min-w-0 items-center justify-center rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-center leading-4 break-words whitespace-normal text-[oklch(0.38_0.075_148)]'>
+                                <span className='inline-flex min-w-0 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-center leading-4 break-words whitespace-normal text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'>
                                     {t('streaming.parallelBatchEnabled')}
                                 </span>
                             )}
-                            <span className='border-primary/20 bg-primary/10 text-primary col-span-2 inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
+                            <span className='border-primary/20 bg-primary/10 text-primary col-span-2 inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {estimatedCostLabel}
                             </span>
                         </div>
@@ -1886,7 +1886,7 @@ export function EditingForm({
                             type='button'
                             onClick={handleSubmit}
                             disabled={isLoading || !!submitDisabledReason}
-                            className='flex min-h-11 w-full items-center justify-center gap-2 rounded-md border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white lg:min-h-9'>
+                            className='bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground flex min-h-11 w-full items-center justify-center gap-2 rounded-md border-0 shadow-sm lg:min-h-9'>
                             {showLoadingState && <Loader2 className='h-4 w-4 animate-spin' />}
                             {showLoadingState ? t('edit.loading') : t('edit.submit')}
                         </Button>

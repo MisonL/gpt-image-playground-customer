@@ -201,7 +201,7 @@ describe('EditingForm submit footer', { concurrency: false }, () => {
 
         assertSubmitFooterAvailable(html, '编辑图像');
         assert.match(html, /grid grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)\] gap-1\.5 text-xs/);
-        assert.match(html, /min-w-0 items-center justify-center rounded-full/);
+        assert.match(html, /min-w-0 items-center justify-center rounded-md/);
         assert.doesNotMatch(html, /text-center whitespace-nowrap/);
         assert.doesNotMatch(html, /min-\[1760px\]:flex/);
         assert.match(html, /存为灵感/);
