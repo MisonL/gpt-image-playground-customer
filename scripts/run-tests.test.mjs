@@ -1,4 +1,10 @@
-import { buildTestArguments, findTestFiles, parseTestRunnerArguments, selectTestFiles } from './run-tests.mjs';
+import {
+    buildTestArguments,
+    DEFAULT_TEST_TIMEOUT_MS,
+    findTestFiles,
+    parseTestRunnerArguments,
+    selectTestFiles
+} from './run-tests.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,10 +15,11 @@ const testFiles = ['scripts/example.test.mjs', 'src/example.test.ts', 'src/examp
 const baseTestArguments = ['--test', '--import', 'tsx', ...testFiles];
 
 describe('test runner arguments', () => {
-    it('limits concurrency when the current Node runtime supports the option', () => {
-        assert.deepEqual(buildTestArguments(true, testFiles), [
+    it('limits concurrency and test duration when the current Node runtime supports both options', () => {
+        assert.deepEqual(buildTestArguments(true, testFiles, [], true), [
             '--test',
             '--test-concurrency=4',
+            `--test-timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
             ...baseTestArguments.slice(1)
         ]);
     });
@@ -28,9 +35,10 @@ describe('test runner arguments', () => {
             nodeArguments
         });
         assert.deepEqual(selectTestFiles(process.cwd(), 'all', nodeArguments), []);
-        assert.deepEqual(buildTestArguments(true, [], nodeArguments), [
+        assert.deepEqual(buildTestArguments(true, [], nodeArguments, true), [
             '--test',
             '--test-concurrency=4',
+            `--test-timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
             '--import',
             'tsx',
             ...nodeArguments
@@ -48,11 +56,23 @@ describe('test runner arguments', () => {
     });
 
     it('preserves an explicit Node test concurrency value', () => {
-        assert.deepEqual(buildTestArguments(true, testFiles, ['--test-concurrency=1']), [
+        assert.deepEqual(buildTestArguments(true, testFiles, ['--test-concurrency=1'], true), [
             '--test',
+            `--test-timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
             '--import',
             'tsx',
             '--test-concurrency=1',
+            ...testFiles
+        ]);
+    });
+
+    it('preserves an explicit Node test timeout value', () => {
+        assert.deepEqual(buildTestArguments(true, testFiles, ['--test-timeout=120000'], true), [
+            '--test',
+            '--test-concurrency=4',
+            '--import',
+            'tsx',
+            '--test-timeout=120000',
             ...testFiles
         ]);
     });
