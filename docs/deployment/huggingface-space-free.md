@@ -96,6 +96,7 @@ npm run deploy:space
 
 - 使用 `git status --porcelain` 拒绝脏工作区。
 - 使用 `git archive HEAD` 生成临时源码目录，只上传已跟踪源码。
+- Space 发布包会排除根目录 `readme-images/` 中的 README 文档截图，以兼容 Hugging Face Git 的二进制文件门禁；Space README 会改用对应 GitHub 提交的不可变图片地址。
 - 优先使用 `hf upload` 上传到 `misonL/gpt-image-playground-customer`。
 - 仅当 `hf upload` 因既有 Docker Space 的创建政策 `402` 失败时，克隆该固定 Space、同步已跟踪源码并使用认证 Git 推送；其他错误不会自动回退。
 - 等待新 Space commit 进入 `RUNNING`。

@@ -2,7 +2,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -21,6 +21,7 @@ const HF_SPACE_GIT_REMOTE_URL = `https://huggingface.co/spaces/${HF_SPACE_ID}`;
 const GIT_DEPLOY_AUTHOR_NAME = 'gpt-image-playground deploy';
 const GIT_DEPLOY_AUTHOR_EMAIL = 'deploy@localhost';
 export const GIT_ARCHIVE_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
+const SPACE_DEPLOY_EXCLUDED_PATH_PREFIXES = ['readme-images/'];
 
 function parseArgs(argv) {
     assertKnownOptions(argv, ['--help', '-h']);
@@ -88,10 +89,30 @@ function assertCleanGitWorktree() {
     }
 }
 
-function prepareSourceTree() {
+export function isSpaceDeployPath(filePath) {
+    const normalized = String(filePath || '')
+        .replaceAll('\\', '/')
+        .replace(/^\.\//, '');
+    return normalized.length > 0 && !SPACE_DEPLOY_EXCLUDED_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+export function rewriteSpaceReadmeImageSources(readme, repoSlug, localSha) {
+    if (!repoSlug?.trim()) throw new Error('repoSlug is required when rewriting Space README image sources.');
+    if (!/^[0-9a-f]{40}$/.test(String(localSha || ''))) {
+        throw new Error('localSha must be a full git commit SHA when rewriting Space README image sources.');
+    }
+    return String(readme).replace(/(['"])(?:\.\/)?(readme-images\/[^'"]+)\1/g, (_, quote, imagePath) => {
+        return `${quote}https://raw.githubusercontent.com/${repoSlug}/${localSha}/${imagePath}${quote}`;
+    });
+}
+
+function prepareSourceTree(repoSlug, localSha) {
     const sourceDir = mkdtempSync(join(tmpdir(), 'gpt-image-hf-space-'));
     const archive = runBinary('git', ['archive', '--format=tar', 'HEAD']);
     runText('tar', ['-x', '-C', sourceDir], { input: archive });
+    rmSync(join(sourceDir, 'readme-images'), { force: true, recursive: true });
+    const readmePath = join(sourceDir, 'README.md');
+    writeFileSync(readmePath, rewriteSpaceReadmeImageSources(readFileSync(readmePath, 'utf8'), repoSlug, localSha), 'utf8');
     return sourceDir;
 }
 
@@ -142,7 +163,7 @@ export function buildUploadArgs({ sourceDir, localSha, repoSlug, deletePaths = [
 
 function readLocalGitFiles() {
     const output = runText('git', ['-c', 'core.quotePath=false', 'ls-tree', '-r', '-z', '--name-only', 'HEAD']);
-    return new Set(output.split('\0').filter(Boolean));
+    return new Set(output.split('\0').filter(isSpaceDeployPath));
 }
 
 function readRemoteFilePaths() {
@@ -216,13 +237,13 @@ function readLocalGitFilesWithDeployMarker() {
     return files;
 }
 
-function uploadSourceTree(sourceDir, deployMarker) {
+function uploadSourceTree(sourceDir, deployMarker, repoSlug) {
     writeDeployMarker(sourceDir, deployMarker);
     const deletePaths = findRemoteDeletePaths(readLocalGitFilesWithDeployMarker(), readRemoteFilePaths());
     try {
         const output = runText(
             'hf',
-            buildUploadArgs({ sourceDir, localSha: deployMarker.local_sha, repoSlug: readRepositorySlug(), deletePaths })
+            buildUploadArgs({ sourceDir, localSha: deployMarker.local_sha, repoSlug, deletePaths })
         );
         return { spaceCommitSha: extractUploadCommitSha(output), transport: 'hf_upload' };
     } catch (error) {
@@ -351,10 +372,11 @@ async function deploy() {
     assertCleanGitWorktree();
     runText('hf', ['auth', 'whoami']);
     const localSha = runText('git', ['rev-parse', 'HEAD']);
+    const repoSlug = readRepositorySlug();
     const deployMarker = buildDeployMarker(localSha);
-    const sourceDir = prepareSourceTree();
+    const sourceDir = prepareSourceTree(repoSlug, localSha);
     try {
-        const { spaceCommitSha, transport } = uploadSourceTree(sourceDir, deployMarker);
+        const { spaceCommitSha, transport } = uploadSourceTree(sourceDir, deployMarker, repoSlug);
         const runtime = await waitForRunning(spaceCommitSha, deployMarker);
         const verification = await verifyPublicEndpoints();
         console.log(

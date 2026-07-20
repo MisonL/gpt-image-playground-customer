@@ -6,11 +6,13 @@ import {
     assertDeployMarkerMatches,
     buildDeployMarker,
     buildDeployMarkerRouteSource,
+    isSpaceDeployPath,
     isHfUploadExistingSpacePolicyError,
     buildUploadArgs,
     extractUploadCommitSha,
     findRemoteDeletePaths,
     parseRepositorySlug,
+    rewriteSpaceReadmeImageSources,
     waitForRunning
 } from './deploy-hf-space.mjs';
 
@@ -110,6 +112,23 @@ describe('HF Space deploy script', () => {
 
     it('keeps enough buffer for repository archives used by Space uploads', () => {
         assert.ok(GIT_ARCHIVE_MAX_BUFFER_BYTES >= 128 * 1024 * 1024);
+    });
+
+    it('excludes README documentation binaries from the Space source tree', () => {
+        assert.equal(isSpaceDeployPath('README.md'), true);
+        assert.equal(isSpaceDeployPath('src/app/page.tsx'), true);
+        assert.equal(isSpaceDeployPath('readme-images/interface.jpg'), false);
+        assert.equal(isSpaceDeployPath('readme-images/nested/example.jpg'), false);
+    });
+
+    it('rewrites local README image sources to immutable GitHub sources for the Space', () => {
+        const localSha = '1111111111111111111111111111111111111111';
+        const readme = '<img src="./readme-images/interface.jpg?v=123" alt="Interface" />';
+
+        assert.equal(
+            rewriteSpaceReadmeImageSources(readme, 'owner/repo', localSha),
+            `<img src="https://raw.githubusercontent.com/owner/repo/${localSha}/readme-images/interface.jpg?v=123" alt="Interface" />`
+        );
     });
 
     it('adds delete args for remote files that are no longer in git HEAD', () => {
