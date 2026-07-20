@@ -315,8 +315,9 @@ function buildDryRunVerificationScope() {
 }
 
 function readJsonlTasks(filePath) {
+    const input = filePath === '/dev/stdin' ? 0 : filePath;
     return fs
-        .readFileSync(filePath, 'utf8')
+        .readFileSync(input, 'utf8')
         .split(/\r?\n/)
         .map((line, index) => ({ line: line.trim(), index }))
         .filter((item) => item.line && !item.line.startsWith('#'))
