@@ -2,7 +2,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -17,6 +17,9 @@ const HF_CLI_TIMEOUT_MS = 120_000;
 const DEPLOY_MARKER_REPO_PATH = 'public/hf-space-deploy-marker.json';
 const DEPLOY_MARKER_API_ROUTE_PATH = 'src/app/api/deploy-marker/route.ts';
 const DEPLOY_MARKER_SERVICE_PATH = '/api/deploy-marker';
+const HF_SPACE_GIT_REMOTE_URL = `https://huggingface.co/spaces/${HF_SPACE_ID}`;
+const GIT_DEPLOY_AUTHOR_NAME = 'gpt-image-playground deploy';
+const GIT_DEPLOY_AUTHOR_EMAIL = 'deploy@localhost';
 export const GIT_ARCHIVE_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 
 function parseArgs(argv) {
@@ -102,6 +105,15 @@ export function extractUploadCommitSha(output) {
     const match = String(payload.url || '').match(/\/commit\/([0-9a-f]{40})$/);
     if (!match) throw new Error('hf upload output did not include a Space commit SHA or commit URL.');
     return match[1];
+}
+
+export function isHfUploadExistingSpacePolicyError(error) {
+    const message = error instanceof Error ? error.message : String(error || '');
+    return (
+        /\b402 Payment Required\b/i.test(message) &&
+        /huggingface\.co\/api\/repos\/create/i.test(message) &&
+        /Docker Spaces?.*(?:PRO|subscription)/is.test(message)
+    );
 }
 
 export function buildUploadArgs({ sourceDir, localSha, repoSlug, deletePaths = [] }) {
@@ -207,8 +219,58 @@ function readLocalGitFilesWithDeployMarker() {
 function uploadSourceTree(sourceDir, deployMarker) {
     writeDeployMarker(sourceDir, deployMarker);
     const deletePaths = findRemoteDeletePaths(readLocalGitFilesWithDeployMarker(), readRemoteFilePaths());
-    const output = runText('hf', buildUploadArgs({ sourceDir, localSha: deployMarker.local_sha, repoSlug: readRepositorySlug(), deletePaths }));
-    return extractUploadCommitSha(output);
+    try {
+        const output = runText(
+            'hf',
+            buildUploadArgs({ sourceDir, localSha: deployMarker.local_sha, repoSlug: readRepositorySlug(), deletePaths })
+        );
+        return { spaceCommitSha: extractUploadCommitSha(output), transport: 'hf_upload' };
+    } catch (error) {
+        if (!isHfUploadExistingSpacePolicyError(error)) throw error;
+        console.warn(
+            'hf upload was blocked by the existing Docker Space create policy; falling back to an authenticated Git push.'
+        );
+        return { spaceCommitSha: uploadSourceTreeWithGit(sourceDir, deployMarker), transport: 'git_push_fallback' };
+    }
+}
+
+function uploadSourceTreeWithGit(sourceDir, deployMarker) {
+    const worktreeDir = mkdtempSync(join(tmpdir(), 'gpt-image-hf-space-git-'));
+    try {
+        runText('git', ['clone', '--depth', '1', HF_SPACE_GIT_REMOTE_URL, worktreeDir]);
+        replaceGitWorktreeContents(worktreeDir, sourceDir);
+        runText('git', ['-C', worktreeDir, 'add', '--all']);
+        runText('git', [
+            '-C',
+            worktreeDir,
+            '-c',
+            `user.name=${GIT_DEPLOY_AUTHOR_NAME}`,
+            '-c',
+            `user.email=${GIT_DEPLOY_AUTHOR_EMAIL}`,
+            'commit',
+            '--no-gpg-sign',
+            '--message',
+            `Deploy ${deployMarker.local_sha.slice(0, 7)} to Docker Space`
+        ]);
+        const spaceCommitSha = runText('git', ['-C', worktreeDir, 'rev-parse', 'HEAD']);
+        if (!/^[0-9a-f]{40}$/.test(spaceCommitSha)) {
+            throw new Error('Git fallback did not create a full Space commit SHA.');
+        }
+        runText('git', ['-C', worktreeDir, 'push', 'origin', 'HEAD:main']);
+        return spaceCommitSha;
+    } finally {
+        rmSync(worktreeDir, { force: true, recursive: true });
+    }
+}
+
+function replaceGitWorktreeContents(worktreeDir, sourceDir) {
+    for (const entry of readdirSync(worktreeDir)) {
+        if (entry === '.git') continue;
+        rmSync(join(worktreeDir, entry), { force: true, recursive: true });
+    }
+    for (const entry of readdirSync(sourceDir)) {
+        cpSync(join(sourceDir, entry), join(worktreeDir, entry), { force: true, recursive: true });
+    }
 }
 
 function readSpaceInfo() {
@@ -292,7 +354,7 @@ async function deploy() {
     const deployMarker = buildDeployMarker(localSha);
     const sourceDir = prepareSourceTree();
     try {
-        const spaceCommitSha = uploadSourceTree(sourceDir, deployMarker);
+        const { spaceCommitSha, transport } = uploadSourceTree(sourceDir, deployMarker);
         const runtime = await waitForRunning(spaceCommitSha, deployMarker);
         const verification = await verifyPublicEndpoints();
         console.log(
@@ -303,6 +365,7 @@ async function deploy() {
                     spaceUrl: HF_SPACE_URL,
                     localSha,
                     spaceCommitSha,
+                    transport,
                     runtime,
                     verification
                 },

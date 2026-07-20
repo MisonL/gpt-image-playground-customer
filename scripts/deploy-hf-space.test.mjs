@@ -6,6 +6,7 @@ import {
     assertDeployMarkerMatches,
     buildDeployMarker,
     buildDeployMarkerRouteSource,
+    isHfUploadExistingSpacePolicyError,
     buildUploadArgs,
     extractUploadCommitSha,
     findRemoteDeletePaths,
@@ -14,6 +15,18 @@ import {
 } from './deploy-hf-space.mjs';
 
 describe('HF Space deploy script', () => {
+    it('recognizes the existing Docker Space create-policy error for the Git deployment fallback', () => {
+        const policyError = [
+            'Set HF_DEBUG=1 as environment variable for full traceback.',
+            "Error: Client error '402 Payment Required' for url 'https://huggingface.co/api/repos/create'",
+            'Static Spaces are free for everyone, but hosting Gradio and Docker Spaces on free cpu-basic requires a PRO subscription.'
+        ].join('\n');
+
+        assert.equal(isHfUploadExistingSpacePolicyError(policyError), true);
+        assert.equal(isHfUploadExistingSpacePolicyError("Client error '402 Payment Required' for url 'https://huggingface.co/api/models/create'"), false);
+        assert.equal(isHfUploadExistingSpacePolicyError("Client error '401 Unauthorized' for url 'https://huggingface.co/api/repos/create'"), false);
+    });
+
     it('extracts the Space commit SHA from hf upload JSON output', () => {
         const sha = extractUploadCommitSha(
             [

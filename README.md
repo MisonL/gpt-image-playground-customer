@@ -326,7 +326,7 @@ npm run docker:cleanup-fixtures
 | 模式       | 命令或配置                                           | 适用场景                              |
 | ---------- | ---------------------------------------------------- | ------------------------------------- |
 | SQLite     | `docker-compose.yml`                                 | 本地单实例和长期本地服务。            |
-| Memory     | `docker-compose.yml` + `docker-compose.memory.yml`   | Hugging Face Space 免费层或临时演示。 |
+| Memory     | `docker-compose.yml` + `docker-compose.memory.yml`   | Hugging Face Space 或临时演示。       |
 | PostgreSQL | `docker-compose.yml` + `docker-compose.postgres.yml` | 高并发、多实例或集中状态库。          |
 
 图片默认保存在：
@@ -341,7 +341,7 @@ WebUI 文件系统图片默认不会自动删除。设置 `WEBUI_IMAGE_AUTO_CLEA
 
 Agent API 通过 `images-non-stream`、`images-sse`、`responses-non-stream` 和 `responses-sse` 生成的 artifact 均由 Agent 状态库登记。WebUI 清理会跳过仍被登记的 Agent artifact，其生命周期继续由 `AGENT_REQUEST_TTL_SECONDS` 管理，因此较长的 Agent 保留期不会被 WebUI 的 30 天策略提前截断。`.agent-state/`、`.shares/`、`.app-logs/` 等子目录不在 WebUI 清理范围内。当前清理配置和最近一次执行摘要可从 `/api/runtime-capabilities` 的 `webuiImageCleanup` 字段读取。
 
-Hugging Face Space 免费层部署见 [docs/deployment/huggingface-space-free.md](./docs/deployment/huggingface-space-free.md)。
+Hugging Face Space 部署见 [docs/deployment/huggingface-space-free.md](./docs/deployment/huggingface-space-free.md)。
 
 ## 常用命令
 

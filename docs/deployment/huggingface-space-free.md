@@ -1,6 +1,6 @@
-# Hugging Face Space 免费层部署
+# Hugging Face Space 部署
 
-本文档描述如何把本项目部署到 Hugging Face Docker Space 免费层，用作公网图片生成服务。
+本文档描述如何把本项目部署到 Hugging Face Docker Space，用作公网图片生成服务。Docker Space 的创建和更新权限取决于 Hugging Face 的当前账户政策；当前账户若在 `hf upload` 阶段收到 Docker Space 创建接口的 `402`，部署脚本只会对已存在且可认证写入的固定 Space 回退到 Git 推送，不能绕过新建 Docker Space 的账户限制。
 
 ## 目标形态
 
@@ -24,7 +24,7 @@ app_port: 4783
 官方依据：
 
 - Docker Space 配置、Variables/Secrets 和权限说明：https://huggingface.co/docs/hub/main/spaces-sdks-docker
-- 免费 CPU Basic 规格说明：https://huggingface.co/docs/hub/main/spaces-gpus
+- Space 硬件与计费政策：https://huggingface.co/docs/hub/main/spaces-gpus
 - Hugging Face CLI 安装和登录说明：https://huggingface.co/docs/huggingface_hub/en/guides/cli
 
 ## 全新电脑前置条件
@@ -46,7 +46,7 @@ hf auth whoami
 - npm 随 Node.js 一起可用。
 - Hugging Face CLI 使用当前官方 `hf` 命令。
 - `hf auth login` 使用 Hugging Face Access Token，不是账号密码。
-- Docker 只对本地 Space-like 容器 smoke（推荐 `npm run smoke:hf-space-local`，兼容别名 `npm run smoke:hf-space`）和本地容器验证必需；部署到远端 Space 使用 `hf` CLI。
+- Docker 只对本地 Space-like 容器 smoke（推荐 `npm run smoke:hf-space-local`，兼容别名 `npm run smoke:hf-space`）和本地容器验证必需；远端部署由 `npm run deploy:space` 统一执行。
 
 安装 Hugging Face CLI 时，以官方文档为准。不要把远程安装脚本直接管道到 shell；如需使用官方脚本，先下载、核对来源和内容后再执行。
 
@@ -81,7 +81,7 @@ npm run agent:doctor
 - `doctor`：统一诊断入口，默认包含 HF Space 只读远端检查。
 - `verify`：提交前基线，执行测试、lint、脚本语法、构建和 `git diff --check`；需要真实 PostgreSQL gate 时加 `--postgres`。
 - `deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `--memory` 会断言 memory/indexeddb overlay 生效。
-- `deploy:space`：上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证。
+- `deploy:space`：上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证；已存在 Docker Space 遇到已知创建政策 `402` 时，会使用认证 Git 推送回退。
 - `agent:doctor`：通过仓库 Skill 脚本执行只读 Agent API 契约检查，不触发真实生图。
 
 HF Space 交互使用官方 `hf` CLI。不要维护本机 access 文件，不要把 `APP_PASSWORD`、`AGENT_API_TOKEN`、OpenAI Key 或 Hugging Face token 写入仓库文件。
@@ -96,7 +96,8 @@ npm run deploy:space
 
 - 使用 `git status --porcelain` 拒绝脏工作区。
 - 使用 `git archive HEAD` 生成临时源码目录，只上传已跟踪源码。
-- 使用 `hf upload` 上传到 `misonL/gpt-image-playground-customer`。
+- 优先使用 `hf upload` 上传到 `misonL/gpt-image-playground-customer`。
+- 仅当 `hf upload` 因既有 Docker Space 的创建政策 `402` 失败时，克隆该固定 Space、同步已跟踪源码并使用认证 Git 推送；其他错误不会自动回退。
 - 等待新 Space commit 进入 `RUNNING`。
 - 检查 `/api/auth-status`、`/api/agent/capabilities` 和 `/api/runtime-capabilities`，不触发真实生图。
 
@@ -110,7 +111,7 @@ hf spaces secrets add misonL/gpt-image-playground-customer -s APP_PASSWORD=<page
 hf spaces secrets add misonL/gpt-image-playground-customer -s AGENT_API_TOKEN=<long-random-agent-token>
 ```
 
-源码部署、远端诊断、Variables 和 Secrets 都围绕 `hf` CLI 完成；仓库内不再提供第二套 access-file 同步流程。
+源码部署、远端诊断、Variables 和 Secrets 都由仓库命令与 `hf` CLI 协同完成；部署回退只使用现有 Git 凭据，不维护第二套 access-file 或 Secret 同步流程。
 
 ## Space Variables
 
@@ -220,13 +221,13 @@ npm run smoke:hf-space-local
 - 默认等待容器 HTTP ready 最多 45 秒；慢机器可设置 `HF_SPACE_SMOKE_READY_TIMEOUT_MS=90000`。
 - 执行 Agent 生成和编辑脚本的契约检查，不触发真实上游生图。
 
-## 免费层限制
+## 平台与运行限制
 
-- Hugging Face 免费 CPU Basic 适合公开演示和轻量使用，不适合长期高并发。
-- CPU Basic 免费层在长时间无访问后会休眠；需要真正永不休眠或自定义 sleep time 时，应升级到付费硬件。
+- Docker Space 的创建、更新和可用硬件受 Hugging Face 当前账户政策约束。`hf upload` 对已存在 Space 的创建接口检查收到 `402` 时，脚本会尝试认证 Git 推送；新建 Docker Space 仍需要满足平台账户要求。
+- CPU Basic 适合公开演示和轻量使用，不适合长期高并发；长时间无访问后可能休眠。需要真正永不休眠或自定义 sleep time 时，应使用满足平台要求的付费硬件。
 - Docker Space 重启后容器磁盘写入会丢失。`memory` 状态后端的 Agent 幂等记录、replay 状态和分享元数据也会丢失。
 - Agent API 仍会把产物图片写入容器临时文件系统，以便提供 `content_url` 下载。重启后这些链接不保证继续有效。
-- 需要长期保存图片、分享链接或 Agent replay 状态时，不应使用免费层纯内存模式。应切换到 PostgreSQL 加持久卷或外部对象存储。
+- 需要长期保存图片、分享链接或 Agent replay 状态时，不应使用纯内存模式。应切换到 PostgreSQL 加持久卷或外部对象存储。
 
 ## 公网客户门槛
 
@@ -239,9 +240,9 @@ npm run smoke:hf-space-local
 - `AGENT_API_TOKEN` 已设置，自动化调用不会回退到页面访问码哈希。
 - `npm run doctor:hf-space` 的 `remote-secrets` 检查通过。
 - 共享链接明确保留访问码和有效期的默认控制，不把无访问码永久链接当成默认发布形态。
-- 免费层重启丢失分享元数据和 Agent replay 的前提已被客户知晓。
+- Space 重启丢失分享元数据和 Agent replay 的前提已被客户知晓。
 
-## 免费层 Keepalive
+## Space Keepalive
 
 本仓库提供 GitHub Actions 定时 keepalive，降低 CPU Basic 因长时间无访问进入休眠的概率：
 
@@ -268,7 +269,7 @@ HF_SPACE_KEEPALIVE_RETRY_MAX_DELAY_MS=20000 \
 npm run keepalive:hf-space
 ```
 
-注意：keepalive 是免费层的 best-effort 机制，不能保证绕过 Hugging Face 平台维护、重启或政策限制。若需要平台级保证，应升级到付费硬件并设置永不休眠。
+注意：keepalive 是 best-effort 机制，不能保证绕过 Hugging Face 平台维护、重启或政策限制。若需要平台级保证，应使用满足平台要求的硬件并设置永不休眠。
 
 ## 验证门禁
 
