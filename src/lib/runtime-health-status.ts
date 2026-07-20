@@ -11,6 +11,7 @@ export type RuntimeHealthCapabilities = {
     } | null;
     responsesImageBackend?: {
         enabled?: boolean | null;
+        hasDefaultModel?: boolean | null;
     } | null;
     channelRouting?: {
         effectiveRequestModes?: readonly string[] | null;
@@ -84,6 +85,7 @@ export function resolveRuntimeHealthStatus(input: {
     runtimeCapabilities: RuntimeHealthCapabilities | null;
     hasRequestApiOverride: boolean;
     imageBackend: ImageUpstreamFormBackend;
+    hasRequestResponsesModel: boolean;
     streamingStrategy: ImageStreamingStrategy;
     streamMode: ImageStreamMode;
 }): RuntimeHealthStatus {
@@ -93,11 +95,14 @@ export function resolveRuntimeHealthStatus(input: {
         runtimeCapabilities: input.runtimeCapabilities,
         imageBackend: input.imageBackend
     });
-    if (
-        requestedBackend === 'responses-image-generation' &&
-        input.runtimeCapabilities.responsesImageBackend?.enabled !== true
-    ) {
-        return 'route-limited';
+    if (requestedBackend === 'responses-image-generation') {
+        const responsesImageBackend = input.runtimeCapabilities.responsesImageBackend;
+        const hasUsableResponsesModel =
+            responsesImageBackend?.hasDefaultModel === true ||
+            (input.imageBackend !== IMAGE_UPSTREAM_FORM_SERVER_DEFAULT && input.hasRequestResponsesModel === true);
+        if (responsesImageBackend?.enabled !== true || !hasUsableResponsesModel) {
+            return 'route-limited';
+        }
     }
     const preferredRequestMode = resolvePreferredRequestMode(input);
     if (hasHealthyRequestMode(input.runtimeCapabilities, preferredRequestMode)) {

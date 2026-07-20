@@ -175,7 +175,7 @@ describe('WorkbenchStatusStrip', () => {
         assert.match(html, /lg:min-h-7/);
         assert.match(html, /w-full min-w-0 flex-wrap/);
         assert.match(html, /sm:w-auto/);
-        assert.match(html, /basis-full items-center rounded-full/);
+        assert.match(html, /basis-full items-center rounded-md/);
         assert.match(html, /sm:basis-auto/);
         assert.match(html, /absolute/);
         assert.match(html, /left-0/);

@@ -180,7 +180,7 @@ describe('GenerationForm submit footer', () => {
 
         assertSubmitFooterAvailable(html, '生成图像');
         assert.match(html, /grid grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)\] gap-1\.5 text-xs/);
-        assert.match(html, /min-w-0 items-center justify-center rounded-full/);
+        assert.match(html, /min-w-0 items-center justify-center rounded-md/);
         assert.match(html, /min-h-11 min-w-0 items-center justify-center/);
         assert.match(html, /h-3\.5 w-3\.5 shrink-0" aria-hidden="true"/);
         assert.match(html, /min-w-0 whitespace-normal/);

@@ -150,6 +150,10 @@ describe('page state regressions', () => {
         }
         assert.match(styles, /@media \(max-width: 1023px\) and \(max-height: 480px\)/);
         assert.match(styles, /#mobile-creation-sheet\s*\{[\s\S]*?overflow-y: auto;/);
+        assert.match(
+            styles,
+            /#mobile-creation-sheet \.mobile-creation-sheet-handle\s*\{[\s\S]*?background: var\(--card\);/
+        );
         assert.match(styles, /\.mobile-drawer-form-content\s*\{[\s\S]*?overflow: visible;/);
     });
 
@@ -294,7 +298,7 @@ describe('page state regressions', () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
 
         assert.match(source, /min-h-screen overflow-x-hidden/);
-        assert.match(source, /w-full max-w-\[1760px\] min-w-0/);
+        assert.match(source, /w-full max-w-\[1880px\] min-w-0/);
         assert.match(source, /flex min-w-0 flex-wrap items-center gap-2/);
         assert.match(source, /order-1 flex min-h-\[380px\] min-w-0/);
         assert.match(source, /order-3 min-h-\[420px\] min-w-0/);
@@ -315,22 +319,23 @@ describe('page state regressions', () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
 
         assert.match(source, /flex-1 flex-wrap items-baseline gap-x-3 gap-y-1/);
-        assert.match(source, /editorial-title shrink-0 text-3xl/);
+        assert.match(source, /editorial-title shrink-0 text-2xl/);
         assert.match(source, /text-muted-foreground min-w-0 text-sm/);
         assert.match(source, /flex h-11 w-11 items-center justify-center[^']*lg:h-9 lg:w-9/);
-        assert.doesNotMatch(source, /editorial-title truncate text-3xl/);
+        assert.doesNotMatch(source, /editorial-title truncate text-2xl/);
     });
 
-    it('keeps preview paper decoration inside very narrow screens', async () => {
+    it('uses a neutral preview surface without paper decoration', async () => {
         const source = await readFile(new URL('./globals.css', import.meta.url), 'utf8');
 
         assert.match(source, /\.photo-paper \{\s*min-width: 0;/);
-        assert.match(source, /@media \(max-width: 380px\) \{/);
-        assert.match(source, /\.photo-paper::before \{[\s\S]*?width: min\(6rem, 40%\);/);
-        assert.match(source, /\.preview-gallery-board::before \{[\s\S]*?inset: 0\.5rem;/);
+        assert.match(source, /\.photo-paper::before \{\s*content: none;/);
+        assert.match(source, /\.preview-gallery-board \{\s*background: var\(--workspace-canvas\);/);
+        assert.match(source, /\.preview-gallery-board::before \{\s*content: none;/);
+        assert.doesNotMatch(source, /repeating-linear-gradient/);
     });
 
-    it('keeps the pro dock adjacent to the empty preview state', async () => {
+    it('uses the desktop workspace for an empty preview while keeping compact narrow layouts', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
 
         assert.match(source, /const shouldExpandOutputStage =/);
@@ -339,13 +344,13 @@ describe('page state regressions', () => {
         assert.match(source, /mode === 'edit' && Boolean\(editSourceImagePreviewUrls\[0\]\)/);
         assert.match(source, /xl:h-dvh xl:pb-0/);
         assert.match(source, /xl:h-full xl:min-h-0/);
-        assert.match(source, /xl:grid-cols-\[minmax\(300px,340px\)_minmax\(600px,1fr\)_minmax\(280px,330px\)\]/);
-        assert.match(source, /2xl:grid-cols-\[minmax\(300px,340px\)_minmax\(840px,1fr\)_minmax\(280px,310px\)\]/);
-        assert.match(source, /grid flex-1 grid-cols-1 gap-5[^']*xl:min-h-0/);
+        assert.match(source, /xl:grid-cols-\[minmax\(320px,360px\)_minmax\(0,1fr\)_minmax\(232px,272px\)\]/);
+        assert.match(source, /2xl:grid-cols-\[minmax\(380px,424px\)_minmax\(780px,1fr\)_minmax\(272px,304px\)\]/);
+        assert.match(source, /grid flex-1 grid-cols-1 gap-4[^']*xl:min-h-0/);
         assert.doesNotMatch(source, /xl:flex-none xl:items-start/);
         assert.match(source, /order-1 flex min-h-\[380px\][^']*xl:min-h-0/);
-        assert.match(source, /shouldExpandOutputStage \? 'min-h-0 flex-1' : 'min-h-0 shrink-0 xl:flex-1'/);
-        assert.doesNotMatch(source, /<div className='min-h-0 flex-1'>\s*<ImageOutput/);
+        assert.match(source, /<div className='min-h-0 shrink-0 xl:flex-1'>\s*<ImageOutput/);
+        assert.doesNotMatch(source, /shouldExpandOutputStage \? 'min-h-0 flex-1' : 'min-h-0 shrink-0'/);
         assert.doesNotMatch(source, /xl:min-h-\[34rem\]/);
     });
 });

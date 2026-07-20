@@ -70,21 +70,21 @@ export function WorkbenchStatusStrip({
                 : t('app.apiDisconnected');
     const runtimeStatusColorClass =
         runtimeHealthStatus === 'custom-override'
-            ? 'text-[oklch(0.44_0.08_55)]'
+            ? 'text-amber-700 dark:text-amber-300'
             : runtimeHealthStatus === 'runtime-ready'
-              ? 'text-[oklch(0.5_0.12_150)]'
+              ? 'text-emerald-700 dark:text-emerald-300'
               : runtimeHealthStatus === 'route-limited'
-                ? 'text-[oklch(0.56_0.12_82)]'
-                : 'text-[oklch(0.58_0.02_55)]';
+                ? 'text-amber-700 dark:text-amber-300'
+                : 'text-slate-600 dark:text-slate-300';
     const RuntimeStatusIcon = runtimeHealthStatus === 'runtime-ready' ? CircleCheck : CircleAlert;
 
     return (
         <div
             className={cn(
-                'text-muted-foreground ui-stat flex w-full min-w-0 flex-wrap items-center gap-1.5 text-xs sm:w-auto sm:gap-2 sm:text-sm',
+                'text-muted-foreground ui-stat flex w-full min-w-0 flex-wrap items-center gap-1.5 text-xs sm:w-auto sm:text-sm',
                 className
             )}>
-            <span className='border-border bg-card/70 inline-flex min-h-6 items-center gap-1.5 rounded-full border px-2 py-0.5 sm:min-h-7 sm:gap-2 sm:px-2.5 sm:py-1'>
+            <span className='border-border bg-card inline-flex min-h-6 items-center gap-1.5 rounded-md border px-2 py-0.5 sm:min-h-7 sm:gap-2 sm:px-2.5 sm:py-1'>
                 <RuntimeStatusIcon className={cn('h-3.5 w-3.5', runtimeStatusColorClass)} />
                 {runtimeStatusLabel}
             </span>
@@ -92,8 +92,10 @@ export function WorkbenchStatusStrip({
                 <details className='group relative max-w-full basis-full sm:basis-auto'>
                     <summary
                         className={cn(
-                            'border-border bg-card/70 inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 rounded-full border px-2 py-0.5 sm:px-2.5 sm:py-1 lg:min-h-7',
-                            hasRouteWarnings ? 'text-[oklch(0.48_0.11_72)]' : 'text-[oklch(0.42_0.09_150)]'
+                            'border-border bg-card inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 rounded-md border px-2 py-0.5 sm:px-2.5 sm:py-1 lg:min-h-7',
+                            hasRouteWarnings
+                                ? 'text-amber-700 dark:text-amber-300'
+                                : 'text-emerald-700 dark:text-emerald-300'
                         )}>
                         {hasRouteWarnings ? (
                             <CircleAlert className='h-3.5 w-3.5' />
@@ -151,27 +153,26 @@ export function WorkbenchStatusStrip({
                     data-request-mode-placeholder='true'
                     aria-hidden='true'
                     className='relative max-w-full basis-full sm:basis-auto'>
-                    <span className='border-border bg-card/70 text-muted-foreground inline-flex min-h-11 items-center gap-1.5 rounded-full border px-2 py-0.5 sm:px-2.5 sm:py-1 lg:min-h-7'>
+                    <span className='border-border bg-card text-muted-foreground inline-flex min-h-11 items-center gap-1.5 rounded-md border px-2 py-0.5 sm:px-2.5 sm:py-1 lg:min-h-7'>
                         <CircleAlert className='h-3.5 w-3.5' />
                         {t('app.requestModeHealth')}
                     </span>
                 </span>
             )}
-            <span className='border-border bg-card/70 inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 sm:min-h-7 sm:px-2.5 sm:py-1'>
-                {model}
+            <span className='border-border bg-card inline-flex min-h-6 min-w-0 items-center gap-2 rounded-md border px-2 py-0.5 sm:min-h-7 sm:px-2.5 sm:py-1'>
+                <span className='truncate'>{model}</span>
+                <span className='bg-border h-3 w-px shrink-0' aria-hidden='true' />
+                <span className='text-muted-foreground truncate'>{routeLabel}</span>
             </span>
-            <span className='border-border bg-card/70 inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 sm:min-h-7 sm:px-2.5 sm:py-1'>
-                {routeLabel}
-            </span>
-            <span className='inline-flex min-h-6 items-center rounded-full border border-[oklch(0.78_0.055_205)] bg-[oklch(0.94_0.028_205)] px-2 py-0.5 text-[oklch(0.38_0.065_218)] sm:min-h-7 sm:px-2.5 sm:py-1'>
+            <span className='inline-flex min-h-6 items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-sky-700 sm:min-h-7 sm:px-2.5 sm:py-1 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300'>
                 {streamStatus}
             </span>
             {parallelBatchEnabled && (
-                <span className='inline-flex min-h-6 items-center rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-0.5 text-[oklch(0.38_0.075_148)] sm:min-h-7 sm:px-2.5 sm:py-1'>
+                <span className='inline-flex min-h-6 items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700 sm:min-h-7 sm:px-2.5 sm:py-1 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'>
                     {t('streaming.parallelBatchEnabled')}
                 </span>
             )}
-            <span className='border-primary/20 bg-primary/10 text-primary inline-flex min-h-6 min-w-0 basis-full items-center rounded-full border px-2 py-0.5 sm:min-h-7 sm:basis-auto sm:px-2.5 sm:py-1'>
+            <span className='border-primary/20 bg-primary/10 text-primary inline-flex min-h-6 min-w-0 basis-full items-center rounded-md border px-2 py-0.5 sm:min-h-7 sm:basis-auto sm:px-2.5 sm:py-1'>
                 {costLabel}
             </span>
         </div>

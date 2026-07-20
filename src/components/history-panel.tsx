@@ -248,9 +248,6 @@ function HistoryPanelImpl({
         historyCount: history.length,
         inspirationCount: inspirations.length
     });
-    const isActiveCollectionEmpty =
-        effectiveActiveTab === 'inspiration' ? inspirations.length === 0 : history.length === 0;
-    const isPanelIdle = history.length === 0 && inspirations.length === 0 && activityItems.length === 0;
     const hasRetentionManagedHistory = React.useMemo(() => history.some(isRetentionManagedHistoryItem), [history]);
     const canManageRetention = cleanupEnabled && hasRetentionManagedHistory && !!onUpdatePermanentSave;
     const retentionManagedFilenames = React.useMemo(
@@ -261,6 +258,10 @@ function HistoryPanelImpl({
                     .flatMap((item) => item.images.map((image) => image.filename))
             ),
         [history]
+    );
+    const activeSelectedRetentionFilenames = React.useMemo(
+        () => new Set([...selectedRetentionFilenames].filter((filename) => retentionManagedFilenames.has(filename))),
+        [retentionManagedFilenames, selectedRetentionFilenames]
     );
     const isRetentionSelectionActive = isSelectingRetention && canManageRetention && effectiveActiveTab === 'history';
 
@@ -295,30 +296,28 @@ function HistoryPanelImpl({
         setRetentionError(null);
     }, [clearRetentionSelection, isRetentionSelectionActive]);
 
-    React.useEffect(() => {
-        setSelectedRetentionFilenames((current) => {
-            const next = new Set([...current].filter((filename) => retentionManagedFilenames.has(filename)));
-            return next.size === current.size ? current : next;
-        });
-    }, [retentionManagedFilenames]);
-
-    const handleRetentionImageSelection = React.useCallback((filename: string, isSelected: boolean) => {
-        setSelectedRetentionFilenames((current) => {
-            const next = new Set(current);
-            if (isSelected) {
-                next.add(filename);
-            } else {
-                next.delete(filename);
-            }
-            return next;
-        });
-        setRetentionError(null);
-    }, []);
+    const handleRetentionImageSelection = React.useCallback(
+        (filename: string, isSelected: boolean) => {
+            setSelectedRetentionFilenames((current) => {
+                const next = new Set(
+                    [...current].filter((currentFilename) => retentionManagedFilenames.has(currentFilename))
+                );
+                if (isSelected) {
+                    next.add(filename);
+                } else {
+                    next.delete(filename);
+                }
+                return next;
+            });
+            setRetentionError(null);
+        },
+        [retentionManagedFilenames]
+    );
 
     const submitRetentionUpdate = React.useCallback(
         async (action: 'preserve' | 'release') => {
-            if (!onUpdatePermanentSave || selectedRetentionFilenames.size === 0 || isUpdatingRetention) return;
-            const filenames = [...selectedRetentionFilenames];
+            if (!onUpdatePermanentSave || activeSelectedRetentionFilenames.size === 0 || isUpdatingRetention) return;
+            const filenames = [...activeSelectedRetentionFilenames];
             setIsUpdatingRetention(true);
             setRetentionError(null);
             try {
@@ -333,7 +332,7 @@ function HistoryPanelImpl({
                 setIsUpdatingRetention(false);
             }
         },
-        [isUpdatingRetention, onUpdatePermanentSave, selectedRetentionFilenames, t]
+        [activeSelectedRetentionFilenames, isUpdatingRetention, onUpdatePermanentSave, t]
     );
 
     const handleCopy = async (text: string | null | undefined, timestamp: number) => {
@@ -385,8 +384,7 @@ function HistoryPanelImpl({
     return (
         <Card
             className={cn(
-                'workbench-panel text-card-foreground border-border flex h-full w-full flex-col gap-0 overflow-hidden rounded-lg border py-0',
-                isPanelIdle && 'xl:h-auto xl:self-start'
+                'workbench-panel text-card-foreground border-border flex h-full w-full flex-col gap-0 overflow-hidden rounded-lg border py-0'
             )}>
             <CardHeader className='border-border/70 flex flex-col gap-2 border-b px-4 pt-3 !pb-3'>
                 {totalCost > 0 ? (
@@ -395,7 +393,7 @@ function HistoryPanelImpl({
                             <DialogTrigger asChild>
                                 <button
                                     type='button'
-                                    className='bg-secondary text-secondary-foreground hover:bg-secondary/80 ui-stat mt-0.5 flex min-h-9 cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 text-[12px] transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0 lg:min-h-7'
+                                    className='bg-secondary text-secondary-foreground hover:bg-secondary/80 ui-stat mt-0.5 flex min-h-9 cursor-pointer items-center gap-1 rounded-md px-2.5 py-1 text-[12px] transition-[background-color] lg:min-h-7'
                                     aria-label={t('history.showTotalCost')}>
                                     {t('history.totalCost', { cost: totalCost.toFixed(4) })}
                                 </button>
@@ -543,16 +541,13 @@ function HistoryPanelImpl({
             </CardHeader>
             <CardContent
                 className={cn(
-                    'literary-scrollbar min-h-0 p-3 lg:max-h-[calc(100%-17.5rem)] lg:overflow-y-auto lg:p-3 xl:flex-none',
-                    isActiveCollectionEmpty && !isPanelIdle && 'xl:flex xl:max-h-none xl:flex-1 xl:flex-col'
+                    'literary-scrollbar min-h-0 p-3 lg:max-h-[calc(100%-17.5rem)] lg:overflow-y-auto lg:p-3 xl:flex xl:max-h-none xl:flex-1 xl:flex-col'
                 )}>
                 {effectiveActiveTab === 'inspiration' ? (
                     <div
                         className={cn(
                             'space-y-3 lg:space-y-2',
-                            inspirations.length === 0 &&
-                                !isPanelIdle &&
-                                'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0'
+                            inspirations.length === 0 && 'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0'
                         )}>
                         {inspirations.length === 0 ? (
                             <div className='text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm xl:my-auto'>
@@ -653,8 +648,7 @@ function HistoryPanelImpl({
                 ) : history.length === 0 ? (
                     <div
                         className={cn(
-                            'text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm',
-                            !isPanelIdle && 'xl:flex-1'
+                            'text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-1 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm'
                         )}>
                         <FileImage className='h-5 w-5 opacity-70' aria-hidden='true' />
                         <p>{t('history.empty')}</p>
@@ -681,7 +675,7 @@ function HistoryPanelImpl({
                             const firstImageIsPermanentlySaved =
                                 !!firstImage && permanentlySavedFilenames.has(firstImage.filename);
                             const isFirstImageSelected =
-                                !!firstImage && selectedRetentionFilenames.has(firstImage.filename);
+                                !!firstImage && activeSelectedRetentionFilenames.has(firstImage.filename);
                             const outputFormat = item.output_format || 'png';
                             const costBadge = getCostBadge(item, {
                                 actual: t('history.actualCostShort'),
@@ -789,7 +783,7 @@ function HistoryPanelImpl({
                                                       : t('history.modeCreate')}
                                             </div>
                                             {isMultiImage && (
-                                                <div className='ui-stat pointer-events-none absolute right-1 bottom-1 z-10 flex items-center gap-1 rounded-sm bg-[oklch(0.28_0.028_58/0.78)] px-1.5 py-0.5 text-[12px] text-white'>
+                                                <div className='ui-stat pointer-events-none absolute right-1 bottom-1 z-10 flex items-center gap-1 rounded-sm bg-slate-900/80 px-1.5 py-0.5 text-[12px] text-white'>
                                                     <Layers size={16} />
                                                     {imageCount}
                                                 </div>
@@ -1259,7 +1253,7 @@ function HistoryPanelImpl({
                                                                 image.filename
                                                             );
                                                             const isSelectedForRetention =
-                                                                selectedRetentionFilenames.has(image.filename);
+                                                                activeSelectedRetentionFilenames.has(image.filename);
 
                                                             return (
                                                                 <div
@@ -1281,7 +1275,8 @@ function HistoryPanelImpl({
                                                                             alt={t('history.batchThumbnail', {
                                                                                 index: index + 1
                                                                             })}
-                                                                            fill
+                                                                            width={88}
+                                                                            height={88}
                                                                             sizes='88px'
                                                                             className='h-full w-full object-cover'
                                                                             onLoad={(event) =>
@@ -1649,10 +1644,10 @@ function HistoryPanelImpl({
                     </div>
                 )}
                 {isRetentionSelectionActive ? (
-                    <div className='bg-background/96 border-border sticky bottom-0 z-40 mt-3 flex min-h-14 items-center gap-2 border-t px-3 py-2 shadow-[0_-8px_16px_rgba(73,50,25,0.08)] backdrop-blur-sm'>
+                    <div className='bg-background/96 border-border sticky bottom-0 z-40 mt-3 flex min-h-14 items-center gap-2 border-t px-3 py-2 shadow-[0_-8px_16px_rgba(15,23,42,0.08)] backdrop-blur-sm'>
                         <div className='mr-auto min-w-0'>
                             <p className='text-muted-foreground text-xs'>
-                                {t('retention.selectedCount', { count: selectedRetentionFilenames.size })}
+                                {t('retention.selectedCount', { count: activeSelectedRetentionFilenames.size })}
                             </p>
                             {retentionError ? (
                                 <p className='text-destructive mt-0.5 text-[11px]' role='status'>
@@ -1663,7 +1658,7 @@ function HistoryPanelImpl({
                         <Button
                             type='button'
                             size='sm'
-                            disabled={selectedRetentionFilenames.size === 0 || isUpdatingRetention}
+                            disabled={activeSelectedRetentionFilenames.size === 0 || isUpdatingRetention}
                             onClick={() => void submitRetentionUpdate('preserve')}
                             className='min-h-10 px-3 text-xs lg:min-h-8'>
                             <Bookmark className='h-3.5 w-3.5' />
@@ -1673,7 +1668,7 @@ function HistoryPanelImpl({
                             type='button'
                             variant='outline'
                             size='sm'
-                            disabled={selectedRetentionFilenames.size === 0 || isUpdatingRetention}
+                            disabled={activeSelectedRetentionFilenames.size === 0 || isUpdatingRetention}
                             onClick={() => void submitRetentionUpdate('release')}
                             className='min-h-10 px-3 text-xs lg:min-h-8'>
                             {t('retention.release')}

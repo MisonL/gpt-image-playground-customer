@@ -1,14 +1,11 @@
 import { RequestValidationError } from './image-request-utils';
+import type { ImageStreamingRecommendationStrategy } from './image-streaming-recommendation';
+
+export { shouldRecommendImageStreaming } from './image-streaming-recommendation';
 
 export type ImageGenerationBackend = 'images-api' | 'responses-image-generation';
 
-export type ImageStreamingStrategy =
-    | 'off'
-    | 'auto'
-    | 'openai-sse'
-    | 'newapi-keepalive-sse'
-    | 'responses-sse'
-    | 'force-sse';
+export type ImageStreamingStrategy = ImageStreamingRecommendationStrategy;
 
 export type ImageStreamMode = 'auto' | 'stream' | 'non_stream';
 
@@ -199,17 +196,4 @@ export function resolveImageStreamEnabled(input: {
     }
 
     return true;
-}
-
-export function shouldRecommendImageStreaming(input: {
-    streamingStrategy: ImageStreamingStrategy;
-    quality: 'low' | 'medium' | 'high' | 'auto';
-    width: number;
-    height: number;
-    streamEnabled: boolean;
-}): boolean {
-    if (input.streamEnabled || input.streamingStrategy !== 'auto' || input.quality !== 'high') {
-        return false;
-    }
-    return Math.max(input.width, input.height) > 2048;
 }

@@ -69,12 +69,12 @@ describe('ImageOutput result actions', () => {
         assert.match(html, /还没有生成图像/);
         assert.match(html, /写下灵感后点击生成/);
         assert.match(html, /workbench-panel[^"]*h-fit xl:h-full[\s\S]*preview-gallery-board/);
-        assert.match(html, /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\] xl:min-h-0 xl:flex-1/);
-        assert.match(html, /min-h-\[20rem\]/);
-        assert.match(html, /max-w-\[32rem\]/);
+        assert.match(html, /min-h-\[220px\] shrink-0 sm:min-h-\[248px\] lg:min-h-\[272px\] xl:min-h-0 xl:flex-1/);
+        assert.doesNotMatch(html, /min-h-\[20rem\]/);
+        assert.match(html, /max-w-\[30rem\]/);
         assert.match(html, /items-center justify-center/);
         assert.match(html, /text-center/);
-        assert.match(html, /2xl:max-w-\[34rem\]/);
+        assert.doesNotMatch(html, /2xl:max-w-\[34rem\]/);
         assert.doesNotMatch(html, /photo-paper relative flex aspect-\[8\/5\]/);
         assert.doesNotMatch(html, /max-w-\[780px\] flex-col justify-between/);
         assert.doesNotMatch(html, /<img/);
@@ -96,7 +96,7 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /workbench-panel[^"]*h-full[\s\S]*preview-gallery-board/);
         assert.match(html, /min-h-\[300px\] flex-1 sm:min-h-\[420px\] lg:min-h-\[520px\]/);
-        assert.doesNotMatch(html, /min-h-\[260px\] shrink-0 sm:min-h-\[320px\] lg:min-h-\[360px\]/);
+        assert.doesNotMatch(html, /min-h-\[220px\] shrink-0 sm:min-h-\[248px\] lg:min-h-\[272px\]/);
     });
 
     it('uses an edit reference placeholder instead of the sample image in edit mode', () => {
@@ -124,6 +124,9 @@ describe('ImageOutput result actions', () => {
 
         assert.match(html, /先放入参考图/);
         assert.match(html, /等待参考图/);
+        assert.doesNotMatch(html, /min-h-\[18rem\]/);
+        assert.match(html, /max-w-\[30rem\]/);
+        assert.doesNotMatch(html, /photo-paper relative flex aspect-\[4\/3\]/);
         assert.doesNotMatch(html, /灵感样张/);
     });
 

@@ -302,6 +302,45 @@ describe('HistoryPanel recent history actions', () => {
         }
     });
 
+    it('ignores selected filesystem images removed from history', async () => {
+        const updates: Array<{ action: 'preserve' | 'release'; filenames: string[] }> = [];
+        const replacementHistoryItem: HistoryMetadata = {
+            ...singleFsHistoryItem,
+            timestamp: singleFsHistoryItem.timestamp + 2,
+            images: [{ filename: '1781567999003-dddddddddddddddd-3.png', clientRequestId: 'fs-request-4' }]
+        };
+        const retention = {
+            cleanupEnabled: true,
+            permanentlySavedFilenames: new Set<string>(),
+            onUpdatePermanentSave: async (action: 'preserve' | 'release', filenames: string[]) => {
+                updates.push({ action, filenames });
+            }
+        };
+        const view = await renderInClientDom(historyPanelNode([singleFsHistoryItem], retention));
+        try {
+            const selectButton = view.container.querySelector<HTMLButtonElement>('[aria-label="选择最近生成图片"]');
+            assert.ok(selectButton, 'missing retention selection entry');
+            await view.click(selectButton);
+
+            const checkbox = view.container.querySelector<HTMLElement>(
+                `[data-retention-image="${singleFsHistoryItem.images[0].filename}"]`
+            );
+            assert.ok(checkbox, 'missing fs image retention checkbox');
+            await view.click(checkbox);
+
+            await view.render(historyPanelNode([replacementHistoryItem], retention));
+
+            assert.match(view.container.textContent ?? '', /已选择 0 张/);
+            const preserveButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+                (button) => button.textContent === '永久保存'
+            );
+            assert.equal(preserveButton?.disabled, true);
+            assert.deepEqual(updates, []);
+        } finally {
+            await view.cleanup();
+        }
+    });
+
     it('keeps the selection and displays the concrete retention update failure', async () => {
         const originalConsoleError = console.error;
         console.error = () => {};
@@ -355,6 +394,12 @@ describe('HistoryPanel recent history actions', () => {
 
             assert.equal(view.container.querySelectorAll('[data-retention-image]').length, fsHistoryItem.images.length);
             assert.equal(view.container.querySelector('[data-retention-image="history-card.png"]'), null);
+            const thumbnails = view.container.querySelectorAll<HTMLImageElement>('.batch-thumbnail-strip img');
+            assert.equal(thumbnails.length, fsHistoryItem.images.length);
+            for (const thumbnail of thumbnails) {
+                assert.equal(thumbnail.getAttribute('width'), '88');
+                assert.equal(thumbnail.getAttribute('height'), '88');
+            }
         } finally {
             await view.cleanup();
         }
@@ -465,13 +510,12 @@ describe('HistoryPanel recent history actions', () => {
         assert.doesNotMatch(html, />管理</);
     });
 
-    it('keeps a completely empty side panel compact without placeholder activity rows', () => {
+    it('uses the full desktop side panel without placeholder activity rows', () => {
         const html = renderHistoryPanel([]);
 
         assert.match(html, /lg:overflow-y-auto/);
-        assert.match(html, /xl:h-auto xl:self-start/);
-        assert.doesNotMatch(html, /xl:flex xl:max-h-none xl:flex-1 xl:flex-col/);
-        assert.doesNotMatch(html, /xl:overflow-hidden/);
+        assert.match(html, /xl:flex xl:max-h-none xl:flex-1 xl:flex-col/);
+        assert.doesNotMatch(html, /xl:h-auto xl:self-start/);
         assert.doesNotMatch(html, /border-dashed/);
         assert.match(html, /暂无已保存的灵感/);
         assert.doesNotMatch(html, /activity-feed/);
@@ -486,14 +530,18 @@ describe('HistoryPanel recent history actions', () => {
         assert.doesNotMatch(html, /生成动态/);
         assert.doesNotMatch(html, /点击生成后，这里会记录创作过程。/);
 
-        const activeHtml = renderHistoryPanel([], [inspirationItem], [
-            {
-                id: 'generating',
-                label: '正在生成',
-                detail: '正在提交创作单。',
-                tone: 'progress'
-            }
-        ]);
+        const activeHtml = renderHistoryPanel(
+            [],
+            [inspirationItem],
+            [
+                {
+                    id: 'generating',
+                    label: '正在生成',
+                    detail: '正在提交创作单。',
+                    tone: 'progress'
+                }
+            ]
+        );
 
         assert.match(activeHtml, /role="status"/);
         assert.match(activeHtml, /aria-live="polite"/);
@@ -527,6 +575,18 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /xl:min-h-0/);
         assert.match(html, /xl:flex-1/);
         assert.match(html, /新图已入册/);
+    });
+
+    it('renders activity timeline history thumbnails with fixed dimensions', () => {
+        const html = renderHistoryPanel([batchHistoryItem], [inspirationItem]);
+        const thumbnails = html.match(/<img[^>]*alt="batch-card-\d\.png"[^>]*>/g) ?? [];
+
+        assert.equal(thumbnails.length, 3);
+        for (const thumbnail of thumbnails) {
+            assert.match(thumbnail, /width="28"/);
+            assert.match(thumbnail, /height="28"/);
+            assert.match(thumbnail, /class="[^"]*h-full w-full object-cover/);
+        }
     });
 
     it('announces saved completion after retained streaming preview activity', () => {

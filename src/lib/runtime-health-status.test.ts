@@ -22,6 +22,7 @@ describe('resolveRuntimeHealthStatus', () => {
                 },
                 hasRequestApiOverride: false,
                 imageBackend: 'images-api',
+                hasRequestResponsesModel: false,
                 streamingStrategy: 'auto',
                 streamMode: 'stream'
             }),
@@ -34,7 +35,7 @@ describe('resolveRuntimeHealthStatus', () => {
             resolveRuntimeHealthStatus({
                 runtimeCapabilities: {
                     streaming: { defaultBackend: 'responses-image-generation' },
-                    responsesImageBackend: { enabled: true },
+                    responsesImageBackend: { enabled: true, hasDefaultModel: true },
                     channelRouting: {
                         effectiveRequestModes: ['responses-non-stream'],
                         requestModeHealth: [
@@ -48,7 +49,62 @@ describe('resolveRuntimeHealthStatus', () => {
                 },
                 hasRequestApiOverride: false,
                 imageBackend: 'server-default',
+                hasRequestResponsesModel: false,
                 streamingStrategy: 'auto',
+                streamMode: 'auto'
+            }),
+            'runtime-ready'
+        );
+    });
+
+    it('marks the server-default Responses route as limited without a server default model', () => {
+        assert.equal(
+            resolveRuntimeHealthStatus({
+                runtimeCapabilities: {
+                    streaming: { defaultBackend: 'responses-image-generation' },
+                    responsesImageBackend: { enabled: true, hasDefaultModel: false },
+                    channelRouting: {
+                        effectiveRequestModes: ['responses-sse'],
+                        requestModeHealth: [
+                            {
+                                mode: 'responses-sse',
+                                healthyCredentialCount: 1,
+                                healthyChannelCount: 1
+                            }
+                        ]
+                    }
+                },
+                hasRequestApiOverride: false,
+                imageBackend: 'server-default',
+                hasRequestResponsesModel: true,
+                streamingStrategy: 'auto',
+                streamMode: 'stream'
+            }),
+            'route-limited'
+        );
+    });
+
+    it('keeps an explicit Responses route ready when the request provides its top-level model', () => {
+        assert.equal(
+            resolveRuntimeHealthStatus({
+                runtimeCapabilities: {
+                    streaming: { defaultBackend: 'images-api' },
+                    responsesImageBackend: { enabled: true, hasDefaultModel: false },
+                    channelRouting: {
+                        effectiveRequestModes: ['responses-non-stream'],
+                        requestModeHealth: [
+                            {
+                                mode: 'responses-non-stream',
+                                healthyCredentialCount: 1,
+                                healthyChannelCount: 1
+                            }
+                        ]
+                    }
+                },
+                hasRequestApiOverride: false,
+                imageBackend: 'responses-image-generation',
+                hasRequestResponsesModel: true,
+                streamingStrategy: 'off',
                 streamMode: 'auto'
             }),
             'runtime-ready'
@@ -61,6 +117,7 @@ describe('resolveRuntimeHealthStatus', () => {
                 runtimeCapabilities: null,
                 hasRequestApiOverride: true,
                 imageBackend: 'images-api',
+                hasRequestResponsesModel: false,
                 streamingStrategy: 'auto',
                 streamMode: 'auto'
             }),
@@ -87,6 +144,7 @@ describe('resolveRuntimeHealthStatus', () => {
                 },
                 hasRequestApiOverride: false,
                 imageBackend: 'responses-image-generation',
+                hasRequestResponsesModel: false,
                 streamingStrategy: 'auto',
                 streamMode: 'stream'
             }),
@@ -107,6 +165,7 @@ describe('resolveRuntimeHealthStatus', () => {
                 },
                 hasRequestApiOverride: true,
                 imageBackend: 'images-api',
+                hasRequestResponsesModel: false,
                 streamingStrategy: 'auto',
                 streamMode: 'auto'
             }),

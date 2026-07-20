@@ -35,10 +35,10 @@ import {
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
 import {
-    shouldRecommendImageStreaming,
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
+import { shouldRecommendImageStreaming } from '@/lib/image-streaming-recommendation';
 import {
     getPresetDimensions,
     getPresetTooltip,
@@ -583,7 +583,7 @@ export function GenerationForm({
                 <ModeToggle currentMode={currentMode} onModeChange={onModeChange} />
             </CardHeader>
             <div className='mobile-drawer-form-frame flex min-h-0 flex-1 flex-col overflow-hidden'>
-                <CardContent className='mobile-drawer-form-content literary-scrollbar min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4 pb-4 lg:px-4 lg:py-3 2xl:space-y-2.5'>
+                <CardContent className='mobile-drawer-form-content literary-scrollbar min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4 pb-4 lg:px-5 lg:py-3 2xl:space-y-2.5'>
                     <div className='flex items-center'>
                         <CardTitle className='editorial-title py-0.5 text-xl font-semibold'>
                             {t('workbench.creationSheet')}
@@ -625,7 +625,7 @@ export function GenerationForm({
                                         onChange={(e) => setPrompt(e.target.value)}
                                         required
                                         disabled={isLoading}
-                                        className='min-h-[104px] rounded-md bg-[oklch(0.972_0.018_82)] px-4 py-3 pb-8 leading-6 shadow-inner lg:min-h-[92px]'
+                                        className='bg-muted/45 min-h-[104px] rounded-md px-4 py-3 pb-8 leading-6 shadow-inner lg:min-h-[92px]'
                                     />
                                     <span className='text-muted-foreground ui-stat pointer-events-none absolute bottom-3 left-4 text-xs'>
                                         {prompt.trim().length} / 1000
@@ -639,7 +639,7 @@ export function GenerationForm({
                             </p>
                         )}
                         {isReuseMode && (
-                            <div className='border-primary/25 dark:bg-muted/40 rounded-md border bg-[oklch(0.965_0.03_76)] px-3 py-2 text-xs leading-5 shadow-sm'>
+                            <div className='border-primary/25 bg-primary/5 rounded-md border px-3 py-2 text-xs leading-5 shadow-sm'>
                                 {reuseContext ? (
                                     <div className='space-y-2'>
                                         <div className='flex items-start justify-between gap-3'>
@@ -689,7 +689,7 @@ export function GenerationForm({
                                     value={batchPromptText}
                                     onChange={(event) => setBatchPromptText(event.target.value)}
                                     disabled={isLoading}
-                                    className='min-h-[132px] rounded-md bg-[oklch(0.978_0.016_82)] px-3 py-2 leading-6 shadow-inner'
+                                    className='bg-muted/45 min-h-[132px] rounded-md px-3 py-2 leading-6 shadow-inner'
                                     placeholder={t('batch.promptPlaceholder')}
                                 />
                                 {hasFailedBatchPrompts && (
@@ -1518,21 +1518,21 @@ export function GenerationForm({
                 <CardFooter className='border-border bg-card flex shrink-0 border-t p-3'>
                     <div className='w-full space-y-2'>
                         <div className='grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-1.5 text-xs'>
-                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
+                            <span className='border-border bg-muted/45 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {model}
                             </span>
-                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
+                            <span className='border-border bg-muted/45 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {workbenchBackendLabel}
                             </span>
-                            <span className='border-border bg-background/65 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
+                            <span className='border-border bg-muted/45 text-muted-foreground inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {streamStatusLabel}
                             </span>
                             {parallelBatchChecked && (
-                                <span className='inline-flex min-w-0 items-center justify-center rounded-full border border-[oklch(0.72_0.065_142)] bg-[oklch(0.94_0.032_142)] px-2 py-1 text-center leading-4 break-words whitespace-normal text-[oklch(0.38_0.075_148)]'>
+                                <span className='inline-flex min-w-0 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-center leading-4 break-words whitespace-normal text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'>
                                     {t('streaming.parallelBatchEnabled')}
                                 </span>
                             )}
-                            <span className='border-primary/20 bg-primary/10 text-primary col-span-2 inline-flex min-w-0 items-center justify-center rounded-full border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
+                            <span className='border-primary/20 bg-primary/10 text-primary col-span-2 inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
                                 {estimatedCostLabel}
                             </span>
                         </div>
@@ -1544,7 +1544,7 @@ export function GenerationForm({
                                 type='button'
                                 onClick={handleSubmit}
                                 disabled={isLoading || !!submitDisabledReason}
-                                className='flex min-h-11 w-full items-center justify-center gap-2 border-0 bg-[oklch(0.615_0.165_30)] text-white shadow-sm hover:bg-[oklch(0.56_0.15_30)] hover:text-white lg:min-h-9'>
+                                className='bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground flex min-h-11 w-full items-center justify-center gap-2 border-0 shadow-sm lg:min-h-9'>
                                 {showLoadingState && <Loader2 className='h-4 w-4 animate-spin' />}
                                 {showLoadingState ? t('generate.loading') : t('generate.submit')}
                             </Button>

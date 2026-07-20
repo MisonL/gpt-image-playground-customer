@@ -121,7 +121,7 @@ import {
 import { formatEstimatedCredits } from '@/lib/workbench-cost-label';
 import { createZipBlob } from '@/lib/zip-export';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Activity, ArrowUp, Flower2, HelpCircle, Loader2, Lock, Pause, PenLine, Settings2, X } from 'lucide-react';
+import { Activity, ArrowUp, Loader2, Lock, Pause, PenLine, Settings2, X } from 'lucide-react';
 import * as React from 'react';
 
 type DrawnPoint = {
@@ -753,6 +753,7 @@ export default function HomePage() {
         runtimeCapabilities,
         hasRequestApiOverride,
         imageBackend: activeWorkbenchBackend,
+        hasRequestResponsesModel: (usesEditControls ? editResponsesModel : genResponsesModel).trim().length > 0,
         streamingStrategy: activeEffectiveStreamingStrategy,
         streamMode
     });
@@ -3671,17 +3672,16 @@ export default function HomePage() {
                             onClick={closeMobileCreationDrawer}
                         />
                     )}
-                    <div className='mx-auto flex min-h-screen w-full max-w-[1760px] min-w-0 flex-col px-4 py-3 lg:px-7 lg:py-5 xl:h-full xl:min-h-0'>
+                    <div className='mx-auto flex min-h-screen w-full max-w-[1880px] min-w-0 flex-col px-4 py-3 lg:px-6 lg:py-5 xl:h-full xl:min-h-0'>
                         <header
                             aria-hidden={isMobileCreationDrawerOpen}
                             inert={isMobileCreationDrawerOpen}
-                            className='mb-5 flex shrink-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between'>
+                            className='border-border/80 mb-4 flex shrink-0 flex-col gap-3 border-b pb-4 xl:flex-row xl:items-center xl:justify-between'>
                             <div className='flex min-w-0 items-center gap-3'>
                                 <div className='flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1'>
-                                    <h1 className='editorial-title shrink-0 text-3xl font-semibold tracking-normal sm:text-4xl'>
+                                    <h1 className='editorial-title shrink-0 text-2xl font-semibold tracking-normal sm:text-3xl'>
                                         {t('app.studioTitle')}
                                     </h1>
-                                    <Flower2 className='hidden h-7 w-7 rotate-12 text-[oklch(0.68_0.12_64)] sm:block' />
                                     <p className='text-muted-foreground min-w-0 text-sm'>{t('app.studioSubtitle')}</p>
                                 </div>
                                 <Button
@@ -3706,8 +3706,7 @@ export default function HomePage() {
                                     channelRouting={runtimeCapabilities?.channelRouting ?? null}
                                     runtimeLastFailure={runtimeCapabilities?.streamingBatch.lastFailure ?? null}
                                 />
-                                <div className='text-muted-foreground hidden items-center gap-4 sm:flex'>
-                                    <HelpCircle className='h-4 w-4' aria-hidden='true' />
+                                <div className='text-muted-foreground hidden items-center sm:flex'>
                                     <button
                                         type='button'
                                         onClick={openApiSettingsDialog}
@@ -3722,7 +3721,7 @@ export default function HomePage() {
                         <div
                             id='workbench-content'
                             tabIndex={-1}
-                            className='grid flex-1 grid-cols-1 gap-5 focus:outline-none lg:grid-cols-[minmax(340px,390px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(300px,340px)_minmax(600px,1fr)_minmax(280px,330px)] 2xl:grid-cols-[minmax(300px,340px)_minmax(840px,1fr)_minmax(280px,310px)]'>
+                            className='grid flex-1 grid-cols-1 gap-4 focus:outline-none lg:grid-cols-[minmax(360px,420px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(320px,360px)_minmax(0,1fr)_minmax(232px,272px)] 2xl:grid-cols-[minmax(380px,424px)_minmax(780px,1fr)_minmax(272px,304px)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
@@ -3731,7 +3730,7 @@ export default function HomePage() {
                                 onKeyDown={handleMobileCreationDrawerKeyDown}
                                 className={`order-2 lg:static lg:order-1 lg:block lg:overflow-visible lg:p-0 lg:shadow-none xl:min-h-0 xl:overflow-hidden ${
                                     isMobileCreationDrawerOpen
-                                        ? 'border-border fixed inset-x-0 top-4 bottom-0 z-50 flex min-h-0 flex-col overflow-hidden rounded-t-lg border-t bg-[oklch(0.986_0.015_84)] px-3 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(73,50,25,0.18)] lg:max-h-none lg:rounded-none'
+                                        ? 'border-border bg-card fixed inset-x-0 top-4 bottom-0 z-50 flex min-h-0 flex-col overflow-hidden rounded-t-lg border-t px-3 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-[0_-16px_36px_rgba(15,23,42,0.16)] lg:max-h-none lg:rounded-none'
                                         : 'hidden min-h-[620px]'
                                 }`}>
                                 {isMobileCreationDrawerOpen && (
@@ -3949,10 +3948,7 @@ export default function HomePage() {
                                         <AlertDescription>{renderErrorDescription(error)}</AlertDescription>
                                     </Alert>
                                 )}
-                                <div
-                                    className={
-                                        shouldExpandOutputStage ? 'min-h-0 flex-1' : 'min-h-0 shrink-0 xl:flex-1'
-                                    }>
+                                <div className='min-h-0 shrink-0 xl:flex-1'>
                                     <ImageOutput
                                         imageBatch={latestImageBatch}
                                         viewMode={imageOutputView}
@@ -4060,7 +4056,7 @@ export default function HomePage() {
                         </div>
                     </div>
                     {!isMobileCreationDrawerOpen && (
-                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 min-h-[var(--mobile-action-dock-height)] border-t px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(73,50,25,0.12)] lg:hidden'>
+                        <div className='bg-background border-border fixed right-0 bottom-0 left-0 z-40 min-h-[var(--mobile-action-dock-height)] border-t px-3 pt-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-12px_30px_rgba(15,23,42,0.1)] lg:hidden'>
                             <div
                                 className='mx-auto mb-2 flex h-3 w-24 touch-none items-center justify-center rounded-full select-none'
                                 onPointerDown={beginMobileCreationDrawerGesture}
