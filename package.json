@@ -3,6 +3,13 @@
     "version": "2.1.0",
     "license": "MIT",
     "private": true,
+    "allowScripts": {
+        "better-sqlite3@12.9.0": true,
+        "esbuild@0.28.1": true,
+        "fsevents@2.3.3": true,
+        "sharp@0.34.5": true,
+        "unrs-resolver@1.6.4": true
+    },
     "scripts": {
         "dev": "next dev --turbopack -p 4783",
         "prebuild": "node scripts/clean-standalone.mjs",
