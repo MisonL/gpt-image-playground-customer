@@ -6,6 +6,14 @@ import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_TEST_TIMEOUT_MS = 60_000;
 
+export function buildTestEnvironment(baseEnvironment = process.env) {
+    return {
+        ...baseEnvironment,
+        NODE_ENV: 'test',
+        APP_LOG_TEST_CONSOLE_MIRROR: 'false'
+    };
+}
+
 function collectTestFiles(root, directory, suffixes, files) {
     const currentDirectory = path.join(root, directory);
     for (const entry of readdirSync(currentDirectory, { withFileTypes: true })) {
@@ -101,7 +109,8 @@ export function runTests(scope = 'all', nodeArguments = []) {
     }
 
     return spawn(process.execPath, buildTestArguments(supportsTestConcurrency, testFiles, nodeArguments, supportsTestTimeout), {
-        stdio: 'inherit'
+        stdio: 'inherit',
+        env: buildTestEnvironment()
     });
 }
 

@@ -20,6 +20,7 @@ const DEFAULT_LOG_FILE_NAME = 'app.log.jsonl';
 const TEST_LOG_DIR = path.join(os.tmpdir(), 'gpt-image-playground-app-logs');
 const TEST_LOG_FILE_NAME = 'app-test.log.jsonl';
 const testLogFileNameOverrideEnv = 'APP_LOG_TEST_FILE_NAME';
+const testConsoleMirrorEnv = 'APP_LOG_TEST_CONSOLE_MIRROR';
 
 type LogLevel = (typeof LOG_LEVELS)[number];
 type LogContext = string | number | boolean | null | Record<string, unknown> | unknown[];
@@ -59,6 +60,10 @@ function resolveLogFile(): string {
 
 function shouldPersistEntries(): boolean {
     return process.env.NODE_ENV !== 'test' || persistenceEnabledForTest;
+}
+
+function shouldMirrorToConsole(): boolean {
+    return process.env.NODE_ENV !== 'test' || process.env[testConsoleMirrorEnv] !== 'false';
 }
 
 function defaultLogLevel(nodeEnv: string | undefined): LogLevel {
@@ -257,6 +262,9 @@ function writeLog(
         return;
     }
     appendLogEntry(level, message, context);
+    if (!shouldMirrorToConsole()) {
+        return;
+    }
     if (context === undefined) {
         writer(message);
         return;

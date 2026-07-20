@@ -18,16 +18,19 @@ const originalLogLevel = process.env.APP_LOG_LEVEL;
 const originalMaxEntries = process.env.APP_LOG_MAX_ENTRIES;
 const originalNodeEnv = process.env.NODE_ENV;
 const originalTestLogFileName = process.env.APP_LOG_TEST_FILE_NAME;
+const originalTestConsoleMirror = process.env.APP_LOG_TEST_CONSOLE_MIRROR;
 const originalDebug = console.debug;
 const originalInfo = console.info;
 const originalWarn = console.warn;
 const originalError = console.error;
 const nodeEnvKey: string = 'NODE_ENV';
 const testLogFileNameKey = 'APP_LOG_TEST_FILE_NAME';
+const testConsoleMirrorEnv = 'APP_LOG_TEST_CONSOLE_MIRROR';
 const sourcePath = fileURLToPath(new URL('./app-logger.ts', import.meta.url));
 
 beforeEach(async () => {
     process.env[nodeEnvKey] = 'test';
+    process.env[testConsoleMirrorEnv] = 'true';
     process.env[testLogFileNameKey] =
         `app-logger-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`;
     setAppLogPersistenceForTest(true);
@@ -57,6 +60,11 @@ afterEach(async () => {
     } else {
         process.env[testLogFileNameKey] = originalTestLogFileName;
     }
+    if (originalTestConsoleMirror === undefined) {
+        delete process.env[testConsoleMirrorEnv];
+    } else {
+        process.env[testConsoleMirrorEnv] = originalTestConsoleMirror;
+    }
     console.debug = originalDebug;
     console.info = originalInfo;
     console.warn = originalWarn;
@@ -64,6 +72,7 @@ afterEach(async () => {
 });
 
 it('keeps the test log override scoped to the fixed app log directory', () => {
+    console.info = () => {};
     process.env[testLogFileNameKey] = path.join('..', 'outside.jsonl');
     clearAppLogEntriesForTest();
 
@@ -164,6 +173,39 @@ describe('appLogger', { concurrency: false }, () => {
         appLogger.info('context message', { requestId: 'req-1' });
 
         assert.deepEqual(calls, [['plain message'], ['context message', { requestId: 'req-1' }]]);
+    });
+
+    it('keeps test diagnostics when test console mirroring is disabled', () => {
+        const calls: unknown[][] = [];
+        const received: string[] = [];
+        process.env[testConsoleMirrorEnv] = 'false';
+        console.error = (...args: unknown[]) => {
+            calls.push(args);
+        };
+        const unsubscribe = subscribeAppLogs((entry) => {
+            received.push(`${entry.level}:${entry.message}`);
+        });
+
+        appLogger.error('expected test diagnostic', { requestId: 'req-test-diagnostic' });
+        unsubscribe();
+
+        assert.deepEqual(calls, []);
+        assert.equal(readAppLogEntries().at(-1)?.message, 'expected test diagnostic');
+        assert.deepEqual(received, ['error:expected test diagnostic']);
+    });
+
+    it('keeps console mirroring enabled outside test mode when the test-only switch is false', () => {
+        const calls: unknown[][] = [];
+        process.env[nodeEnvKey] = 'production';
+        process.env.APP_LOG_LEVEL = 'error';
+        process.env[testConsoleMirrorEnv] = 'false';
+        console.error = (...args: unknown[]) => {
+            calls.push(args);
+        };
+
+        appLogger.error('production diagnostic');
+
+        assert.deepEqual(calls, [['production diagnostic']]);
     });
 
     it('allows debug messages at debug level', () => {

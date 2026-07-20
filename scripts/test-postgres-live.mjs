@@ -34,6 +34,7 @@ function runTests(databaseUrl) {
     env: {
       ...process.env,
       NODE_ENV: 'test',
+      APP_LOG_TEST_CONSOLE_MIRROR: 'false',
       AGENT_POSTGRES_TEST_DATABASE_URL: databaseUrl
     }
   });

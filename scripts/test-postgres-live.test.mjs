@@ -65,6 +65,31 @@ describe('live PostgreSQL test launcher cleanup', () => {
         }
     });
 
+    it('marks direct PostgreSQL contract tests as quiet test runs', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'pg-live-launcher-'));
+        const binDir = path.join(tempDir, 'bin');
+        await mkdir(binDir);
+        await writeFile(path.join(binDir, 'node'), buildEnvironmentNodeShim(), { mode: 0o755 });
+
+        try {
+            const result = spawnSync(process.execPath, [scriptPath], {
+                cwd: repoRoot,
+                encoding: 'utf8',
+                env: {
+                    ...process.env,
+                    AGENT_POSTGRES_TEST_DATABASE_URL: 'postgres://agent_test:agent_test@127.0.0.1:55432/agent_test',
+                    PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`
+                }
+            });
+
+            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+            assert.match(result.stdout, /NODE_ENV=test/);
+            assert.match(result.stdout, /APP_LOG_TEST_CONSOLE_MIRROR=false/);
+        } finally {
+            await rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
     it('surfaces Docker startup stderr when the temporary container cannot start', async () => {
         const tempDir = await mkdtemp(path.join(os.tmpdir(), 'pg-live-launcher-'));
         const logPath = path.join(tempDir, 'docker.log');
@@ -97,6 +122,14 @@ describe('live PostgreSQL test launcher cleanup', () => {
 function buildFailingNodeShim() {
     return `#!/bin/sh
 exit 37
+`;
+}
+
+function buildEnvironmentNodeShim() {
+    return `#!/bin/sh
+printf 'NODE_ENV=%s\\n' "$NODE_ENV"
+printf 'APP_LOG_TEST_CONSOLE_MIRROR=%s\\n' "$APP_LOG_TEST_CONSOLE_MIRROR"
+exit 0
 `;
 }
 

@@ -1,4 +1,5 @@
 import {
+    buildTestEnvironment,
     buildTestArguments,
     DEFAULT_TEST_TIMEOUT_MS,
     findTestFiles,
@@ -15,6 +16,14 @@ const testFiles = ['scripts/example.test.mjs', 'src/example.test.ts', 'src/examp
 const baseTestArguments = ['--test', '--import', 'tsx', ...testFiles];
 
 describe('test runner arguments', () => {
+    it('marks the standard suite as test-only and disables app-log console mirroring', () => {
+        const environment = buildTestEnvironment({ EXISTING_VALUE: 'kept' });
+
+        assert.equal(environment.EXISTING_VALUE, 'kept');
+        assert.equal(environment.NODE_ENV, 'test');
+        assert.equal(environment.APP_LOG_TEST_CONSOLE_MIRROR, 'false');
+    });
+
     it('limits concurrency and test duration when the current Node runtime supports both options', () => {
         assert.deepEqual(buildTestArguments(true, testFiles, [], true), [
             '--test',
