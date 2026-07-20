@@ -1,4 +1,4 @@
-FROM node:24-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++ pkgconfig
 COPY package.json package-lock.json ./
@@ -11,7 +11,7 @@ ENV NEXT_PUBLIC_IMAGE_STORAGE_MODE=${NEXT_PUBLIC_IMAGE_STORAGE_MODE}
 COPY . .
 RUN npm run build
 
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 ARG NEXT_PUBLIC_IMAGE_STORAGE_MODE=fs
 ENV NODE_ENV=production
