@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_TEST_TIMEOUT_MS = 60_000;
+export const DEFAULT_TEST_CONCURRENCY = 2;
 
 export function buildTestEnvironment(baseEnvironment = process.env) {
     return {
@@ -77,7 +78,9 @@ export function buildTestArguments(
     supportsTestTimeout = false
 ) {
     const defaultConcurrency =
-        supportsTestConcurrency && !hasTestConcurrencyArgument(nodeArguments) ? ['--test-concurrency=4'] : [];
+        supportsTestConcurrency && !hasTestConcurrencyArgument(nodeArguments)
+            ? [`--test-concurrency=${DEFAULT_TEST_CONCURRENCY}`]
+            : [];
     const defaultTimeout =
         supportsTestTimeout && !hasTestTimeoutArgument(nodeArguments) ? [`--test-timeout=${DEFAULT_TEST_TIMEOUT_MS}`] : [];
     return ['--test', ...defaultConcurrency, ...defaultTimeout, '--import', 'tsx', ...nodeArguments, ...testFiles];

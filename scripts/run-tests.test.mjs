@@ -1,6 +1,7 @@
 import {
     buildTestEnvironment,
     buildTestArguments,
+    DEFAULT_TEST_CONCURRENCY,
     DEFAULT_TEST_TIMEOUT_MS,
     findTestFiles,
     parseTestRunnerArguments,
@@ -27,7 +28,7 @@ describe('test runner arguments', () => {
     it('limits concurrency and test duration when the current Node runtime supports both options', () => {
         assert.deepEqual(buildTestArguments(true, testFiles, [], true), [
             '--test',
-            '--test-concurrency=4',
+            `--test-concurrency=${DEFAULT_TEST_CONCURRENCY}`,
             `--test-timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
             ...baseTestArguments.slice(1)
         ]);
@@ -46,7 +47,7 @@ describe('test runner arguments', () => {
         assert.deepEqual(selectTestFiles(process.cwd(), 'all', nodeArguments), []);
         assert.deepEqual(buildTestArguments(true, [], nodeArguments, true), [
             '--test',
-            '--test-concurrency=4',
+            `--test-concurrency=${DEFAULT_TEST_CONCURRENCY}`,
             `--test-timeout=${DEFAULT_TEST_TIMEOUT_MS}`,
             '--import',
             'tsx',
@@ -78,7 +79,7 @@ describe('test runner arguments', () => {
     it('preserves an explicit Node test timeout value', () => {
         assert.deepEqual(buildTestArguments(true, testFiles, ['--test-timeout=120000'], true), [
             '--test',
-            '--test-concurrency=4',
+            `--test-concurrency=${DEFAULT_TEST_CONCURRENCY}`,
             '--import',
             'tsx',
             '--test-timeout=120000',
