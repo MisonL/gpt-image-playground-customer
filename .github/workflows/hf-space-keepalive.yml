@@ -10,23 +10,26 @@ permissions:
 
 jobs:
   keepalive:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       HF_SPACE_KEEPALIVE_URL: ${{ vars.HF_SPACE_KEEPALIVE_URL || 'https://misonl-gpt-image-playground-customer.hf.space' }}
       HF_SPACE_KEEPALIVE_PATH: /api/auth-status
       HF_SPACE_KEEPALIVE_TIMEOUT_MS: '30000'
-      HF_SPACE_KEEPALIVE_MAX_ATTEMPTS: '3'
+      HF_SPACE_KEEPALIVE_MAX_ATTEMPTS: '4'
       HF_SPACE_KEEPALIVE_RETRY_DELAY_MS: '5000'
+      HF_SPACE_KEEPALIVE_RETRY_MAX_DELAY_MS: '20000'
       HF_SPACE_KEEPALIVE_EXPECT_PASSWORD_REQUIRED: 'true'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Ping Space keepalive endpoint
         run: node scripts/keepalive-hf-space.mjs

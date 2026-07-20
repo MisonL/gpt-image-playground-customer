@@ -248,7 +248,7 @@ npm run smoke:hf-space-local
 - 工作流文件：`.github/workflows/hf-space-keepalive.yml`
 - 默认频率：每 6 小时一次，可手动触发 `workflow_dispatch`
 - 默认目标：`https://misonl-gpt-image-playground-customer.hf.space/api/auth-status`
-- GitHub Actions 中默认最多请求 3 次，每次超时 30 秒，重试间隔 5 秒。失败日志会记录每次尝试，不把超时伪装成成功。
+- GitHub Actions 使用 Node 24，并在最多 4 次请求中按 5 秒、10 秒、20 秒退避重试；每次超时 30 秒。失败日志会记录 HTTP 状态、响应类型和下一次等待时间，不把失败伪装成成功，也不会输出上游响应正文。
 - 行为边界：只访问只读鉴权状态端点，不携带 `APP_PASSWORD`、`AGENT_API_TOKEN` 或 OpenAI Key，不触发生图、不访问 Agent 生成接口。
 
 如果 Space 地址变化，在 GitHub 仓库 Variables 中设置：
@@ -262,13 +262,17 @@ HF_SPACE_KEEPALIVE_URL=https://<user>-<space>.hf.space
 ```bash
 HF_SPACE_KEEPALIVE_URL=https://<user>-<space>.hf.space \
 HF_SPACE_KEEPALIVE_EXPECT_PASSWORD_REQUIRED=true \
-HF_SPACE_KEEPALIVE_MAX_ATTEMPTS=3 \
+HF_SPACE_KEEPALIVE_MAX_ATTEMPTS=4 \
+HF_SPACE_KEEPALIVE_RETRY_DELAY_MS=5000 \
+HF_SPACE_KEEPALIVE_RETRY_MAX_DELAY_MS=20000 \
 npm run keepalive:hf-space
 ```
 
 注意：keepalive 是免费层的 best-effort 机制，不能保证绕过 Hugging Face 平台维护、重启或政策限制。若需要平台级保证，应升级到付费硬件并设置永不休眠。
 
 ## 验证门禁
+
+GitHub Actions 的 `.github/workflows/ci.yml` 会在 Pull Request、`main` 分支推送和手动触发时执行版本元数据检查、完整依赖审计、测试、源码 lint、脚本语法检查、生产构建、工作流 lint、Dockerfile 与基础 Compose 加 memory/PostgreSQL 覆盖配置检查。它还会构建和启动生产镜像后验证 `/api/auth-status`，并在独立 job 中运行真实 PostgreSQL 状态契约。
 
 最小验证：
 

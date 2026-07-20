@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate version metadata
+        run: npm run version:check
+
+      - name: Audit dependency tree
+        run: npm audit
+
+      - name: Run tests
+        run: npm test -- --test-timeout=60000
+
+      - name: Lint source files
+        run: npm run lint
+
+      - name: Check script syntax
+        run: npm run lint:scripts
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Check committed whitespace
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BASE_SHA" && "$BASE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+            git diff --check "$BASE_SHA" "$HEAD_SHA"
+          else
+            git show --check --format= "$HEAD_SHA"
+          fi
+
+      - name: Lint GitHub Actions workflows
+        run: docker run --rm --network none -v "$PWD:/repo:ro" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+
+      - name: Validate Docker build definition
+        run: docker build --check .
+
+      - name: Validate Compose configurations
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.memory.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.postgres.yml config --quiet
+
+  docker-runtime:
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build production image
+        run: docker build --tag gpt-image-playground-customer:ci .
+
+      - name: Start production container
+        run: docker run --detach --name gpt-image-playground-customer-ci --publish 127.0.0.1:4783:4783 gpt-image-playground-customer:ci
+
+      - name: Verify production endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:4783/api/auth-status >/tmp/auth-status.json; then
+              node --input-type=module -e "import { readFileSync } from 'node:fs'; const response = JSON.parse(readFileSync('/tmp/auth-status.json', 'utf8')); if (response.passwordRequired !== false) throw new Error('Expected the CI container auth-status endpoint to report passwordRequired=false.');"
+              exit 0
+            fi
+            printf 'auth-status probe attempt %s failed\n' "$attempt" >&2
+            sleep 1
+          done
+          docker logs gpt-image-playground-customer-ci
+          exit 1
+
+      - name: Stop production container
+        if: always()
+        run: docker rm --force gpt-image-playground-customer-ci || true
+
+  postgres-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run PostgreSQL state contract
+        run: npm run test:postgres
