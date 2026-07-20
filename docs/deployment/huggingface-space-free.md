@@ -1,6 +1,6 @@
 # Hugging Face Space 部署
 
-本文档描述如何把本项目部署到 Hugging Face Docker Space，用作公网图片生成服务。Docker Space 的创建和更新权限取决于 Hugging Face 的当前账户政策；当前账户若在 `hf upload` 阶段收到 Docker Space 创建接口的 `402`，部署脚本只会对已存在且可认证写入的固定 Space 回退到 Git 推送，不能绕过新建 Docker Space 的账户限制。
+本文档描述如何把本项目部署到 Hugging Face Docker Space，用作公网图片生成服务。Docker Space 的创建和更新权限取决于 Hugging Face 的当前账户政策；固定目标已存在且元数据标识为 Docker，部署脚本会直接使用认证 Git 推送，避免 `hf upload` 触发创建接口的已知 `402`。这不绕过新建 Docker Space 的账户限制。
 
 ## 目标形态
 
@@ -81,7 +81,7 @@ npm run agent:doctor
 - `doctor`：统一诊断入口，默认包含 HF Space 只读远端检查。
 - `verify`：提交前基线，执行测试、lint、脚本语法、构建和 `git diff --check`；需要真实 PostgreSQL gate 时加 `--postgres`。
 - `deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `--memory` 会断言 memory/indexeddb overlay 生效。
-- `deploy:space`：上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证；已存在 Docker Space 遇到已知创建政策 `402` 时，会使用认证 Git 推送回退。
+- `deploy:space`：上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证；已存在 Docker Space 根据远端元数据直接使用认证 Git 推送，其他类型才优先尝试 `hf upload`。
 - `agent:doctor`：通过仓库 Skill 脚本执行只读 Agent API 契约检查，不触发真实生图。
 
 HF Space 交互使用官方 `hf` CLI。不要维护本机 access 文件，不要把 `APP_PASSWORD`、`AGENT_API_TOKEN`、OpenAI Key 或 Hugging Face token 写入仓库文件。
@@ -97,8 +97,8 @@ npm run deploy:space
 - 使用 `git status --porcelain` 拒绝脏工作区。
 - 使用 `git archive HEAD` 生成临时源码目录，只上传已跟踪源码。
 - Space 发布包会排除根目录 `readme-images/` 中的 README 文档截图，以兼容 Hugging Face Git 的二进制文件门禁；Space README 会改用对应 GitHub 提交的不可变图片地址。
-- 优先使用 `hf upload` 上传到 `misonL/gpt-image-playground-customer`。
-- 仅当 `hf upload` 因既有 Docker Space 的创建政策 `402` 失败时，克隆该固定 Space、同步已跟踪源码并使用认证 Git 推送；其他错误不会自动回退。
+- 读取远端 Space 元数据；当前固定 Docker Space 直接克隆、同步已跟踪源码并使用认证 Git 推送。
+- 非 Docker Space 才优先使用 `hf upload`；仅当它命中既有 Docker Space 创建政策 `402` 时才回退到认证 Git 推送，其他错误不会自动回退。
 - 等待新 Space commit 进入 `RUNNING`。
 - 检查 `/api/auth-status`、`/api/agent/capabilities` 和 `/api/runtime-capabilities`，不触发真实生图。
 

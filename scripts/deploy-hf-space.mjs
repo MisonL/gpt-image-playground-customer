@@ -1,14 +1,12 @@
 #!/usr/bin/env node
-
+import { fetchJsonWithTimeout, parseJsonPayload, runCommandStrict } from './command-center-utils.mjs';
+import { assertKnownOptions, HF_SPACE_ID, HF_SPACE_URL, isMainModule } from './hf-space-doctor-utils.mjs';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-
-import { fetchJsonWithTimeout, parseJsonPayload, runCommandStrict } from './command-center-utils.mjs';
-import { assertKnownOptions, HF_SPACE_ID, HF_SPACE_URL, isMainModule } from './hf-space-doctor-utils.mjs';
 
 const STATUS_POLL_ATTEMPTS = 40;
 const STATUS_POLL_INTERVAL_MS = 10_000;
@@ -34,10 +32,11 @@ function printHelp() {
     console.log(`Usage:
   npm run deploy:hf-space
 
-Deploys the current clean git HEAD to ${HF_SPACE_ID} with the official hf CLI.
+Deploys the current clean git HEAD to ${HF_SPACE_ID}.
 
-The script uploads a temporary git archive, waits for the Space to run the new
-Space commit, and performs read-only public endpoint checks.`);
+Existing Docker Spaces use an authenticated Git push. Other Space types try the
+official hf CLI first. The script waits for the Space to run the new commit and
+performs read-only public endpoint checks.`);
 }
 
 function runText(command, args, options = {}) {
@@ -93,7 +92,9 @@ export function isSpaceDeployPath(filePath) {
     const normalized = String(filePath || '')
         .replaceAll('\\', '/')
         .replace(/^\.\//, '');
-    return normalized.length > 0 && !SPACE_DEPLOY_EXCLUDED_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+    return (
+        normalized.length > 0 && !SPACE_DEPLOY_EXCLUDED_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+    );
 }
 
 export function rewriteSpaceReadmeImageSources(readme, repoSlug, localSha) {
@@ -112,7 +113,11 @@ function prepareSourceTree(repoSlug, localSha) {
     runText('tar', ['-x', '-C', sourceDir], { input: archive });
     rmSync(join(sourceDir, 'readme-images'), { force: true, recursive: true });
     const readmePath = join(sourceDir, 'README.md');
-    writeFileSync(readmePath, rewriteSpaceReadmeImageSources(readFileSync(readmePath, 'utf8'), repoSlug, localSha), 'utf8');
+    writeFileSync(
+        readmePath,
+        rewriteSpaceReadmeImageSources(readFileSync(readmePath, 'utf8'), repoSlug, localSha),
+        'utf8'
+    );
     return sourceDir;
 }
 
@@ -135,6 +140,10 @@ export function isHfUploadExistingSpacePolicyError(error) {
         /huggingface\.co\/api\/repos\/create/i.test(message) &&
         /Docker Spaces?.*(?:PRO|subscription)/is.test(message)
     );
+}
+
+export function shouldUseGitPushForSpace(spaceInfo) {
+    return spaceInfo?.sdk === 'docker';
 }
 
 export function buildUploadArgs({ sourceDir, localSha, repoSlug, deletePaths = [] }) {
@@ -166,9 +175,10 @@ function readLocalGitFiles() {
     return new Set(output.split('\0').filter(isSpaceDeployPath));
 }
 
-function readRemoteFilePaths() {
-    const info = readSpaceInfo();
-    return (info.siblings || []).map((sibling) => sibling.rfilename).filter((filename) => typeof filename === 'string' && filename.length > 0);
+function readRemoteFilePaths(info) {
+    return (info.siblings || [])
+        .map((sibling) => sibling.rfilename)
+        .filter((filename) => typeof filename === 'string' && filename.length > 0);
 }
 
 export function findRemoteDeletePaths(localFiles, remoteFiles) {
@@ -190,15 +200,22 @@ export function buildDeployMarker(localSha, createdAt = new Date(), deployId = r
 
 export function assertDeployMarkerMatches(marker, expectedMarker) {
     if (!marker || typeof marker !== 'object') throw new Error('deploy marker response was not an object.');
-    if (marker?.schema_version !== expectedMarker.schema_version) throw new Error('deploy marker schema_version mismatch.');
+    if (marker?.schema_version !== expectedMarker.schema_version)
+        throw new Error('deploy marker schema_version mismatch.');
     if (marker.local_sha !== expectedMarker.local_sha) {
-        throw new Error(`deploy marker local_sha mismatch: expected ${expectedMarker.local_sha}, received ${marker.local_sha || 'missing'}.`);
+        throw new Error(
+            `deploy marker local_sha mismatch: expected ${expectedMarker.local_sha}, received ${marker.local_sha || 'missing'}.`
+        );
     }
     if (marker.created_at !== expectedMarker.created_at) {
-        throw new Error(`deploy marker created_at mismatch: expected ${expectedMarker.created_at}, received ${marker.created_at || 'missing'}.`);
+        throw new Error(
+            `deploy marker created_at mismatch: expected ${expectedMarker.created_at}, received ${marker.created_at || 'missing'}.`
+        );
     }
     if (marker.deploy_id !== expectedMarker.deploy_id) {
-        throw new Error(`deploy marker deploy_id mismatch: expected ${expectedMarker.deploy_id}, received ${marker.deploy_id || 'missing'}.`);
+        throw new Error(
+            `deploy marker deploy_id mismatch: expected ${expectedMarker.deploy_id}, received ${marker.deploy_id || 'missing'}.`
+        );
     }
     return marker;
 }
@@ -239,7 +256,15 @@ function readLocalGitFilesWithDeployMarker() {
 
 function uploadSourceTree(sourceDir, deployMarker, repoSlug) {
     writeDeployMarker(sourceDir, deployMarker);
-    const deletePaths = findRemoteDeletePaths(readLocalGitFilesWithDeployMarker(), readRemoteFilePaths());
+    const remoteSpace = readSpaceInfo();
+    const deletePaths = findRemoteDeletePaths(readLocalGitFilesWithDeployMarker(), readRemoteFilePaths(remoteSpace));
+    if (shouldUseGitPushForSpace(remoteSpace)) {
+        console.log('Deploying the existing Docker Space via an authenticated Git push.');
+        return {
+            spaceCommitSha: uploadSourceTreeWithGit(sourceDir, deployMarker),
+            transport: 'git_push_existing_docker_space'
+        };
+    }
     try {
         const output = runText(
             'hf',
@@ -411,7 +436,9 @@ async function main() {
 
 if (isMainModule(import.meta.url, process.argv[1])) {
     main().catch((error) => {
-        console.error(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }, null, 2));
+        console.error(
+            JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }, null, 2)
+        );
         process.exit(1);
     });
 }

@@ -1,6 +1,3 @@
-import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
-
 import {
     GIT_ARCHIVE_MAX_BUFFER_BYTES,
     assertDeployMarkerMatches,
@@ -8,6 +5,7 @@ import {
     buildDeployMarkerRouteSource,
     isSpaceDeployPath,
     isHfUploadExistingSpacePolicyError,
+    shouldUseGitPushForSpace,
     buildUploadArgs,
     extractUploadCommitSha,
     findRemoteDeletePaths,
@@ -15,6 +13,8 @@ import {
     rewriteSpaceReadmeImageSources,
     waitForRunning
 } from './deploy-hf-space.mjs';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 
 describe('HF Space deploy script', () => {
     it('recognizes the existing Docker Space create-policy error for the Git deployment fallback', () => {
@@ -25,8 +25,24 @@ describe('HF Space deploy script', () => {
         ].join('\n');
 
         assert.equal(isHfUploadExistingSpacePolicyError(policyError), true);
-        assert.equal(isHfUploadExistingSpacePolicyError("Client error '402 Payment Required' for url 'https://huggingface.co/api/models/create'"), false);
-        assert.equal(isHfUploadExistingSpacePolicyError("Client error '401 Unauthorized' for url 'https://huggingface.co/api/repos/create'"), false);
+        assert.equal(
+            isHfUploadExistingSpacePolicyError(
+                "Client error '402 Payment Required' for url 'https://huggingface.co/api/models/create'"
+            ),
+            false
+        );
+        assert.equal(
+            isHfUploadExistingSpacePolicyError(
+                "Client error '401 Unauthorized' for url 'https://huggingface.co/api/repos/create'"
+            ),
+            false
+        );
+    });
+
+    it('uses Git directly for an existing Docker Space', () => {
+        assert.equal(shouldUseGitPushForSpace({ sdk: 'docker' }), true);
+        assert.equal(shouldUseGitPushForSpace({ sdk: 'gradio' }), false);
+        assert.equal(shouldUseGitPushForSpace({}), false);
     });
 
     it('extracts the Space commit SHA from hf upload JSON output', () => {
@@ -41,7 +57,10 @@ describe('HF Space deploy script', () => {
     });
 
     it('rejects upload output without a Space commit URL', () => {
-        assert.throws(() => extractUploadCommitSha('{"url":"https://huggingface.co/spaces/misonL/demo"}'), /commit SHA or commit URL/);
+        assert.throws(
+            () => extractUploadCommitSha('{"url":"https://huggingface.co/spaces/misonL/demo"}'),
+            /commit SHA or commit URL/
+        );
     });
 
     it('extracts the Space commit SHA from direct hf upload JSON fields', () => {
@@ -80,7 +99,10 @@ describe('HF Space deploy script', () => {
             args[args.indexOf('--commit-description') + 1],
             'Source: MisonL/gpt-image-playground-customer@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
         );
-        assert.equal(args.some((arg) => arg.includes('\n')), false);
+        assert.equal(
+            args.some((arg) => arg.includes('\n')),
+            false
+        );
     });
 
     it('uses a provided repository slug in upload commit metadata', () => {
@@ -90,12 +112,21 @@ describe('HF Space deploy script', () => {
             repoSlug: 'owner/repo'
         });
 
-        assert.equal(args[args.indexOf('--commit-description') + 1], 'Source: owner/repo@eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee');
+        assert.equal(
+            args[args.indexOf('--commit-description') + 1],
+            'Source: owner/repo@eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+        );
     });
 
     it('parses GitHub repository slugs from common origin URL formats', () => {
-        assert.equal(parseRepositorySlug('https://github.com/MisonL/gpt-image-playground-customer.git'), 'MisonL/gpt-image-playground-customer');
-        assert.equal(parseRepositorySlug('git@github.com:MisonL/gpt-image-playground-customer.git'), 'MisonL/gpt-image-playground-customer');
+        assert.equal(
+            parseRepositorySlug('https://github.com/MisonL/gpt-image-playground-customer.git'),
+            'MisonL/gpt-image-playground-customer'
+        );
+        assert.equal(
+            parseRepositorySlug('git@github.com:MisonL/gpt-image-playground-customer.git'),
+            'MisonL/gpt-image-playground-customer'
+        );
         assert.throws(() => parseRepositorySlug('not-a-github-url'), /Set REPO_SLUG=owner\/repo/);
     });
 
@@ -179,8 +210,14 @@ describe('HF Space deploy script', () => {
     });
 
     it('builds a unique deploy marker id when none is provided', () => {
-        const first = buildDeployMarker('3333333333333333333333333333333333333333', new Date('2026-06-20T10:00:00.000Z'));
-        const second = buildDeployMarker('3333333333333333333333333333333333333333', new Date('2026-06-20T10:00:00.000Z'));
+        const first = buildDeployMarker(
+            '3333333333333333333333333333333333333333',
+            new Date('2026-06-20T10:00:00.000Z')
+        );
+        const second = buildDeployMarker(
+            '3333333333333333333333333333333333333333',
+            new Date('2026-06-20T10:00:00.000Z')
+        );
 
         assert.match(first.deploy_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
         assert.notEqual(first.deploy_id, second.deploy_id);
@@ -283,12 +320,10 @@ describe('HF Space deploy script', () => {
 
     it('keeps the generated deploy markers from being deleted on upload', () => {
         assert.deepEqual(
-            findRemoteDeletePaths(new Set(['README.md', 'public/hf-space-deploy-marker.json', 'src/app/api/deploy-marker/route.ts']), [
-                'README.md',
-                'public/hf-space-deploy-marker.json',
-                'src/app/api/deploy-marker/route.ts',
-                'old.md'
-            ]),
+            findRemoteDeletePaths(
+                new Set(['README.md', 'public/hf-space-deploy-marker.json', 'src/app/api/deploy-marker/route.ts']),
+                ['README.md', 'public/hf-space-deploy-marker.json', 'src/app/api/deploy-marker/route.ts', 'old.md']
+            ),
             ['old.md']
         );
     });
