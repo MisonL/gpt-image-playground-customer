@@ -1,6 +1,6 @@
-const minimumNodeVersion = [20, 10, 0];
+const minimumNodeVersion = [22, 15, 0];
 
-export const MIN_NODE_VERSION_RANGE = '>=20.10.0';
+export const MIN_NODE_VERSION_RANGE = '>=22.15.0';
 
 export function isSupportedNodeVersion(version = process.version) {
     const match = /^v?(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version);

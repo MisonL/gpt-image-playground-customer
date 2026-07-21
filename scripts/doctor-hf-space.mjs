@@ -11,8 +11,9 @@ import {
     runDoctorCommand,
     validateSpaceUrl
 } from './hf-space-doctor-utils.mjs';
+import { inspectDependencyInstallation } from './dependency-installation.mjs';
 import { isSupportedNodeVersion, MIN_NODE_VERSION_RANGE } from './node-version.mjs';
-import { existsSync } from 'node:fs';
+import { inspectNpmInstallPolicy } from './npm-install-policy.mjs';
 
 const REQUIRED_SPACE_VARIABLES = ['AGENT_STATE_BACKEND', 'NEXT_PUBLIC_IMAGE_STORAGE_MODE'];
 const RECOMMENDED_SPACE_VARIABLES = ['APP_LOG_LEVEL'];
@@ -65,6 +66,23 @@ function checkCommand(checks, name, command, args, failureAction) {
     }
     addCheck(checks, 'fail', name, failureAction, { error: result.error });
     return false;
+}
+
+export function buildNpmInstallPolicyCheck(policy = inspectNpmInstallPolicy()) {
+    if (policy.ok) {
+        return {
+            status: 'pass',
+            name: 'npm-install-policy',
+            message: 'npm supports strict allowScripts installation policy.'
+        };
+    }
+    return {
+        status: 'fail',
+        name: 'npm-install-policy',
+        message: 'Current npm does not support --strict-allow-scripts; upgrade npm before installing dependencies.',
+        reason: policy.reason,
+        ...(policy.error ? { error: policy.error } : {})
+    };
 }
 
 function checkConfiguredTarget(checks) {
@@ -185,6 +203,30 @@ function checkRemoteSecrets(checks, spaceId) {
     }
 }
 
+export function buildDependencyInstallationCheck(cwd = process.cwd()) {
+    const installation = inspectDependencyInstallation(cwd);
+    if (installation.ok) {
+        return { status: 'pass', name: 'node-modules', message: 'Direct dependencies match package-lock.json.' };
+    }
+    return {
+        status: 'warn',
+        name: 'node-modules',
+        message:
+            'node_modules is missing or incomplete; build, lint, test, and smoke commands require npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check.',
+        reason: installation.reason,
+        ...(installation.missingPackages.length ? { missingPackages: installation.missingPackages } : {}),
+        ...(installation.invalidPackages.length ? { invalidPackages: installation.invalidPackages } : {}),
+        ...(installation.nameMismatches.length ? { nameMismatches: installation.nameMismatches } : {}),
+        ...(installation.versionMismatches.length ? { versionMismatches: installation.versionMismatches } : {}),
+        ...(installation.rootLockMismatches.length ? { rootLockMismatches: installation.rootLockMismatches } : {}),
+        ...(installation.hiddenLockMismatches.length ? { hiddenLockMismatches: installation.hiddenLockMismatches } : {})
+    };
+}
+
+function checkDependencyInstallation(checks) {
+    checks.push(buildDependencyInstallationCheck());
+}
+
 function main() {
     const options = parseArgs(process.argv.slice(2));
     if (options.help) {
@@ -194,13 +236,15 @@ function main() {
 
     const checks = [];
     checkNode(checks);
-    checkCommand(
+    const npmAvailable = checkCommand(
         checks,
         'npm',
         'npm',
         ['--version'],
         `npm is missing. Install Node.js ${MIN_NODE_VERSION_RANGE} or newer with npm.`
     );
+    if (npmAvailable) checks.push(buildNpmInstallPolicyCheck());
+    else addCheck(checks, 'skip', 'npm-install-policy', 'npm install policy check requires npm.');
     const hfAvailable = checkCommand(
         checks,
         'hf-cli',
@@ -217,16 +261,7 @@ function main() {
             error: hfAuth.error
         });
     }
-    if (existsSync('node_modules')) {
-        addCheck(checks, 'pass', 'node-modules', 'node_modules exists.');
-    } else {
-        addCheck(
-            checks,
-            'warn',
-            'node-modules',
-            'node_modules is missing; build, lint, test, and smoke commands require npm install.'
-        );
-    }
+    checkDependencyInstallation(checks);
     checkCommand(
         checks,
         'git',

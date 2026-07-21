@@ -2,7 +2,8 @@ FROM node:26-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++ pkgconfig
 COPY package.json package-lock.json ./
-RUN npm ci --strict-allow-scripts
+COPY scripts/check-install-script-policy.mjs scripts/dependency-installation.mjs scripts/npm-install-policy.mjs ./scripts/
+RUN npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check
 
 FROM deps AS builder
 ENV NEXT_TELEMETRY_DISABLED=1

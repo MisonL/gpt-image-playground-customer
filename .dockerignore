@@ -7,9 +7,11 @@ coverage
 dist
 .git
 .gitignore
+!.gitignore
 .env
 .env.*
 !.env.example
+!.env.real-smoke.example
 generated-images
 npm-debug.log*
 yarn-debug.log*

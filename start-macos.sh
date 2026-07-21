@@ -17,7 +17,7 @@ fi
 
 if ! command -v node >/dev/null 2>&1; then
     echo "[ERROR] Node.js was not found."
-    echo "Please install Node.js 20.10.0 or later: https://nodejs.org/"
+    echo "Please install Node.js 22.15.0 or later: https://nodejs.org/"
     exit 1
 fi
 
@@ -25,12 +25,12 @@ if ! node -e "import('./scripts/node-version.mjs').then(function(module){process
     echo "[ERROR] Node.js version is too old."
     echo "Current version:"
     node -v
-    echo "Required: Node.js 20.10.0 or later. Download: https://nodejs.org/"
+    echo "Required: Node.js 22.15.0 or later. Download: https://nodejs.org/"
     exit 1
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-    echo "[ERROR] npm was not found. Please reinstall Node.js 20.10.0 or later."
+    echo "[ERROR] npm was not found. Please reinstall Node.js 22.15.0 or later."
     exit 1
 fi
 
@@ -53,12 +53,27 @@ else
     echo "[INFO] .env.local found."
 fi
 
-if [ ! -d "node_modules" ]; then
-    echo "[INFO] First run: installing dependencies. This may take a few minutes."
-    echo
-    npm install
+if node scripts/dependency-installation.mjs; then
+    echo "[INFO] Dependencies match package-lock.json. Skipping installation."
 else
-    echo "[INFO] Dependencies found. Skipping installation."
+    echo "[INFO] Dependencies are missing or incomplete. Installing from package-lock.json. This may take a few minutes."
+    echo
+    if ! npm run install-scripts:check; then
+        echo "[ERROR] Dependency install script policy validation failed."
+        exit 1
+    fi
+    if ! node scripts/npm-install-policy.mjs; then
+        echo "[ERROR] Current npm does not support --strict-allow-scripts. Upgrade npm before installing dependencies."
+        exit 1
+    fi
+    if ! npm ci --strict-allow-scripts; then
+        echo "[ERROR] Dependency installation failed. Please check the network and run again."
+        exit 1
+    fi
+    if ! npm run dependencies:check; then
+        echo "[ERROR] Dependency installation completed with an incomplete package tree. Please run the install command again."
+        exit 1
+    fi
 fi
 
 echo

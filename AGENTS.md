@@ -13,7 +13,7 @@
 
 - 项目是 Next.js 16 + React 19 的本地图片服务，默认端口 `4783`。
 - 包管理工具是 `npm`，锁文件是 `package-lock.json`。
-- Node 版本要求是 `>=20.10.0`。
+- Node 版本要求是 `>=22.15.0`。
 - 主要页面入口是 `src/app/page.tsx`。
 - 图片 API 入口是 `src/app/api/images/route.ts`。
 - Agent API 位于 `src/app/api/agent/`。
@@ -84,6 +84,9 @@
 - 提交前最小基线是：
 
 ```bash
+npm run install-scripts:check
+npm run npm-install-policy:check
+npm run dependencies:check
 npm test
 npm run lint
 npm run lint:scripts
@@ -105,7 +108,10 @@ git diff --check
 ### 6.1 本地开发
 
 ```bash
-npm install
+npm run install-scripts:check
+npm run npm-install-policy:check
+npm ci --strict-allow-scripts
+npm run dependencies:check
 npm run dev
 ```
 

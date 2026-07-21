@@ -90,7 +90,7 @@ Authorization: Bearer <token>
 - 不要把 API Key、token 或访问码写入源码、文档示例、日志或测试快照。
 - 排查环境配置时不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。Codex 会话日志会持久保存命令输出；优先运行仓库脚本 `npm run env:summary`，或在命令中先把 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 值替换为 `<redacted>`。
 - Skill 必须保持自包含和可迁移：脚本、示例和说明不得写入本机绝对路径或仓库绝对路径；运行脚本时以当前已安装 Skill 目录为根解析 `scripts/`，不要依赖某台机器上的 checkout 位置。
-- Skill 必须兼容 Windows、Linux 和 macOS：脚本只用 Node.js 20+、跨平台 `node:` 标准库和 `package.json` 声明依赖；文档示例用 `node "<skill-root>/scripts/..."`，不依赖 bash、sh、chmod、可执行位、POSIX inline env 或反斜杠续行。
+- Skill 必须兼容 Windows、Linux 和 macOS：脚本只用 Node.js 22.15+、跨平台 `node:` 标准库和 `package.json` 声明依赖；文档示例用 `node "<skill-root>/scripts/..."`，不依赖 bash、sh、chmod、可执行位、POSIX inline env 或反斜杠续行。
 - 不要把 `localhost:4783` 当作唯一部署位置；它只是无明确地址时的探测默认值。交互式任务中，探测到本地服务后先请用户确认是否使用；用户提供其他地址时，以用户地址为准。
 - subagent 或自动化任务如果用户指定 Space、云服务或内网服务，调用 `generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 或 `npm run agent:doctor -- --base-url <url>` 时显式传服务地址；不要依赖默认 localhost。
 - 不要在模型上下文中展开大体积 base64，除非用户明确要求。

@@ -42,7 +42,7 @@ hf auth whoami
 
 要求：
 
-- Node.js >=20.10.0。
+- Node.js >=22.15.0。
 - npm 随 Node.js 一起可用。
 - Hugging Face CLI 使用当前官方 `hf` 命令。
 - `hf auth login` 使用 Hugging Face Access Token，不是账号密码。
@@ -53,8 +53,13 @@ hf auth whoami
 第一次拉取仓库后安装依赖：
 
 ```bash
-npm install
+npm run install-scripts:check
+npm run npm-install-policy:check
+npm ci --strict-allow-scripts
+npm run dependencies:check
 ```
+
+项目支持 Node.js >=22.15.0；本地先校验锁文件中的安装脚本白名单，并确认 npm 支持 `--strict-allow-scripts`，完成确定性安装后核对直接依赖。旧 npm 会被安装门禁明确拒绝，升级 npm 后再重试。GitHub Actions 和 Docker 使用 Node 26，并额外启用 npm 的 `--strict-allow-scripts`。
 
 如果不确定当前机器缺什么，运行只读诊断：
 
@@ -78,8 +83,8 @@ npm run agent:doctor
 ```
 
 - `status`：只读输出 git、Node、固定 Space 目标、Agent capabilities 路径和 Skill 入口。
-- `doctor`：统一诊断入口，默认包含 HF Space 只读远端检查。
-- `verify`：提交前基线，执行测试、lint、脚本语法、构建和 `git diff --check`；需要真实 PostgreSQL gate 时加 `--postgres`。
+- `doctor`：统一诊断入口，默认包含 HF Space 只读远端检查，并校验当前 npm 是否支持严格安装脚本策略、本地 `node_modules` 隐藏锁文件和直接依赖版本是否与根锁文件一致。
+- `verify`：提交前基线，先核对锁文件安装脚本与 `allowScripts` 白名单、当前 npm 严格安装策略能力和已安装直接依赖，再执行测试、lint、脚本语法、构建和 `git diff --check`；需要真实 PostgreSQL gate 时加 `--postgres`。
 - `deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `--memory` 会断言 memory/indexeddb overlay 生效。
 - `deploy:space`：上传当前干净 git HEAD 到固定 HF Space，并做只读公网验证；已存在 Docker Space 根据远端元数据直接使用认证 Git 推送，其他类型才优先尝试 `hf upload`。
 - `agent:doctor`：通过仓库 Skill 脚本执行只读 Agent API 契约检查，不触发真实生图。
@@ -274,11 +279,14 @@ npm run keepalive:hf-space
 
 ## 验证门禁
 
-GitHub Actions 的 `.github/workflows/ci.yml` 会在 Pull Request、`main` 分支推送和手动触发时执行版本元数据检查、完整依赖审计、测试、源码 lint、脚本语法检查、生产构建、工作流 lint、Dockerfile 与基础 Compose 加 memory/PostgreSQL 覆盖配置检查。它还会构建和启动生产镜像后验证 `/api/auth-status`，并在独立 job 中运行真实 PostgreSQL 状态契约。
+GitHub Actions 的 `.github/workflows/ci.yml` 会在 Pull Request、`main` 分支推送和手动触发时先核对锁文件安装脚本与 `allowScripts` 白名单、npm 的严格安装脚本能力，再以严格白名单模式安装依赖并核对直接依赖完整性，随后执行版本元数据检查、完整依赖审计、测试、源码 lint、脚本语法检查、生产构建、工作流 lint、Dockerfile 与基础 Compose 加 memory/PostgreSQL 覆盖配置检查。它还会构建和启动生产镜像后验证 `/api/auth-status`，并在独立 job 中运行真实 PostgreSQL 状态契约。
 
 最小验证：
 
 ```bash
+npm run install-scripts:check
+npm run npm-install-policy:check
+npm run dependencies:check
 npm test
 npm run lint
 npm run lint:scripts

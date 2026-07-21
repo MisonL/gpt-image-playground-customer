@@ -122,7 +122,11 @@ const NEXT_ACTIONS = new Map([
         'hf-auth',
         'Check network/proxy access to Hugging Face, then run hf auth login if the token is missing or expired.'
     ],
-    ['node-modules', 'Run npm install.'],
+    ['npm-install-policy', 'Upgrade npm to a version that supports --strict-allow-scripts, then reopen the terminal.'],
+    [
+        'node-modules',
+        'Run npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check.'
+    ],
     ['remote-variables', 'Configure the required and recommended Space Variables with hf spaces variables add.'],
     ['remote-variable-values', 'Set required Space Variable values with hf spaces variables add.'],
     ['remote-secrets', 'Configure required Space Secrets with hf spaces secrets add.'],

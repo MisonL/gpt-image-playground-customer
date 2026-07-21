@@ -20,7 +20,7 @@ import {
 import { buildVerifyPlan } from './verify.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,18 +47,48 @@ describe('Command center scripts', () => {
     it('keeps the full verification gate aligned with repository policy', () => {
         assert.deepEqual(
             buildVerifyPlan().map((step) => step.name),
-            ['version:check', 'test', 'lint', 'lint:scripts', 'build', 'diff-check', 'diff-cached-check']
+            [
+                'version:check',
+                'install-scripts:check',
+                'npm-install-policy:check',
+                'dependencies:check',
+                'test',
+                'lint',
+                'lint:scripts',
+                'build',
+                'diff-check',
+                'diff-cached-check'
+            ]
         );
     });
 
     it('supports a quick verification loop without hiding the full gate', () => {
         assert.deepEqual(
             buildVerifyPlan({ quick: true }).map((step) => step.name),
-            ['version:check', 'test:scripts', 'lint:scripts', 'diff-check', 'diff-cached-check']
+            [
+                'version:check',
+                'install-scripts:check',
+                'npm-install-policy:check',
+                'dependencies:check',
+                'test:scripts',
+                'lint:scripts',
+                'diff-check',
+                'diff-cached-check'
+            ]
         );
         assert.deepEqual(
             buildVerifyPlan({ skipBuild: true }).map((step) => step.name),
-            ['version:check', 'test', 'lint', 'lint:scripts', 'diff-check', 'diff-cached-check']
+            [
+                'version:check',
+                'install-scripts:check',
+                'npm-install-policy:check',
+                'dependencies:check',
+                'test',
+                'lint',
+                'lint:scripts',
+                'diff-check',
+                'diff-cached-check'
+            ]
         );
     });
 
@@ -67,6 +97,9 @@ describe('Command center scripts', () => {
             buildVerifyPlan({ postgres: true }).map((step) => step.name),
             [
                 'version:check',
+                'install-scripts:check',
+                'npm-install-policy:check',
+                'dependencies:check',
                 'test',
                 'lint',
                 'lint:scripts',
@@ -78,7 +111,17 @@ describe('Command center scripts', () => {
         );
         assert.deepEqual(
             buildVerifyPlan({ quick: true, postgres: true }).map((step) => step.name),
-            ['version:check', 'test:scripts', 'lint:scripts', 'test:postgres', 'diff-check', 'diff-cached-check']
+            [
+                'version:check',
+                'install-scripts:check',
+                'npm-install-policy:check',
+                'dependencies:check',
+                'test:scripts',
+                'lint:scripts',
+                'test:postgres',
+                'diff-check',
+                'diff-cached-check'
+            ]
         );
     });
 
@@ -600,6 +643,10 @@ describe('Command center scripts', () => {
                     });
                     assert.equal(report.service.ok, true);
                     assert.equal(
+                        report.checks.find((check) => check.name === 'dependencies_installed').hint,
+                        '运行 npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check。'
+                    );
+                    assert.equal(
                         report.checks.find((check) => check.name === 'agent_auth_available_to_process').ok,
                         true
                     );
@@ -645,9 +692,58 @@ describe('Command center scripts', () => {
                         true
                     );
                     assert.doesNotMatch(JSON.stringify(report), /shell-secret|file-secret/);
+                    assert.match(
+                        JSON.stringify(report.next_actions),
+                        /npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check/
+                    );
                     assert.match(JSON.stringify(report.next_actions), /agent:doctor/);
                     assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_APP_PASSWORD_HASH/);
                     assert.match(JSON.stringify(report.next_actions), /GPT_IMAGE_AGENT_TOKEN/);
+                } finally {
+                    await rm(tempDir, { recursive: true, force: true });
+                }
+            }
+        );
+    });
+
+    it('does not treat an interrupted dependency installation as ready', async () => {
+        const tempDir = await mkdtemp(path.join(os.tmpdir(), 'first-run-incomplete-dependencies-'));
+        await writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
+        await writeFile(
+            path.join(tempDir, 'package-lock.json'),
+            JSON.stringify({
+                lockfileVersion: 3,
+                packages: {
+                    '': { dependencies: { demo: '1.0.0' } },
+                    'node_modules/demo': { version: '1.0.0' }
+                }
+            })
+        );
+        await mkdir(path.join(tempDir, 'node_modules'));
+        await writeFile(
+            path.join(tempDir, 'node_modules', '.package-lock.json'),
+            JSON.stringify({ lockfileVersion: 3, packages: { 'node_modules/demo': { version: '1.0.0' } } })
+        );
+        await withServer(
+            (_request, response) => {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ defaults: {}, supported: {} }));
+            },
+            async (baseUrl) => {
+                try {
+                    const report = await buildFirstRunReport(
+                        { cwd: tempDir, baseUrl, envFiles: [], timeoutMs: 1000 },
+                        {}
+                    );
+                    const dependencies = report.checks.find((check) => check.name === 'dependencies_installed');
+
+                    assert.equal(dependencies.ok, false);
+                    assert.equal(dependencies.reason, 'direct_package_missing');
+                    assert.deepEqual(dependencies.missing_packages, ['demo']);
+                    assert.equal(
+                        dependencies.hint,
+                        '运行 npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check。'
+                    );
                 } finally {
                     await rm(tempDir, { recursive: true, force: true });
                 }

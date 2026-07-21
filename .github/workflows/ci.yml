@@ -36,7 +36,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --strict-allow-scripts
+        run: npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check
 
       - name: Validate version metadata
         run: npm run version:check
@@ -140,7 +140,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci --strict-allow-scripts
+        run: npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check
 
       - name: Run PostgreSQL state contract
         run: npm run test:postgres

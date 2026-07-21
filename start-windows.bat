@@ -20,7 +20,7 @@ if not exist "package.json" (
 where node >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] Node.js was not found.
-    echo Please install Node.js 20.10.0 or later: https://nodejs.org/
+    echo Please install Node.js 22.15.0 or later: https://nodejs.org/
     echo Then run this file again.
     echo.
     pause
@@ -32,7 +32,7 @@ if errorlevel 1 (
     echo [ERROR] Node.js version is too old.
     echo Current version:
     node -v
-    echo Required: Node.js 20.10.0 or later. Download: https://nodejs.org/
+    echo Required: Node.js 22.15.0 or later. Download: https://nodejs.org/
     echo.
     pause
     exit /b 1
@@ -40,7 +40,7 @@ if errorlevel 1 (
 
 where npm >nul 2>nul
 if errorlevel 1 (
-    echo [ERROR] npm was not found. Please reinstall Node.js 20.10.0 or later.
+    echo [ERROR] npm was not found. Please reinstall Node.js 22.15.0 or later.
     echo.
     pause
     exit /b 1
@@ -68,10 +68,27 @@ if not exist ".env.local" (
     echo [INFO] .env.local found.
 )
 
-if not exist "node_modules" (
-    echo [INFO] First run: installing dependencies. This may take a few minutes.
+node scripts\dependency-installation.mjs
+if errorlevel 1 (
+    echo [INFO] Dependencies are missing or incomplete. Installing from package-lock.json. This may take a few minutes.
     echo.
-    call npm install
+    call npm run install-scripts:check
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Dependency install script policy validation failed.
+        echo.
+        pause
+        exit /b 1
+    )
+    node scripts\npm-install-policy.mjs
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Current npm does not support --strict-allow-scripts. Upgrade npm before installing dependencies.
+        echo.
+        pause
+        exit /b 1
+    )
+    call npm ci --strict-allow-scripts
     if errorlevel 1 (
         echo.
         echo [ERROR] Dependency installation failed. Please check the network and run again.
@@ -79,8 +96,16 @@ if not exist "node_modules" (
         pause
         exit /b 1
     )
+    call npm run dependencies:check
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Dependency installation completed with an incomplete package tree. Please run the install command again.
+        echo.
+        pause
+        exit /b 1
+    )
 ) else (
-    echo [INFO] Dependencies found. Skipping installation.
+    echo [INFO] Dependencies match package-lock.json. Skipping installation.
 )
 
 echo.

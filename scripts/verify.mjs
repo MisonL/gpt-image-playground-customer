@@ -4,6 +4,9 @@ import { isMainModule, pickFailureOutput, printJson, runCommand } from './comman
 
 const FULL_VERIFY_PLAN = [
     { name: 'version:check', command: 'npm', args: ['run', 'version:check'] },
+    { name: 'install-scripts:check', command: 'npm', args: ['run', 'install-scripts:check'] },
+    { name: 'npm-install-policy:check', command: 'npm', args: ['run', 'npm-install-policy:check'] },
+    { name: 'dependencies:check', command: 'npm', args: ['run', 'dependencies:check'] },
     { name: 'test', command: 'npm', args: ['test'] },
     { name: 'lint', command: 'npm', args: ['run', 'lint'] },
     { name: 'lint:scripts', command: 'npm', args: ['run', 'lint:scripts'] },
@@ -14,6 +17,9 @@ const FULL_VERIFY_PLAN = [
 
 const QUICK_VERIFY_PLAN = [
     { name: 'version:check', command: 'npm', args: ['run', 'version:check'] },
+    { name: 'install-scripts:check', command: 'npm', args: ['run', 'install-scripts:check'] },
+    { name: 'npm-install-policy:check', command: 'npm', args: ['run', 'npm-install-policy:check'] },
+    { name: 'dependencies:check', command: 'npm', args: ['run', 'dependencies:check'] },
     { name: 'test:scripts', command: 'npm', args: ['run', 'test:scripts'] },
     { name: 'lint:scripts', command: 'npm', args: ['run', 'lint:scripts'] },
     { name: 'diff-check', command: 'git', args: ['diff', '--check'] },

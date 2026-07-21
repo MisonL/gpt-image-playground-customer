@@ -7,7 +7,7 @@ app_port: 4783
 
 ![Version](https://img.shields.io/badge/version-2.1.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Node](https://img.shields.io/badge/node-%3E%3D20.10.0-339933)
+![Node](https://img.shields.io/badge/node-%3E%3D22.15.0-339933)
 
 本地 AI 图片创作工作台，面向中文内容运营、设计草图和自动化生图流程。支持 `gpt-image-2`、OpenAI 兼容图片接口、文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪和 Agent API。
 
@@ -52,9 +52,14 @@ OPENAI_API_BASE_URL=https://api.openai.com/v1
 开发模式：
 
 ```bash
-npm install
+npm run install-scripts:check
+npm run npm-install-policy:check
+npm ci --strict-allow-scripts
+npm run dependencies:check
 npm run dev
 ```
+
+项目支持 Node.js >=22.15.0；本地先用锁文件白名单校验安装脚本，确认当前 npm 支持 `--strict-allow-scripts`，完成确定性安装后核对直接依赖。旧 npm 会被安装门禁明确拒绝，升级 npm 后再重试。CI 和 Docker 使用 Node 26，并额外启用 npm 的 `--strict-allow-scripts`。
 
 也可使用平台脚本：
 
@@ -371,8 +376,8 @@ Hugging Face Space 部署见 [docs/deployment/huggingface-space-free.md](./docs/
 
 | 问题             | 处理                                                                |
 | ---------------- | ------------------------------------------------------------------- |
-| 未检测到 Node.js | 安装 Node.js >=20.10.0。                                            |
-| 依赖安装失败     | 检查 npm 网络后重新执行 `npm install`。                             |
+| 未检测到 Node.js | 安装 Node.js >=22.15.0。                                            |
+| 依赖安装失败     | 检查 npm 网络和安装策略后重新执行 `npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check`。 |
 | API 返回 HTML    | API URL 填成了网页或管理后台；应填写 OpenAI 兼容 `/v1` 根地址。     |
 | 提示需要 API Key | 在 `.env.local` 写入 `OPENAI_API_KEY`，或在页面 `API 设置` 中填写。 |
 | 端口被占用       | 默认端口是 `4783`，检查旧进程或旧容器。                             |

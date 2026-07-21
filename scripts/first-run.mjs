@@ -4,7 +4,9 @@ import {
     resolvePlaygroundBaseUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
 import { isMainModule, printJson, redactBaseUrl } from './command-center-utils.mjs';
+import { inspectDependencyInstallation, LOCAL_DEPENDENCY_INSTALL_COMMAND } from './dependency-installation.mjs';
 import { summarizeEnvFile } from './env-summary.mjs';
+import { inspectNpmInstallPolicy } from './npm-install-policy.mjs';
 import { isSupportedNodeVersion, MIN_NODE_VERSION_RANGE } from './node-version.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -51,6 +53,7 @@ export async function buildFirstRunReport(options = {}, env = process.env) {
     loadPrivateAgentEnvFile({ cwd, env });
     const base = resolveFirstRunBaseUrl(options.baseUrl, env);
     const envSummary = envFiles.map((filePath) => summarizeEnvFile(join(cwd, filePath)));
+    const npmInstallPolicy = options.npmInstallPolicy || inspectNpmInstallPolicy();
     const validationError = readBaseUrlValidationError(base);
     const service = validationError
         ? { ok: false, skipped: true, error: validationError }
@@ -65,7 +68,8 @@ export async function buildFirstRunReport(options = {}, env = process.env) {
         envSummary,
         service,
         base,
-        validationError
+        validationError,
+        npmInstallPolicy
     });
     const nextActions = buildNextActions({ checks, base, service, env, envSummary, validationError });
     return {
@@ -137,22 +141,28 @@ async function readJsonEndpoint(url, options) {
     }
 }
 
-function buildChecks({ cwd, env, envSummary, service, base, validationError }) {
+function buildChecks({ cwd, env, envSummary, service, base, validationError, npmInstallPolicy }) {
     const node = readNodeCheck();
     const packageJson = readPackageJson(cwd);
     const packageLock = existsSync(join(cwd, 'package-lock.json'));
-    const nodeModules = existsSync(join(cwd, 'node_modules'));
+    const dependencyInstallation = inspectDependencyInstallation(cwd);
     const agentAuthSchemes = readAgentAuthSchemes(service);
     const currentAgentAuth = hasAnyConfiguredAgentAuth(env, agentAuthSchemes);
     const fileAgentAuth = envSummary.some((source) => hasAnyConfiguredAgentAuthSource(source, agentAuthSchemes));
     return [
         { name: 'node_version', ok: node.ok, current: node.current, required: MIN_NODE_VERSION_RANGE },
+        {
+            name: 'npm_install_policy',
+            ok: npmInstallPolicy.ok,
+            ...(npmInstallPolicy.ok ? {} : { reason: npmInstallPolicy.reason, ...(npmInstallPolicy.error ? { error: npmInstallPolicy.error } : {}) })
+        },
         { name: 'package_lock', ok: packageLock },
         {
             name: 'dependencies_installed',
-            ok: nodeModules,
+            ok: dependencyInstallation.ok,
             skipped: false,
-            hint: nodeModules ? undefined : 'run npm install'
+            ...(dependencyInstallation.ok ? {} : summarizeDependencyFailure(dependencyInstallation)),
+            hint: dependencyInstallation.ok ? undefined : `运行 ${LOCAL_DEPENDENCY_INSTALL_COMMAND}。`
         },
         {
             name: 'env_files',
@@ -242,7 +252,10 @@ function buildNextActions({ checks, base, service, env, envSummary, validationEr
     const hasCurrentAgentAuth = hasAnyConfiguredAgentAuth(env, agentAuthSchemes);
     const hasFileAgentAuth = envSummary.some((source) => hasAnyConfiguredAgentAuthSource(source, agentAuthSchemes));
     if (!findCheck(checks, 'node_version').ok) actions.push(`安装 Node.js ${MIN_NODE_VERSION_RANGE} 或更新版本。`);
-    if (!findCheck(checks, 'dependencies_installed').ok) actions.push('运行 npm install。');
+    if (!findCheck(checks, 'npm_install_policy').ok) {
+        actions.push('升级 npm 到支持 --strict-allow-scripts 的版本后重新运行。');
+    }
+    if (!findCheck(checks, 'dependencies_installed').ok) actions.push(`运行 ${LOCAL_DEPENDENCY_INSTALL_COMMAND}。`);
     if (!findCheck(checks, 'env_files').ok) {
         actions.push('复制 .env.example 为 .env.local，或在页面设置里配置默认上游。');
     }
@@ -405,6 +418,18 @@ function readNodeCheck() {
     return { ok: isSupportedNodeVersion(), current: process.version };
 }
 
+function summarizeDependencyFailure(state) {
+    return {
+        reason: state.reason,
+        ...(state.missingPackages?.length ? { missing_packages: state.missingPackages } : {}),
+        ...(state.invalidPackages?.length ? { invalid_packages: state.invalidPackages } : {}),
+        ...(state.nameMismatches?.length ? { name_mismatches: state.nameMismatches } : {}),
+        ...(state.versionMismatches?.length ? { version_mismatches: state.versionMismatches } : {}),
+        ...(state.rootLockMismatches?.length ? { root_lock_mismatches: state.rootLockMismatches } : {}),
+        ...(state.hiddenLockMismatches?.length ? { hidden_lock_mismatches: state.hiddenLockMismatches } : {})
+    };
+}
+
 function readPackageJson(cwd) {
     try {
         return JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
@@ -565,6 +590,7 @@ function formatServiceSource(source) {
 function formatCheckLabel(name) {
     const labels = {
         node_version: 'Node.js 版本',
+        npm_install_policy: 'npm 安装脚本策略',
         package_lock: 'package-lock.json',
         dependencies_installed: '依赖是否已安装',
         env_files: '环境文件',
