@@ -27,6 +27,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - `scripts/batch-images.mjs`：JSONL 批量 generate/edit 调用。
 - `scripts/convert-image-format.mjs`：本地 PNG/JPEG/WebP 互转。
 - `scripts/diagnose-request.mjs`：按页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断，支持 `--base-url` 固定目标服务。
+- `scripts/diagnose-channel-health.mjs`：通过 capabilities 声明的 Agent 端点读取当前服务进程的渠道健康快照，支持 `--base-url` 和 `--output`。
 - `scripts/probe-upstream-image.mjs`：上游图片接口连通性探针。
 
 生成、编辑和批量脚本默认只做 dry-run，不触发真实生图或编辑。dry-run 输出的 `verification_scope.mode=local_planning_only` 表示只完成本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。generate 可添加 `--check-remote` 做只读远端检查，输出 `verification_scope.mode=remote_contract_and_local_planning`，仅访问 `/api/agent/capabilities` 和 `/api/runtime-capabilities`，不会发送真实生图请求。必须显式添加 `--allow-billable` 才会调用真实端点。generate 默认提交到 `/api/agent/image-requests` 服务端编排入口；`--agent`、`--job`、`--page-sse` 才会显式改用 `/api/agent/images/generate`、`/api/agent/jobs/images/generate` 或页面端 `/api/images` SSE。
@@ -35,7 +36,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 位于仓库根目录且是首次配置、换机器、服务地址不确定或 token 不确定时，先运行 `npm run first-run`。它只读、非计费、不写 env 文件，默认输出中文摘要，并报告 `service_base_url_source`、`interactive_confirmation_required`、服务可达性、当前进程鉴权、页面 SSE 鉴权和下一步动作。
 自动化消费时使用 `npm run first-run -- --json`。
 Agent 端点鉴权以 capabilities 的 `auth.schemes` 为准。配置 `AGENT_API_TOKEN` 时只接受 Bearer token；只有未配置 `AGENT_API_TOKEN` 且配置了 `APP_PASSWORD` 时，Agent 端点才接受访问码哈希 `GPT_IMAGE_APP_PASSWORD_HASH`。页面端 `/api/images` SSE 另看 `agent_streaming.page_sse.auth`；当其声明 `required=true` 时，form-data 必须包含 `passwordHash`。`GPT_IMAGE_AGENT_TOKEN` 不能替代页面 SSE 表单鉴权。
-subagent 或自动化任务如果用户指定 Space、云服务或内网服务，调用 `generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 或 `npm run agent:doctor -- --base-url <url>` 时显式传服务地址；不要依赖默认 localhost。
+subagent 或自动化任务如果用户指定 Space、云服务或内网服务，调用 `generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs`、`diagnose-channel-health.mjs` 或 `npm run agent:doctor -- --base-url <url>` 时显式传服务地址；不要依赖默认 localhost。
 Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 仍必须通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN`；Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`，shell 环境变量优先。不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。
 排查环境配置时不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。Codex 会话日志会持久保存命令输出；优先运行仓库脚本 `npm run env:summary`，或在命令中先把 `API_KEY`、`TOKEN`、`PASSWORD`、`SECRET` 值替换为 `<redacted>`。
 
@@ -481,13 +482,22 @@ GET /api/agent/diagnostics/page-requests/{id}
 GET /api/agent/diagnostics/requests?request_id={request_id}
 GET /api/agent/diagnostics/requests?idempotency_key={idempotency_key}
 GET /api/agent/diagnostics/requests/{request_id}
+GET /api/agent/diagnostics/channel-health
 ```
 
-这些端点使用 Agent 鉴权，只读返回页面请求反馈、页面请求脱敏日志摘要或 Agent state 请求诊断。
+这些端点使用 Agent 鉴权，只读返回页面请求反馈、页面请求脱敏日志摘要、Agent state 请求诊断或当前进程的渠道健康快照。
 
 页面请求 `{id}` 是页面端 `/api/images` SSE 的 `clientRequestId`；skill 脚本走页面 SSE 时会把 `Idempotency-Key` 写入该字段，因此通常可以用同一个业务 key 查询。页面诊断摘要来自本地 bounded app log，不是 Agent state 后端的无限历史；`GET /api/agent/capabilities` 的 `page_request_diagnostics.retention` 和诊断 API 响应的 `diagnostics_retention` 会声明当前 `APP_LOG_MAX_ENTRIES` 窗口和可能的日志丢失模式。
 
 Agent request diagnostics 来自 Agent state 后端，适用于 `/api/agent/images/generate`、`/api/agent/images/edit` 和 Agent job 产生的请求。响应包含 `request`、`timeline`、`artifacts`、成功 `response`、失败 `error`、可选 `feedback`、`state_backend`、`diagnostics_retention` 和 `diagnostics_boundary`。该接口不会返回完整 prompt、API key、图片 base64 或本地文件路径。
+
+渠道健康诊断来自当前服务进程已初始化的 `channel-router` 内存状态，返回渠道、凭证和请求方式的状态、冷却时间、恢复探测门禁和脱敏失败元数据。它不返回 API key、base URL、错误原文或完整上游响应；`state_initialized=false` 表示当前进程尚无可读取的路由状态，`channels` 为空，不代表未配置渠道；`healthy` 表示至少有一个有效 request mode 可用，`probe_pending` 表示恢复探测门禁仍未解除，因此可以与尚未到期的 `cooldown_until` 同时出现。`GET /api/agent/diagnostics/channel-health` 是非计费只读接口，不会为了读取而初始化路由或启动恢复探测，不触发上游探测或图片生成，也不替代页面 `/api/runtime-capabilities` 的运行态与并发配置摘要。
+
+调用示例：
+
+```text
+node "<skill-root>/scripts/diagnose-channel-health.mjs" --base-url https://your-space.hf.space --output runs/channel-health.json
+```
 
 反馈响应形态：
 
@@ -668,7 +678,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 - `POST /api/images`：页面 form-data 图片端点。它支持 `mode=generate|edit`、`stream=true` 的页面 SSE、`clientRequestId`、页面 `passwordHash` 表单鉴权，以及 `responsesModel`、`gptModel`、`thinking`、`promptOptimization`、`force_web` 等页面高级字段。skill 脚本只在 capabilities 的 `agent_streaming.page_sse` 或路由规则需要时使用它。
 - `PUT /api/feedback`：页面结果反馈写入端点。页面把最近生成的可用性标记和备注写入服务端状态；Agent 只读查询使用 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback`。
 - `DELETE /api/feedback`：页面结果反馈清理端点。页面删除历史时按 `clientRequestId` 清理对应服务端反馈；该端点不接受 Agent Bearer token。
-- `GET /api/runtime-capabilities`：页面运行态能力摘要。它暴露流式默认值、图片上游传输配置、渠道健康、渠道队列、并发建议和 Responses 后端 enablement，不返回 API key 或本地密钥。
+- `GET /api/runtime-capabilities`：页面运行态能力摘要。它暴露流式默认值、图片上游传输配置、渠道健康、渠道队列、并发建议和 Responses 后端 enablement，不返回 API key 或本地密钥。它不替代也不被 Agent 的 `/api/agent/diagnostics/channel-health` 替代。
 - `POST /api/shares`：页面分享上传创建端点。配置 `APP_PASSWORD` 时要求页面访问 cookie；请求是 form-data `image`、`sourceFilename`、`expiresInMinutes` 和可选 `accessCode`。Agent 客户端不要用它上传 artifact；应使用 `/api/agent/artifacts/{id}/share`。
 - `GET /api/shares/{token}`、`GET /api/shares/{token}/content` 和 `POST /api/shares/{token}/content`：分享元数据和图片内容端点。公开分享支持浏览器直接 GET 内容；私密分享的内容读取通过分享页 POST JSON `accessCode` 校验，并有访问码失败限流；这不是 Agent artifact 下载。
 - `GET /api/logs`：页面日志 SSE。必须配置 `APP_PASSWORD`，并在 `Authorization: Bearer <sha256(APP_PASSWORD)>` 中发送访问码哈希；查询参数中的哈希会被拒绝。它不接受 `AGENT_API_TOKEN`。Agent 只读诊断使用 `/api/agent/diagnostics/page-requests/{id}`。
@@ -681,6 +691,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 | 前端能力或端点                                                                                                                                                          | 归属契约                   | 进入 Agent OpenAPI | 自动化口径                                                                                                                                                                                                                |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/agent/image-requests`、`POST /api/agent/images/generate`、`POST /api/agent/images/edit`、Agent jobs、Agent artifacts、`POST /api/agent/artifacts/{id}/share` | Agent API                  | 是                 | 普通 generate 默认用 image-requests；其他 Agent 端点通过 skill 脚本和 Agent 鉴权调用。分享创建需要 Agent 鉴权，返回的分享 URL 给用户浏览器访问。                                                                          |
+| `GET /api/agent/diagnostics/channel-health`                                                                                                                           | Agent 只读渠道健康诊断 API  | 是                 | 只返回当前服务进程的路由内存快照，不触发上游探测或图片生成；需 Agent 鉴权，不能证明真实上游可用，也不替代页面 runtime capabilities。                                                                                         |
 | `POST /api/images`                                                                                                                                                      | 页面 form-data SSE API     | 否                 | 仅在默认 WebP edit、复杂 UI 批量、页面高级字段或显式 `--page-sse` 诊断时由 skill 选择。                                                                                                                                   |
 | `GET /api/runtime-capabilities`                                                                                                                                         | 页面运行态能力 API         | 否                 | 页面展示运行态默认值、图片上游传输配置、渠道健康和后端 enablement；不是 Agent capabilities。                                                                                                                              |
 | `PUT/DELETE /api/feedback`                                                                                                                                              | 页面结果反馈写入和清理 API | 否                 | 页面写入最近生成的结果反馈；删除历史时清理对应反馈。                                                                                                                                                                      |

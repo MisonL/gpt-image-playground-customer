@@ -1,5 +1,6 @@
 import { AGENT_ENDPOINTS } from '../skills/gpt-image-playground-agent/scripts/lib/agent-api-paths.mjs';
 import { enrichFailureWithAgentDiagnostics } from '../skills/gpt-image-playground-agent/scripts/lib/agent-diagnostics-summary.mjs';
+import { AGENT_ENDPOINTS as SERVER_AGENT_ENDPOINTS } from '../src/lib/agent-api-paths.mjs';
 import {
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
@@ -4551,7 +4552,8 @@ describe('Agent skill script argument validation', () => {
             '/api/agent/page-requests/feedback',
             '/api/agent/page-requests/{id}/feedback',
             '/api/agent/diagnostics/page-requests',
-            '/api/agent/diagnostics/page-requests/{id}'
+            '/api/agent/diagnostics/page-requests/{id}',
+            '/api/agent/diagnostics/channel-health'
         ];
         const localWorkbenchFeatures = ['灵感相册', '历史复用'];
 
@@ -8323,6 +8325,198 @@ describe('Agent skill script argument validation', () => {
                 assert.match(body.requests[0].diagnostics_note.message, /最近 456 条本地应用日志/);
             }
         );
+    });
+
+    it('reads the process-local channel health snapshot through the declared Agent capability', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push({
+                    method: request.method,
+                    url: request.url,
+                    authorization: request.headers.authorization
+                });
+                if (request.url === '/playground/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            endpoints: {
+                                channel_health_diagnostics: '/api/agent/diagnostics/channel-health'
+                            },
+                            channel_health_diagnostics: {
+                                supported: true,
+                                endpoint: '/api/agent/diagnostics/channel-health',
+                                source: 'in_process_channel_router',
+                                state_scope: 'process_local',
+                                billable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                if (request.url === '/playground/api/agent/diagnostics/channel-health') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            ok: true,
+                            billable: false,
+                            source: 'in_process_channel_router',
+                            state_scope: 'process_local',
+                            state_initialized: true,
+                            snapshot: {
+                                observed_at: 1_000,
+                                channels: [
+                                    {
+                                        channel_id: 'primary',
+                                        credential_count: 1,
+                                        healthy_credential_count: 1,
+                                        unhealthy_credential_count: 0,
+                                        state: 'healthy',
+                                        probe_required: false,
+                                        credentials: [
+                                            {
+                                                credential_id: 'primary#0',
+                                                state: 'healthy',
+                                                probe_required: false,
+                                                request_modes: [
+                                                    {
+                                                        mode: 'images-non-stream',
+                                                        state: 'healthy',
+                                                        probe_required: false
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'diagnose-channel-health.mjs',
+                    ['--base-url', `${baseUrl}/playground`],
+                    { GPT_IMAGE_AGENT_TOKEN: 'channel-health-token' }
+                );
+
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr.trim(), '');
+                assert.doesNotMatch(result.stdout, /channel-health-token/);
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.ok, true);
+                assert.equal(body.billable, false);
+                assert.equal(body.state_initialized, true);
+                assert.equal(body.service_base_url, `${baseUrl}/playground`);
+                assert.equal(body.service_base_url_source, 'user_provided');
+                assert.equal(body.snapshot.channels[0].channel_id, 'primary');
+                assert.deepEqual(
+                    requests.map((item) => `${item.method} ${item.url}`),
+                    [
+                        'GET /playground/api/agent/capabilities',
+                        'GET /playground/api/agent/diagnostics/channel-health'
+                    ]
+                );
+                assert.equal(requests[0].authorization, 'Bearer channel-health-token');
+                assert.equal(requests[1].authorization, 'Bearer channel-health-token');
+            }
+        );
+    });
+
+    it('does not guess a channel health endpoint when capabilities do not declare support', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ endpoints: {} }));
+                    return;
+                }
+                response.writeHead(500, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'unexpected request' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync('diagnose-channel-health.mjs', ['--base-url', baseUrl]);
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                assert.match(result.stderr, /channel_health_diagnostics/);
+            }
+        );
+    });
+
+    it('rejects inconsistent channel health endpoint declarations before reading diagnostics', async () => {
+        const requests = [];
+        await withServer(
+            (request, response) => {
+                requests.push([request.method, request.url].join(' '));
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            endpoints: {
+                                channel_health_diagnostics: '/api/agent/diagnostics/other-channel-health'
+                            },
+                            channel_health_diagnostics: {
+                                supported: true,
+                                endpoint: '/api/agent/diagnostics/channel-health',
+                                source: 'in_process_channel_router',
+                                state_scope: 'process_local',
+                                billable: false
+                            }
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(500, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'unexpected request' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync('diagnose-channel-health.mjs', ['--base-url', baseUrl]);
+
+                assert.equal(result.status, 1);
+                assert.equal(result.stdout.trim(), '');
+                assert.match(result.stderr, /端点声明不一致/);
+                assert.deepEqual(requests, ['GET /api/agent/capabilities']);
+            }
+        );
+    });
+});
+
+describe('Agent endpoint path drift guards', () => {
+    it('keeps the Skill endpoint registry identical to the server registry', () => {
+        assert.deepEqual(AGENT_ENDPOINTS, SERVER_AGENT_ENDPOINTS);
+    });
+
+    it('keeps channel health Skill documentation aligned with the Agent-only contract', () => {
+        const readmeText = readFileSync(join(repoRoot, 'README.md'), 'utf8');
+        const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+        const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
+        const openApiSource = readFileSync(join(repoRoot, 'src/lib/agent-openapi.ts'), 'utf8');
+
+        assert.equal(AGENT_ENDPOINTS.channel_health_diagnostics, '/api/agent/diagnostics/channel-health');
+        assert.match(readmeText, /\/api\/agent\/diagnostics\/channel-health/);
+        assert.match(skillText, /diagnose-channel-health\.mjs/);
+        assert.match(apiReference, /diagnose-channel-health\.mjs/);
+        assert.match(skillText, /\/api\/agent\/diagnostics\/channel-health/);
+        assert.match(apiReference, /\/api\/agent\/diagnostics\/channel-health/);
+        assert.match(readmeText, /不触发上游探测或图片生成/);
+        assert.match(readmeText, /不替代页面/);
+        assert.match(readmeText, /runtime-capabilities/);
+        assert.match(skillText, /不触发上游探测或图片生成/);
+        assert.match(apiReference, /不触发上游探测或图片生成/);
+        assert.match(readmeText, /state_initialized=false/);
+        assert.match(skillText, /state_initialized=false/);
+        assert.match(apiReference, /state_initialized=false/);
+        assert.match(skillText, /不替代页面/);
+        assert.match(skillText, /runtime-capabilities/);
+        assert.match(apiReference, /不替代页面/);
+        assert.match(apiReference, /runtime-capabilities/);
+        assert.match(openApiSource, /AgentChannelHealthDiagnosticsResponse/);
+        assert.match(openApiSource, /不会触发上游探测或图片生成/);
     });
 });
 

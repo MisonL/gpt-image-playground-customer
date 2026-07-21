@@ -13,6 +13,7 @@ export const AGENT_ENDPOINTS = Object.freeze({
     artifact_delete: '/api/agent/artifacts/{id}',
     page_request_feedback_batch: '/api/agent/page-requests/feedback',
     page_request_feedback: '/api/agent/page-requests/{id}/feedback',
+    channel_health_diagnostics: '/api/agent/diagnostics/channel-health',
     agent_request_diagnostics_lookup: '/api/agent/diagnostics/requests',
     agent_request_diagnostics: '/api/agent/diagnostics/requests/{id}',
     page_request_diagnostics_batch: '/api/agent/diagnostics/page-requests',

@@ -174,6 +174,7 @@ Agent API 是机器接口，不是自治 Agent 平台。自动化客户端应先
 | `POST /api/agent/artifacts/{id}/share`      | 为产物创建浏览器可访问的分享链接。    |
 | `POST /api/agent/diagnostics/page-requests` | 批量读取页面请求的脱敏日志诊断摘要。  |
 | `GET /api/agent/diagnostics/requests`       | 按 request id 或幂等键查询诊断。      |
+| `GET /api/agent/diagnostics/channel-health` | 读取当前进程的只读渠道健康快照。      |
 
 生成示例：
 
@@ -298,7 +299,7 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 - 排查环境配置时优先运行 `npm run env:summary`，不要直接输出 `.env.local`、`.env*.local`、secret 文件或原始 `docker inspect .Config.Env`。
 - Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。
 - 边界矩阵精简版：
-- `/api/agent/*` 返回最终 JSON；Agent artifact 的原始下载仍需要 Agent 鉴权。`POST /api/agent/artifacts/{id}/share` 只负责创建分享链接，用户浏览器访问走 `/share/{token}` 或 `/api/shares/{token}/content` 的分享 token/访问码模型。`POST /api/images`、`GET /api/runtime-capabilities`、`/api/feedback`、页面创建分享的 `POST /api/shares`、`/api/logs` 和 `POST /api/image-delete` 属于页面或运行态 API，不进入 Agent OpenAPI。Agent 只读反馈和诊断入口是 `/api/agent/page-requests/feedback`、`/api/agent/page-requests/{id}/feedback`、`/api/agent/diagnostics/page-requests` 和 `/api/agent/diagnostics/page-requests/{id}`。灵感相册和历史复用是浏览器工作台体验，不作为机器 API 契约承诺。
+- `/api/agent/*` 返回最终 JSON；Agent artifact 的原始下载仍需要 Agent 鉴权。`POST /api/agent/artifacts/{id}/share` 只负责创建分享链接，用户浏览器访问走 `/share/{token}` 或 `/api/shares/{token}/content` 的分享 token/访问码模型。`POST /api/images`、`GET /api/runtime-capabilities`、`/api/feedback`、页面创建分享的 `POST /api/shares`、`/api/logs` 和 `POST /api/image-delete` 属于页面或运行态 API，不进入 Agent OpenAPI。Agent 只读反馈和诊断入口是 `/api/agent/page-requests/feedback`、`/api/agent/page-requests/{id}/feedback`、`/api/agent/diagnostics/page-requests`、`/api/agent/diagnostics/page-requests/{id}` 和 `/api/agent/diagnostics/channel-health`。渠道健康端点只读取当前进程已初始化的路由内存状态，不会为了读取而初始化路由或启动恢复探测；如果 `state_initialized=false`，表示当前进程还没有可读取的路由状态，`channels` 为空，不代表未配置渠道或真实上游可用。该端点不触发上游探测或图片生成，也不替代页面 `/api/runtime-capabilities`。灵感相册和历史复用是浏览器工作台体验，不作为机器 API 契约承诺。
 
 ## Docker 与部署
 

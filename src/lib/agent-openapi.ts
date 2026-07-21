@@ -323,6 +323,19 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     }
                 }
             },
+            [AGENT_ENDPOINTS.channel_health_diagnostics]: {
+                get: {
+                    summary: '读取当前进程的渠道健康诊断快照',
+                    description:
+                        '只读返回当前进程内存中的渠道、凭证和请求方式状态；不会为了读取而初始化路由或启动恢复探测，因此不会触发上游探测或图片生成，也不代表真实上游可用性。',
+                    security: agentSecurity,
+                    responses: {
+                        '200': jsonContent('#/components/schemas/AgentChannelHealthDiagnosticsResponse'),
+                        '401': jsonContent('#/components/schemas/AgentError'),
+                        '500': jsonContent('#/components/schemas/AgentError')
+                    }
+                }
+            },
             [AGENT_ENDPOINTS.agent_request_diagnostics_lookup]: {
                 get: {
                     summary: '按 request_id 或 idempotency_key 读取 Agent state 请求诊断',
@@ -462,6 +475,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'storage',
                         'page_request_diagnostics',
                         'agent_request_diagnostics',
+                        'channel_health_diagnostics',
                         'idempotency'
                     ],
                     properties: {
@@ -780,6 +794,9 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         agent_request_diagnostics: {
                             $ref: '#/components/schemas/AgentRequestDiagnosticsCapabilities'
                         },
+                        channel_health_diagnostics: {
+                            $ref: '#/components/schemas/AgentChannelHealthDiagnosticsCapabilities'
+                        },
                         idempotency: { type: 'object' }
                     }
                 },
@@ -1013,6 +1030,108 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             additionalProperties: false
                         },
                         retention: { $ref: '#/components/schemas/AgentRequestDiagnosticsRetention' }
+                    },
+                    additionalProperties: false
+                },
+                AgentChannelHealthDiagnosticsCapabilities: {
+                    type: 'object',
+                    required: ['supported', 'endpoint', 'source', 'state_scope', 'billable'],
+                    properties: {
+                        supported: { type: 'boolean', const: true },
+                        endpoint: { type: 'string', const: AGENT_ENDPOINTS.channel_health_diagnostics },
+                        source: { type: 'string', const: 'in_process_channel_router' },
+                        state_scope: { type: 'string', const: 'process_local' },
+                        billable: { type: 'boolean', const: false }
+                    },
+                    additionalProperties: false
+                },
+                AgentChannelHealthDiagnosticsResponse: {
+                    type: 'object',
+                    required: ['ok', 'billable', 'source', 'state_scope', 'state_initialized', 'snapshot'],
+                    properties: {
+                        ok: { type: 'boolean', const: true },
+                        billable: { type: 'boolean', const: false },
+                        source: { type: 'string', const: 'in_process_channel_router' },
+                        state_scope: { type: 'string', const: 'process_local' },
+                        state_initialized: { type: 'boolean' },
+                        snapshot: { $ref: '#/components/schemas/AgentChannelHealthSnapshot' }
+                    },
+                    additionalProperties: false
+                },
+                AgentChannelHealthSnapshot: {
+                    type: 'object',
+                    required: ['observed_at', 'channels'],
+                    properties: {
+                        observed_at: { type: 'integer', minimum: 0 },
+                        channels: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/AgentChannelHealthChannel' }
+                        }
+                    },
+                    additionalProperties: false
+                },
+                AgentChannelHealthChannel: {
+                    type: 'object',
+                    required: [
+                        'channel_id',
+                        'credential_count',
+                        'healthy_credential_count',
+                        'unhealthy_credential_count',
+                        'state',
+                        'probe_required',
+                        'credentials'
+                    ],
+                    properties: {
+                        channel_id: { type: 'string' },
+                        credential_count: { type: 'integer', minimum: 0 },
+                        healthy_credential_count: { type: 'integer', minimum: 0 },
+                        unhealthy_credential_count: { type: 'integer', minimum: 0 },
+                        state: { type: 'string', enum: ['healthy', 'cooldown', 'probe_pending'] },
+                        probe_required: { type: 'boolean' },
+                        credentials: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/AgentChannelHealthCredential' }
+                        }
+                    },
+                    additionalProperties: false
+                },
+                AgentChannelHealthCredential: {
+                    type: 'object',
+                    required: ['credential_id', 'state', 'probe_required', 'request_modes'],
+                    properties: {
+                        credential_id: { type: 'string' },
+                        state: { type: 'string', enum: ['healthy', 'cooldown', 'probe_pending'] },
+                        cooldown_until: { type: 'integer', minimum: 0 },
+                        probe_required: { type: 'boolean' },
+                        last_failure: { $ref: '#/components/schemas/AgentChannelHealthFailure' },
+                        request_modes: {
+                            type: 'array',
+                            items: { $ref: '#/components/schemas/AgentChannelHealthRequestMode' }
+                        }
+                    },
+                    additionalProperties: false
+                },
+                AgentChannelHealthRequestMode: {
+                    type: 'object',
+                    required: ['mode', 'state', 'probe_required'],
+                    properties: {
+                        mode: { type: 'string', enum: CHANNEL_REQUEST_MODES },
+                        state: { type: 'string', enum: ['healthy', 'cooldown', 'probe_pending'] },
+                        cooldown_until: { type: 'integer', minimum: 0 },
+                        probe_required: { type: 'boolean' }
+                    },
+                    additionalProperties: false
+                },
+                AgentChannelHealthFailure: {
+                    type: 'object',
+                    required: ['at', 'scope'],
+                    properties: {
+                        at: { type: 'integer', minimum: 0 },
+                        scope: { type: 'string', enum: ['credential', 'channel'] },
+                        status: { type: 'integer' },
+                        code: { type: 'string' },
+                        request_id: { type: 'string' },
+                        request_mode: { type: 'string', enum: CHANNEL_REQUEST_MODES }
                     },
                     additionalProperties: false
                 },

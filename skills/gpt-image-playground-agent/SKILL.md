@@ -1,6 +1,6 @@
 ---
 name: gpt-image-playground-agent
-description: 当用户需要通过已部署的 GPT Image Playground 生成、编辑、批量生成、转换图片格式、查询结果反馈或诊断图片接口时使用；必须优先运行本 Skill 内置 scripts/generate-image.mjs、edit-image.mjs、batch-images.mjs、convert-image-format.mjs、diagnose-request.mjs 或 probe-upstream-image.mjs，而不是临时编写 API 调用脚本。
+description: 当用户需要通过已部署的 GPT Image Playground 生成、编辑、批量生成、转换图片格式、查询结果反馈、渠道健康或诊断图片接口时使用；必须优先运行本 Skill 内置 scripts/generate-image.mjs、edit-image.mjs、batch-images.mjs、convert-image-format.mjs、diagnose-request.mjs、diagnose-channel-health.mjs 或 probe-upstream-image.mjs，而不是临时编写 API 调用脚本。
 ---
 
 # GPT Image Playground Agent
@@ -16,6 +16,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - 批量 generate/edit：优先运行 `scripts/batch-images.mjs`，用 JSONL 输入和 append-only manifest 管理续跑。
 - 转换本地图片格式：优先运行 `scripts/convert-image-format.mjs`。
 - 查询页面请求的结果反馈或日志诊断摘要：优先运行 `scripts/diagnose-request.mjs`。
+- 查询当前实例内存中的渠道、凭证和请求方式健康状态：优先运行 `scripts/diagnose-channel-health.mjs`。它只读调用 Agent API，不触发上游探测或图片生成，也不能证明真实上游可用。
 - 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。接入新上游渠道时，先确认 `/models` 和 `/images/generations` 能通，再用 `npm run smoke:image-upstream-real -- --allow-billable` 逐个验证 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。脚本也接受 request mode 别名 `images-json`、`images-sse`、`responses-json`、`responses-sse`，方便按通道能力筛选 case。只有内联 `b64_json`、Responses `result` 或与 API Base URL 同源的 artifact URL 才算可被本服务消费；远程 URL-only 结果不能写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果某一路径先返回 `object=image.task,status=pending`，说明该请求方式不是直接完成结果；应先确认同一业务键能否在同一渠道下重试拿到最终图片，再把可用的 `request_modes` 写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，或 HTTP 200 但只返回文本 output、没有 `image_generation_call.result`/`url`，就把对应 `responses-*` mode 从 `OPENAI_CHANNEL_N_REQUEST_MODES` 移除。服务端未配置 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 时按费用更少优先选择：`images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`；只有真实 smoke 证明需要改变顺序时，管理员才写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 或全局 `OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`。
 - 不要临时编写 Node/Python/shell 脚本、curl 命令或手写 fetch/FormData 来重复实现这些脚本已经覆盖的 API 调用。
 - 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下 ad hoc 调用脚本。
@@ -28,6 +29,8 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 Agent API 只作为自动化客户端接口，不作为首战场景或用户验证的主证明。首阶段产品判断以页面工作台上的真实发布任务、结果下载、继续编辑、复用和最近生成里的结果反馈为准。
 
 结果反馈由页面工作台通过 `/api/feedback` 写入和清理，Agent 客户端通过 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback` 只读查询。日志查看的原始流仍是 WebUI/page API `/api/logs`，不接受 Agent token；Agent 客户端通过 `/api/agent/diagnostics/page-requests/{id}` 或 `/api/agent/diagnostics/page-requests` 查询脱敏日志摘要。诊断摘要来自本地 bounded app log，capabilities 的 `page_request_diagnostics.retention` 和诊断响应的 `diagnostics_retention` 声明当前窗口；`matched_log_count=0` 时响应会带 `diagnostics_note`，不等同于请求未发生。Agent JSON、Agent edit 和 job 的请求状态属于 Agent state，可通过 `/api/agent/diagnostics/requests/{request_id}` 或 `/api/agent/diagnostics/requests?idempotency_key=...` 只读查询，返回状态、时间线、artifact 摘要、成功响应 timing/execution、失败错误、状态后端和保留边界。灵感相册和历史复用属于页面工作台和浏览器本地体验，不作为 Agent capabilities 或机器 API 承诺。Agent artifact 原始下载 URL 仍需要 Agent 鉴权；需要给用户浏览器访问时，使用 `POST /api/agent/artifacts/{id}/share` 或生成脚本 `--share` 显式创建分享链接。分享链接使用 `/share/{token}` 和 `/api/shares/{token}/content` 的随机 token/访问码模型，不把 Agent token 放进 URL。
+
+渠道健康诊断使用 `GET /api/agent/diagnostics/channel-health` 和 Agent 鉴权。它只读当前服务进程已初始化的 `channel-router` 内存快照，不创建第二套状态，也不会为了读取而初始化路由或启动恢复探测，因此不触发上游探测或图片生成，也不能证明真实上游可用。响应中的 `state_initialized=false` 表示当前进程尚无可读取的路由状态，`channels` 为空，不代表未配置渠道；`healthy` 表示至少有一个有效 request mode 可用，`cooldown` 表示冷却状态，`probe_pending` 表示恢复探测门禁仍未解除；`probe_pending` 可以与 `cooldown_until` 同时出现。该 Agent 诊断不替代页面 `/api/runtime-capabilities`，后者仍是页面运行态和并发配置的摘要。
 
 ## 路由规则
 
@@ -92,7 +95,7 @@ Authorization: Bearer <token>
 - Skill 必须保持自包含和可迁移：脚本、示例和说明不得写入本机绝对路径或仓库绝对路径；运行脚本时以当前已安装 Skill 目录为根解析 `scripts/`，不要依赖某台机器上的 checkout 位置。
 - Skill 必须兼容 Windows、Linux 和 macOS：脚本只用 Node.js 22.15+、跨平台 `node:` 标准库和 `package.json` 声明依赖；文档示例用 `node "<skill-root>/scripts/..."`，不依赖 bash、sh、chmod、可执行位、POSIX inline env 或反斜杠续行。
 - 不要把 `localhost:4783` 当作唯一部署位置；它只是无明确地址时的探测默认值。交互式任务中，探测到本地服务后先请用户确认是否使用；用户提供其他地址时，以用户地址为准。
-- subagent 或自动化任务如果用户指定 Space、云服务或内网服务，调用 `generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs` 或 `npm run agent:doctor -- --base-url <url>` 时显式传服务地址；不要依赖默认 localhost。
+- subagent 或自动化任务如果用户指定 Space、云服务或内网服务，调用 `generate-image.mjs`、`edit-image.mjs`、`batch-images.mjs`、`diagnose-request.mjs`、`diagnose-channel-health.mjs` 或 `npm run agent:doctor -- --base-url <url>` 时显式传服务地址；不要依赖默认 localhost。
 - 不要在模型上下文中展开大体积 base64，除非用户明确要求。
 - 不要把 `error.message` 当成唯一判断依据；稳定分支以 `error.code` 和 HTTP 状态为准。
 - 不要在没有 `Idempotency-Key` 的情况下调用生成或编辑接口。
@@ -101,7 +104,9 @@ Authorization: Bearer <token>
 - 不要直接调用 job endpoints，除非 capabilities 明确返回 `agent_jobs.supported=true` 且 `mode=job_polling`，并且本次是显式 `--job` 诊断或兼容场景。默认 generate 使用 `orchestration.endpoint`。
 - 不要把一次高分辨率、高质量长耗时失败归纳为全局不可用。优先查看 `error.diagnostics.upstream_status`、`upstream_event_type`、`partial_image_count`、`transport_error`、`selected_channel_id`、`channel_cooldown_scope`、`error.diagnostics.cooldown_target.request_mode` 和 `retry_after_seconds`。
 - 不要在 `error.retryable=false` 时依据历史 `retry_after_seconds` 继续重试同一个 key；终态失败需要新业务操作和新 key。
-- 不要把 `/api/runtime-capabilities`、`/api/feedback`、页面创建分享的 `POST /api/shares`、`/api/logs` 或 `/api/image-delete` 当成 Agent API。它们是页面运行态或页面工作流端点，鉴权和字段契约与 `/api/agent/*` 不同；反馈和诊断的 Agent 只读入口是 `/api/agent/page-requests/{id}/feedback`、`/api/agent/page-requests/feedback`、`/api/agent/diagnostics/page-requests/{id}` 和 `/api/agent/diagnostics/page-requests`。Agent 只通过 `/api/agent/artifacts/{id}/share` 为已有 artifact 创建分享链接，不上传任意新图片到页面分享端点。
+- 不要把 `/api/runtime-capabilities`、`/api/feedback`、页面创建分享的 `POST /api/shares`、`/api/logs` 或 `/api/image-delete` 当成 Agent API。它们是页面运行态或页面工作流端点，鉴权和字段契约与 `/api/agent/*` 不同；反馈和诊断的 Agent 只读入口是 `/api/agent/page-requests/{id}/feedback`、`/api/agent/page-requests/feedback`、`/api/agent/diagnostics/page-requests/{id}`、`/api/agent/diagnostics/page-requests` 和 `/api/agent/diagnostics/channel-health`。渠道健康诊断不替代页面 `/api/runtime-capabilities`。Agent 只通过 `/api/agent/artifacts/{id}/share` 为已有 artifact 创建分享链接，不上传任意新图片到页面分享端点。
+
+- 需要只读查看当前实例的渠道健康状态时，使用 `scripts/diagnose-channel-health.mjs --base-url ...`。脚本先从 capabilities 读取并交叉校验端点声明，再调用同源 Agent 端点；不猜测路径，不调用页面 `/api/runtime-capabilities`，不触发真实上游探测或图片生成。
 
 ## Job Polling
 

@@ -18,6 +18,10 @@ export function getServerChannelState() {
     return cachedServerChannelState;
 }
 
+export function getExistingServerChannelState() {
+    return cachedServerChannelState;
+}
+
 export function resetServerChannelStateForTests(): void {
     const isTestRuntime = process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test';
     if (!isTestRuntime) {

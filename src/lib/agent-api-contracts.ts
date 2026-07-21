@@ -432,6 +432,13 @@ export type AgentCapabilities = {
         };
         retention: AgentRequestDiagnosticsRetention;
     };
+    channel_health_diagnostics: {
+        supported: true;
+        endpoint: string;
+        source: 'in_process_channel_router';
+        state_scope: 'process_local';
+        billable: false;
+    };
     idempotency: {
         required: boolean;
         header: string;
@@ -1285,6 +1292,13 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         },
         page_request_diagnostics: buildPageRequestDiagnosticsCapabilities(env),
         agent_request_diagnostics: buildAgentRequestDiagnosticsCapabilities(env),
+        channel_health_diagnostics: {
+            supported: true,
+            endpoint: AGENT_ENDPOINTS.channel_health_diagnostics,
+            source: 'in_process_channel_router',
+            state_scope: 'process_local',
+            billable: false
+        },
         idempotency: {
             required: true,
             header: 'Idempotency-Key',

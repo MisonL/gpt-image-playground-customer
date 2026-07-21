@@ -83,6 +83,7 @@ export type ChannelRouter = {
     reportRecoveryProbeSuccess(candidate: ChannelRecoveryProbeCandidate): boolean;
     reportRecoveryProbeFailure(candidate: ChannelRecoveryProbeCandidate, reason?: ChannelFailureReason): void;
     getHealthSummary(): ChannelPoolHealthSummary;
+    getHealthSnapshot(): ChannelHealthSnapshot;
     getRequestModeHealthSummary(): ChannelRequestModeHealthSummary;
 };
 
@@ -142,6 +143,37 @@ export type ChannelPoolHealthSummary = {
     pendingRecoveryProbeCredentialCount: number;
     pendingRecoveryProbeChannelCount: number;
     lastFailure?: ChannelFailureReason;
+};
+
+export type ChannelHealthState = 'healthy' | 'cooldown' | 'probe_pending';
+
+export type ChannelCredentialRequestModeHealthSnapshot = {
+    mode: ChannelRequestMode;
+    state: ChannelHealthState;
+    cooldownUntil?: number;
+    probeRequired: boolean;
+};
+
+export type ChannelCredentialHealthSnapshot = {
+    credentialId: string;
+    state: ChannelHealthState;
+    cooldownUntil?: number;
+    probeRequired: boolean;
+    lastFailure?: PublicChannelFailureReason;
+    requestModes: ChannelCredentialRequestModeHealthSnapshot[];
+};
+
+export type ChannelHealthSnapshot = {
+    at: number;
+    channels: Array<{
+        channelId: string;
+        credentialCount: number;
+        healthyCredentialCount: number;
+        unhealthyCredentialCount: number;
+        state: ChannelHealthState;
+        probeRequired: boolean;
+        credentials: ChannelCredentialHealthSnapshot[];
+    }>;
 };
 
 export type ChannelRecoveryProbeCandidate = {
@@ -221,11 +253,18 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
     const probeRequiredChannelIds = new Set<string>();
     const probeRequiredCredentialRequestModes = new Set<string>();
     const probeRequiredChannelRequestModes = new Set<string>();
+    const lastFailureByCredentialId = new Map<string, ChannelFailureReason>();
+    const lastFailureByChannelId = new Map<string, ChannelFailureReason>();
+    const lastFailureByCredentialRequestMode = new Map<string, ChannelFailureReason>();
+    const lastFailureByChannelRequestMode = new Map<string, ChannelFailureReason>();
     const channelIds = Array.from(new Set(options.credentials.map((credential) => credential.channelId)));
     let lastFailure: ChannelFailureReason | undefined;
 
-    const isCoolingDown = (credential: ChannelCredential, requestMode?: ChannelRequestMode) => {
-        const currentTime = now();
+    const isCoolingDownAt = (
+        credential: ChannelCredential,
+        currentTime: number,
+        requestMode?: ChannelRequestMode
+    ) => {
         return (
             (unhealthyUntilByCredentialId.get(credential.id) ?? 0) > currentTime ||
             (unhealthyUntilByChannelId.get(credential.channelId) ?? 0) > currentTime ||
@@ -238,6 +277,8 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             )
         );
     };
+    const isCoolingDown = (credential: ChannelCredential, requestMode?: ChannelRequestMode) =>
+        isCoolingDownAt(credential, now(), requestMode);
 
     const isWaitingForProbe = (credential: ChannelCredential, requestMode?: ChannelRequestMode) => {
         if (!options.requireProbeForRecovery) return false;
@@ -267,6 +308,79 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             !isWaitingForProbe(credential, mode)
         );
     };
+    const getLatestCooldownUntil = (values: Array<number | undefined>, currentTime: number) => {
+        const activeValues = values.filter(
+            (value): value is number => typeof value === 'number' && value > currentTime
+        );
+        return activeValues.length ? Math.max(...activeValues) : undefined;
+    };
+    const getCooldownUntil = (credential: ChannelCredential, currentTime: number, requestMode?: ChannelRequestMode) => {
+        const values = [
+            unhealthyUntilByCredentialId.get(credential.id),
+            unhealthyUntilByChannelId.get(credential.channelId),
+            ...(requestMode
+                ? [
+                      unhealthyUntilByCredentialRequestMode.get(credentialRequestModeKey(credential, requestMode)),
+                      unhealthyUntilByChannelRequestMode.get(channelRequestModeKey(credential, requestMode))
+                  ]
+                : [])
+        ];
+        const activeValues = values.filter((value): value is number => typeof value === 'number' && value > currentTime);
+        return activeValues.length ? Math.max(...activeValues) : undefined;
+    };
+    const getHealthState = (credential: ChannelCredential, currentTime: number, requestMode?: ChannelRequestMode) => {
+        if (isWaitingForProbe(credential, requestMode)) return 'probe_pending' as const;
+        return isCoolingDownAt(credential, currentTime, requestMode) ? ('cooldown' as const) : ('healthy' as const);
+    };
+    const getCredentialHealthState = (
+        credentialState: ChannelHealthState,
+        requestModes: readonly ChannelCredentialRequestModeHealthSnapshot[]
+    ): ChannelHealthState => {
+        if (
+            credentialState !== 'healthy' ||
+            requestModes.length === 0 ||
+            requestModes.some((requestMode) => requestMode.state === 'healthy')
+        ) {
+            return credentialState;
+        }
+        return requestModes.some((requestMode) => requestMode.state === 'probe_pending')
+            ? 'probe_pending'
+            : 'cooldown';
+    };
+    const recordFailure = (
+        credential: ChannelCredential,
+        scope: 'credential' | 'channel',
+        reason: ChannelFailureReason,
+        requestMode?: ChannelRequestMode
+    ) => {
+        if (scope === 'channel') {
+            if (requestMode) {
+                lastFailureByChannelRequestMode.set(channelRequestModeKey(credential, requestMode), reason);
+            } else {
+                lastFailureByChannelId.set(credential.channelId, reason);
+            }
+            return;
+        }
+        if (requestMode) {
+            lastFailureByCredentialRequestMode.set(credentialRequestModeKey(credential, requestMode), reason);
+        } else {
+            lastFailureByCredentialId.set(credential.id, reason);
+        }
+    };
+    const getLatestFailure = (reasons: Array<ChannelFailureReason | undefined>) =>
+        reasons.reduce<ChannelFailureReason | undefined>((latest, reason) => {
+            if (!reason || (latest && latest.at >= reason.at)) return latest;
+            return reason;
+        }, undefined);
+    const getCredentialLastFailure = (credential: ChannelCredential) =>
+        getLatestFailure([
+            lastFailureByCredentialId.get(credential.id),
+            lastFailureByChannelId.get(credential.channelId),
+            ...getEffectiveChannelRequestModes(credential).flatMap((requestMode) => [
+                lastFailureByCredentialRequestMode.get(credentialRequestModeKey(credential, requestMode)),
+                lastFailureByChannelRequestMode.get(channelRequestModeKey(credential, requestMode))
+            ])
+        ]);
     const setCooldown = (
         credential: ChannelCredential,
         scope: 'credential' | 'channel',
@@ -416,6 +530,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 ...(reportOptions.reason ?? { at: currentTime, scope }),
                 ...(requestMode ? { requestMode } : {})
             };
+            recordFailure(credential, scope, lastFailure, requestMode);
             const cooldown = setCooldown(credential, scope, requestMode);
             return {
                 scope,
@@ -591,6 +706,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 }),
                 ...(candidate.requestMode ? { requestMode: candidate.requestMode } : {})
             };
+            recordFailure(candidate.credential, candidate.scope, lastFailure, candidate.requestMode);
             setCooldown(candidate.credential, candidate.scope, candidate.requestMode);
         },
         getHealthSummary() {
@@ -609,6 +725,63 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                     probeRequiredCredentialIds.size + probeRequiredCredentialRequestModes.size,
                 pendingRecoveryProbeChannelCount: probeRequiredChannelIds.size + probeRequiredChannelRequestModes.size,
                 ...(lastFailure ? { lastFailure } : {})
+            };
+        },
+        getHealthSnapshot() {
+            const currentTime = now();
+            return {
+                at: currentTime,
+                channels: channelIds.map((channelId) => {
+                    const channelCredentials = options.credentials.filter((credential) => credential.channelId === channelId);
+                    const credentials = channelCredentials.map((credential) => {
+                        const requestModes = getEffectiveChannelRequestModes(credential).map((mode) => {
+                            const cooldownUntil = getCooldownUntil(credential, currentTime, mode);
+                            return {
+                                mode,
+                                state: getHealthState(credential, currentTime, mode),
+                                ...(cooldownUntil === undefined ? {} : { cooldownUntil }),
+                                probeRequired: isWaitingForProbe(credential, mode)
+                            };
+                        });
+                        const credentialState = getCredentialHealthState(
+                            getHealthState(credential, currentTime),
+                            requestModes
+                        );
+                        const credentialCooldownUntil = getCooldownUntil(credential, currentTime);
+                        const cooldownUntil =
+                            credentialState === 'healthy'
+                                ? credentialCooldownUntil
+                                : getLatestCooldownUntil([
+                                      credentialCooldownUntil,
+                                      ...requestModes.map((requestMode) => requestMode.cooldownUntil)
+                                  ], currentTime);
+                        const probeRequired = isWaitingForProbe(credential) || requestModes.some((mode) => mode.probeRequired);
+                        const lastCredentialFailure = toPublicChannelFailure(getCredentialLastFailure(credential));
+                        return {
+                            credentialId: credential.id,
+                            state: credentialState,
+                            ...(cooldownUntil === undefined ? {} : { cooldownUntil }),
+                            probeRequired,
+                            ...(lastCredentialFailure ? { lastFailure: lastCredentialFailure } : {}),
+                            requestModes
+                        };
+                    });
+                    const healthyCredentialCount = credentials.filter((credential) => credential.state === 'healthy').length;
+                    return {
+                        channelId,
+                        credentialCount: credentials.length,
+                        healthyCredentialCount,
+                        unhealthyCredentialCount: credentials.length - healthyCredentialCount,
+                        state:
+                            healthyCredentialCount > 0
+                                ? ('healthy' as const)
+                                : credentials.some((credential) => credential.state === 'probe_pending')
+                                  ? ('probe_pending' as const)
+                                  : ('cooldown' as const),
+                        probeRequired: credentials.some((credential) => credential.probeRequired),
+                        credentials
+                    };
+                })
             };
         },
         getRequestModeHealthSummary() {
