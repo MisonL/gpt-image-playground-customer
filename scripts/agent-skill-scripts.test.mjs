@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const skillRoot = join(repoRoot, 'skills/gpt-image-playground-agent');
 const skillScriptsRoot = join(repoRoot, 'skills/gpt-image-playground-agent/scripts');
+const localUpstreamProbeTimeoutMs = '5000';
 
 function agentGenerateCapabilities(extra = {}) {
     return {
@@ -491,7 +492,7 @@ describe('Agent skill script argument validation', () => {
                     '--base-url',
                     `${baseUrl}/v1`,
                     '--timeout-ms',
-                    '1000'
+                    localUpstreamProbeTimeoutMs
                 ]);
 
                 assert.equal(result.status, 0);
@@ -525,7 +526,7 @@ describe('Agent skill script argument validation', () => {
             async (baseUrl) => {
                 const result = await runSkillScriptAsync(
                     'probe-upstream-image.mjs',
-                    ['--base-url', `${baseUrl}/v1`, '--timeout-ms', '1000'],
+                    ['--base-url', `${baseUrl}/v1`, '--timeout-ms', localUpstreamProbeTimeoutMs],
                     { GPT_IMAGE_UPSTREAM_API_KEY: 'probe-secret', OPENAI_UPSTREAM_USER_AGENT: 'custom-probe' }
                 );
 

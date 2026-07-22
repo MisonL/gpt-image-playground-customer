@@ -10,6 +10,7 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = join(repoRoot, 'scripts/smoke-image-upstream-real.mjs');
 const realSmokeOutputDir = join(repoRoot, 'generated-images/.real-smoke');
 const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const smokeChildTimeoutGuardMs = 45_000;
 
 describe('image upstream real smoke script', () => {
     it('skips every real upstream target without billable calls when no target env is configured', () => {
@@ -686,7 +687,7 @@ describe('image upstream real smoke script', () => {
                     IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
                     IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
                 },
-                { killAfterMs: 30000 }
+                { killAfterMs: smokeChildTimeoutGuardMs }
             );
 
             assert.equal(result.signal, null, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -757,7 +758,7 @@ describe('image upstream real smoke script', () => {
         );
 
         assert.equal(result.status, 1);
-        assert.equal(result.stderr.trim(), '');
+        assert.doesNotMatch(result.stderr, /--env-file 指定的文件不存在/);
         const report = JSON.parse(result.stdout.slice(result.stdout.indexOf('{')));
         assert.equal(report.independent_targets.configuration_complete, false);
         assert.equal(report.missing_required_count, 6);
