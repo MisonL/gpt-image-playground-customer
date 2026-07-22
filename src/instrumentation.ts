@@ -26,14 +26,17 @@ export async function register() {
 
 export async function runServerStartup(deps: ServerStartupDeps): Promise<void> {
     await runAgentStateStartupRecovery(deps);
-    try {
-        deps.appLogger.info('开始启动 WebUI 图片自动清理。');
-        await deps.startWebuiImageCleanupScheduler();
-        deps.appLogger.info('WebUI 图片自动清理启动完成。');
-    } catch (error) {
-        deps.appLogger.error('WebUI 图片自动清理启动失败。', error);
-        throw error;
-    }
+    startWebuiImageCleanupScheduler(deps);
+}
+
+function startWebuiImageCleanupScheduler(deps: ServerStartupDeps): void {
+    deps.appLogger.info('开始启动 WebUI 图片自动清理。');
+    void Promise.resolve()
+        .then(async () => await deps.startWebuiImageCleanupScheduler())
+        .then(
+            () => deps.appLogger.info('WebUI 图片自动清理启动完成。'),
+            (error) => deps.appLogger.error('WebUI 图片自动清理启动失败。', error)
+        );
 }
 
 export async function runAgentStateStartupRecovery(deps: StartupRecoveryDeps): Promise<void> {

@@ -12,6 +12,7 @@ import type { AgentStateStore } from './agent-state-store';
 import type { ImageShareStateStore } from './share-store';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 
 afterEach(() => {
     setAgentStateStoreFactoryForTests(undefined);
@@ -153,52 +154,82 @@ describe('runAgentStateStartupRecovery', () => {
 });
 
 describe('runServerStartup', () => {
-    it('starts WebUI cleanup only after Agent state recovery completes', async () => {
+    it('starts WebUI cleanup after Agent state recovery without blocking server startup', async () => {
         const events: string[] = [];
-
-        await runServerStartup({
+        let cleanupStarted = false;
+        let releaseCleanup: (() => void) | undefined;
+        const cleanup = new Promise<void>((resolve) => {
+            releaseCleanup = resolve;
+        });
+        let startupSettled = false;
+        const startup = runServerStartup({
             recoverAgentStateOnStartup: async () => {
                 events.push('agent-recovery');
                 return 0;
             },
             startWebuiImageCleanupScheduler: async () => {
+                cleanupStarted = true;
                 events.push('webui-cleanup-start');
+                await cleanup;
             },
             appLogger: {
                 info() {},
                 error() {}
             }
         });
+        void startup.then(() => {
+            startupSettled = true;
+        });
 
-        assert.deepEqual(events, ['agent-recovery', 'webui-cleanup-start']);
+        try {
+            await waitFor(() => cleanupStarted);
+
+            assert.equal(startupSettled, true);
+            assert.deepEqual(events, ['agent-recovery', 'webui-cleanup-start']);
+        } finally {
+            releaseCleanup?.();
+            await startup;
+        }
     });
 
-    it('logs and rejects WebUI cleanup startup failures', async () => {
+    it('logs WebUI cleanup startup failures without rejecting server startup', async () => {
         const logs: Array<{ level: 'info' | 'error'; message: string; context?: unknown }> = [];
+        let resolveFailureLogged: (() => void) | undefined;
+        const failureLogged = new Promise<void>((resolve) => {
+            resolveFailureLogged = resolve;
+        });
 
-        await assert.rejects(
-            () =>
-                runServerStartup({
-                    recoverAgentStateOnStartup: async () => 0,
-                    startWebuiImageCleanupScheduler: async () => {
-                        throw new Error('cleanup startup failed');
-                    },
-                    appLogger: {
-                        info(message, context) {
-                            logs.push({ level: 'info', message, context });
-                        },
-                        error(message, context) {
-                            logs.push({ level: 'error', message, context });
-                        }
-                    }
-                }),
-            /cleanup startup failed/
-        );
+        await runServerStartup({
+            recoverAgentStateOnStartup: async () => 0,
+            startWebuiImageCleanupScheduler: async () => {
+                throw new Error('cleanup startup failed');
+            },
+            appLogger: {
+                info(message, context) {
+                    logs.push({ level: 'info', message, context });
+                },
+                error(message, context) {
+                    logs.push({ level: 'error', message, context });
+                    resolveFailureLogged?.();
+                }
+            }
+        });
+        await failureLogged;
 
         assert.equal(logs.at(-1)?.level, 'error');
         assert.equal(logs.at(-1)?.message, 'WebUI 图片自动清理启动失败。');
+        assert.ok(logs.at(-1)?.context instanceof Error);
+        assert.match((logs.at(-1)?.context as Error).message, /cleanup startup failed/);
     });
 });
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+    const startedAt = Date.now();
+    while (!predicate()) {
+        if (Date.now() - startedAt > timeoutMs) throw new Error('condition not met before timeout');
+        await delay(5);
+    }
+}
 
 describe('readAgentDatabaseUrl', () => {
     const DB_PASSWORD_FIXTURE = ['database', 'password'].join(' ');
