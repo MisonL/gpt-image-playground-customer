@@ -10,8 +10,21 @@ type CreateImageShareFromBlobOptions = {
     accessRefreshErrorMessage: string;
     createFailedMessage: string;
     refreshImageAccessCookie: () => Promise<boolean>;
+    pageUrl?: string;
     fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
+
+function resolveShareUrlForPage(url: string, pageUrl: string | undefined, createFailedMessage: string): string {
+    if (!pageUrl) return url;
+    try {
+        const page = new URL(pageUrl);
+        const share = new URL(url, page);
+        if (share.origin !== page.origin) throw new Error('share URL origin mismatch');
+        return share.toString();
+    } catch {
+        throw new Error(createFailedMessage);
+    }
+}
 
 export async function createImageShareFromBlob(options: CreateImageShareFromBlobOptions): Promise<{ url: string }> {
     if (!(await options.refreshImageAccessCookie())) {
@@ -39,5 +52,5 @@ export async function createImageShareFromBlob(options: CreateImageShareFromBlob
         throw new Error(options.createFailedMessage);
     }
 
-    return { url: body.url };
+    return { url: resolveShareUrlForPage(body.url, options.pageUrl, options.createFailedMessage) };
 }

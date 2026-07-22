@@ -25,12 +25,45 @@ describe('createImageShareFromBlob', () => {
                 assert.equal(form.get('accessCode'), '12345678');
                 assert.equal(form.get('expiresInMinutes'), '60');
                 assert.ok(form.get('image') instanceof File);
-                return Response.json({ url: 'http://localhost/share/token' }, { status: 201 });
+                return Response.json({ url: '/share/token' }, { status: 201 });
             }
         });
 
-        assert.equal(response.url, 'http://localhost/share/token');
+        assert.equal(response.url, '/share/token');
         assert.deepEqual(steps, ['refresh', 'fetch']);
+    });
+
+    it('resolves a relative share path against the active page origin', async () => {
+        const response = await createImageShareFromBlob({
+            filename: 'result.png',
+            blob: new Blob([Buffer.from('image-bytes')], { type: 'image/png' }),
+            values: { accessCode: '', expiresInMinutes: null },
+            accessRefreshErrorMessage: 'refresh failed',
+            createFailedMessage: 'create failed',
+            refreshImageAccessCookie: async () => true,
+            pageUrl: 'https://images.example.test/workbench',
+            fetchImpl: async () => Response.json({ url: '/playground/share/token' }, { status: 201 })
+        });
+
+        assert.equal(response.url, 'https://images.example.test/playground/share/token');
+    });
+
+    it('rejects a share URL outside the current page origin', async () => {
+        await assert.rejects(
+            () =>
+                createImageShareFromBlob({
+                    filename: 'result.png',
+                    blob: new Blob([Buffer.from('image-bytes')], { type: 'image/png' }),
+                    values: { accessCode: '', expiresInMinutes: null },
+                    accessRefreshErrorMessage: 'refresh failed',
+                    createFailedMessage: 'create failed',
+                    refreshImageAccessCookie: async () => true,
+                    pageUrl: 'https://images.example.test/workbench',
+                    fetchImpl: async () =>
+                        Response.json({ url: 'https://other.example.test/share/token' }, { status: 201 })
+                }),
+            /create failed/
+        );
     });
 
     it('does not post a share when access refresh fails', async () => {

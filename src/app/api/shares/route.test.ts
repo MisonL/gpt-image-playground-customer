@@ -40,12 +40,12 @@ afterEach(async () => {
     }
 });
 
-function createShareRequest(form: FormData, options: { accessToken?: string | null } = {}) {
+function createShareRequest(form: FormData, options: { accessToken?: string | null; url?: string } = {}) {
     const headers = new Headers();
     const accessToken =
         options.accessToken === undefined ? createAccessToken(PAGE_PASSWORD_FIXTURE) : options.accessToken;
     if (accessToken) headers.set('Cookie', `gptImageAccess=${accessToken}`);
-    return new NextRequest('http://localhost/api/shares', { method: 'POST', headers, body: form });
+    return new NextRequest(options.url ?? 'http://localhost/api/shares', { method: 'POST', headers, body: form });
 }
 
 function params(token: string) {
@@ -68,10 +68,39 @@ describe('POST /api/shares', { concurrency: false }, () => {
 
         assert.match(body.token, /^[a-f0-9]{24}$/);
         assert.equal(body.accessCodeRequired, true);
-        assert.equal(typeof body.url, 'string');
-        assert.ok(body.url.includes(`/share/${body.token}`));
+        assert.equal(body.url, `/share/${body.token}`);
         assert.equal('accessCodeHash' in body, false);
         assert.equal('accessCodeSalt' in body, false);
+    });
+
+    it('returns a same-deployment share path instead of an internal Docker listener origin', async () => {
+        await withTempCwd();
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
+        const form = new FormData();
+        form.set('sourceFilename', 'result.png');
+        form.set('image', new File([VALID_PNG_BYTES], 'result.png', { type: 'image/png' }));
+
+        const response = await POST(createShareRequest(form, { url: 'http://0.0.0.0:4783/api/shares' }));
+        assert.equal(response.status, 201);
+        const body = await response.json();
+
+        assert.equal(body.url, `/share/${body.token}`);
+    });
+
+    it('keeps a deployment path prefix in the returned share path', async () => {
+        await withTempCwd();
+        process.env.APP_PASSWORD = PAGE_PASSWORD_FIXTURE;
+        const form = new FormData();
+        form.set('sourceFilename', 'result.png');
+        form.set('image', new File([VALID_PNG_BYTES], 'result.png', { type: 'image/png' }));
+
+        const response = await POST(
+            createShareRequest(form, { url: 'https://internal.example.test/playground/api/shares' })
+        );
+        assert.equal(response.status, 201);
+        const body = await response.json();
+
+        assert.equal(body.url, `/playground/share/${body.token}`);
     });
 
     it('rejects unauthenticated share creation when a page access code is configured', async () => {

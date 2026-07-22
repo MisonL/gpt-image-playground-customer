@@ -2,6 +2,7 @@ import {
     DEFAULT_SHARE_EXPIRY_VALUE,
     ShareDialogFooterActions,
     ShareExpiryField,
+    ShareLinkField,
     getShareExpiryMinutes
 } from './share-dialog';
 import { I18nProvider, useI18n } from '@/lib/i18n';
@@ -22,7 +23,19 @@ function renderShareRiskHint() {
     );
 }
 
-function renderOpenShareDialog() {
+function renderShareLinkField() {
+    return renderToStaticMarkup(
+        <I18nProvider>
+            <ShareLinkField
+                shareUrl='https://images.example.test/share/token'
+                copyStatus={{ url: 'https://images.example.test/share/token', result: 'copied' }}
+                onCopy={noop}
+            />
+        </I18nProvider>
+    );
+}
+
+function renderShareExpiryField() {
     return renderToStaticMarkup(
         <I18nProvider>
             <ShareExpiryField expiry='1440' onExpiryChange={noop} />
@@ -62,9 +75,17 @@ describe('ShareDialog', () => {
     });
 
     it('associates the expiry label with the select trigger', () => {
-        const html = renderOpenShareDialog();
+        const html = renderShareExpiryField();
 
         assert.match(html, /share-expiry/);
+    });
+
+    it('associates the generated link with its read-only input and announces share feedback', () => {
+        const html = renderShareLinkField();
+
+        assert.match(html, /for="share-link"/);
+        assert.match(html, /id="share-link"/);
+        assert.match(html, /aria-live="polite"/);
     });
 
     it('renders an explicit footer close action', () => {

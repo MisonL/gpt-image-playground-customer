@@ -44,8 +44,10 @@ function parseExpiry(value: FormDataEntryValue | null): number | null | undefine
 }
 
 function resolveShareUrl(request: Request, token: string): string {
-    const url = new URL(request.url);
-    return `${url.origin}/share/${token}`;
+    const pathname = new URL(request.url).pathname.replace(/\/+$/, '');
+    const apiPath = '/api/shares';
+    const basePath = pathname.endsWith(apiPath) ? pathname.slice(0, -apiPath.length) : '';
+    return `${basePath}/share/${encodeURIComponent(token)}`;
 }
 
 function isUploadedImage(value: FormDataEntryValue | null): value is File {

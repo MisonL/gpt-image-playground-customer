@@ -3237,7 +3237,8 @@ export default function HomePage() {
                     values,
                     accessRefreshErrorMessage: t('error.imageAccessRefreshFailed'),
                     createFailedMessage: t('share.createFailed'),
-                    refreshImageAccessCookie
+                    refreshImageAccessCookie,
+                    pageUrl: window.location.href
                 });
                 setShareUrl(result.url);
             } catch (error) {

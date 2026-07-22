@@ -98,6 +98,43 @@ export function ShareDialogFooterActions(props: {
     );
 }
 
+export function ShareLinkField(props: {
+    shareUrl: string;
+    copyStatus: { url: string; result: 'copied' | 'error' } | null;
+    onCopy: () => void;
+}) {
+    const { t } = useI18n();
+    const copyResult = props.copyStatus?.url === props.shareUrl ? props.copyStatus.result : null;
+
+    return (
+        <div className='grid gap-2'>
+            <Label htmlFor='share-link'>{t('share.link')}</Label>
+            <div className='flex gap-2'>
+                <Input id='share-link' name='shareLink' value={props.shareUrl} readOnly />
+                <Button
+                    type='button'
+                    variant='outline'
+                    size='icon'
+                    className='min-h-11 min-w-11 sm:min-h-9 sm:min-w-9'
+                    onClick={props.onCopy}
+                    aria-label={t('share.copyLink')}>
+                    <Copy className='h-4 w-4' />
+                </Button>
+            </div>
+            {copyResult === 'copied' ? (
+                <p aria-live='polite' className='text-sm text-emerald-600'>
+                    {t('common.copied')}
+                </p>
+            ) : null}
+            {copyResult === 'error' ? (
+                <p aria-live='polite' className='text-destructive text-sm'>
+                    {t('share.copyFailed')}
+                </p>
+            ) : null}
+        </div>
+    );
+}
+
 export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, onCreate }: ShareDialogProps) {
     const { t } = useI18n();
     const [accessCode, setAccessCode] = React.useState('');
@@ -139,40 +176,30 @@ export function ShareDialog({ open, onOpenChange, isCreating, shareUrl, error, o
                     </div>
                     <ShareExpiryField expiry={expiry} onExpiryChange={setExpiry} />
                     {accessCodeError ? <p className='text-destructive text-sm'>{accessCodeError}</p> : null}
-                    {error ? <p className='text-destructive text-sm'>{error}</p> : null}
+                    {error ? (
+                        <p aria-live='polite' className='text-destructive text-sm'>
+                            {error}
+                        </p>
+                    ) : null}
                     {shareUrl ? (
-                        <div className='grid gap-2'>
-                            <Label>{t('share.link')}</Label>
-                            <div className='flex gap-2'>
-                                <Input value={shareUrl} readOnly />
-                                <Button
-                                    type='button'
-                                    variant='outline'
-                                    size='icon'
-                                    className='min-h-11 min-w-11 sm:min-h-9 sm:min-w-9'
-                                    onClick={async () => {
-                                        setCopyStatus(null);
-                                        try {
-                                            if (!navigator.clipboard?.writeText) {
-                                                throw new Error(t('share.copyFailed'));
-                                            }
-                                            await navigator.clipboard.writeText(shareUrl);
-                                            setCopyStatus({ url: shareUrl, result: 'copied' });
-                                        } catch {
-                                            setCopyStatus({ url: shareUrl, result: 'error' });
+                        <ShareLinkField
+                            shareUrl={shareUrl}
+                            copyStatus={copyStatus}
+                            onCopy={() => {
+                                void (async () => {
+                                    setCopyStatus(null);
+                                    try {
+                                        if (!navigator.clipboard?.writeText) {
+                                            throw new Error(t('share.copyFailed'));
                                         }
-                                    }}
-                                    aria-label={t('share.copyLink')}>
-                                    <Copy className='h-4 w-4' />
-                                </Button>
-                            </div>
-                            {copyStatus?.url === shareUrl && copyStatus.result === 'copied' ? (
-                                <p className='text-sm text-emerald-600'>{t('common.copied')}</p>
-                            ) : null}
-                            {copyStatus?.url === shareUrl && copyStatus.result === 'error' ? (
-                                <p className='text-destructive text-sm'>{t('share.copyFailed')}</p>
-                            ) : null}
-                        </div>
+                                        await navigator.clipboard.writeText(shareUrl);
+                                        setCopyStatus({ url: shareUrl, result: 'copied' });
+                                    } catch {
+                                        setCopyStatus({ url: shareUrl, result: 'error' });
+                                    }
+                                })();
+                            }}
+                        />
                     ) : null}
                 </div>
                 <ShareDialogFooterActions
