@@ -10,7 +10,8 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = join(repoRoot, 'scripts/smoke-image-upstream-real.mjs');
 const realSmokeOutputDir = join(repoRoot, 'generated-images/.real-smoke');
 const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
-const smokeChildTimeoutGuardMs = 45_000;
+const smokeChildTerminationGraceMs = 5_000;
+const smokeProcessTestTimeoutMs = 120_000;
 
 describe('image upstream real smoke script', () => {
     it('skips every real upstream target without billable calls when no target env is configured', () => {
@@ -107,8 +108,14 @@ describe('image upstream real smoke script', () => {
         assert.equal(result.stderr.trim(), '');
         const report = JSON.parse(result.stdout);
         assert.equal(report.results.length, 1);
-        assert.deepEqual(report.results.map((item) => item.id), ['sub2api-responses-json']);
-        assert.deepEqual(report.results.map((item) => item.request_mode), ['responses-non-stream']);
+        assert.deepEqual(
+            report.results.map((item) => item.id),
+            ['sub2api-responses-json']
+        );
+        assert.deepEqual(
+            report.results.map((item) => item.request_mode),
+            ['responses-non-stream']
+        );
         assert.deepEqual(report.request_modes.skipped, ['responses-non-stream']);
         assert.deepEqual(report.request_modes.not_selected, ['images-non-stream', 'images-sse', 'responses-sse']);
     });
@@ -201,80 +208,104 @@ describe('image upstream real smoke script', () => {
         ]);
     });
 
-    it('does not make billable upstream calls when any selected target has unsafe configuration', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(['--allow-billable', '--require-independent-targets'], {
-                ...buildAllIndependentTargetEnv(upstream.baseUrl),
-                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
-            });
+    it(
+        'does not make billable upstream calls when any selected target has unsafe configuration',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable', '--require-independent-targets'],
+                    {
+                        ...buildAllIndependentTargetEnv(upstream.baseUrl),
+                        IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
+                    },
+                    { signal: t.signal }
+                );
 
-            assert.equal(result.status, 1);
-            assert.doesNotMatch(result.stdout, /user:pass|example\.test|secret-independent-key|token=secret/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.ok, false);
-            assert.deepEqual(report.invalid_required_cases, ['original-images-json']);
-            assert.deepEqual(report.blocked_required_cases, [
-                'gaoren-images-sse',
-                'sub2api-images-sse',
-                'sub2api-responses-json',
-                'gpt2image-responses-sse',
-                'matsca-images-sse'
-            ]);
-            assert.equal(upstream.calls.length, 0);
-        } finally {
-            await upstream.close();
+                assert.equal(result.status, 1);
+                assert.doesNotMatch(result.stdout, /user:pass|example\.test|secret-independent-key|token=secret/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.ok, false);
+                assert.deepEqual(report.invalid_required_cases, ['original-images-json']);
+                assert.deepEqual(report.blocked_required_cases, [
+                    'gaoren-images-sse',
+                    'sub2api-images-sse',
+                    'sub2api-responses-json',
+                    'gpt2image-responses-sse',
+                    'matsca-images-sse'
+                ]);
+                assert.equal(upstream.calls.length, 0);
+            } finally {
+                await upstream.close();
+            }
         }
-    });
+    );
 
-    it('reports blocked cases at the top level for non-final-gate billable smoke runs', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(['--allow-billable'], {
-                ...buildAllIndependentTargetEnv(upstream.baseUrl),
-                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
-            });
+    it(
+        'reports blocked cases at the top level for non-final-gate billable smoke runs',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable'],
+                    {
+                        ...buildAllIndependentTargetEnv(upstream.baseUrl),
+                        IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: 'https://user:pass@example.test/v1?token=secret#frag'
+                    },
+                    { signal: t.signal }
+                );
 
-            assert.equal(result.status, 1);
-            const report = JSON.parse(result.stdout);
-            assert.deepEqual(report.blocked_cases, [
-                'gaoren-images-sse',
-                'sub2api-images-sse',
-                'sub2api-responses-json',
-                'gpt2image-responses-sse',
-                'matsca-images-sse'
-            ]);
-            assert.equal(upstream.calls.length, 0);
-        } finally {
-            await upstream.close();
+                assert.equal(result.status, 1);
+                const report = JSON.parse(result.stdout);
+                assert.deepEqual(report.blocked_cases, [
+                    'gaoren-images-sse',
+                    'sub2api-images-sse',
+                    'sub2api-responses-json',
+                    'gpt2image-responses-sse',
+                    'matsca-images-sse'
+                ]);
+                assert.equal(upstream.calls.length, 0);
+            } finally {
+                await upstream.close();
+            }
         }
-    });
+    );
 
-    it('does not make billable upstream calls when the required independent gate is missing target config', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(['--allow-billable', '--require-independent-targets'], {
-                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
-                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
-            });
+    it(
+        'does not make billable upstream calls when the required independent gate is missing target config',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable', '--require-independent-targets'],
+                    {
+                        IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                        IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
+                    },
+                    { signal: t.signal }
+                );
 
-            assert.equal(result.status, 1);
-            assert.doesNotMatch(result.stdout, /secret-real-smoke-key/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.ok, false);
-            assert.deepEqual(report.blocked_required_cases, ['original-images-json']);
-            assert.deepEqual(report.skipped_required_cases, [
-                'gaoren-images-sse',
-                'sub2api-images-sse',
-                'sub2api-responses-json',
-                'gpt2image-responses-sse',
-                'matsca-images-sse'
-            ]);
-            assert.equal(upstream.calls.length, 0);
-        } finally {
-            await upstream.close();
+                assert.equal(result.status, 1);
+                assert.doesNotMatch(result.stdout, /secret-real-smoke-key/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.ok, false);
+                assert.deepEqual(report.blocked_required_cases, ['original-images-json']);
+                assert.deepEqual(report.skipped_required_cases, [
+                    'gaoren-images-sse',
+                    'sub2api-images-sse',
+                    'sub2api-responses-json',
+                    'gpt2image-responses-sse',
+                    'matsca-images-sse'
+                ]);
+                assert.equal(upstream.calls.length, 0);
+            } finally {
+                await upstream.close();
+            }
         }
-    });
+    );
 
     it('fails the run when independent upstream targets are required but skipped', () => {
         const result = runScript(['--require-independent-targets']);
@@ -440,270 +471,328 @@ describe('image upstream real smoke script', () => {
         assert.deepEqual(report.independent_targets.missing_cases, ['sub2api-responses-json']);
     });
 
-    it('passes APP_PASSWORD auth to in-process page route billable smoke runs', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(['--allow-billable', '--case', 'original-images-json'], {
-                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
-                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
-                APP_PASSWORD: 'page-access-code'
-            });
+    it(
+        'passes APP_PASSWORD auth to in-process page route billable smoke runs',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable', '--case', 'original-images-json'],
+                    {
+                        IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                        IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
+                        APP_PASSWORD: 'page-access-code'
+                    },
+                    { signal: t.signal }
+                );
 
-            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-real-smoke-key|page-access-code/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.results[0].status, 200);
-            assert.equal(report.results[0].image_count, 1);
-            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
-        } finally {
-            await upstream.close();
-        }
-    });
-
-    it('pins page route smoke backend and strategy against global route defaults', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(['--allow-billable', '--case', 'original-images-json'], {
-                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
-                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
-                IMAGE_GENERATION_BACKEND: 'responses-image-generation',
-                IMAGE_STREAMING_STRATEGY: 'force-sse',
-                ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
-                OPENAI_RESPONSES_API_MODEL: 'gpt-4.1-env'
-            });
-
-            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-real-smoke-key|gpt-4\.1-env/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.results[0].status, 200);
-            assert.equal(report.results[0].content_type, 'application/json');
-            assert.equal(report.results[0].image_count, 1);
-            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
-        } finally {
-            await upstream.close();
-        }
-    });
-
-    it('trims APP_PASSWORD before hashing page route billable smoke auth', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(['--allow-billable', '--case', 'original-images-json'], {
-                IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
-                IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
-                APP_PASSWORD: '  page-access-code  '
-            });
-
-            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-real-smoke-key|page-access-code/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.results[0].status, 200);
-            assert.equal(report.results[0].image_count, 1);
-            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
-        } finally {
-            await upstream.close();
-        }
-    });
-
-    it('passes AGENT_API_TOKEN auth to in-process Agent route billable smoke runs', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(
-                ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
-                {
-                    OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
-                    OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
-                    OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
-                    AGENT_API_TOKEN: 'secret-agent-token'
-                }
-            );
-
-            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-server-channel-key|secret-agent-token/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.results[0].status, 200);
-            assert.equal(report.results[0].image_count, 1);
-            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
-        } finally {
-            await upstream.close();
-        }
-    });
-
-    it('passes APP_PASSWORD auth to in-process Agent route billable smoke runs when no Agent token is configured', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(
-                ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
-                {
-                    OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
-                    OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
-                    OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
-                    APP_PASSWORD: 'page-access-code'
-                }
-            );
-
-            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-server-channel-key|page-access-code/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.results[0].status, 200);
-            assert.equal(report.results[0].image_count, 1);
-            assert.deepEqual(upstream.calls, ['/v1/images/generations']);
-        } finally {
-            await upstream.close();
-        }
-    });
-
-    it('removes generated .real-smoke artifact files after billable local Agent smoke runs', async () => {
-        const upstream = await startLocalImagesSseUpstream();
-        const before = listRealSmokeFiles();
-        let after = before;
-        try {
-            const result = await runScriptAsync(
-                ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
-                {
-                    OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
-                    OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
-                    OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse'
-                }
-            );
-
-            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-server-channel-key/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.ok, true);
-            assert.equal(report.final_gate_satisfied, false);
-            assert.equal(report.results[0].image_count, 1);
-            after = listRealSmokeFiles();
-            assert.deepEqual(diffFiles(before, after), []);
-        } finally {
-            for (const file of diffFiles(before, after)) {
-                rmSync(join(realSmokeOutputDir, file), { force: true });
+                assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-real-smoke-key|page-access-code/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.results[0].status, 200);
+                assert.equal(report.results[0].image_count, 1);
+                assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+            } finally {
+                await upstream.close();
             }
-            await upstream.close();
         }
-    });
+    );
 
-    it('runs the current server channel Responses JSON smoke case against a local upstream', async () => {
-        const upstream = await startLocalResponsesJsonUpstream();
-        try {
-            const result = await runScriptAsync(
-                ['--include-server-channel', '--allow-billable', '--case', 'server-channel-responses-json'],
-                {
-                    OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
-                    OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
-                    OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-non-stream',
-                    IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL: 'gpt-5.4'
+    it(
+        'pins page route smoke backend and strategy against global route defaults',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable', '--case', 'original-images-json'],
+                    {
+                        IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                        IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
+                        IMAGE_GENERATION_BACKEND: 'responses-image-generation',
+                        IMAGE_STREAMING_STRATEGY: 'force-sse',
+                        ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+                        OPENAI_RESPONSES_API_MODEL: 'gpt-4.1-env'
+                    },
+                    { signal: t.signal }
+                );
+
+                assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-real-smoke-key|gpt-4\.1-env/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.results[0].status, 200);
+                assert.equal(report.results[0].content_type, 'application/json');
+                assert.equal(report.results[0].image_count, 1);
+                assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+            } finally {
+                await upstream.close();
+            }
+        }
+    );
+
+    it(
+        'trims APP_PASSWORD before hashing page route billable smoke auth',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable', '--case', 'original-images-json'],
+                    {
+                        IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                        IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key',
+                        APP_PASSWORD: '  page-access-code  '
+                    },
+                    { signal: t.signal }
+                );
+
+                assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-real-smoke-key|page-access-code/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.results[0].status, 200);
+                assert.equal(report.results[0].image_count, 1);
+                assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+            } finally {
+                await upstream.close();
+            }
+        }
+    );
+
+    it(
+        'passes AGENT_API_TOKEN auth to in-process Agent route billable smoke runs',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
+                    {
+                        OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
+                        OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                        OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
+                        AGENT_API_TOKEN: 'secret-agent-token'
+                    },
+                    { signal: t.signal }
+                );
+
+                assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-server-channel-key|secret-agent-token/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.results[0].status, 200);
+                assert.equal(report.results[0].image_count, 1);
+                assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+            } finally {
+                await upstream.close();
+            }
+        }
+    );
+
+    it(
+        'passes APP_PASSWORD auth to in-process Agent route billable smoke runs when no Agent token is configured',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
+                    {
+                        OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
+                        OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                        OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
+                        APP_PASSWORD: 'page-access-code'
+                    },
+                    { signal: t.signal }
+                );
+
+                assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-server-channel-key|page-access-code/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.results[0].status, 200);
+                assert.equal(report.results[0].image_count, 1);
+                assert.deepEqual(upstream.calls, ['/v1/images/generations']);
+            } finally {
+                await upstream.close();
+            }
+        }
+    );
+
+    it(
+        'removes generated .real-smoke artifact files after billable local Agent smoke runs',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImagesSseUpstream();
+            const before = listRealSmokeFiles();
+            let after = before;
+            try {
+                const result = await runScriptAsync(
+                    ['--include-server-channel', '--allow-billable', '--case', 'server-channel-agent-images-sse'],
+                    {
+                        OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
+                        OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                        OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse'
+                    },
+                    { signal: t.signal }
+                );
+
+                assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-server-channel-key/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.ok, true);
+                assert.equal(report.final_gate_satisfied, false);
+                assert.equal(report.results[0].image_count, 1);
+                after = listRealSmokeFiles();
+                assert.deepEqual(diffFiles(before, after), []);
+            } finally {
+                for (const file of diffFiles(before, after)) {
+                    rmSync(join(realSmokeOutputDir, file), { force: true });
                 }
-            );
-
-            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-server-channel-key/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.ok, true);
-            assert.equal(report.final_gate_satisfied, false);
-            assert.equal(report.results[0].status, 200);
-            assert.equal(report.results[0].image_count, 1);
-            assert.equal(report.results[0].first_b64_length, pngBase64.length);
-        } finally {
-            await upstream.close();
+                await upstream.close();
+            }
         }
-    });
+    );
 
-    it('marks the final gate satisfied only after every independent target runs successfully', async () => {
-        const upstream = await startLocalImageAndResponsesUpstream();
-        try {
-            const result = await runScriptAsync(
-                ['--allow-billable', '--require-independent-targets'],
-                buildAllIndependentTargetEnv(upstream.baseUrl)
-            );
+    it(
+        'runs the current server channel Responses JSON smoke case against a local upstream',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalResponsesJsonUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--include-server-channel', '--allow-billable', '--case', 'server-channel-responses-json'],
+                    {
+                        OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
+                        OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
+                        OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-non-stream',
+                        IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL: 'gpt-5.4'
+                    },
+                    { signal: t.signal }
+                );
 
-            assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-independent-key/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.ok, true);
-            assert.equal(report.final_gate_satisfied, true);
-            assert.deepEqual(report.request_modes.passed, [
-                'images-non-stream',
-                'images-sse',
-                'responses-non-stream',
-                'responses-sse'
-            ]);
-            assert.deepEqual(report.request_modes.failed, []);
-            assert.equal(
-                report.suggested_channel_config,
-                'images-non-stream,images-sse,responses-non-stream,responses-sse'
-            );
-            assert.equal(report.independent_targets.configuration_complete, true);
-            assert.equal(report.independent_targets.configured_count, 6);
-            assert.equal(report.results.length, 6);
-            assert.equal(
-                report.results.every((item) => item.ok === true && item.skipped !== true),
-                true
-            );
-            assert.equal('missing_required_cases' in report, false);
-        } finally {
-            await upstream.close();
+                assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-server-channel-key/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.ok, true);
+                assert.equal(report.final_gate_satisfied, false);
+                assert.equal(report.results[0].status, 200);
+                assert.equal(report.results[0].image_count, 1);
+                assert.equal(report.results[0].first_b64_length, pngBase64.length);
+            } finally {
+                await upstream.close();
+            }
         }
-    });
+    );
 
-    it('fails the final gate when a page SSE smoke case returns a stream error event', async () => {
-        const successUpstream = await startLocalImageAndResponsesUpstream();
-        const failingSseUpstream = await startLocalFailingImagesSseUpstream();
-        try {
-            const result = await runScriptAsync(['--allow-billable', '--require-independent-targets'], {
-                ...buildAllIndependentTargetEnv(successUpstream.baseUrl),
-                IMAGE_REAL_SMOKE_GAOREN_BASE_URL: failingSseUpstream.baseUrl,
-                IMAGE_REAL_SMOKE_GAOREN_API_KEY: 'secret-independent-key-gaoren'
-            });
+    it(
+        'marks the final gate satisfied only after every independent target runs successfully',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalImageAndResponsesUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable', '--require-independent-targets'],
+                    buildAllIndependentTargetEnv(upstream.baseUrl),
+                    { signal: t.signal }
+                );
 
-            assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-independent-key/);
-            const report = JSON.parse(result.stdout);
-            const failedCase = report.results.find((item) => item.id === 'gaoren-images-sse');
-
-            assert.equal(report.ok, false);
-            assert.equal(report.final_gate_satisfied, false);
-            assert.deepEqual(report.request_modes.failed, ['images-sse']);
-            assert.equal(
-                report.suggested_channel_config,
-                'images-non-stream,responses-non-stream,responses-sse'
-            );
-            assert.equal(failedCase?.ok, false);
-            assert.equal(failedCase?.status, 200);
-            assert.equal(failedCase?.done_image_count, 0);
-            assert.match(failedCase?.error || '', /b64_json|最终图片/);
-            assert.equal(successUpstream.calls.length, 5);
-        } finally {
-            await successUpstream.close();
-            await failingSseUpstream.close();
+                assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-independent-key/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.ok, true);
+                assert.equal(report.final_gate_satisfied, true);
+                assert.deepEqual(report.request_modes.passed, [
+                    'images-non-stream',
+                    'images-sse',
+                    'responses-non-stream',
+                    'responses-sse'
+                ]);
+                assert.deepEqual(report.request_modes.failed, []);
+                assert.equal(
+                    report.suggested_channel_config,
+                    'images-non-stream,images-sse,responses-non-stream,responses-sse'
+                );
+                assert.equal(report.independent_targets.configuration_complete, true);
+                assert.equal(report.independent_targets.configured_count, 6);
+                assert.equal(report.results.length, 6);
+                assert.equal(
+                    report.results.every((item) => item.ok === true && item.skipped !== true),
+                    true
+                );
+                assert.equal('missing_required_cases' in report, false);
+            } finally {
+                await upstream.close();
+            }
         }
-    });
+    );
 
-    it('exits after its own timeout when a billable upstream never responds', async () => {
-        const upstream = await startLocalHangingImageUpstream();
-        try {
-            const result = await runScriptAsync(
-                ['--allow-billable', '--case', 'original-images-json', '--timeout-ms', '1000'],
-                {
-                    IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
-                    IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
-                },
-                { killAfterMs: smokeChildTimeoutGuardMs }
-            );
+    it(
+        'fails the final gate when a page SSE smoke case returns a stream error event',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const successUpstream = await startLocalImageAndResponsesUpstream();
+            const failingSseUpstream = await startLocalFailingImagesSseUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable', '--require-independent-targets'],
+                    {
+                        ...buildAllIndependentTargetEnv(successUpstream.baseUrl),
+                        IMAGE_REAL_SMOKE_GAOREN_BASE_URL: failingSseUpstream.baseUrl,
+                        IMAGE_REAL_SMOKE_GAOREN_API_KEY: 'secret-independent-key-gaoren'
+                    },
+                    { signal: t.signal }
+                );
 
-            assert.equal(result.signal, null, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.equal(result.killedByTest, false, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-            assert.doesNotMatch(result.stdout, /secret-real-smoke-key/);
-            const report = JSON.parse(result.stdout);
-            assert.equal(report.ok, false);
-            assert.equal(report.final_gate_satisfied, false);
-            assert.equal(report.results[0].timed_out, true);
-            assert.equal(report.results[0].ok, false);
-            assert.match(report.results[0].error, /timed out after 1000ms/);
-        } finally {
-            await upstream.close();
+                assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-independent-key/);
+                const report = JSON.parse(result.stdout);
+                const failedCase = report.results.find((item) => item.id === 'gaoren-images-sse');
+
+                assert.equal(report.ok, false);
+                assert.equal(report.final_gate_satisfied, false);
+                assert.deepEqual(report.request_modes.failed, ['images-sse']);
+                assert.equal(report.suggested_channel_config, 'images-non-stream,responses-non-stream,responses-sse');
+                assert.equal(failedCase?.ok, false);
+                assert.equal(failedCase?.status, 200);
+                assert.equal(failedCase?.done_image_count, 0);
+                assert.match(failedCase?.error || '', /b64_json|最终图片/);
+                assert.equal(successUpstream.calls.length, 5);
+            } finally {
+                await successUpstream.close();
+                await failingSseUpstream.close();
+            }
         }
-    });
+    );
+
+    it(
+        'exits after its own timeout when a billable upstream never responds',
+        { timeout: smokeProcessTestTimeoutMs },
+        async (t) => {
+            const upstream = await startLocalHangingImageUpstream();
+            try {
+                const result = await runScriptAsync(
+                    ['--allow-billable', '--case', 'original-images-json', '--timeout-ms', '1000'],
+                    {
+                        IMAGE_REAL_SMOKE_ORIGINAL_BASE_URL: upstream.baseUrl,
+                        IMAGE_REAL_SMOKE_ORIGINAL_API_KEY: 'secret-real-smoke-key'
+                    },
+                    { signal: t.signal }
+                );
+
+                assert.equal(result.signal, null, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.equal(result.killedByTest, false, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+                assert.doesNotMatch(result.stdout, /secret-real-smoke-key/);
+                const report = JSON.parse(result.stdout);
+                assert.equal(report.ok, false);
+                assert.equal(report.final_gate_satisfied, false);
+                assert.equal(report.results[0].timed_out, true);
+                assert.equal(report.results[0].ok, false);
+                assert.match(report.results[0].error, /timed out after 1000ms/);
+            } finally {
+                await upstream.close();
+            }
+        }
+    );
 
     it('rejects invalid timeout values before running smoke cases', () => {
         const result = runScript(['--timeout-ms', '999']);
@@ -861,12 +950,25 @@ function runScriptAsync(args = [], env = {}, options = {}) {
         let stdout = '';
         let stderr = '';
         let killedByTest = false;
-        const killTimer = options.killAfterMs
-            ? setTimeout(() => {
-                  killedByTest = true;
-                  child.kill('SIGTERM');
-              }, options.killAfterMs)
-            : undefined;
+        let terminationRequested = false;
+        let forceKillTimer;
+        const terminateChild = () => {
+            if (terminationRequested || child.exitCode !== null || child.signalCode !== null) return;
+
+            terminationRequested = true;
+            killedByTest = true;
+            if (child.kill('SIGTERM')) {
+                forceKillTimer = setTimeout(() => {
+                    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+                }, smokeChildTerminationGraceMs);
+            }
+        };
+        const abortListener = () => terminateChild();
+        const abortSignal = options.signal;
+        if (abortSignal) {
+            if (abortSignal.aborted) abortListener();
+            else abortSignal.addEventListener('abort', abortListener, { once: true });
+        }
         child.stdout.setEncoding('utf8');
         child.stderr.setEncoding('utf8');
         child.stdout.on('data', (chunk) => {
@@ -876,7 +978,8 @@ function runScriptAsync(args = [], env = {}, options = {}) {
             stderr += chunk;
         });
         child.on('close', (status, signal) => {
-            if (killTimer) clearTimeout(killTimer);
+            if (abortSignal) abortSignal.removeEventListener('abort', abortListener);
+            if (forceKillTimer) clearTimeout(forceKillTimer);
             resolve({ status, signal, stdout, stderr, killedByTest, elapsedMs: Date.now() - startedAt });
         });
     });
