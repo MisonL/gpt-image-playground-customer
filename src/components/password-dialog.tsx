@@ -40,6 +40,12 @@ export function PasswordDialog({
         onOpenChange(false);
     };
 
+    const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (!currentPassword.trim()) return;
+        handleSave();
+    };
+
     const handleDialogClose = (open: boolean) => {
         if (!open) {
             setCurrentPassword('');
@@ -54,35 +60,31 @@ export function PasswordDialog({
                     <DialogTitle>{title}</DialogTitle>
                     {description && <DialogDescription>{description}</DialogDescription>}
                 </DialogHeader>
-                <div className='grid gap-4 py-4'>
-                    <div className='grid grid-cols-1 items-center gap-4'>
-                        <Label htmlFor='password-input' className='sr-only'>
-                            {t('password.placeholder')}
-                        </Label>
-                        <Input
-                            ref={inputRef}
-                            id='password-input'
-                            name='password'
-                            type='password'
-                            autoComplete='current-password'
-                            placeholder={t('password.placeholder')}
-                            value={currentPassword}
-                            onChange={(e) => setCurrentPassword(e.target.value)}
-                            className='col-span-1'
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' && currentPassword.trim()) {
-                                    e.preventDefault();
-                                    handleSave();
-                                }
-                            }}
-                        />
+                <form onSubmit={handleSubmit} className='grid gap-4'>
+                    <div className='grid gap-4 py-4'>
+                        <div className='grid grid-cols-1 items-center gap-4'>
+                            <Label htmlFor='password-input' className='sr-only'>
+                                {t('password.placeholder')}
+                            </Label>
+                            <Input
+                                ref={inputRef}
+                                id='password-input'
+                                name='password'
+                                type='password'
+                                autoComplete='current-password'
+                                placeholder={t('password.placeholder')}
+                                value={currentPassword}
+                                onChange={(e) => setCurrentPassword(e.target.value)}
+                                className='col-span-1'
+                            />
+                        </div>
                     </div>
-                </div>
-                <DialogFooter>
-                    <Button type='button' onClick={handleSave} disabled={!currentPassword.trim()} className='px-6'>
-                        {t('common.save')}
-                    </Button>
-                </DialogFooter>
+                    <DialogFooter>
+                        <Button type='submit' disabled={!currentPassword.trim()} className='px-6'>
+                            {t('common.save')}
+                        </Button>
+                    </DialogFooter>
+                </form>
             </DialogContent>
         </Dialog>
     );
