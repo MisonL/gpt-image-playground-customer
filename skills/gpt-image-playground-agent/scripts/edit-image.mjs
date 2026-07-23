@@ -660,7 +660,6 @@ function buildPageSseFormData() {
     formData.append('quality', options.quality);
     formData.append('response_mode', options.responseMode);
     formData.append('clientRequestId', idempotencyKey);
-    formData.append('stream', 'true');
     formData.append('output_format', readOutputFormat(options));
     if (readOutputCompression(options) !== undefined) {
         formData.append('output_compression', String(readOutputCompression(options)));

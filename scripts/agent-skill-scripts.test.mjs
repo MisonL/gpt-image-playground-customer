@@ -2353,7 +2353,7 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
-    it('omits page SSE streaming strategy unless explicitly requested', async () => {
+    it('omits implicit page streaming controls unless explicitly requested', async () => {
         let pageRequestBody = '';
         await withServer(
             async (request, response) => {
@@ -2399,7 +2399,7 @@ describe('Agent skill script argument validation', () => {
 
                 assert.equal(result.status, 0);
                 assert.equal(result.stderr.trim(), '');
-                assert.match(pageRequestBody, /name="stream"\r?\n\r?\ntrue/);
+                assert.doesNotMatch(pageRequestBody, /name="stream"/);
                 assert.doesNotMatch(pageRequestBody, /name="image_streaming_strategy"/);
             }
         );

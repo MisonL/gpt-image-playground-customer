@@ -1116,8 +1116,7 @@ function buildPageSseRequestPreview(task) {
         size: raw.size || (task.mode === 'generate' ? '1024x1024' : 'auto'),
         quality: raw.quality || (task.mode === 'generate' ? 'high' : 'auto'),
         response_mode: readResponseMode(raw),
-        clientRequestId: task.idempotencyKey,
-        stream: 'true'
+        clientRequestId: task.idempotencyKey
     };
     if (raw.n !== undefined) preview.n = readConfiguredPositiveInteger(raw.n, `${task.id}.n`, 1);
     if (raw.stream_mode) preview.stream_mode = String(raw.stream_mode);
@@ -1421,7 +1420,6 @@ function buildPageSseTaskFormData(task) {
     formData.append('quality', raw.quality || (task.mode === 'generate' ? 'high' : 'auto'));
     formData.append('response_mode', readResponseMode(raw));
     formData.append('clientRequestId', task.idempotencyKey);
-    formData.append('stream', 'true');
     if (raw.n !== undefined) formData.append('n', String(readConfiguredPositiveInteger(raw.n, `${task.id}.n`, 1)));
     if (raw.stream_mode) formData.append('stream_mode', String(raw.stream_mode));
     if (raw.streaming_strategy) formData.append('image_streaming_strategy', String(raw.streaming_strategy));

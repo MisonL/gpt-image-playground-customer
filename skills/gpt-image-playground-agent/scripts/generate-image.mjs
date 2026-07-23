@@ -835,7 +835,6 @@ function buildPageSseFormData() {
     formData.append('output_format', requestBody.output_format);
     formData.append('response_mode', requestBody.response_mode);
     formData.append('clientRequestId', idempotencyKey);
-    formData.append('stream', 'true');
     if (requestBody.stream_mode) formData.append('stream_mode', requestBody.stream_mode);
     formData.append('partial_images', String(requestBody.partial_images ?? pageSsePartialImages));
     if (requestBody.image_backend)
@@ -1510,7 +1509,6 @@ async function checkPageSseContract() {
     formData.append('quality', requestBody.quality);
     formData.append('output_format', requestBody.output_format);
     formData.append('response_mode', requestBody.response_mode);
-    formData.append('stream', 'true');
     formData.append('clientRequestId', 'x'.repeat(pageSseClientRequestIdMaxLength + 1));
     if (passwordHash) formData.append('passwordHash', passwordHash);
     const { response, text } = await fetchJson(`${baseUrl}${PAGE_SSE_ENDPOINT}`, {
