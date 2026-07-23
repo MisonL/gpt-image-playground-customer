@@ -56,7 +56,7 @@ describe('POST /api/images streaming and Responses backends', { concurrency: fal
             );
             assert.equal(events[0].b64_json, 'edit-partial-base64');
             assert.equal(events[1].b64_json, PNG_BASE64);
-            assert.equal(events[1].output_format, 'webp');
+            assert.equal(events[1].output_format, 'png');
             assert.equal((events[2].images as Array<Record<string, unknown>>)[0].b64_json, PNG_BASE64);
             assert.equal(upstreamUrl, '/v1/images/edits');
             assert.match(upstreamBody, /name="image\[\]"/);

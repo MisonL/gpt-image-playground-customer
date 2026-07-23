@@ -644,6 +644,7 @@ export async function POST(request: NextRequest) {
                 outputFormat: responseOutputFormat,
                 storageMode: effectiveStorageMode,
                 includeBase64: true,
+                normalizeOutputFormat: true,
                 apiBaseUrl: effectiveApiBaseUrl,
                 apiKey: effectiveApiKey,
                 upstreamHeaders,

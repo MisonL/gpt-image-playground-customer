@@ -233,7 +233,7 @@ export async function persistOpenAiImages(options: {
     return persisted;
 }
 
-async function normalizeImageBuffer(buffer: Buffer, outputFormat: ValidOutputFormat): Promise<Buffer> {
+export async function normalizeImageBuffer(buffer: Buffer, outputFormat: ValidOutputFormat): Promise<Buffer> {
     const detectedFormat = detectImageFormat(buffer, outputFormat);
     if (detectedFormat.outputFormat === outputFormat) return buffer;
     const { default: sharp } = await import('sharp');

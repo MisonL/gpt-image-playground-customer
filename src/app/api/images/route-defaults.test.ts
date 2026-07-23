@@ -14,6 +14,33 @@ import { describe, it } from 'node:test';
 registerRouteTestLifecycle();
 
 describe('POST /api/images backend defaults and security boundaries', { concurrency: false }, () => {
+    it('normalizes non-streamed page image bytes to the requested output format', async () => {
+        const { POST } = await import('./route');
+        const upstream = await startImagesJsonUpstream(async () => ({ data: [{ b64_json: PNG_BASE64 }] }));
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: false,
+                    streamMode: 'non_stream',
+                    outputFormat: 'webp'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = (await response.json()) as { images?: Array<Record<string, unknown>> };
+            assert.equal(body.images?.[0]?.output_format, 'webp');
+            assert.equal(
+                Buffer.from(String(body.images?.[0]?.b64_json || ''), 'base64').toString('ascii', 8, 12),
+                'WEBP'
+            );
+        } finally {
+            await upstream.close();
+        }
+    });
+
     it('uses IMAGE_GENERATION_BACKEND as the route default when the request omits imageBackend', async () => {
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
         process.env.IMAGE_GENERATION_BACKEND = 'responses';

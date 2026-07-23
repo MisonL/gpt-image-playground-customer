@@ -6,6 +6,8 @@ import http from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const CONVERTIBLE_PNG_BASE64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
 
 function resolveActualCost() {
     return Promise.resolve({
@@ -76,6 +78,32 @@ async function waitForCondition(predicate: () => boolean, message: string) {
 }
 
 describe('createImageStreamResponse', () => {
+    it('normalizes final streamed image bytes to the requested output format', async () => {
+        const response = createImageStreamResponse({
+            stream: upstreamEvents([{ data: [{ b64_json: CONVERTIBLE_PNG_BASE64 }] }]),
+            modeLabel: '生成',
+            outputFormat: 'webp',
+            storageMode: 'indexeddb',
+            apiKey: 'test-key',
+            model: 'gpt-image-2',
+            startedAtMs: 1000,
+            resolveActualCost,
+            logProviderDiagnostics: false
+        });
+
+        const events = await readSseEvents(response);
+        assert.equal(events[0].output_format, 'webp');
+        assert.equal(Buffer.from(String(events[0].b64_json || ''), 'base64').toString('ascii', 8, 12), 'WEBP');
+        assert.equal(
+            Buffer.from(String((events[1].images as Array<Record<string, unknown>>)[0].b64_json || ''), 'base64').toString(
+                'ascii',
+                8,
+                12
+            ),
+            'WEBP'
+        );
+    });
+
     it('emits the stable client SSE contract for normalized upstream image events', async () => {
         const response = createImageStreamResponse({
             stream: upstreamEvents([

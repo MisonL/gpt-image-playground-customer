@@ -463,6 +463,7 @@ export async function executeAgentGenerate(options: {
             prompt: options.request.prompt,
             outputFormat: options.request.output_format,
             responseMode: options.request.response_mode,
+            normalizeOutputFormat: true,
             requestId: options.requestId,
             idempotencyKey: options.idempotencyKey,
             cached: options.cached,

@@ -52,7 +52,7 @@ describe('POST /api/images Images API streaming', { concurrency: false }, () => 
             assert.equal(events[0].b64_json, 'partial-base64');
             assert.equal(events[1].type, 'completed');
             assert.equal(events[1].b64_json, PNG_BASE64);
-            assert.equal(events[1].output_format, 'webp');
+            assert.equal(events[1].output_format, 'png');
             assert.equal(events[2].type, 'done');
             assert.equal((events[2].images as Array<Record<string, unknown>>)[0].b64_json, PNG_BASE64);
 

@@ -1,6 +1,7 @@
 import { writeFileAtomic } from './agent-file-utils';
 import { appLogger } from './app-logger';
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
+import { normalizeImageBuffer } from './image-service';
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
 import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
@@ -263,18 +264,26 @@ async function emitCompletedImage(
     if (!b64Json) {
         throw new Error('流式图片完成事件缺少 b64_json。');
     }
+    const normalizedB64Json = (
+        await normalizeImageBuffer(Buffer.from(b64Json, 'base64'), runtime.options.outputFormat)
+    ).toString('base64');
     const currentIndex = runtime.state.imageIndex;
     const filename = createImageFilename(runtime.batchId, currentIndex, runtime.options.outputFormat);
-    await persistStreamedImage({ options: runtime.options, filename, b64Json });
+    await persistStreamedImage({ options: runtime.options, filename, b64Json: normalizedB64Json });
 
-    const imageData = createImageResult(filename, b64Json, runtime.options.outputFormat, runtime.options.storageMode);
+    const imageData = createImageResult(
+        filename,
+        normalizedB64Json,
+        runtime.options.outputFormat,
+        runtime.options.storageMode
+    );
     runtime.state.completedImages.push(imageData);
 
     const completedEvent: StreamingEvent = {
         type: 'completed',
         index: currentIndex,
         filename,
-        b64_json: b64Json,
+        b64_json: normalizedB64Json,
         path: runtime.options.storageMode === 'fs' ? `/api/image/${filename}` : undefined,
         output_format: runtime.options.outputFormat,
         outputFormat: runtime.options.outputFormat,

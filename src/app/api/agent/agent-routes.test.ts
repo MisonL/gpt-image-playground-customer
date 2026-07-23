@@ -410,12 +410,13 @@ describe('Agent route integration', () => {
     });
 
     it('generates through a compatible upstream once and exposes request diagnostics for the same state record', async () => {
-        const { generateImage, getAgentRequestDiagnostics, lookupAgentRequestDiagnostics } = await loadAgentRoutes();
+        const { generateImage, getAgentRequestDiagnostics, getArtifactContent, lookupAgentRequestDiagnostics } =
+            await loadAgentRoutes();
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
             return {
-                data: [{ b64_json: PNG_BASE64 }],
+                data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }],
                 usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }
             };
         });
@@ -423,13 +424,26 @@ describe('Agent route integration', () => {
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
 
         try {
-            const first = await generateImage(agentJsonRequest('route-cache-key', { prompt: 'agent route success' }));
+            const first = await generateImage(
+                agentJsonRequest('route-cache-key', { prompt: 'agent route success', output_format: 'webp' })
+            );
             assert.equal(first.status, 200);
             const firstBody = await first.json();
             assert.equal(firstBody.cached, false);
             assert.equal(firstBody.images.length, 1);
             assert.ok(firstBody.images[0].content_url);
             assert.equal('b64_json' in firstBody.images[0], false);
+            assert.equal(firstBody.images[0].output_format, 'webp');
+            assert.equal(firstBody.images[0].mime_type, 'image/webp');
+            const artifactId = firstBody.images[0].content_url.split('/').at(-2);
+            assert.equal(typeof artifactId, 'string');
+            const artifactContent = await getArtifactContent(
+                new Request(`http://localhost/api/agent/artifacts/${artifactId}/content`),
+                { params: Promise.resolve({ id: artifactId }) }
+            );
+            assert.equal(artifactContent.status, 200);
+            assert.equal(artifactContent.headers.get('content-type'), 'image/webp');
+            assert.equal(Buffer.from(await artifactContent.arrayBuffer()).toString('ascii', 8, 12), 'WEBP');
             assert.equal(firstBody.execution.transport, 'agent_json');
             assert.equal(firstBody.execution.endpoint, '/api/agent/images/generate');
             assert.equal(firstBody.execution.route_mode, 'agent');
@@ -458,7 +472,9 @@ describe('Agent route integration', () => {
             assert.equal(typeof firstBody.timing.started_at, 'string');
             assert.equal(typeof firstBody.timing.completed_at, 'string');
 
-            const second = await generateImage(agentJsonRequest('route-cache-key', { prompt: 'agent route success' }));
+            const second = await generateImage(
+                agentJsonRequest('route-cache-key', { prompt: 'agent route success', output_format: 'webp' })
+            );
             assert.equal(second.status, 200);
             const secondBody = await second.json();
             assert.equal(secondBody.cached, true);
@@ -3751,8 +3767,7 @@ function asNextRequest(request: Request): NextRequest {
 }
 
 function agentJsonRequest(idempotencyKey: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
-    const requestBody =
-        'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
+    const requestBody = buildAgentGenerateRequestBody(body);
     return new Request('http://localhost/api/agent/images/generate', {
         method: 'POST',
         headers: {
@@ -3769,8 +3784,7 @@ function agentJobJsonRequest(
     body: Record<string, unknown>,
     headers: Record<string, string> = {}
 ) {
-    const requestBody =
-        'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
+    const requestBody = buildAgentGenerateRequestBody(body);
     return new Request('http://localhost/api/agent/jobs/images/generate', {
         method: 'POST',
         headers: {
@@ -3787,8 +3801,7 @@ function agentImageRequest(
     body: Record<string, unknown>,
     headers: Record<string, string> = {}
 ) {
-    const requestBody =
-        'stream_mode' in body || 'streaming_strategy' in body ? body : { ...body, stream_mode: 'non_stream' };
+    const requestBody = buildAgentGenerateRequestBody(body);
     return new Request('http://localhost/api/agent/image-requests', {
         method: 'POST',
         headers: {
@@ -3798,6 +3811,14 @@ function agentImageRequest(
         },
         body: JSON.stringify(requestBody)
     });
+}
+
+function buildAgentGenerateRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+    return {
+        ...body,
+        ...('stream_mode' in body || 'streaming_strategy' in body ? {} : { stream_mode: 'non_stream' }),
+        ...('output_format' in body ? {} : { output_format: 'png' })
+    };
 }
 
 type AgentEditRequestFields = {

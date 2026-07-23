@@ -5,7 +5,7 @@ import http from 'node:http';
 export { readSseEvents } from '@/lib/sse-test-utils';
 
 export const PNG_BASE64 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
 
 export function imageFormRequest(input: {
     apiBaseUrl?: string;
@@ -39,7 +39,7 @@ export function imageFormRequest(input: {
     formData.append('model', 'gpt-image-2');
     formData.append('n', input.n || '1');
     formData.append('size', input.size || '1024x1024');
-    formData.append('output_format', input.outputFormat || 'webp');
+    formData.append('output_format', input.outputFormat || 'png');
     if (input.apiBaseUrl) {
         formData.append('apiBaseUrl', input.apiBaseUrl);
     }
