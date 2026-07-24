@@ -29,6 +29,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - `scripts/diagnose-request.mjs`：按页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断，支持 `--base-url` 固定目标服务。
 - `scripts/diagnose-channel-health.mjs`：通过 capabilities 声明的 Agent 端点读取当前服务进程的渠道健康快照，支持 `--base-url` 和 `--output`。
 - `scripts/probe-upstream-image.mjs`：上游图片接口连通性探针。
+- `scripts/channel-capability-matrix.mjs`：固定串行验证四种上游图片请求方式，并在真实验证通过后生成私有渠道 env 配置。
 
 生成、编辑和批量脚本默认只做 dry-run，不触发真实生图或编辑。dry-run 输出的 `verification_scope.mode=local_planning_only` 表示只完成本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。generate 可添加 `--check-remote` 做只读远端检查，输出 `verification_scope.mode=remote_contract_and_local_planning`，仅访问 `/api/agent/capabilities` 和 `/api/runtime-capabilities`，不会发送真实生图请求。必须显式添加 `--allow-billable` 才会调用真实端点。generate 默认提交到 `/api/agent/image-requests` 服务端编排入口；`--agent`、`--job`、`--page-sse` 才会显式改用 `/api/agent/images/generate`、`/api/agent/jobs/images/generate` 或页面端 `/api/images` SSE。
 上游探针默认只检查 DNS、TLS 和 `/models`，必须显式添加 `--allow-billable` 才会调用上游 `/images/generations`。
@@ -191,6 +192,16 @@ node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.json
 上游探针默认只做非计费 `/models` 检查。添加 `--allow-billable` 后才会按 `--request-mode` 真实请求图片路径；可选值为 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`，也支持别名 `images-json`、`images-sse`、`responses-json`、`responses-sse` 和 `all`。探测 Responses 路径时必须提供 `--responses-model` 或配置 `OPENAI_RESPONSES_API_MODEL`，它是 `/responses` 顶层模型，不是图片模型。`request_modes.passed` 和 `request_modes.suggested_channel_config` 只是管理员写入 `OPENAI_CHANNEL_N_REQUEST_MODES` 的候选值；远程 URL-only、pending/poll_url、失败或未实测的 mode 不应写入。写入白名单后，默认按费用更少优先选择 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`；只有实测证明需要改变顺序时，才写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 或全局 `OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`。上游探针默认使用 `User-Agent: gpt-image-playground/probe`，可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖；输出的 `summary.request_headers` 只暴露脱敏摘要。
 
 上游探针读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL` 作为上游地址，读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY` 作为上游鉴权。base URL 必须是无凭据、无查询参数和无片段的 `http`/`https` 绝对 URL。输出不会包含 key，也不会输出完整 base64。
+
+## 渠道能力矩阵和私有配置
+
+```text
+node "<skill-root>/scripts/channel-capability-matrix.mjs" --base-url https://upstream.example.com/v1 --responses-model gpt-5.4 --allow-billable --write-env-file /private/path/channel.env
+```
+
+该脚本固定串行调用 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`，不会把未测、失败、pending/poll 或远程 URL-only 结果写入渠道白名单。`--write-env-file` 必须与 `--allow-billable` 一起使用；写入还要求 `/models` 成功、四种模式都有报告、至少一个模式返回本服务可消费的最终图片、API Key 有效，且 Responses 模式有可用顶层模型。任何条件不满足时只输出脱敏矩阵报告，不创建目标文件。
+
+写入的独立私有 env 配置包含 `OPENAI_CHANNEL_N_*`、实测通过的模式和优先级、`IMAGE_GENERATION_BACKEND`、`IMAGE_STREAMING_STRATEGY=auto`，以及需要时的 `ENABLE_RESPONSES_IMAGE_BACKEND` 和 `OPENAI_RESPONSES_API_MODEL`。只要至少一个 Images API 模式通过，默认后端为 `images-api`；只有 Responses 模式通过时，默认后端为 `responses-image-generation`，因此普通服务请求也会选择实际可用的协议。远程明文 HTTP 上游会额外写入精确的 `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS`，以满足服务端对非 loopback HTTP 的安全门禁。目标文件使用原子写入和权限 `0600`，默认拒绝覆盖或符号链接；标准输出只提供脱敏 `configuration.env_preview`。脚本不会合并或自动写入 `.env.local`，不会重启服务或部署。
 
 ## 能力查询
 

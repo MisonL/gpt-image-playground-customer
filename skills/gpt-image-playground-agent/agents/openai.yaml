@@ -1,4 +1,4 @@
 interface:
   display_name: "GPT Image Agent API"
-  short_description: "使用内置脚本调用图片 Agent API，并确认目标服务地址"
-  default_prompt: "使用 $gpt-image-playground-agent 先选择并运行内置脚本；运行前先定位服务地址，用户提供 URL 时显式传 --base-url，自动发现本地或环境变量地址时先确认，不要临时编写 API 调用脚本。"
+  short_description: "用内置脚本生成图片、诊断服务并验证上游渠道能力矩阵"
+  default_prompt: "使用 $gpt-image-playground-agent 先选择并运行内置脚本；新上游先运行能力矩阵，只有真实验证通过后才生成私有渠道配置，不要临时编写 API 调用脚本。"

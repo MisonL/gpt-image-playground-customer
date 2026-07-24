@@ -1,6 +1,6 @@
 ---
 name: gpt-image-playground-agent
-description: 当用户需要通过已部署的 GPT Image Playground 生成、编辑、批量生成、转换图片格式、查询结果反馈、渠道健康或诊断图片接口时使用；必须优先运行本 Skill 内置 scripts/generate-image.mjs、edit-image.mjs、batch-images.mjs、convert-image-format.mjs、diagnose-request.mjs、diagnose-channel-health.mjs 或 probe-upstream-image.mjs，而不是临时编写 API 调用脚本。
+description: 当用户需要通过已部署的 GPT Image Playground 生成、编辑、批量生成、转换图片格式、查询结果反馈、渠道健康、诊断图片接口，或对新图片上游运行完整能力矩阵并生成私有渠道配置时使用；必须优先运行本 Skill 内置 scripts/generate-image.mjs、edit-image.mjs、batch-images.mjs、convert-image-format.mjs、diagnose-request.mjs、diagnose-channel-health.mjs、probe-upstream-image.mjs 或 channel-capability-matrix.mjs，而不是临时编写 API 调用脚本。
 ---
 
 # GPT Image Playground Agent
@@ -18,6 +18,7 @@ Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平
 - 查询页面请求的结果反馈或日志诊断摘要：优先运行 `scripts/diagnose-request.mjs`。
 - 查询当前实例内存中的渠道、凭证和请求方式健康状态：优先运行 `scripts/diagnose-channel-health.mjs`。它只读调用 Agent API，不触发上游探测或图片生成，也不能证明真实上游可用。
 - 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。接入新上游渠道时，先确认 `/models` 和 `/images/generations` 能通，再用 `npm run smoke:image-upstream-real -- --allow-billable` 逐个验证 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。脚本也接受 request mode 别名 `images-json`、`images-sse`、`responses-json`、`responses-sse`，方便按通道能力筛选 case。只有内联 `b64_json`、Responses `result` 或与 API Base URL 同源的 artifact URL 才算可被本服务消费；远程 URL-only 结果不能写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果某一路径先返回 `object=image.task,status=pending`，说明该请求方式不是直接完成结果；应先确认同一业务键能否在同一渠道下重试拿到最终图片，再把可用的 `request_modes` 写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，或 HTTP 200 但只返回文本 output、没有 `image_generation_call.result`/`url`，就把对应 `responses-*` mode 从 `OPENAI_CHANNEL_N_REQUEST_MODES` 移除。服务端未配置 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 时按费用更少优先选择：`images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`；只有真实 smoke 证明需要改变顺序时，管理员才写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 或全局 `OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`。
+- 对新上游完成固定四模式验证并准备可直接使用的私有配置：运行 `scripts/channel-capability-matrix.mjs`。只有用户明确允许计费时才传 `--allow-billable`；需要输出配置时再显式传 `--write-env-file <private-path>`。它固定串行验证 Images/Responses 的非流式和 SSE 模式，仅在 `/models` 通过、矩阵完整、至少一个方式返回可消费最终图且凭证有效时写入。生成文件只保留实际通过的 `OPENAI_CHANNEL_N_REQUEST_MODES`，显式设置匹配实测能力的 `IMAGE_GENERATION_BACKEND` 和 `IMAGE_STREAMING_STRATEGY=auto`；若没有任何 Images API 模式通过，则默认使用 `responses-image-generation`。Responses 模式通过时会同时启用 Responses 后端并写入实测顶层模型；远程明文 HTTP 目标会写入精确的 `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS`，使生成配置符合服务端安全门禁。输出文件是权限 `0600` 的独立私有 env 配置，默认拒绝覆盖和符号链接；脚本不合并或自动改写现有 `.env.local`，不会重启服务或部署。
 - 不要临时编写 Node/Python/shell 脚本、curl 命令或手写 fetch/FormData 来重复实现这些脚本已经覆盖的 API 调用。
 - 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下 ad hoc 调用脚本。
 - 先用 dry-run、`--check-remote` 或 `--contract-check` 检查请求、路由、鉴权和服务声明的默认编排入口；只有用户明确允许真实计费时才加 `--allow-billable`。

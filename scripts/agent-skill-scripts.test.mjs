@@ -4399,10 +4399,12 @@ describe('Agent skill script argument validation', () => {
         const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
 
         assert.match(skillText, /必须优先运行本 Skill 内置 scripts\/generate-image\.mjs/);
+        assert.match(skillText, /scripts\/channel-capability-matrix\.mjs/);
         assert.match(skillText, /不要临时编写 Node\/Python\/shell 脚本、curl 命令或手写 fetch\/FormData/);
         assert.match(openAiYaml, /先选择并运行内置脚本/);
         assert.match(openAiYaml, /不要临时编写 API 调用脚本/);
         assert.match(apiReference, /先使用这些内置脚本/);
+        assert.match(apiReference, /scripts\/channel-capability-matrix\.mjs/);
         assert.match(apiReference, /不要临时编写 Node\/Python\/shell 脚本、curl 命令或手写 fetch\/FormData/);
     });
 
