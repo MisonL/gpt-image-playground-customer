@@ -143,6 +143,8 @@ describe('page state regressions', () => {
         assert.match(source, /mobile-drawer-form-slot flex min-h-0 w-full flex-1 flex-col lg:h-full/);
         assert.match(source, /mobile-drawer-form-slot/);
         assert.match(source, /mobile-creation-sheet-handle/);
+        assert.match(source, /aria-label=\{t\('ux\.closeCreationSheet'\)\}/);
+        assert.match(source, /aria-label=\{t\('ux\.closeCreationSheetButton'\)\}/);
         for (const formSource of [generationFormSource, editingFormSource]) {
             assert.match(formSource, /mobile-drawer-form-card/);
             assert.match(formSource, /mobile-drawer-form-frame/);

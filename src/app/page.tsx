@@ -3760,7 +3760,7 @@ export default function HomePage() {
                                             size='icon'
                                             onClick={closeMobileCreationDrawer}
                                             className='bg-card/95 absolute top-0 right-0 h-11 w-11 shadow-sm'
-                                            aria-label={t('ux.closeCreationSheet')}>
+                                            aria-label={t('ux.closeCreationSheetButton')}>
                                             <X className='h-4 w-4' />
                                         </Button>
                                     </div>
