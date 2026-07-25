@@ -130,9 +130,12 @@ function normalizeUpstreamProxyUrl(rawValue: string, fieldName: string): string 
     if (rawValue.includes('?') || rawValue.includes('#')) {
         throw new Error(`${fieldName} 不能包含查询参数或片段。`);
     }
-    const protocolMatch = /^(https?):\/\//i.exec(rawValue);
+    const protocolMatch = /^([a-z][a-z0-9+.-]*):\/\//i.exec(rawValue);
     if (!protocolMatch) {
         throw new Error(`${fieldName} 必须是有效的 HTTP 或 HTTPS 代理 URL。`);
+    }
+    if (protocolMatch[1].toLowerCase() !== 'http' && protocolMatch[1].toLowerCase() !== 'https') {
+        throw new Error(`${fieldName} 仅支持 http 或 https 代理，不支持 SOCKS 或其他协议。`);
     }
     const authorityAndPath = rawValue.slice(protocolMatch[0].length);
     const pathStartIndex = authorityAndPath.search(/[\\/]/);
