@@ -1,0 +1,30 @@
+{
+    "name": "brace-expansion",
+    "version": "5.0.8",
+    "description": "Compatibility facade for brace-expansion 5.0.8",
+    "private": true,
+    "license": "MIT",
+    "type": "module",
+    "main": "./index.cjs",
+    "module": "./index.mjs",
+    "types": "./index.d.ts",
+    "exports": {
+        ".": {
+            "import": {
+                "types": "./index.d.ts",
+                "default": "./index.mjs"
+            },
+            "require": {
+                "types": "./index.d.ts",
+                "default": "./index.cjs"
+            }
+        },
+        "./package.json": "./package.json"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "dependencies": {
+        "brace-expansion-modern": "npm:brace-expansion@5.0.8"
+    }
+}

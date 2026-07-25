@@ -16,6 +16,7 @@ describe('Docker build context', () => {
         assert.match(dockerignore, /^\.env\.\*$/m);
         assert.match(dockerignore, /^!\.env\.real-smoke\.example$/m);
         assert.match(dockerfile, /^COPY \. \.$/m);
+        assert.match(dockerfile, /^COPY vendor\/brace-expansion-compat \.\/vendor\/brace-expansion-compat$/m);
         assert.match(gitignore, /^!\.env\.real-smoke\.example$/m);
         assert.match(realSmokeTemplate, /^IMAGE_REAL_SMOKE_TIMEOUT_MS=240000$/m);
     });

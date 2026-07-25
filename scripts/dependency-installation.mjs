@@ -79,13 +79,13 @@ function collectDirectDependencies(rootPackage) {
 }
 
 function collectRootLockMismatches(directDependencies, packages) {
-    return directDependencies.filter((name) => !readPackageVersion(packages[`node_modules/${name}`]));
+    return directDependencies.filter((name) => !readPackageVersion(packages, `node_modules/${name}`));
 }
 
 function collectHiddenLockMismatches(directDependencies, rootPackages, hiddenPackages) {
     return directDependencies.flatMap((name) => {
-        const expected = readPackageVersion(rootPackages[`node_modules/${name}`]);
-        const actual = readPackageVersion(hiddenPackages[`node_modules/${name}`]);
+        const expected = readPackageVersion(rootPackages, `node_modules/${name}`);
+        const actual = readPackageVersion(hiddenPackages, `node_modules/${name}`);
         return actual === expected ? [] : [{ name, expected, actual }];
     });
 }
@@ -107,7 +107,7 @@ function inspectDirectPackageManifests(nodeModulesPath, directDependencies, root
             continue;
         }
         if (manifest.name !== name) nameMismatches.push({ expected: name, actual: manifest.name });
-        const expected = readPackageVersion(rootPackages[`node_modules/${name}`]);
+        const expected = readPackageVersion(rootPackages, `node_modules/${name}`);
         if (manifest.version !== expected) versionMismatches.push({ name, expected, actual: manifest.version });
     }
     return { missingPackages, invalidPackages, nameMismatches, versionMismatches };
@@ -125,8 +125,13 @@ function readPackageManifest(path) {
     }
 }
 
-function readPackageVersion(manifest) {
-    return typeof manifest?.version === 'string' && manifest.version.length > 0 ? manifest.version : undefined;
+function readPackageVersion(packages, packagePath, visited = new Set()) {
+    if (visited.has(packagePath)) return undefined;
+    visited.add(packagePath);
+    const manifest = packages[packagePath];
+    if (typeof manifest?.version === 'string' && manifest.version.length > 0) return manifest.version;
+    if (!manifest?.link || typeof manifest.resolved !== 'string') return undefined;
+    return readPackageVersion(packages, manifest.resolved, visited);
 }
 
 function buildFailure(reason, details = {}) {

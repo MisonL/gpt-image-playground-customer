@@ -3,6 +3,7 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++ pkgconfig
 COPY package.json package-lock.json ./
 COPY scripts/check-install-script-policy.mjs scripts/dependency-installation.mjs scripts/npm-install-policy.mjs scripts/node-gyp-local-headers.cjs ./scripts/
+COPY vendor/brace-expansion-compat ./vendor/brace-expansion-compat
 ENV NODE_OPTIONS=--require=/app/scripts/node-gyp-local-headers.cjs
 RUN npm run install-scripts:check && npm run npm-install-policy:check && npm ci --strict-allow-scripts && npm run dependencies:check
 ENV NODE_OPTIONS=
