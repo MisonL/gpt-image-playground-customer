@@ -301,7 +301,7 @@ describe('page state regressions', () => {
         assert.match(source, /w-full max-w-\[1880px\] min-w-0/);
         assert.match(source, /flex min-w-0 flex-wrap items-center gap-2/);
         assert.match(source, /order-1 flex min-h-\[380px\] min-w-0/);
-        assert.match(source, /order-3 min-h-\[420px\] min-w-0/);
+        assert.match(source, /order-3 min-h-\[17\.5rem\] min-w-0/);
     });
 
     it('lets keyboard users skip the workbench header', async () => {
@@ -337,6 +337,7 @@ describe('page state regressions', () => {
 
     it('uses the desktop workspace for an empty preview while keeping compact narrow layouts', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+        const styles = await readFile(new URL('./globals.css', import.meta.url), 'utf8');
 
         assert.match(source, /const shouldExpandOutputStage =/);
         assert.match(source, /Boolean\(latestImageBatch\)/);
@@ -344,9 +345,22 @@ describe('page state regressions', () => {
         assert.match(source, /mode === 'edit' && Boolean\(editSourceImagePreviewUrls\[0\]\)/);
         assert.match(source, /xl:h-dvh xl:pb-0/);
         assert.match(source, /xl:h-full xl:min-h-0/);
-        assert.match(source, /xl:grid-cols-\[minmax\(320px,360px\)_minmax\(0,1fr\)_minmax\(232px,272px\)\]/);
-        assert.match(source, /2xl:grid-cols-\[minmax\(380px,424px\)_minmax\(780px,1fr\)_minmax\(272px,304px\)\]/);
-        assert.match(source, /grid flex-1 grid-cols-1 gap-4[^']*xl:min-h-0/);
+        assert.match(source, /className='workbench-layout grid flex-1 grid-cols-1 gap-4/);
+        assert.match(source, /workbench-history-column order-3 min-h-\[17\.5rem\] min-w-0 lg:col-span-2/);
+        assert.match(source, /workbench-history-column--contained/);
+        assert.doesNotMatch(source, /min-\[1160px\]/);
+        assert.match(
+            styles,
+            /@media \(min-width: 1160px\) \{[\s\S]*?\.workbench-layout \{[\s\S]*?grid-template-columns: minmax\(320px, 340px\) minmax\(0, 1fr\) minmax\(220px, 244px\);/
+        );
+        assert.match(
+            styles,
+            /@media \(min-width: 1280px\) \{[\s\S]*?grid-template-columns: minmax\(320px, 360px\) minmax\(0, 1fr\) minmax\(232px, 272px\);/
+        );
+        assert.match(
+            styles,
+            /@media \(min-width: 1536px\) \{[\s\S]*?grid-template-columns: minmax\(380px, 424px\) minmax\(780px, 1fr\) minmax\(272px, 304px\);/
+        );
         assert.doesNotMatch(source, /xl:flex-none xl:items-start/);
         assert.match(source, /order-1 flex min-h-\[380px\][^']*xl:min-h-0/);
         assert.match(source, /<div className='min-h-0 shrink-0 xl:flex-1'>\s*<ImageOutput/);

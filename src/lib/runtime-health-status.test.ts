@@ -3,6 +3,21 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 describe('resolveRuntimeHealthStatus', () => {
+    it('keeps the initial capability fetch distinct from a disconnected runtime', () => {
+        assert.equal(
+            resolveRuntimeHealthStatus({
+                runtimeCapabilities: null,
+                isRuntimeCapabilitiesLoading: true,
+                hasRequestApiOverride: false,
+                imageBackend: 'server-default',
+                hasRequestResponsesModel: false,
+                streamingStrategy: 'auto',
+                streamMode: 'auto'
+            }),
+            'checking'
+        );
+    });
+
     it('treats a healthy declared route as ready for the current form request', () => {
         assert.equal(
             resolveRuntimeHealthStatus({
@@ -20,6 +35,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         ]
                     }
                 },
+                isRuntimeCapabilitiesLoading: false,
                 hasRequestApiOverride: false,
                 imageBackend: 'images-api',
                 hasRequestResponsesModel: false,
@@ -47,6 +63,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         ]
                     }
                 },
+                isRuntimeCapabilitiesLoading: false,
                 hasRequestApiOverride: false,
                 imageBackend: 'server-default',
                 hasRequestResponsesModel: false,
@@ -74,6 +91,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         ]
                     }
                 },
+                isRuntimeCapabilitiesLoading: false,
                 hasRequestApiOverride: false,
                 imageBackend: 'server-default',
                 hasRequestResponsesModel: true,
@@ -101,6 +119,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         ]
                     }
                 },
+                isRuntimeCapabilitiesLoading: false,
                 hasRequestApiOverride: false,
                 imageBackend: 'responses-image-generation',
                 hasRequestResponsesModel: true,
@@ -115,6 +134,7 @@ describe('resolveRuntimeHealthStatus', () => {
         assert.equal(
             resolveRuntimeHealthStatus({
                 runtimeCapabilities: null,
+                isRuntimeCapabilitiesLoading: false,
                 hasRequestApiOverride: true,
                 imageBackend: 'images-api',
                 hasRequestResponsesModel: false,
@@ -142,6 +162,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         ]
                     }
                 },
+                isRuntimeCapabilitiesLoading: false,
                 hasRequestApiOverride: false,
                 imageBackend: 'responses-image-generation',
                 hasRequestResponsesModel: false,
@@ -163,6 +184,7 @@ describe('resolveRuntimeHealthStatus', () => {
                         requestModeHealth: []
                     }
                 },
+                isRuntimeCapabilitiesLoading: false,
                 hasRequestApiOverride: true,
                 imageBackend: 'images-api',
                 hasRequestResponsesModel: false,

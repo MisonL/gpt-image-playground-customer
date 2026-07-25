@@ -513,7 +513,8 @@ describe('HistoryPanel recent history actions', () => {
     it('uses the full desktop side panel without placeholder activity rows', () => {
         const html = renderHistoryPanel([]);
 
-        assert.match(html, /lg:overflow-y-auto/);
+        assert.match(html, /h-auto min-h-\[17\.5rem\]/);
+        assert.match(html, /lg:max-h-\[17\.5rem\] lg:overflow-y-auto/);
         assert.match(html, /xl:flex xl:max-h-none xl:flex-1 xl:flex-col/);
         assert.doesNotMatch(html, /xl:h-auto xl:self-start/);
         assert.doesNotMatch(html, /border-dashed/);

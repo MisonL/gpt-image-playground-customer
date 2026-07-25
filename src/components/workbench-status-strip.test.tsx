@@ -58,7 +58,18 @@ describe('WorkbenchStatusStrip', () => {
         assert.doesNotMatch(html, /invisible/);
     });
 
-    it('renders disconnected, route-limited, and custom override runtime states explicitly', () => {
+    it('renders checking, disconnected, route-limited, and custom override runtime states explicitly', () => {
+        const checkingHtml = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchStatusStrip
+                    model='gpt-image-2'
+                    routeLabel='服务器默认'
+                    streamStatus='普通生成'
+                    costLabel='预计 0.12 积分'
+                    runtimeHealthStatus='checking'
+                />
+            </I18nProvider>
+        );
         const disconnectedHtml = renderToStaticMarkup(
             <I18nProvider>
                 <WorkbenchStatusStrip
@@ -93,6 +104,8 @@ describe('WorkbenchStatusStrip', () => {
             </I18nProvider>
         );
 
+        assert.match(checkingHtml, /正在检查运行时/);
+        assert.match(checkingHtml, /animate-spin/);
         assert.match(disconnectedHtml, /运行时未连接/);
         assert.match(routeLimitedHtml, /运行态受限/);
         assert.match(customOverrideHtml, /使用自定义上游/);
@@ -170,17 +183,14 @@ describe('WorkbenchStatusStrip', () => {
             </I18nProvider>
         );
 
-        assert.match(html, /basis-full sm:basis-auto/);
-        assert.match(html, /min-h-11 cursor-pointer/);
-        assert.match(html, /lg:min-h-7/);
-        assert.match(html, /w-full min-w-0 flex-wrap/);
+        assert.match(html, /group static max-w-full shrink-0 sm:relative sm:basis-auto/);
+        assert.match(html, /min-h-11 min-w-11 cursor-pointer/);
+        assert.match(html, /sr-only sm:not-sr-only/);
+        assert.match(html, /relative flex w-full min-w-0 flex-wrap/);
         assert.match(html, /sm:w-auto/);
-        assert.match(html, /basis-full items-center rounded-md/);
-        assert.match(html, /sm:basis-auto/);
-        assert.match(html, /absolute/);
-        assert.match(html, /left-0/);
-        assert.match(html, /right-0/);
-        assert.match(html, /w-\[min\(100%,calc\(100vw-2rem\)\)\]/);
+        assert.match(html, /hidden h-3 w-px shrink-0 sm:block/);
+        assert.match(html, /hidden truncate sm:inline/);
+        assert.match(html, /absolute inset-x-0 top-full/);
         assert.match(html, /sm:right-auto sm:left-0 sm:w-\[min\(88vw,28rem\)\]/);
         assert.match(html, /xl:right-0 xl:left-auto/);
     });

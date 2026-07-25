@@ -3,7 +3,7 @@ import type { ImageGenerationBackend, ImageStreamMode, ImageStreamingStrategy } 
 
 type RuntimeRequestMode = 'images-non-stream' | 'images-sse' | 'responses-non-stream' | 'responses-sse';
 
-export type RuntimeHealthStatus = 'runtime-ready' | 'route-limited' | 'disconnected' | 'custom-override';
+export type RuntimeHealthStatus = 'checking' | 'runtime-ready' | 'route-limited' | 'disconnected' | 'custom-override';
 
 export type RuntimeHealthCapabilities = {
     streaming?: {
@@ -83,6 +83,7 @@ function hasHealthyRequestMode(
 
 export function resolveRuntimeHealthStatus(input: {
     runtimeCapabilities: RuntimeHealthCapabilities | null;
+    isRuntimeCapabilitiesLoading: boolean;
     hasRequestApiOverride: boolean;
     imageBackend: ImageUpstreamFormBackend;
     hasRequestResponsesModel: boolean;
@@ -90,6 +91,7 @@ export function resolveRuntimeHealthStatus(input: {
     streamMode: ImageStreamMode;
 }): RuntimeHealthStatus {
     if (input.hasRequestApiOverride) return 'custom-override';
+    if (input.isRuntimeCapabilitiesLoading) return 'checking';
     if (input.runtimeCapabilities === null) return 'disconnected';
     const requestedBackend = resolveRequestedBackend({
         runtimeCapabilities: input.runtimeCapabilities,

@@ -241,6 +241,35 @@
         content: none;
     }
 
+    /* Tailwind v4 does not emit this arbitrary breakpoint reliably in the current build. */
+    @media (min-width: 1160px) {
+        .workbench-layout {
+            min-height: 0;
+            grid-template-columns: minmax(320px, 340px) minmax(0, 1fr) minmax(220px, 244px);
+        }
+
+        .workbench-history-column {
+            min-height: 0;
+            grid-column: span 1 / span 1;
+        }
+
+        .workbench-history-column--contained {
+            overflow: hidden;
+        }
+    }
+
+    @media (min-width: 1280px) {
+        .workbench-layout {
+            grid-template-columns: minmax(320px, 360px) minmax(0, 1fr) minmax(232px, 272px);
+        }
+    }
+
+    @media (min-width: 1536px) {
+        .workbench-layout {
+            grid-template-columns: minmax(380px, 424px) minmax(780px, 1fr) minmax(272px, 304px);
+        }
+    }
+
     @media (max-width: 1023px) and (max-height: 480px) {
         #mobile-creation-sheet {
             overflow-y: auto;

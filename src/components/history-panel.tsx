@@ -384,7 +384,7 @@ function HistoryPanelImpl({
     return (
         <Card
             className={cn(
-                'workbench-panel text-card-foreground border-border flex h-full w-full flex-col gap-0 overflow-hidden rounded-lg border py-0'
+                'workbench-panel text-card-foreground border-border flex h-auto min-h-[17.5rem] w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 xl:h-full xl:min-h-0'
             )}>
             <CardHeader className='border-border/70 flex flex-col gap-2 border-b px-4 pt-3 !pb-3'>
                 {totalCost > 0 ? (
@@ -541,7 +541,7 @@ function HistoryPanelImpl({
             </CardHeader>
             <CardContent
                 className={cn(
-                    'literary-scrollbar min-h-0 p-3 lg:max-h-[calc(100%-17.5rem)] lg:overflow-y-auto lg:p-3 xl:flex xl:max-h-none xl:flex-1 xl:flex-col'
+                    'literary-scrollbar min-h-0 p-3 lg:max-h-[17.5rem] lg:overflow-y-auto lg:p-3 xl:flex xl:max-h-none xl:flex-1 xl:flex-col'
                 )}>
                 {effectiveActiveTab === 'inspiration' ? (
                     <div

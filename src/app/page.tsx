@@ -564,6 +564,7 @@ export default function HomePage() {
     const [isApiSettingsDialogOpen, setIsApiSettingsDialogOpen] = React.useState(false);
     const [apiSettings, setApiSettings] = React.useState<ApiSettings>(emptyApiSettings);
     const [runtimeCapabilities, setRuntimeCapabilities] = React.useState<RuntimeCapabilities | null>(null);
+    const [isRuntimeCapabilitiesLoading, setIsRuntimeCapabilitiesLoading] = React.useState(true);
     const [loadedWebuiImageRetentionState, setLoadedWebuiImageRetentionState] =
         React.useState<LoadedWebuiImageRetentionState | null>(null);
     const [passwordDialogContext, setPasswordDialogContext] = React.useState<'initial' | 'retry'>('initial');
@@ -751,6 +752,7 @@ export default function HomePage() {
     const activeRouteLabel = getWorkbenchRouteLabel(activeWorkbenchBackend, t);
     const activeRuntimeHealthStatus: RuntimeHealthStatus = resolveRuntimeHealthStatus({
         runtimeCapabilities,
+        isRuntimeCapabilitiesLoading,
         hasRequestApiOverride,
         imageBackend: activeWorkbenchBackend,
         hasRequestResponsesModel: (usesEditControls ? editResponsesModel : genResponsesModel).trim().length > 0,
@@ -1351,6 +1353,7 @@ export default function HomePage() {
     }, [createErrorNotice, t, verifyEntryPasswordHash]);
 
     const refreshRuntimeCapabilities = React.useCallback(async (): Promise<RuntimeCapabilities | null> => {
+        setIsRuntimeCapabilitiesLoading(true);
         try {
             const response = await fetch('/api/runtime-capabilities');
             if (!response.ok) {
@@ -1366,6 +1369,8 @@ export default function HomePage() {
             console.error('获取运行时能力失败：', error);
             setRuntimeCapabilities(null);
             return null;
+        } finally {
+            setIsRuntimeCapabilitiesLoading(false);
         }
     }, []);
 
@@ -3722,7 +3727,7 @@ export default function HomePage() {
                         <div
                             id='workbench-content'
                             tabIndex={-1}
-                            className='grid flex-1 grid-cols-1 gap-4 focus:outline-none lg:grid-cols-[minmax(360px,420px)_minmax(0,1fr)] xl:min-h-0 xl:grid-cols-[minmax(320px,360px)_minmax(0,1fr)_minmax(232px,272px)] 2xl:grid-cols-[minmax(380px,424px)_minmax(780px,1fr)_minmax(272px,304px)]'>
+                            className='workbench-layout grid flex-1 grid-cols-1 gap-4 focus:outline-none lg:grid-cols-[minmax(360px,420px)_minmax(0,1fr)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
@@ -4025,8 +4030,8 @@ export default function HomePage() {
                                 aria-hidden={isMobileCreationDrawerOpen}
                                 inert={isMobileCreationDrawerOpen}
                                 className={cn(
-                                    'order-3 min-h-[420px] min-w-0 lg:col-span-2 lg:min-h-[420px] xl:col-span-1',
-                                    shouldExpandOutputStage ? 'xl:min-h-0 xl:overflow-hidden' : 'xl:min-h-0'
+                                    'workbench-history-column order-3 min-h-[17.5rem] min-w-0 lg:col-span-2',
+                                    shouldExpandOutputStage && 'workbench-history-column--contained'
                                 )}>
                                 <HistoryPanel
                                     history={history}
