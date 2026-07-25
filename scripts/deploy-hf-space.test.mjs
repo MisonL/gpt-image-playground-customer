@@ -5,6 +5,7 @@ import {
     buildDeployMarkerRouteSource,
     isSpaceDeployPath,
     isHfUploadExistingSpacePolicyError,
+    isRetryableSpaceInfoReadError,
     shouldUseGitPushForSpace,
     buildUploadArgs,
     extractUploadCommitSha,
@@ -300,6 +301,79 @@ describe('HF Space deploy script', () => {
             service_marker_verified: true,
             marker
         });
+    });
+
+    it('retries a transient Hugging Face Space status transport error before verifying the new marker', async () => {
+        const marker = buildDeployMarker(
+            '6666666666666666666666666666666666666666',
+            new Date('2026-06-20T13:00:00.000Z'),
+            'deploy-666'
+        );
+        let readCount = 0;
+        let sleepCount = 0;
+
+        const runtime = await waitForRunning('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', marker, {
+            attempts: 2,
+            intervalMs: 0,
+            readInfo: () => {
+                readCount += 1;
+                if (readCount === 1) {
+                    throw new Error(
+                        'httpcore.ConnectError: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol'
+                    );
+                }
+                return {
+                    runtime: { stage: 'RUNNING' },
+                    sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+                };
+            },
+            verifyMarker: async () => marker,
+            sleep: async () => {
+                sleepCount += 1;
+            },
+            log: () => {}
+        });
+
+        assert.equal(readCount, 2);
+        assert.equal(sleepCount, 1);
+        assert.deepEqual(runtime, {
+            stage: 'RUNNING',
+            sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            service_marker_verified: true,
+            marker
+        });
+    });
+
+    it('only classifies transient Hugging Face management transport errors as retryable', () => {
+        assert.equal(
+            isRetryableSpaceInfoReadError(
+                new Error('httpcore.ConnectError: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol')
+            ),
+            true
+        );
+        assert.equal(isRetryableSpaceInfoReadError(new Error('hf spaces info failed with HTTP 401 Unauthorized')), false);
+    });
+
+    it('does not retry a non-transient Space status failure', async () => {
+        const marker = buildDeployMarker(
+            '7777777777777777777777777777777777777777',
+            new Date('2026-06-20T14:00:00.000Z'),
+            'deploy-777'
+        );
+
+        await assert.rejects(
+            waitForRunning('cccccccccccccccccccccccccccccccccccccccc', marker, {
+                attempts: 2,
+                intervalMs: 0,
+                readInfo: () => {
+                    throw new Error('hf spaces info failed with HTTP 401 Unauthorized');
+                },
+                verifyMarker: async () => marker,
+                sleep: async () => {},
+                log: () => {}
+            }),
+            /HTTP 401 Unauthorized/
+        );
     });
 
     it('builds a no-store API route for service-side deploy marker verification', () => {

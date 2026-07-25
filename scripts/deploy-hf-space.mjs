@@ -324,6 +324,16 @@ function readSpaceInfo() {
     return parseJsonPayload(output, 'hf spaces info');
 }
 
+export function isRetryableSpaceInfoReadError(error) {
+    const message = error instanceof Error ? error.message : String(error || '');
+    return [
+        /\b(?:httpcore|httpx)\.(?:ConnectError|ReadError|ReadTimeout|ConnectTimeout|RemoteProtocolError)\b/i,
+        /\bSSL:\s*(?:UNEXPECTED_EOF_WHILE_READING|SYSCALL)\b/i,
+        /\bEOF occurred in violation of protocol\b/i,
+        /\b(?:connection reset by peer|connection aborted|network is unreachable|temporary failure in name resolution)\b/i
+    ].some((pattern) => pattern.test(message));
+}
+
 export async function waitForRunning(spaceCommitSha, deployMarker, options = {}) {
     const attempts = options.attempts || STATUS_POLL_ATTEMPTS;
     const intervalMs = options.intervalMs ?? STATUS_POLL_INTERVAL_MS;
@@ -334,8 +344,18 @@ export async function waitForRunning(spaceCommitSha, deployMarker, options = {})
     let lastStage = 'unknown';
     let lastSha = 'unknown';
     let lastMarkerError = 'unknown';
+    let lastManagementError = 'none';
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
-        const info = readInfo();
+        let info;
+        try {
+            info = await readInfo();
+        } catch (error) {
+            lastManagementError = error instanceof Error ? error.message : String(error);
+            if (!isRetryableSpaceInfoReadError(error)) throw error;
+            log(`attempt=${attempt} management_status=unavailable error=${lastManagementError}`);
+            await sleep(intervalMs);
+            continue;
+        }
         lastStage = info.runtime?.stage || 'unknown';
         lastSha = info.sha || info.runtime?.raw?.sha || 'unknown';
         log(`attempt=${attempt} stage=${lastStage} sha=${lastSha}`);
@@ -356,7 +376,7 @@ export async function waitForRunning(spaceCommitSha, deployMarker, options = {})
         sha: lastSha,
         management_status: 'runtime_stage_not_running',
         service_marker_verified: true,
-        warning: `Space did not reach RUNNING with a matching service marker for ${spaceCommitSha}; last stage=${lastStage} sha=${lastSha} marker_error=${lastMarkerError}`,
+        warning: `Space did not reach RUNNING with a matching service marker for ${spaceCommitSha}; last stage=${lastStage} sha=${lastSha} marker_error=${lastMarkerError} management_error=${lastManagementError}`,
         marker
     };
 }
