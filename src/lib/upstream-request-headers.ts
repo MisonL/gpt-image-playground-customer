@@ -16,10 +16,11 @@ const CONFIGURABLE_HEADER_BLOCKLIST = new Set([
     'content-type',
     'content-length',
     'host',
-    'idempotency-key'
+    'idempotency-key',
+    'proxy-authorization'
 ]);
-// Defense-in-depth: fixed idempotency headers must never leak from extra upstream headers.
-const ALWAYS_FILTERED_EXTRA_HEADER_NAMES = new Set(['idempotency-key']);
+// Defense-in-depth: protocol and proxy-auth headers must never leak from extra upstream headers.
+const ALWAYS_FILTERED_EXTRA_HEADER_NAMES = new Set(['idempotency-key', 'proxy-authorization']);
 const CANONICAL_HEADER_NAMES: Record<string, string> = {
     accept: 'Accept',
     authorization: 'Authorization',

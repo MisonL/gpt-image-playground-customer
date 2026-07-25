@@ -394,7 +394,8 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(capabilities.image_transport, {
             upstream_timeout_ms: 900_000,
             stream_data_interval_timeout_ms: 900_000,
-            upstream_max_retries: 0
+            upstream_max_retries: 0,
+            upstream_proxy: { configured: false }
         });
         assert.equal(capabilities.defaults.image_backend, 'images-api');
         assert.equal(capabilities.defaults.stream_mode, 'auto');
@@ -713,6 +714,7 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(capabilities.upstream_request_headers.channels, [
             {
                 id: 'images',
+                upstream_proxy: { configured: false },
                 request_modes: ['images-non-stream', 'images-sse'],
                 request_mode_priority: ['images-non-stream', 'images-sse'],
                 request_headers: {
@@ -723,6 +725,36 @@ describe('buildAgentCapabilities', () => {
                 }
             }
         ]);
+    });
+
+    it('reports global and per-channel upstream proxy summaries without exposing endpoints', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_UPSTREAM_PROXY_URL: 'https://global-proxy.internal.example:9443',
+            OPENAI_CHANNEL_1_ID: 'primary',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://primary.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_2_ID: 'backup',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://backup.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'configured',
+            OPENAI_CHANNEL_2_PROXY_URL: 'http://channel-proxy.internal.example:8080'
+        });
+
+        assert.deepEqual(capabilities.image_transport.upstream_proxy, { configured: true, protocol: 'https' });
+        assert.deepEqual(
+            capabilities.upstream_request_headers.channels.map((channel) => ({
+                id: channel.id,
+                upstream_proxy: channel.upstream_proxy
+            })),
+            [
+                { id: 'primary', upstream_proxy: { configured: true, protocol: 'https' } },
+                { id: 'backup', upstream_proxy: { configured: true, protocol: 'http' } }
+            ]
+        );
+        const serialized = JSON.stringify(capabilities);
+        assert.equal(serialized.includes('global-proxy.internal.example'), false);
+        assert.equal(serialized.includes('channel-proxy.internal.example'), false);
+        assert.equal(serialized.includes('9443'), false);
+        assert.equal(serialized.includes('8080'), false);
     });
 
     it('reports Matsca server-channel upload and image-count limits in Agent capabilities', () => {
@@ -989,6 +1021,7 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentImageResponseTiming' in document.components.schemas);
         assert.ok('AgentImageResponseExecution' in document.components.schemas);
         assert.ok('ChannelRequestModeDecision' in document.components.schemas);
+        assert.ok('UpstreamProxySummary' in document.components.schemas);
         assert.deepEqual(document.components.schemas.AgentImageResponseExecution.properties.channel_request_mode.enum, [
             'images-non-stream',
             'images-sse',
@@ -1108,6 +1141,11 @@ describe('buildAgentCapabilities', () => {
             document.components.schemas.ImageTransportCapabilities.properties.upstream_timeout_ms.const,
             900000
         );
+        assert.equal(
+            document.components.schemas.ImageTransportCapabilities.properties.upstream_proxy.$ref,
+            '#/components/schemas/UpstreamProxySummary'
+        );
+        assert.deepEqual(document.components.schemas.UpstreamProxySummary.required, ['configured']);
         assert.equal(
             capabilityProperties.upstream_request_headers.properties.default.$ref,
             '#/components/schemas/UpstreamRequestHeaderSummary'

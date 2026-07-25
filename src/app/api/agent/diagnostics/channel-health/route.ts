@@ -33,6 +33,7 @@ function toPublicChannelHealthSnapshot(snapshot: ChannelHealthSnapshot) {
         observed_at: snapshot.at,
         channels: snapshot.channels.map((channel) => ({
             channel_id: channel.channelId,
+            upstream_proxy: channel.upstreamProxy,
             credential_count: channel.credentialCount,
             healthy_credential_count: channel.healthyCredentialCount,
             unhealthy_credential_count: channel.unhealthyCredentialCount,

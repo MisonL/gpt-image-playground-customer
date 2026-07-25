@@ -1,5 +1,5 @@
 import { mergeUpstreamHeadersWithFixed, type UpstreamRequestHeaders } from './image-upstream-profile';
-import { readImageUpstreamTimeoutMs } from './openai-image-transport';
+import { fetchOpenAIUpstream, readImageUpstreamTimeoutMs } from './openai-image-transport';
 import type OpenAI from 'openai';
 
 export class ImagesApiStreamError extends Error {
@@ -15,6 +15,7 @@ export class ImagesApiStreamError extends Error {
 type ImagesApiStreamInput = {
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamProxyUrl?: string;
     upstreamHeaders?: UpstreamRequestHeaders;
     idempotencyKey?: string;
     abortSignal?: AbortSignal;
@@ -133,21 +134,25 @@ function readSseChunk(chunk: string): unknown | undefined {
 }
 
 export async function createImagesApiGenerateStream(input: ImagesApiStreamInput): Promise<AsyncIterable<unknown>> {
-    const { abortSignal, apiBaseUrl, apiKey, idempotencyKey, params, upstreamHeaders } = input;
+    const { abortSignal, apiBaseUrl, apiKey, idempotencyKey, params, upstreamHeaders, upstreamProxyUrl } = input;
     const abortContext = createAbortContext({ abortSignal, timeoutMs: input.timeoutMs });
     let response: Response;
     try {
-        response = await fetch(buildImagesGenerateUrl(apiBaseUrl), {
-            method: 'POST',
-            headers: mergeUpstreamHeadersWithFixed(upstreamHeaders, {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                Accept: 'text/event-stream, application/json',
-                ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {})
-            }),
-            signal: abortContext.signal,
-            body: JSON.stringify(params)
-        });
+        response = await fetchOpenAIUpstream(
+            buildImagesGenerateUrl(apiBaseUrl),
+            {
+                method: 'POST',
+                headers: mergeUpstreamHeadersWithFixed(upstreamHeaders, {
+                    Authorization: `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    Accept: 'text/event-stream, application/json',
+                    ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {})
+                }),
+                signal: abortContext.signal,
+                body: JSON.stringify(params)
+            },
+            upstreamProxyUrl
+        );
     } catch (error) {
         abortContext.cleanup();
         throw error;

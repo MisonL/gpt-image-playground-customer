@@ -157,11 +157,15 @@ AGENT_PUBLIC_BASE_URL=https://<user>-<space>.hf.space
 ```dotenv
 OPENAI_API_KEY=<your-api-key>
 OPENAI_API_BASE_URL=https://api.openai.com/v1
+# 可选：仅服务端到上游的无认证 HTTP(S) 代理。
+OPENAI_UPSTREAM_PROXY_URL=http://proxy.internal:8080
 APP_PASSWORD=<page-access-code>
 AGENT_API_TOKEN=<long-random-agent-token>
 ```
 
 `OPENAI_API_BASE_URL` 和 `OPENAI_CHANNEL_N_BASE_URL` 必须是无凭据、无查询参数和无片段的 `http` 或 `https` 绝对地址，通常以 `/v1` 结尾。公网 Space 推荐使用 `https` 上游；只有内网、专用代理或已确认的兼容渠道需要 `http` 时才配置 `http`。
+
+`OPENAI_UPSTREAM_PROXY_URL` 只影响 Space 服务端到上游 API 的出站连接，不影响用户浏览器访问 Space。它仅接受无认证、无路径、无查询参数和无片段的 `http://` 或 `https://` 根代理地址，不支持 SOCKS。多渠道部署可用 `OPENAI_CHANNEL_N_PROXY_URL` 覆盖全局代理，渠道级值优先。代理地址即使不含凭据也建议作为 Space Secret 管理；修改后需要重新启动或重新部署 Space。运行态和 Agent 诊断只公开是否配置及协议，不公开主机或端口。
 
 公网部署建议至少设置访问码 `APP_PASSWORD` 和 `AGENT_API_TOKEN`。如果不设置 `APP_PASSWORD`，任何人都可以打开网页并消耗服务端 API Key。
 
@@ -174,6 +178,8 @@ OPENAI_ROUTING_STRATEGY=round_robin
 OPENAI_CHANNEL_1_ID=official
 OPENAI_CHANNEL_1_BASE_URL=https://api.openai.com/v1
 OPENAI_CHANNEL_1_API_KEYS=<key-a>,<key-b>
+# 可选：仅覆盖此渠道的全局上游代理。
+OPENAI_CHANNEL_1_PROXY_URL=http://channel-proxy.internal:8080
 ```
 
 ## 手机网页使用

@@ -98,6 +98,10 @@ export async function GET() {
                     CHANNEL_REQUEST_MODE_ADMIN_CONTROL.defaultPriority,
                 requestModeControls: CHANNEL_REQUEST_MODE_ADMIN_CONTROL,
                 requestModeHealth: requestModeHealthSummary?.modes ?? [],
+                upstreamProxyByChannel: summary.channels.map((channel) => ({
+                    channelId: channel.id,
+                    upstreamProxy: channel.upstreamProxy
+                })),
                 requestModesByChannel: summary.channels.map((channel) => ({
                     channelId: channel.id,
                     requestModes: channel.requestModes,

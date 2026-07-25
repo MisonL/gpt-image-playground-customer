@@ -99,6 +99,7 @@ start-windows.bat
 | 场景               | 变量                                                                                                | 说明                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 默认上游           | `OPENAI_API_KEY`、`OPENAI_API_BASE_URL`                                                             | 服务端默认 OpenAI 或兼容接口配置。页面 `API 设置` 优先级更高。                                                                                                                                                                                                                                                                                                                                                     |
+| 上游代理           | `OPENAI_UPSTREAM_PROXY_URL`、`OPENAI_CHANNEL_N_PROXY_URL`                                           | 可选。只用于服务端到图片上游的出站请求；渠道级地址优先于全局地址。仅接受无认证、无路径、无查询参数和无片段的 `http://` / `https://` 根代理地址，不支持 SOCKS。运行态和 Agent 诊断只公开是否启用及协议，不公开代理主机或端口。 |
 | 页面访问码         | `APP_PASSWORD`                                                                                      | 设置后访问页面和受保护图片需要访问码。公网部署建议开启。                                                                                                                                                                                                                                                                                                                                                           |
 | Agent 鉴权         | `AGENT_API_TOKEN`                                                                                   | 设置后 `/api/agent/*` 需要 Bearer token。                                                                                                                                                                                                                                                                                                                                                                          |
 | Agent 公开地址     | `AGENT_PUBLIC_BASE_URL`                                                                             | OpenAPI `servers[0].url` 和 Agent artifact 分享外链使用的公网 base URL。                                                                                                                                                                                                                                                                                                                                           |
@@ -136,6 +137,18 @@ OPENAI_CHANNEL_3_BASE_URL=https://img.matsca.com/v1
 OPENAI_CHANNEL_3_API_KEYS=your-matsca-key
 OPENAI_CHANNEL_3_UPSTREAM_PROFILE=matsca
 ```
+
+服务端上游代理可按全局或渠道单独配置：
+
+```dotenv
+# 所有未单独覆盖的上游渠道使用此代理。
+OPENAI_UPSTREAM_PROXY_URL=http://proxy.internal:8080
+
+# 仅覆盖渠道 2，优先级高于全局代理。
+OPENAI_CHANNEL_2_PROXY_URL=https://channel-proxy.internal:8443
+```
+
+代理仅作用于服务端到上游的 OpenAI/兼容 API、上游 SSE、同源结果图下载、渠道恢复探测和 new-api 用量日志请求，不改变浏览器到本服务的连接，也不使用浏览器系统代理。代理 URL 只能是无认证的 `http://` 或 `https://` 根地址，不能包含 SOCKS 协议、用户名密码、路径、查询参数或片段。修改代理环境变量后必须重启服务或重新部署。`GET /api/runtime-capabilities`、Agent capabilities 和渠道健康诊断只显示 `configured` 与 `protocol`，不会返回代理主机或端口。
 
 优先级：
 

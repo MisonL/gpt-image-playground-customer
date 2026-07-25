@@ -29,6 +29,11 @@ import {
     type ImageProviderManifest,
     type ImageProviderManifestSummary
 } from './image-upstream-provider-manifest';
+import {
+    readOpenAIUpstreamProxyUrl,
+    summarizeOpenAIUpstreamProxy,
+    type UpstreamProxySummary
+} from './openai-image-transport';
 
 export type RoutingStrategy = 'sticky' | 'round_robin' | 'random';
 
@@ -37,6 +42,7 @@ export type ChannelCredential = {
     channelId: string;
     apiKey: string;
     baseUrl?: string;
+    upstreamProxyUrl?: string;
     upstreamProfile: ImageUpstreamProfileId;
     upstreamHeaders?: UpstreamRequestHeaders;
     providerManifest?: ImageProviderManifestSummary;
@@ -61,6 +67,7 @@ export type ChannelPoolSummary = {
     channels: Array<{
         id: string;
         baseUrl?: string;
+        upstreamProxy: UpstreamProxySummary;
         upstreamProfile: ImageUpstreamProfileId;
         effectiveProfile: ImageUpstreamProfile;
         hasExtraHeaders: boolean;
@@ -167,6 +174,7 @@ export type ChannelHealthSnapshot = {
     at: number;
     channels: Array<{
         channelId: string;
+        upstreamProxy: UpstreamProxySummary;
         credentialCount: number;
         healthyCredentialCount: number;
         unhealthyCredentialCount: number;
@@ -186,6 +194,7 @@ export type ChannelRecoveryProbeCandidate = {
 export type EffectiveCredential = {
     apiKey?: string;
     baseUrl?: string;
+    upstreamProxyUrl?: string;
     upstreamProfile: ImageUpstreamProfileId;
     providerProfile?: ImageUpstreamProfile;
     upstreamHeaders?: UpstreamRequestHeaders;
@@ -204,7 +213,7 @@ const DEFAULT_STRATEGY: RoutingStrategy = 'sticky';
 const DEFAULT_FAILURE_COOLDOWN_MS = 30_000;
 const VALID_STRATEGIES = new Set<RoutingStrategy>(['sticky', 'round_robin', 'random']);
 const CHANNEL_KEY_PATTERN =
-    /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|REQUEST_MODE_PRIORITY|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON|FAILURE_COOLDOWN_MS)$/;
+    /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|REQUEST_MODE_PRIORITY|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON|FAILURE_COOLDOWN_MS|PROXY_URL)$/;
 
 export function parseChannelPoolConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
     if (env.OPENAI_CHANNELS_JSON?.trim()) {
@@ -214,9 +223,10 @@ export function parseChannelPoolConfig(env: Record<string, string | undefined>):
         );
     }
 
+    const globalUpstreamProxyUrl = readOpenAIUpstreamProxyUrl(env);
     const channelIndexes = readConfiguredChannelIndexes(env);
     if (channelIndexes.length === 0) {
-        return parseLegacyConfig(env);
+        return parseLegacyConfig(env, globalUpstreamProxyUrl);
     }
 
     const strategy = readStrategy(env.OPENAI_ROUTING_STRATEGY, 'OPENAI_ROUTING_STRATEGY');
@@ -225,7 +235,7 @@ export function parseChannelPoolConfig(env: Record<string, string | undefined>):
         'OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY'
     );
     const credentials = channelIndexes.flatMap((channelIndex) =>
-        parseNumberedChannel(env, channelIndex, requestModePriority)
+        parseNumberedChannel(env, channelIndex, requestModePriority, globalUpstreamProxyUrl)
     );
 
     if (credentials.length === 0) {
@@ -769,6 +779,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                     const healthyCredentialCount = credentials.filter((credential) => credential.state === 'healthy').length;
                     return {
                         channelId,
+                        upstreamProxy: summarizeOpenAIUpstreamProxy(channelCredentials[0]?.upstreamProxyUrl),
                         credentialCount: credentials.length,
                         healthyCredentialCount,
                         unhealthyCredentialCount: credentials.length - healthyCredentialCount,
@@ -985,6 +996,7 @@ export function getChannelPoolSummary(config: ChannelPoolConfig): ChannelPoolSum
         {
             id: string;
             baseUrl?: string;
+            upstreamProxy: UpstreamProxySummary;
             upstreamProfile: ImageUpstreamProfileId;
             effectiveProfile: ImageUpstreamProfile;
             hasExtraHeaders: boolean;
@@ -1005,6 +1017,7 @@ export function getChannelPoolSummary(config: ChannelPoolConfig): ChannelPoolSum
         channels.set(credential.channelId, {
             id: credential.channelId,
             baseUrl: credential.baseUrl,
+            upstreamProxy: summarizeOpenAIUpstreamProxy(credential.upstreamProxyUrl),
             upstreamProfile: credential.upstreamProfile,
             effectiveProfile: credential.providerProfile || IMAGE_UPSTREAM_PROFILES[credential.upstreamProfile],
             hasExtraHeaders: Boolean(credential.upstreamHeaders),
@@ -1085,6 +1098,7 @@ export function resolveEffectiveCredential(options: {
     requestApiKey: string;
     requestApiBaseUrl: string;
     legacyBaseUrl?: string;
+    legacyUpstreamProxyUrl?: string;
     selectedCredential?: ChannelCredential;
 }): EffectiveCredential {
     if (options.requestApiKey) {
@@ -1094,6 +1108,7 @@ export function resolveEffectiveCredential(options: {
         return {
             apiKey: options.requestApiKey,
             baseUrl: options.requestApiBaseUrl || normalizeOptionalString(options.legacyBaseUrl),
+            ...(options.legacyUpstreamProxyUrl ? { upstreamProxyUrl: options.legacyUpstreamProxyUrl } : {}),
             upstreamProfile: requestProfile.id
         };
     }
@@ -1101,6 +1116,9 @@ export function resolveEffectiveCredential(options: {
     return {
         apiKey: options.selectedCredential?.apiKey,
         baseUrl: options.selectedCredential?.baseUrl,
+        ...(options.selectedCredential?.upstreamProxyUrl
+            ? { upstreamProxyUrl: options.selectedCredential.upstreamProxyUrl }
+            : {}),
         upstreamProfile: options.selectedCredential?.upstreamProfile || DEFAULT_EFFECTIVE_PROFILE_ID,
         ...(options.selectedCredential?.providerProfile
             ? { providerProfile: options.selectedCredential.providerProfile }
@@ -1194,7 +1212,10 @@ export function toPublicChannelFailure(
     };
 }
 
-function parseLegacyConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
+function parseLegacyConfig(
+    env: Record<string, string | undefined>,
+    globalUpstreamProxyUrl: string | undefined
+): ChannelPoolConfig {
     const apiKey = env.OPENAI_API_KEY?.trim();
     const baseUrl = normalizeOptionalString(env.OPENAI_API_BASE_URL);
 
@@ -1227,6 +1248,7 @@ function parseLegacyConfig(env: Record<string, string | undefined>): ChannelPool
                 channelId: 'default',
                 apiKey,
                 baseUrl,
+                ...(globalUpstreamProxyUrl ? { upstreamProxyUrl: globalUpstreamProxyUrl } : {}),
                 upstreamProfile: readImageUpstreamProfile({
                     explicitProfile: rawProfile,
                     channelId: 'default',
@@ -1242,11 +1264,14 @@ function parseLegacyConfig(env: Record<string, string | undefined>): ChannelPool
 function parseNumberedChannel(
     env: Record<string, string | undefined>,
     channelIndex: number,
-    globalRequestModePriority?: ChannelRequestMode[]
+    globalRequestModePriority?: ChannelRequestMode[],
+    globalUpstreamProxyUrl?: string
 ): ChannelCredential[] {
     const channelId = readOptionalEnv(env, `OPENAI_CHANNEL_${channelIndex}_ID`) || `channel-${channelIndex}`;
     const rawApiKeys = readRequiredEnv(env, `OPENAI_CHANNEL_${channelIndex}_API_KEYS`);
     const baseUrl = normalizeOptionalString(env[`OPENAI_CHANNEL_${channelIndex}_BASE_URL`]);
+    const upstreamProxyUrl =
+        readOpenAIUpstreamProxyUrl(env, `OPENAI_CHANNEL_${channelIndex}_PROXY_URL`) ?? globalUpstreamProxyUrl;
     const upstreamProfile = readChannelProfile(env, channelIndex, channelId, baseUrl);
     const upstreamHeaders = readChannelUpstreamHeaders(env, channelIndex, upstreamProfile);
     const providerManifest = readChannelProviderManifest(env, channelIndex, upstreamProfile);
@@ -1285,6 +1310,7 @@ function parseNumberedChannel(
         channelId,
         apiKey,
         baseUrl,
+        ...(upstreamProxyUrl ? { upstreamProxyUrl } : {}),
         upstreamProfile,
         ...(upstreamHeaders ? { upstreamHeaders } : {}),
         ...(providerManifest ? { providerManifest: createProviderManifestSummary(providerManifest) } : {}),

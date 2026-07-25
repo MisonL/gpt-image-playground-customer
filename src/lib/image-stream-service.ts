@@ -49,6 +49,7 @@ type SseWriter = ReturnType<typeof createSseWriter>;
 type ResolveStreamCostInput = {
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamProxyUrl?: string;
     upstreamHeaders?: UpstreamRequestHeaders;
     model: string;
     startedAtMs: number;
@@ -63,6 +64,7 @@ export type ImageStreamResponseOptions = {
     storageMode: StorageMode;
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamProxyUrl?: string;
     upstreamHeaders?: UpstreamRequestHeaders;
     model: string;
     startedAtMs: number;
@@ -218,6 +220,7 @@ async function downloadOptionalPartialImage(runtime: StreamRuntime, imageUrl: st
             imageUrl,
             apiBaseUrl: runtime.options.apiBaseUrl,
             apiKey: runtime.options.apiKey,
+            upstreamProxyUrl: runtime.options.upstreamProxyUrl,
             upstreamHeaders: runtime.options.upstreamHeaders,
             abortSignal: runtime.options.abortSignal
         });
@@ -257,6 +260,7 @@ async function emitCompletedImage(
                   imageUrl: normalizedEvent.imageUrl,
                   apiBaseUrl: runtime.options.apiBaseUrl,
                   apiKey: runtime.options.apiKey,
+                  upstreamProxyUrl: runtime.options.upstreamProxyUrl,
                   upstreamHeaders: runtime.options.upstreamHeaders,
                   abortSignal: runtime.options.abortSignal
               })
@@ -368,6 +372,7 @@ async function emitFallbackImages(runtime: StreamRuntime, result: OpenAI.Images.
                       imageUrl: image.url,
                       apiBaseUrl: runtime.options.apiBaseUrl,
                       apiKey: runtime.options.apiKey,
+                      upstreamProxyUrl: runtime.options.upstreamProxyUrl,
                       upstreamHeaders: runtime.options.upstreamHeaders,
                       abortSignal: runtime.options.abortSignal
                   })
@@ -396,6 +401,7 @@ async function emitDoneEvent(runtime: StreamRuntime): Promise<boolean> {
     const actualCost = await runtime.options.resolveActualCost({
         apiBaseUrl: runtime.options.apiBaseUrl,
         apiKey: runtime.options.apiKey,
+        upstreamProxyUrl: runtime.options.upstreamProxyUrl,
         model: runtime.options.model,
         startedAtMs: runtime.options.startedAtMs,
         expectedImageCount: runtime.state.completedImages.length,

@@ -62,6 +62,7 @@ type CommonModeInput = {
     storageMode: StorageMode;
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamProxyUrl?: string;
     startedAtMs: number;
     upstreamIdempotencyKey?: string;
     clientRequestId?: string;
@@ -330,6 +331,7 @@ async function createResponsesImageStreamResponse(
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
+        upstreamProxyUrl: input.upstreamProxyUrl,
         upstreamHeaders: input.upstreamHeaders,
         model: input.model,
         startedAtMs: input.startedAtMs,
@@ -372,6 +374,7 @@ async function createGenerateStreamResponse(
         stream = await createImagesApiGenerateStream({
             apiBaseUrl: input.apiBaseUrl,
             apiKey: input.apiKey,
+            upstreamProxyUrl: input.upstreamProxyUrl,
             upstreamHeaders: input.upstreamHeaders,
             idempotencyKey: input.upstreamIdempotencyKey,
             abortSignal: input.abortSignal,
@@ -389,6 +392,7 @@ async function createGenerateStreamResponse(
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
+        upstreamProxyUrl: input.upstreamProxyUrl,
         upstreamHeaders: input.upstreamHeaders,
         model: input.model,
         startedAtMs: input.startedAtMs,
@@ -532,6 +536,7 @@ async function createEditStreamResponse(input: CommonModeInput, options: EditOpt
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
+        upstreamProxyUrl: input.upstreamProxyUrl,
         upstreamHeaders: input.upstreamHeaders,
         model: input.model,
         startedAtMs: input.startedAtMs,
@@ -596,6 +601,7 @@ export async function handleEditImageMode(
                 storageMode: input.storageMode,
                 apiBaseUrl: input.apiBaseUrl,
                 apiKey: input.apiKey,
+                upstreamProxyUrl: input.upstreamProxyUrl,
                 upstreamHeaders: input.upstreamHeaders,
                 model: input.model,
                 startedAtMs: input.startedAtMs,

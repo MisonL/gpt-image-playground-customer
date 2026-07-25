@@ -170,6 +170,7 @@ export async function persistOpenAiImages(options: {
     batchId?: string;
     apiBaseUrl?: string;
     apiKey?: string;
+    upstreamProxyUrl?: string;
     upstreamHeaders?: UpstreamRequestHeaders;
     abortSignal?: AbortSignal;
 }): Promise<PersistedOpenAiImage[]> {
@@ -191,6 +192,7 @@ export async function persistOpenAiImages(options: {
                       imageUrl: imageData.url,
                       apiBaseUrl: options.apiBaseUrl,
                       apiKey: options.apiKey,
+                      upstreamProxyUrl: options.upstreamProxyUrl,
                       upstreamHeaders: options.upstreamHeaders,
                       abortSignal: options.abortSignal
                   })

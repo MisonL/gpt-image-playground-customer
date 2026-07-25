@@ -2,6 +2,7 @@ import {
     PNG_BASE64,
     imageFormRequest,
     readSseEvents,
+    startHttpConnectProxy,
     startImagesJsonUpstream,
     startResponsesImageUpstream,
     startStreamingImageUpstream,
@@ -107,6 +108,62 @@ describe('POST /api/images backend defaults and security boundaries', { concurre
             assert.equal(body.images?.[0]?.b64_json, PNG_BASE64);
             assert.equal(imageDownloadCount, 1);
         } finally {
+            await upstream.close();
+        }
+    });
+
+    it('sends page API requests through the configured global upstream proxy', async () => {
+        const { POST } = await import('./route');
+        const upstream = await startImagesJsonUpstream(async () => ({ data: [{ b64_json: PNG_BASE64 }] }));
+        const proxy = await startHttpConnectProxy();
+        process.env.OPENAI_UPSTREAM_PROXY_URL = proxy.url;
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    apiBaseUrl: upstream.baseUrl,
+                    apiKey: 'test-key',
+                    stream: false,
+                    streamMode: 'non_stream'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.ok(proxy.connectTargets.length > 0);
+            assert.ok(proxy.connectTargets.every((target) => target === new URL(upstream.baseUrl).host));
+        } finally {
+            await proxy.close();
+            await upstream.close();
+        }
+    });
+
+    it('uses a channel proxy instead of the global upstream proxy', async () => {
+        const { POST } = await import('./route');
+        const upstream = await startImagesJsonUpstream(async () => ({ data: [{ b64_json: PNG_BASE64 }] }));
+        const globalProxy = await startHttpConnectProxy();
+        const channelProxy = await startHttpConnectProxy();
+        process.env.OPENAI_UPSTREAM_PROXY_URL = globalProxy.url;
+        process.env.OPENAI_CHANNEL_1_ID = 'proxied-channel';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'channel-key';
+        process.env.OPENAI_CHANNEL_1_PROXY_URL = channelProxy.url;
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    stream: false,
+                    streamMode: 'non_stream'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.ok(channelProxy.connectTargets.length > 0);
+            assert.ok(channelProxy.connectTargets.every((target) => target === new URL(upstream.baseUrl).host));
+            assert.deepEqual(globalProxy.connectTargets, []);
+        } finally {
+            await channelProxy.close();
+            await globalProxy.close();
             await upstream.close();
         }
     });

@@ -39,6 +39,7 @@ export async function collectOpenAiImagesFromStream(
     options: {
         apiBaseUrl?: string;
         apiKey?: string;
+        upstreamProxyUrl?: string;
         upstreamHeaders?: UpstreamRequestHeaders;
         abortSignal?: AbortSignal;
         onStreamingDegraded?: (reason: string) => void;
@@ -83,6 +84,7 @@ export async function collectOpenAiImagesFromStream(
                               imageUrl: normalizedEvent.imageUrl,
                               apiBaseUrl: options.apiBaseUrl,
                               apiKey: options.apiKey,
+                              upstreamProxyUrl: options.upstreamProxyUrl,
                               upstreamHeaders: options.upstreamHeaders,
                               abortSignal: options.abortSignal
                           })

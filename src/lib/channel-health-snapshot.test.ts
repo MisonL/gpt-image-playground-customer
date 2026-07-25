@@ -35,6 +35,7 @@ describe('channel health snapshot', () => {
             channels: [
                 {
                     channelId: 'primary',
+                    upstreamProxy: { configured: false },
                     credentialCount: 2,
                     healthyCredentialCount: 1,
                     unhealthyCredentialCount: 1,

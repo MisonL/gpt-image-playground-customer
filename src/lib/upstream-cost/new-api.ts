@@ -1,4 +1,5 @@
 import type { ActualCostDetails, ActualCostResolver, ResolveActualCostInput } from './types';
+import { fetchOpenAIUpstream } from '../openai-image-transport';
 
 export const NEW_API_QUOTA_PER_UNIT = 500_000;
 
@@ -113,17 +114,21 @@ export function matchNewApiCostLog(input: {
     };
 }
 
-async function fetchLogs(url: URL, apiKey: string): Promise<NewApiLogEntry[] | undefined> {
+async function fetchLogs(url: URL, apiKey: string, upstreamProxyUrl?: string): Promise<NewApiLogEntry[] | undefined> {
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), FETCH_TIMEOUT_MS);
     try {
-        const response = await fetch(url, {
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                Accept: 'application/json'
+        const response = await fetchOpenAIUpstream(
+            url,
+            {
+                headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    Accept: 'application/json'
+                },
+                signal: abortController.signal
             },
-            signal: abortController.signal
-        });
+            upstreamProxyUrl
+        );
         if (!response.ok) return undefined;
 
         const body = (await response.json()) as NewApiLogResponse;
@@ -149,7 +154,7 @@ export class NewApiCostResolver implements ActualCostResolver {
 
         try {
             for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt += 1) {
-                const logs = await fetchLogs(url, input.apiKey);
+                const logs = await fetchLogs(url, input.apiKey, input.upstreamProxyUrl);
                 if (logs) {
                     const result = matchNewApiCostLog({
                         logs,

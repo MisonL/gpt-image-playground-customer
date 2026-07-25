@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 
 export { readSseEvents } from '@/lib/sse-test-utils';
 
@@ -405,6 +406,56 @@ export async function startStreamingResponsesImageUpstream(
     return listen(server);
 }
 
+export async function startHttpConnectProxy(): Promise<{
+    url: string;
+    connectTargets: string[];
+    close: () => Promise<void>;
+}> {
+    const sockets = new Set<net.Socket>();
+    const connectTargets: string[] = [];
+    const server = http.createServer((_request, response) => {
+        response.writeHead(405, { Connection: 'close' });
+        response.end();
+    });
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+    });
+    server.on('connect', (request, clientSocket, head) => {
+        const target = parseConnectTarget(request.url);
+        if (!target) {
+            clientSocket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+            return;
+        }
+        connectTargets.push(target.host);
+        const targetSocket = net.connect({ host: target.hostname, port: Number(target.port) });
+        sockets.add(targetSocket);
+        targetSocket.on('close', () => sockets.delete(targetSocket));
+        targetSocket.once('connect', () => {
+            clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+            if (head.length > 0) targetSocket.write(head);
+            clientSocket.pipe(targetSocket);
+            targetSocket.pipe(clientSocket);
+        });
+        targetSocket.once('error', () => {
+            if (!clientSocket.destroyed) {
+                clientSocket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+            }
+        });
+    });
+    await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        url: `http://127.0.0.1:${address.port}`,
+        connectTargets,
+        close: () => closeServerWithSockets(server, sockets)
+    };
+}
+
 async function listen(server: http.Server): Promise<{ baseUrl: string; close: () => Promise<void> }> {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
@@ -413,4 +464,23 @@ async function listen(server: http.Server): Promise<{ baseUrl: string; close: ()
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
         close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
     };
+}
+
+function parseConnectTarget(rawTarget: string | undefined): URL | undefined {
+    if (!rawTarget) return undefined;
+    try {
+        return new URL(`http://${rawTarget}`);
+    } catch {
+        return undefined;
+    }
+}
+
+async function closeServerWithSockets(server: http.Server, sockets: Set<net.Socket>): Promise<void> {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+            if (error) reject(error);
+            else resolve();
+        });
+    });
 }

@@ -1,5 +1,6 @@
 import { RequestValidationError } from './image-request-utils';
 import { mergeUpstreamHeadersWithFixed, type UpstreamRequestHeaders } from './image-upstream-profile';
+import { fetchOpenAIUpstream } from './openai-image-transport';
 
 const MAX_REMOTE_IMAGE_BYTES = 25 * 1024 * 1024;
 const REMOTE_IMAGE_DOWNLOAD_TIMEOUT_MS = 30000;
@@ -41,6 +42,7 @@ export async function downloadSameOriginImageAsBase64(input: {
     imageUrl: string;
     apiBaseUrl?: string;
     apiKey?: string;
+    upstreamProxyUrl?: string;
     upstreamHeaders?: UpstreamRequestHeaders;
     abortSignal?: AbortSignal;
 }): Promise<string> {
@@ -50,10 +52,14 @@ export async function downloadSameOriginImageAsBase64(input: {
     const abortListener = () => controller.abort();
     input.abortSignal?.addEventListener('abort', abortListener, { once: true });
     try {
-        const response = await fetch(url, {
-            headers: buildDownloadHeaders(input.apiKey, input.upstreamHeaders),
-            signal: controller.signal
-        });
+        const response = await fetchOpenAIUpstream(
+            url,
+            {
+                headers: buildDownloadHeaders(input.apiKey, input.upstreamHeaders),
+                signal: controller.signal
+            },
+            input.upstreamProxyUrl
+        );
         if (!response.ok) {
             throw new RemoteImageResultError(`下载上游图片失败：HTTP ${response.status}。`);
         }
@@ -86,9 +92,10 @@ function buildDownloadHeaders(
     apiKey: string | undefined,
     upstreamHeaders: UpstreamRequestHeaders | undefined
 ): UpstreamRequestHeaders | undefined {
-    const headers = apiKey
-        ? mergeUpstreamHeadersWithFixed(upstreamHeaders, { Authorization: `Bearer ${apiKey}` })
-        : { ...(upstreamHeaders || {}) };
+    const headers = mergeUpstreamHeadersWithFixed(
+        upstreamHeaders,
+        apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
+    );
     return Object.keys(headers).length > 0 ? headers : undefined;
 }
 

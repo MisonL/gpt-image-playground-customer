@@ -218,6 +218,7 @@ GET /api/agent/capabilities
 - `image_transport.upstream_timeout_ms`：当前服务端图片上游请求超时，脚本未显式传 `--timeout-ms` 时会用它延长默认超时。
 - `image_transport.stream_data_interval_timeout_ms`：已建立图片流的单次数据空闲超时；`0` 表示服务端禁用该空闲计时器。
 - `image_transport.upstream_max_retries`：OpenAI SDK 图片请求自动重试次数；默认 `0`，避免长耗时图片请求被 SDK 自动重试后重复计费。
+- `image_transport.upstream_proxy`：全局服务端上游代理摘要，只包含 `configured` 和可选的 `protocol`（`http` 或 `https`）；不会返回代理主机、端口、认证信息或完整 URL。代理由部署管理员通过 `OPENAI_UPSTREAM_PROXY_URL` 配置，只影响服务端到图片上游的出站连接。
 - `model_limits.gpt-image-2.max_edge`：最大单边像素，当前为 `3840`。
 - `model_limits.gpt-image-2.max_pixels`：最大总像素，当前为 `8294400`。
 - `model_limits.gpt-image-2.edge_multiple`：宽高必须是该值的倍数，当前为 `16`。
@@ -244,6 +245,7 @@ GET /api/agent/capabilities
 - `supported.request_modes`：服务端支持的上游请求方式枚举，当前为 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`。该字段描述服务端能力全集，不代表每个管理员渠道都已真实 smoke 通过。
 - `upstream_request_headers.default`：默认上游请求头摘要，包含 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`。
 - `upstream_request_headers.channels`：每个服务端渠道的脱敏请求头摘要，包含该渠道有效 `request_modes` 和按白名单过滤后的 `request_mode_priority`。该字段不包含 API key、Authorization 值、Matsca app secret 值或任意 header value。
+- `upstream_request_headers.channels[].upstream_proxy`：该渠道的有效上游代理摘要。`OPENAI_CHANNEL_N_PROXY_URL` 优先于 `OPENAI_UPSTREAM_PROXY_URL`；摘要只返回 `configured` 和 `protocol`，不返回代理地址或端口。
 - `request_mode_controls`：管理员 request mode 白名单和优先级控制面，声明 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、`OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`、`OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY`、默认低费用优先顺序、真实 smoke gate 和 `agent_client_policy=diagnostics_only`；Agent 客户端只能用于解释执行结果，不应据此自行选择上游请求方式。接入新渠道时，先用 `scripts/probe-upstream-image.mjs` 验证 `/models` 和 `/images/generations`，再用 `npm run smoke:image-upstream-real -- --allow-billable` 跑 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse` 之类的真实 smoke；也可用 `--case images-json`、`--case images-sse`、`--case responses-json`、`--case responses-sse` 按 request mode 筛选。脚本输出的 `request_modes.passed` 和顶层 `suggested_channel_config` 是写入 `OPENAI_CHANNEL_N_REQUEST_MODES` 的候选值；未通过、未实测、只返回远程 URL-only 或只返回 pending/poll_url 的 mode 不应写入。只有内联 `b64_json`、Responses `result` 或与 API Base URL 同源的 artifact URL 才算可被本服务消费。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，或 HTTP 200 但只返回文本 output、没有 `image_generation_call.result`/`url`，就把对应 `responses-*` mode 从白名单里删掉，只保留通过的模式。需要覆盖默认排序时，再把通过的 mode 按期望顺序写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY`。
 - `providerManifests[].manifest.executionSupport`：`implemented` 表示当前执行器可按现有 Images/Responses 路径执行；`declared_only` 表示 manifest 声明了 async-poll，但当前执行器不会自动轮询 provider `poll` 配置。pending/poll_url 只能作为诊断线索，不是可写入 request mode 白名单的通过证明。
 - `routing_rules.high_resolution_edit`：`edit` 且最大边大于 `2048` 时默认优先使用页面端 `/api/images` SSE，页面流式有问题时显式回退。
@@ -283,6 +285,8 @@ GET /api/agent/capabilities
 普通 generate 默认使用 `orchestration.endpoint`，不是客户端直接选择 job endpoint。`agent_jobs.supported=true` 且 `mode=job_polling` 表示服务端编排和显式 `--job` 诊断路径可使用同一套 job 状态机。高分辨率 edit 和复杂 UI 批量生产仍按页面/批量规则使用页面端 `/api/images` SSE；页面流式有问题时，先诊断再显式选择 Agent JSON、Agent edit 或 job 路径。当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。
 
 上游请求头策略由服务端统一执行。默认 `User-Agent` 是 `gpt-image-playground/<package-version>`；可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖全局 UA，也可用 `OPENAI_CHANNEL_N_USER_AGENT` 和 `OPENAI_CHANNEL_N_UPSTREAM_HEADERS_JSON` 覆盖单渠道安全 header。`Authorization`、`Accept`、`Content-Type`、`Content-Length` 和 `Host` 等协议头不可由 extra headers 覆盖；固定业务头和鉴权头始终由调用路径设置。
+
+上游代理同样由服务端统一执行：`OPENAI_UPSTREAM_PROXY_URL` 为全局默认值，`OPENAI_CHANNEL_N_PROXY_URL` 可覆盖单个渠道。它们只接受无认证、无路径、无查询参数和无片段的 `http://` 或 `https://` 根代理地址，不支持 SOCKS；配置变更需重启或重新部署服务。代理适用于服务端上游 API、SSE、同源结果图下载、渠道恢复探测和 new-api 用量日志，不影响 Agent 客户端到 Playground 的连接。
 
 ## Job Polling
 

@@ -15,6 +15,7 @@ function configureRouteEnv() {
         'APP_PASSWORD',
         'OPENAI_API_KEY',
         'OPENAI_API_BASE_URL',
+        'OPENAI_UPSTREAM_PROXY_URL',
         'OPENAI_CHANNEL_1_API_KEYS',
         'OPENAI_CHANNEL_1_BASE_URL',
         'IMAGE_GENERATION_BACKEND',

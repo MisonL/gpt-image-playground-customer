@@ -44,6 +44,35 @@ describe('downloadSameOriginImageAsBase64', () => {
         assert.equal(observedAppSecret, 'app-secret');
     });
 
+    it('uses the shared header policy when the image download has no API key', async () => {
+        let observedProxyAuthorization: string | null = null;
+        let observedUserAgent: string | null = null;
+        let observedAppId: string | null = null;
+        globalThis.fetch = async (_url, init) => {
+            const headers = new Headers(init?.headers);
+            observedProxyAuthorization = headers.get('proxy-authorization');
+            observedUserAgent = headers.get('user-agent');
+            observedAppId = headers.get('x-app-id');
+            return new Response(Buffer.from('png'), {
+                status: 200,
+                headers: { 'content-type': 'image/png' }
+            });
+        };
+
+        await downloadSameOriginImageAsBase64({
+            imageUrl: '/generated/final.png',
+            apiBaseUrl: 'https://api.example.test/v1',
+            upstreamHeaders: {
+                'Proxy-Authorization': 'Basic c2VjcmV0',
+                'X-App-ID': 'app-id'
+            }
+        });
+
+        assert.equal(observedProxyAuthorization, null);
+        assert.equal(observedUserAgent, 'gpt-image-playground/2.1.0');
+        assert.equal(observedAppId, 'app-id');
+    });
+
     it('enforces the remote image size limit when fetch returns no stream body', async () => {
         let arrayBufferRead = false;
         globalThis.fetch = async () =>

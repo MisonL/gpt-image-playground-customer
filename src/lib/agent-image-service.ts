@@ -118,6 +118,7 @@ type CredentialContext = {
     channelRequestModeDecision: ChannelRequestModeDecision;
     baseUrl?: string;
     apiKey: string;
+    upstreamProxyUrl?: string;
     upstreamProfile: ImageUpstreamProfile;
     upstreamHeaders?: UpstreamRequestHeaders;
 };
@@ -469,6 +470,7 @@ export async function executeAgentGenerate(options: {
             cached: options.cached,
             apiBaseUrl: credentialContext.baseUrl,
             apiKey: credentialContext.apiKey,
+            upstreamProxyUrl: credentialContext.upstreamProxyUrl,
             upstreamHeaders: credentialContext.upstreamHeaders,
             execution: {
                 startedAtMs,
@@ -559,6 +561,7 @@ async function executeAgentGenerateUpstream(
         const stream = await createImagesApiGenerateStream({
             apiBaseUrl: credentialContext.baseUrl,
             apiKey: credentialContext.apiKey,
+            upstreamProxyUrl: credentialContext.upstreamProxyUrl,
             upstreamHeaders: credentialContext.upstreamHeaders,
             idempotencyKey,
             abortSignal,
@@ -571,6 +574,7 @@ async function executeAgentGenerateUpstream(
         return await collectOpenAiImagesFromStream(stream, {
             apiBaseUrl: credentialContext.baseUrl,
             apiKey: credentialContext.apiKey,
+            upstreamProxyUrl: credentialContext.upstreamProxyUrl,
             upstreamHeaders: credentialContext.upstreamHeaders,
             abortSignal,
             onStreamingDegraded: (reason) => markAgentStreamingUnavailable(streamOptions, reason, 200)
@@ -667,6 +671,7 @@ async function executeAgentResponsesGenerate(
             {
                 apiBaseUrl: credentialContext.baseUrl,
                 apiKey: credentialContext.apiKey,
+                upstreamProxyUrl: credentialContext.upstreamProxyUrl,
                 upstreamHeaders: credentialContext.upstreamHeaders,
                 abortSignal,
                 onStreamingDegraded: (reason) => markAgentStreamingUnavailable(streamOptions, reason, 200)
@@ -837,6 +842,7 @@ export async function executeAgentEdit(options: {
             cached: options.cached,
             apiBaseUrl: activeCredentialContext.baseUrl,
             apiKey: activeCredentialContext.apiKey,
+            upstreamProxyUrl: activeCredentialContext.upstreamProxyUrl,
             upstreamHeaders: activeCredentialContext.upstreamHeaders,
             execution: {
                 startedAtMs,
@@ -900,6 +906,7 @@ async function executeAgentEditStream(input: {
         return await collectOpenAiImagesFromStream(stream, {
             apiBaseUrl: input.credentialContext.baseUrl,
             apiKey: input.credentialContext.apiKey,
+            upstreamProxyUrl: input.credentialContext.upstreamProxyUrl,
             upstreamHeaders: input.credentialContext.upstreamHeaders,
             abortSignal: input.abortSignal,
             onStreamingDegraded: (reason) => markAgentStreamingUnavailable(input.streamOptions, reason, 200)
@@ -1072,12 +1079,14 @@ function createOpenAiClient(headers: Headers, requestModePlan: AgentChannelReque
     const {
         apiKey,
         baseUrl,
+        upstreamProxyUrl,
         providerProfile,
         selectedCredential: effectiveSelectedCredential
     } = resolveEffectiveCredential({
         requestApiKey: '',
         requestApiBaseUrl: '',
         legacyBaseUrl: process.env.OPENAI_API_BASE_URL,
+        legacyUpstreamProxyUrl: process.env.OPENAI_UPSTREAM_PROXY_URL,
         selectedCredential
     });
     validateApiBaseUrl(baseUrl || '', {
@@ -1105,6 +1114,7 @@ function createOpenAiClient(headers: Headers, requestModePlan: AgentChannelReque
             createOpenAIImageClientOptions({
                 apiKey,
                 baseURL: baseUrl || undefined,
+                upstreamProxyUrl,
                 defaultHeaders: mergeUpstreamHeadersWithFixed(effectiveSelectedCredential?.upstreamHeaders, {})
             })
         ),
@@ -1114,6 +1124,7 @@ function createOpenAiClient(headers: Headers, requestModePlan: AgentChannelReque
         channelRequestModeDecision,
         baseUrl,
         apiKey,
+        upstreamProxyUrl,
         upstreamProfile:
             providerProfile ||
             readImageUpstreamProfile({
@@ -1230,6 +1241,7 @@ async function persistOpenAiImages(options: {
     cached: boolean;
     apiBaseUrl?: string;
     apiKey?: string;
+    upstreamProxyUrl?: string;
     upstreamHeaders?: UpstreamRequestHeaders;
     execution: AgentExecutionMetadata;
     abortSignal?: AbortSignal;
@@ -1244,6 +1256,7 @@ async function persistOpenAiImages(options: {
             normalizeOutputFormat: options.normalizeOutputFormat,
             apiBaseUrl: options.apiBaseUrl,
             apiKey: options.apiKey,
+            upstreamProxyUrl: options.upstreamProxyUrl,
             upstreamHeaders: options.upstreamHeaders,
             abortSignal: options.abortSignal
         });

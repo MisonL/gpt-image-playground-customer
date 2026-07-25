@@ -59,6 +59,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_API_BASE_URL;
     delete process.env.OPENAI_UPSTREAM_REQUEST_MODES;
     delete process.env.OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY;
+    delete process.env.OPENAI_UPSTREAM_PROXY_URL;
     delete process.env.OPENAI_UPSTREAM_USER_AGENT;
     delete process.env.UPSTREAM_USER_AGENT;
     delete process.env.OPENAI_CHANNEL_1_ID;
@@ -157,6 +158,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
+                upstream_proxy: { configured: false },
                 request_modes: ['images-non-stream'],
                 request_mode_priority: ['images-non-stream'],
                 request_headers: {
@@ -211,6 +213,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'default',
+                upstream_proxy: { configured: false },
                 request_modes: ['images-non-stream', 'images-sse'],
                 request_mode_priority: ['images-sse', 'images-non-stream'],
                 request_headers: {
@@ -221,6 +224,40 @@ describe('Agent route integration', () => {
                 }
             }
         ]);
+    });
+
+    it('reports global and per-channel upstream proxy summaries without exposing endpoints', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.OPENAI_UPSTREAM_PROXY_URL = 'https://global-proxy.integration.example:9443';
+        process.env.OPENAI_CHANNEL_1_ID = 'primary';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://primary.example.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'primary-secret';
+        process.env.OPENAI_CHANNEL_2_ID = 'backup';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = 'https://backup.example.com/v1';
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'backup-secret';
+        process.env.OPENAI_CHANNEL_2_PROXY_URL = 'http://channel-proxy.integration.example:8080';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.deepEqual(body.image_transport.upstream_proxy, { configured: true, protocol: 'https' });
+        assert.deepEqual(
+            body.upstream_request_headers.channels.map((channel: { id: string; upstream_proxy: unknown }) => ({
+                id: channel.id,
+                upstream_proxy: channel.upstream_proxy
+            })),
+            [
+                { id: 'primary', upstream_proxy: { configured: true, protocol: 'https' } },
+                { id: 'backup', upstream_proxy: { configured: true, protocol: 'http' } }
+            ]
+        );
+        const serialized = JSON.stringify(body);
+        assert.equal(serialized.includes('global-proxy.integration.example'), false);
+        assert.equal(serialized.includes('channel-proxy.integration.example'), false);
+        assert.equal(serialized.includes('9443'), false);
+        assert.equal(serialized.includes('8080'), false);
+        assert.equal(serialized.includes('primary-secret'), false);
+        assert.equal(serialized.includes('backup-secret'), false);
     });
 
     it('registers cleanup-managed artifacts for every request mode', async () => {
@@ -389,6 +426,7 @@ describe('Agent route integration', () => {
         assert.deepEqual(body.upstream_request_headers.channels, [
             {
                 id: 'matsca',
+                upstream_proxy: { configured: false },
                 request_modes: ['images-non-stream'],
                 request_mode_priority: ['images-non-stream'],
                 request_headers: {

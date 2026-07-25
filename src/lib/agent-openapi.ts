@@ -504,9 +504,16 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     type: 'array',
                                     items: {
                                         type: 'object',
-                                        required: ['id', 'request_modes', 'request_mode_priority', 'request_headers'],
+                                        required: [
+                                            'id',
+                                            'upstream_proxy',
+                                            'request_modes',
+                                            'request_mode_priority',
+                                            'request_headers'
+                                        ],
                                         properties: {
                                             id: { type: 'string' },
+                                            upstream_proxy: { $ref: '#/components/schemas/UpstreamProxySummary' },
                                             request_modes: {
                                                 type: 'array',
                                                 items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
@@ -1079,10 +1086,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'unhealthy_credential_count',
                         'state',
                         'probe_required',
+                        'upstream_proxy',
                         'credentials'
                     ],
                     properties: {
                         channel_id: { type: 'string' },
+                        upstream_proxy: { $ref: '#/components/schemas/UpstreamProxySummary' },
                         credential_count: { type: 'integer', minimum: 0 },
                         healthy_credential_count: { type: 'integer', minimum: 0 },
                         unhealthy_credential_count: { type: 'integer', minimum: 0 },
@@ -2197,7 +2206,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 ImageTransportCapabilities: {
                     type: 'object',
-                    required: ['upstream_timeout_ms', 'stream_data_interval_timeout_ms', 'upstream_max_retries'],
+                    required: [
+                        'upstream_timeout_ms',
+                        'stream_data_interval_timeout_ms',
+                        'upstream_max_retries',
+                        'upstream_proxy'
+                    ],
                     properties: {
                         upstream_timeout_ms: {
                             type: 'integer',
@@ -2213,7 +2227,19 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             type: 'integer',
                             minimum: 0,
                             const: capabilities.image_transport.upstream_max_retries
+                        },
+                        upstream_proxy: {
+                            $ref: '#/components/schemas/UpstreamProxySummary'
                         }
+                    },
+                    additionalProperties: false
+                },
+                UpstreamProxySummary: {
+                    type: 'object',
+                    required: ['configured'],
+                    properties: {
+                        configured: { type: 'boolean' },
+                        protocol: { type: 'string', enum: ['http', 'https'] }
                     },
                     additionalProperties: false
                 }

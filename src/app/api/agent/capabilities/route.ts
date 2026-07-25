@@ -31,6 +31,7 @@ function readPublicCapabilitiesEnv(): Record<string, string | undefined> {
         OPENAI_UPSTREAM_PROFILE: process.env.OPENAI_UPSTREAM_PROFILE,
         OPENAI_UPSTREAM_REQUEST_MODES: process.env.OPENAI_UPSTREAM_REQUEST_MODES,
         OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY: process.env.OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY,
+        OPENAI_UPSTREAM_PROXY_URL: process.env.OPENAI_UPSTREAM_PROXY_URL,
         OPENAI_UPSTREAM_USER_AGENT: readConfiguredMarker(process.env.OPENAI_UPSTREAM_USER_AGENT),
         UPSTREAM_USER_AGENT: readConfiguredMarker(process.env.UPSTREAM_USER_AGENT),
         OPENAI_ROUTING_STRATEGY: process.env.OPENAI_ROUTING_STRATEGY,
@@ -46,7 +47,7 @@ function readPublicChannelEnv(env: NodeJS.ProcessEnv): Record<string, string | u
     const publicEnv: Record<string, string | undefined> = {};
     for (const key of Object.keys(env)) {
         const match =
-            /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|REQUEST_MODE_PRIORITY|API_KEYS|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON)$/.exec(
+            /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|PROXY_URL|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|REQUEST_MODE_PRIORITY|API_KEYS|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON)$/.exec(
                 key
             );
         if (!match) continue;

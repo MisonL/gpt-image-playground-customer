@@ -33,6 +33,7 @@ beforeEach(async () => {
     delete process.env.IMAGE_UPSTREAM_TIMEOUT_MS;
     delete process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS;
     delete process.env.IMAGE_UPSTREAM_MAX_RETRIES;
+    delete process.env.OPENAI_UPSTREAM_PROXY_URL;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
     delete process.env.OPENAI_ROUTING_STRATEGY;
@@ -43,6 +44,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST;
     delete process.env.OPENAI_CHANNEL_1_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_1_REQUEST_MODE_PRIORITY;
+    delete process.env.OPENAI_CHANNEL_1_PROXY_URL;
     delete process.env.OPENAI_CHANNEL_2_ID;
     delete process.env.OPENAI_CHANNEL_2_API_KEYS;
     delete process.env.OPENAI_CHANNEL_2_BASE_URL;
@@ -50,6 +52,7 @@ beforeEach(async () => {
     delete process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST;
     delete process.env.OPENAI_CHANNEL_2_REQUEST_MODES;
     delete process.env.OPENAI_CHANNEL_2_REQUEST_MODE_PRIORITY;
+    delete process.env.OPENAI_CHANNEL_2_PROXY_URL;
     delete process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED;
     delete process.env.OPENAI_CHANNEL_QUEUE_ENABLED;
     delete process.env.OPENAI_CHANNEL_QUEUE_MAX_WAIT_MS;
@@ -215,6 +218,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                 upstream_timeout_ms?: number;
                 stream_data_interval_timeout_ms?: number;
                 upstream_max_retries?: number;
+                upstream_proxy?: { configured: boolean; protocol?: string };
             }
         >;
 
@@ -224,7 +228,8 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.deepEqual(body.imageTransport, {
             upstream_timeout_ms: 1_200_000,
             stream_data_interval_timeout_ms: 600_000,
-            upstream_max_retries: 1
+            upstream_max_retries: 1,
+            upstream_proxy: { configured: false }
         });
     });
 
@@ -612,6 +617,10 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                     configuredChannelCount: number;
                     healthyChannelCount: number;
                 }>;
+                upstreamProxyByChannel: Array<{
+                    channelId: string;
+                    upstreamProxy: { configured: boolean; protocol?: string };
+                }>;
                 requestModesByChannel: Array<{
                     channelId: string;
                     requestModes: string[];
@@ -687,6 +696,12 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                     healthyCredentialCount: 0,
                     configuredChannelCount: 0,
                     healthyChannelCount: 0
+                }
+            ],
+            upstreamProxyByChannel: [
+                {
+                    channelId: 'images',
+                    upstreamProxy: { configured: false }
                 }
             ],
             requestModesByChannel: [

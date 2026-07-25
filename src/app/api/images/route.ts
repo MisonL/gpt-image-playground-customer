@@ -427,6 +427,7 @@ export async function POST(request: NextRequest) {
         const {
             apiKey: effectiveApiKey,
             baseUrl: effectiveApiBaseUrl,
+            upstreamProxyUrl: effectiveUpstreamProxyUrl,
             upstreamProfile: effectiveUpstreamProfileId,
             providerProfile,
             upstreamHeaders,
@@ -435,6 +436,7 @@ export async function POST(request: NextRequest) {
             requestApiKey,
             requestApiBaseUrl,
             legacyBaseUrl: process.env.OPENAI_API_BASE_URL,
+            legacyUpstreamProxyUrl: process.env.OPENAI_UPSTREAM_PROXY_URL,
             selectedCredential: selectedServerCredential
         });
         validateApiBaseUrl(effectiveApiBaseUrl || '', { allowedPlainHttpBaseUrls });
@@ -461,6 +463,7 @@ export async function POST(request: NextRequest) {
             createOpenAIImageClientOptions({
                 apiKey: effectiveApiKey,
                 baseURL: effectiveApiBaseUrl || undefined,
+                upstreamProxyUrl: effectiveUpstreamProxyUrl,
                 defaultHeaders: mergeUpstreamHeadersWithFixed(upstreamHeaders, {})
             })
         );
@@ -577,6 +580,7 @@ export async function POST(request: NextRequest) {
                       storageMode: effectiveStorageMode,
                       apiBaseUrl: effectiveApiBaseUrl,
                       apiKey: effectiveApiKey,
+                      upstreamProxyUrl: effectiveUpstreamProxyUrl,
                       startedAtMs: upstreamStartedAtMs,
                       upstreamIdempotencyKey,
                       clientRequestId,
@@ -609,6 +613,7 @@ export async function POST(request: NextRequest) {
                       storageMode: effectiveStorageMode,
                       apiBaseUrl: effectiveApiBaseUrl,
                       apiKey: effectiveApiKey,
+                      upstreamProxyUrl: effectiveUpstreamProxyUrl,
                       startedAtMs: upstreamStartedAtMs,
                       upstreamIdempotencyKey,
                       clientRequestId,
@@ -647,6 +652,7 @@ export async function POST(request: NextRequest) {
                 normalizeOutputFormat: true,
                 apiBaseUrl: effectiveApiBaseUrl,
                 apiKey: effectiveApiKey,
+                upstreamProxyUrl: effectiveUpstreamProxyUrl,
                 upstreamHeaders,
                 abortSignal: request.signal
             });
@@ -657,6 +663,7 @@ export async function POST(request: NextRequest) {
             const actualCost = await resolveRequestActualCostSafely({
                 apiBaseUrl: effectiveApiBaseUrl,
                 apiKey: effectiveApiKey,
+                upstreamProxyUrl: effectiveUpstreamProxyUrl,
                 model,
                 startedAtMs: upstreamStartedAtMs,
                 expectedImageCount: savedImagesData.length,

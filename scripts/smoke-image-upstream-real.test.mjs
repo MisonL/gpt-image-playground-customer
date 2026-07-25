@@ -1025,6 +1025,7 @@ function isSmokeEnvKey(key) {
         key.startsWith('OPENAI_CHANNEL_') ||
         key === 'OPENAI_API_BASE_URL' ||
         key === 'OPENAI_API_KEY' ||
+        key === 'OPENAI_UPSTREAM_PROXY_URL' ||
         key === 'OPENAI_RESPONSES_API_MODEL' ||
         key === 'OPENAI_ROUTING_STRATEGY' ||
         key === 'OPENAI_CHANNELS_JSON' ||

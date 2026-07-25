@@ -1,13 +1,19 @@
 import {
     buildOpenAIImageRequestOptions,
     createOpenAIImageClientOptions,
+    fetchOpenAIUpstream,
     readImageStreamDataIntervalTimeoutMs,
     readImageUpstreamMaxRetries,
     readImageUpstreamTimeoutMs,
+    readOpenAIUpstreamProxyUrl,
+    summarizeOpenAIUpstreamProxy,
     summarizeOpenAIImageTransport
 } from './openai-image-transport';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import net from 'node:net';
 import { describe, it } from 'node:test';
+import OpenAI from 'openai';
 
 describe('openai image transport settings', () => {
     it('uses long image defaults and disables automatic SDK retries', () => {
@@ -17,7 +23,8 @@ describe('openai image transport settings', () => {
         assert.deepEqual(summarizeOpenAIImageTransport({}), {
             upstream_timeout_ms: 900_000,
             stream_data_interval_timeout_ms: 900_000,
-            upstream_max_retries: 0
+            upstream_max_retries: 0,
+            upstream_proxy: { configured: false }
         });
 
         assert.deepEqual(createOpenAIImageClientOptions({ apiKey: 'key', baseURL: 'https://api.example/v1' }), {
@@ -61,4 +68,187 @@ describe('openai image transport settings', () => {
         assert.equal(readImageStreamDataIntervalTimeoutMs({ IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS: '0' }), 0);
         assert.throws(() => readImageUpstreamMaxRetries({ IMAGE_UPSTREAM_MAX_RETRIES: '-1' }), /非负整数/);
     });
+
+    it('accepts only bare HTTP(S) proxy URLs and redacts the configured endpoint', () => {
+        const proxyUrl = readOpenAIUpstreamProxyUrl({
+            OPENAI_UPSTREAM_PROXY_URL: 'https://proxy.internal.example:9443'
+        });
+
+        assert.equal(proxyUrl, 'https://proxy.internal.example:9443/');
+        assert.deepEqual(summarizeOpenAIUpstreamProxy(proxyUrl), { configured: true, protocol: 'https' });
+        assert.equal(JSON.stringify(summarizeOpenAIUpstreamProxy(proxyUrl)).includes('proxy.internal.example'), false);
+        assert.equal(JSON.stringify(summarizeOpenAIUpstreamProxy(proxyUrl)).includes('9443'), false);
+        assert.throws(
+            () => readOpenAIUpstreamProxyUrl({ OPENAI_UPSTREAM_PROXY_URL: 'socks5://127.0.0.1:1080' }),
+            /不支持 SOCKS/
+        );
+        assert.throws(
+            () => readOpenAIUpstreamProxyUrl({ OPENAI_UPSTREAM_PROXY_URL: 'http://proxy-user:secret@proxy.example' }),
+            /不能包含代理用户名或密码/
+        );
+        assert.throws(
+            () => readOpenAIUpstreamProxyUrl({ OPENAI_UPSTREAM_PROXY_URL: 'https://proxy.example/path' }),
+            /不能包含路径/
+        );
+        assert.throws(
+            () => readOpenAIUpstreamProxyUrl({ OPENAI_UPSTREAM_PROXY_URL: 'https://proxy.example?token=secret' }),
+            /不能包含查询参数/
+        );
+        assert.throws(
+            () => readOpenAIUpstreamProxyUrl({ OPENAI_UPSTREAM_PROXY_URL: 'https://proxy.example/?' }),
+            /不能包含查询参数/
+        );
+        assert.throws(
+            () => readOpenAIUpstreamProxyUrl({ OPENAI_UPSTREAM_PROXY_URL: 'https://proxy.example/#' }),
+            /不能包含查询参数/
+        );
+        assert.throws(
+            () => readOpenAIUpstreamProxyUrl({ OPENAI_UPSTREAM_PROXY_URL: 'https://proxy.example/%2e' }),
+            /不能包含路径/
+        );
+        assert.throws(
+            () => readOpenAIUpstreamProxyUrl({ OPENAI_UPSTREAM_PROXY_URL: 'https://proxy.example\\path' }),
+            /不能包含路径/
+        );
+    });
+
+    it('routes SDK and native upstream fetches through an HTTP proxy', async () => {
+        const upstreamRequests: string[] = [];
+        const upstream = await startHttpServer((request, response) => {
+            upstreamRequests.push(request.url || '');
+            if (request.url === '/v1/models') {
+                response.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' });
+                response.end(JSON.stringify({ object: 'list', data: [] }));
+                return;
+            }
+            if (request.url === '/native') {
+                response.writeHead(200, { 'Content-Type': 'text/plain', Connection: 'close' });
+                response.end('native-through-proxy');
+                return;
+            }
+            response.writeHead(404, { 'Content-Type': 'application/json', Connection: 'close' });
+            response.end(JSON.stringify({ error: { message: 'not found' } }));
+        });
+        const proxy = await startHttpConnectProxy();
+
+        try {
+            const nativeResponse = await fetchOpenAIUpstream(
+                `${upstream.baseUrl}/native`,
+                { headers: { Connection: 'close' } },
+                proxy.url
+            );
+            assert.equal(await nativeResponse.text(), 'native-through-proxy');
+
+            const client = new OpenAI(
+                createOpenAIImageClientOptions({
+                    apiKey: 'sk-proxy-test',
+                    baseURL: `${upstream.baseUrl}/v1`,
+                    upstreamProxyUrl: proxy.url,
+                    defaultHeaders: { Connection: 'close' }
+                })
+            );
+            const models = await client.models.list();
+
+            assert.deepEqual(models.data, []);
+            assert.deepEqual(upstreamRequests, ['/native', '/v1/models']);
+            assert.equal(proxy.connectTargets.length, 2);
+            assert.ok(proxy.connectTargets.every((target) => target === upstream.origin));
+        } finally {
+            await proxy.close();
+            await upstream.close();
+        }
+    });
 });
+
+async function startHttpServer(
+    handler: (request: http.IncomingMessage, response: http.ServerResponse) => void
+): Promise<{ baseUrl: string; origin: string; close: () => Promise<void> }> {
+    const sockets = new Set<net.Socket>();
+    const server = http.createServer(handler);
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+    });
+    await listen(server);
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const origin = `127.0.0.1:${address.port}`;
+    return {
+        baseUrl: `http://${origin}`,
+        origin,
+        close: () => closeServer(server, sockets)
+    };
+}
+
+async function startHttpConnectProxy(): Promise<{
+    url: string;
+    connectTargets: string[];
+    close: () => Promise<void>;
+}> {
+    const sockets = new Set<net.Socket>();
+    const connectTargets: string[] = [];
+    const server = http.createServer((_request, response) => {
+        response.writeHead(405, { Connection: 'close' });
+        response.end();
+    });
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+    });
+    server.on('connect', (request, clientSocket, head) => {
+        const target = readConnectTarget(request.url);
+        if (!target) {
+            clientSocket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+            return;
+        }
+        connectTargets.push(`${target.hostname}:${target.port}`);
+        const targetSocket = net.connect({ host: target.hostname, port: Number(target.port) });
+        sockets.add(targetSocket);
+        targetSocket.on('close', () => sockets.delete(targetSocket));
+        targetSocket.once('connect', () => {
+            clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+            if (head.length > 0) targetSocket.write(head);
+            clientSocket.pipe(targetSocket);
+            targetSocket.pipe(clientSocket);
+        });
+        targetSocket.once('error', () => {
+            if (!clientSocket.destroyed) {
+                clientSocket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+            }
+        });
+    });
+    await listen(server);
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    return {
+        url: `http://127.0.0.1:${address.port}`,
+        connectTargets,
+        close: () => closeServer(server, sockets)
+    };
+}
+
+function readConnectTarget(rawTarget: string | undefined): URL | undefined {
+    if (!rawTarget) return undefined;
+    try {
+        return new URL(`http://${rawTarget}`);
+    } catch {
+        return undefined;
+    }
+}
+
+async function listen(server: http.Server): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+    });
+}
+
+async function closeServer(server: http.Server, sockets: Set<net.Socket>): Promise<void> {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+            if (error) reject(error);
+            else resolve();
+        });
+    });
+}

@@ -83,6 +83,61 @@ describe('parseChannelPoolConfig', () => {
         ]);
     });
 
+    it('applies the global proxy and lets a numbered channel override it', () => {
+        const config = parseChannelPoolConfig({
+            OPENAI_UPSTREAM_PROXY_URL: 'https://global-proxy.example:8443',
+            OPENAI_CHANNEL_1_ID: 'primary',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://primary.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'sk-primary',
+            OPENAI_CHANNEL_2_ID: 'backup',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://backup.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'sk-backup',
+            OPENAI_CHANNEL_2_PROXY_URL: 'http://channel-proxy.example:8080'
+        });
+
+        assert.deepEqual(
+            config.credentials.map((credential) => ({
+                id: credential.id,
+                upstreamProxyUrl: credential.upstreamProxyUrl
+            })),
+            [
+                { id: 'primary#0', upstreamProxyUrl: 'https://global-proxy.example:8443/' },
+                { id: 'backup#0', upstreamProxyUrl: 'http://channel-proxy.example:8080/' }
+            ]
+        );
+        const summary = getChannelPoolSummary(config);
+        assert.deepEqual(
+            summary.channels.map((channel) => ({ id: channel.id, upstreamProxy: channel.upstreamProxy })),
+            [
+                { id: 'primary', upstreamProxy: { configured: true, protocol: 'https' } },
+                { id: 'backup', upstreamProxy: { configured: true, protocol: 'http' } }
+            ]
+        );
+        assert.equal(JSON.stringify(summary).includes('global-proxy.example'), false);
+        assert.equal(JSON.stringify(summary).includes('channel-proxy.example'), false);
+    });
+
+    it('rejects an invalid global or channel proxy URL explicitly', () => {
+        assert.throws(
+            () =>
+                parseChannelPoolConfig({
+                    OPENAI_API_KEY: 'sk-legacy',
+                    OPENAI_API_BASE_URL: 'https://legacy.example.com/v1',
+                    OPENAI_UPSTREAM_PROXY_URL: 'ftp://proxy.example'
+                }),
+            /OPENAI_UPSTREAM_PROXY_URL/
+        );
+        assert.throws(
+            () =>
+                parseChannelPoolConfig({
+                    OPENAI_CHANNEL_1_BASE_URL: 'https://primary.example.com/v1',
+                    OPENAI_CHANNEL_1_API_KEYS: 'sk-primary',
+                    OPENAI_CHANNEL_1_PROXY_URL: 'http://proxy.example/path'
+                }),
+            /OPENAI_CHANNEL_1_PROXY_URL/
+        );
+    });
+
     it('rejects invalid legacy upstream profile values instead of silently using the default profile', () => {
         assert.throws(
             () =>
@@ -236,6 +291,7 @@ describe('getChannelPoolSummary', () => {
                 {
                     id: 'official',
                     baseUrl: 'https://api.openai.com/v1',
+                    upstreamProxy: { configured: false },
                     upstreamProfile: 'openai-compatible',
                     effectiveProfile: IMAGE_UPSTREAM_PROFILES['openai-compatible'],
                     hasExtraHeaders: false,
@@ -247,6 +303,7 @@ describe('getChannelPoolSummary', () => {
                 {
                     id: 'backup',
                     baseUrl: 'https://backup.example.com/v1',
+                    upstreamProxy: { configured: false },
                     upstreamProfile: 'openai-compatible',
                     effectiveProfile: IMAGE_UPSTREAM_PROFILES['openai-compatible'],
                     hasExtraHeaders: false,
@@ -277,6 +334,7 @@ describe('getChannelPoolSummary', () => {
                 {
                     id: 'matsca',
                     baseUrl: 'https://matsca.example.com/v1',
+                    upstreamProxy: { configured: false },
                     upstreamProfile: 'matsca',
                     effectiveProfile: IMAGE_UPSTREAM_PROFILES.matsca,
                     hasExtraHeaders: true,
@@ -390,6 +448,7 @@ describe('getChannelPoolSummary', () => {
                 {
                     id: 'custom',
                     baseUrl: 'https://custom.example.com/v1',
+                    upstreamProxy: { configured: false },
                     upstreamProfile: 'matsca',
                     effectiveProfile: config.credentials[0]?.providerProfile,
                     hasExtraHeaders: false,
@@ -1681,6 +1740,7 @@ describe('resolveEffectiveCredential', () => {
             requestApiKey: 'sk-browser',
             requestApiBaseUrl: '',
             legacyBaseUrl: 'https://legacy.example.com/v1',
+            legacyUpstreamProxyUrl: 'http://proxy.example:8080/',
             selectedCredential: {
                 id: 'server#0',
                 channelId: 'server',
@@ -1693,6 +1753,7 @@ describe('resolveEffectiveCredential', () => {
         assert.deepEqual(credential, {
             apiKey: 'sk-browser',
             baseUrl: 'https://legacy.example.com/v1',
+            upstreamProxyUrl: 'http://proxy.example:8080/',
             upstreamProfile: 'openai-compatible'
         });
     });

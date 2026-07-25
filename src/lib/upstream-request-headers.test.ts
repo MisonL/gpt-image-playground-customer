@@ -44,6 +44,16 @@ describe('upstream request headers', () => {
         );
     });
 
+    it('filters proxy authentication from extra headers before dispatch', () => {
+        const merged = mergeUpstreamHeadersWithFixed(
+            { 'Proxy-Authorization': 'Basic c2VjcmV0' },
+            {},
+            {}
+        );
+
+        assert.equal(new Headers(merged).has('proxy-authorization'), false);
+    });
+
     it('rejects unsafe configurable protocol headers', () => {
         assert.throws(
             () =>
@@ -68,6 +78,14 @@ describe('upstream request headers', () => {
                     'OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON'
                 ),
             /不能配置 Idempotency-Key/
+        );
+        assert.throws(
+            () =>
+                normalizeConfiguredUpstreamHeaders(
+                    { 'Proxy-Authorization': 'Basic c2VjcmV0' },
+                    'OPENAI_CHANNEL_1_UPSTREAM_HEADERS_JSON'
+                ),
+            /不能配置 Proxy-Authorization/
         );
     });
 

@@ -17,6 +17,7 @@ describe('env-summary', () => {
                 'OPENAI_API_KEY=sk-real-looking-secret-value',
                 'OPENAI_CHANNEL_1_API_KEYS=key-one,key-two',
                 'OPENAI_API_BASE_URL=https://api.example.com/v1',
+                'OPENAI_UPSTREAM_PROXY_URL=http://proxy.internal.example:8080',
                 'REDIS_HOST=localhost:6379',
                 'PUBLIC_NAME=value # deployment note',
                 'ENABLE_STREAMING_BATCH=true',
@@ -30,6 +31,8 @@ describe('env-summary', () => {
         assert.equal(serialized.includes('sk-real-looking-secret-value'), false);
         assert.equal(serialized.includes('key-one'), false);
         assert.equal(serialized.includes('key-two'), false);
+        assert.equal(serialized.includes('proxy.internal.example'), false);
+        assert.equal(serialized.includes('8080'), false);
         assert.equal(serialized.includes('deployment note'), false);
         assert.deepEqual(summary.find((item) => item.name === 'OPENAI_API_KEY'), {
             name: 'OPENAI_API_KEY',
@@ -39,6 +42,13 @@ describe('env-summary', () => {
             item_count: 1
         });
         assert.equal(summary.find((item) => item.name === 'OPENAI_CHANNEL_1_API_KEYS')?.item_count, 2);
+        assert.deepEqual(summary.find((item) => item.name === 'OPENAI_UPSTREAM_PROXY_URL'), {
+            name: 'OPENAI_UPSTREAM_PROXY_URL',
+            set: true,
+            sensitive: true,
+            value_kind: 'url',
+            item_count: 1
+        });
         assert.deepEqual(summary.find((item) => item.name === 'OPENAI_API_BASE_URL')?.url, {
             valid: true,
             protocol: 'https',

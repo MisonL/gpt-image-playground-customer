@@ -19,6 +19,8 @@ beforeEach(() => {
     process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://images.example.test/v1';
     process.env.OPENAI_CHANNEL_1_API_KEYS = 'health-channel-secret,secondary-secret';
     process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream,images-sse';
+    delete process.env.OPENAI_UPSTREAM_PROXY_URL;
+    delete process.env.OPENAI_CHANNEL_1_PROXY_URL;
     resetServerChannelStateForTests();
 });
 
@@ -104,6 +106,7 @@ describe('GET /api/agent/diagnostics/channel-health', () => {
             channels: [
                 {
                     channel_id: 'primary',
+                    upstream_proxy: { configured: false },
                     credential_count: 2,
                     healthy_credential_count: 1,
                     unhealthy_credential_count: 1,

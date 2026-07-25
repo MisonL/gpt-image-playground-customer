@@ -36,7 +36,7 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from './image-upstream-strategy';
-import { summarizeOpenAIImageTransport } from './openai-image-transport';
+import { summarizeOpenAIImageTransport, type UpstreamProxySummary } from './openai-image-transport';
 import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
 import { readBooleanEnv } from './server-runtime';
 import {
@@ -237,12 +237,14 @@ export type AgentCapabilities = {
         upstream_timeout_ms: number;
         stream_data_interval_timeout_ms: number;
         upstream_max_retries: number;
+        upstream_proxy: UpstreamProxySummary;
     };
     upstream_profile: ImageUpstreamProfileSummary;
     upstream_request_headers: {
         default: UpstreamRequestHeaderSummary;
         channels: Array<{
             id: string;
+            upstream_proxy: UpstreamProxySummary;
             request_modes: readonly ChannelRequestMode[];
             request_mode_priority: readonly ChannelRequestMode[];
             request_headers: UpstreamRequestHeaderSummary;
@@ -1331,6 +1333,7 @@ function buildAgentUpstreamRequestHeadersCapabilities(
         default: summarizeUpstreamRequestHeaders(undefined, env),
         channels: channelSummary.channels.map((channel) => ({
             id: channel.id,
+            upstream_proxy: channel.upstreamProxy,
             request_modes: channel.requestModes,
             request_mode_priority: channel.requestModePriority,
             request_headers: channel.requestHeaders

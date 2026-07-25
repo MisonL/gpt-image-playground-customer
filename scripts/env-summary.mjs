@@ -6,6 +6,7 @@ import { isMainModule, printJson, runCommand } from './command-center-utils.mjs'
 
 const DEFAULT_ENV_FILES = ['.env.local', '.env.real-smoke.local', '.env.agent.local'];
 const SECRET_NAME_PATTERN = /(API_?KEY|API_?KEYS|TOKEN|PASSWORD|SECRET|CREDENTIAL|PRIVATE)/i;
+const PRIVATE_ENDPOINT_NAME_PATTERN = /PROXY/i;
 const URL_NAME_PATTERN = /(BASE_URL|URL|ENDPOINT|HOST)$/i;
 const DOCKER_INSPECT_TIMEOUT_MS = 10_000;
 
@@ -53,7 +54,7 @@ export function summarizeEnvEntries(entries) {
 
 function summarizeEnvEntry(name, value) {
     const set = value.length > 0;
-    const sensitive = SECRET_NAME_PATTERN.test(name);
+    const sensitive = SECRET_NAME_PATTERN.test(name) || PRIVATE_ENDPOINT_NAME_PATTERN.test(name);
     const summary = { name, set, sensitive, value_kind: classifyValue(value) };
     if (sensitive && set) {
         summary.item_count = value.split(',').map((item) => item.trim()).filter(Boolean).length;

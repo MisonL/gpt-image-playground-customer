@@ -437,6 +437,7 @@ export async function ensureOutputDirExists() {
 async function resolveRequestActualCost(input: {
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamProxyUrl?: string;
     model: string;
     startedAtMs: number;
     expectedImageCount: number;
@@ -453,6 +454,7 @@ async function resolveRequestActualCost(input: {
     return resolveActualCost({
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
+        ...(input.upstreamProxyUrl ? { upstreamProxyUrl: input.upstreamProxyUrl } : {}),
         model: input.model,
         startedAtMs: input.startedAtMs,
         finishedAtMs,
@@ -463,6 +465,7 @@ async function resolveRequestActualCost(input: {
 export async function resolveRequestActualCostSafely(input: {
     apiBaseUrl?: string;
     apiKey: string;
+    upstreamProxyUrl?: string;
     model: string;
     startedAtMs: number;
     expectedImageCount: number;

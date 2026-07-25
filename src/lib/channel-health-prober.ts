@@ -6,6 +6,7 @@ import {
     type ChannelRouter
 } from './channel-router';
 import { mergeUpstreamHeadersWithFixed } from './image-upstream-profile';
+import { fetchOpenAIUpstream } from './openai-image-transport';
 
 type ProbeFetch = (input: URL, init: RequestInit) => Promise<Response>;
 type ProbeResult = {
@@ -69,14 +70,18 @@ export async function probeChannelModelsEndpoint(input: {
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), input.timeoutMs);
     try {
-        const response = await (input.fetchImpl || fetch)(buildModelsUrl(input.credential.baseUrl), {
+        const requestInit = {
             method: 'GET',
             headers: mergeUpstreamHeadersWithFixed(input.credential.upstreamHeaders, {
                 Authorization: `Bearer ${input.credential.apiKey}`,
                 Accept: 'application/json'
             }),
             signal: abortController.signal
-        });
+        } satisfies RequestInit;
+        const targetUrl = buildModelsUrl(input.credential.baseUrl);
+        const response = input.fetchImpl
+            ? await input.fetchImpl(targetUrl, requestInit)
+            : await fetchOpenAIUpstream(targetUrl, requestInit, input.credential.upstreamProxyUrl);
         if (!response.ok) {
             return {
                 ok: false,
