@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 import dns from 'node:dns/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import http from 'node:http';
+import https from 'node:https';
+import { isIP } from 'node:net';
+import { dirname } from 'node:path';
 import tls from 'node:tls';
 import {
   assertValidImageSizeForModel,
@@ -10,6 +15,7 @@ import {
   readConfiguredPositiveInteger,
   readOptionValue
 } from './lib/script-utils.mjs';
+import { readImageDimensions } from './lib/image-dimensions.mjs';
 import { completeScriptTiming, startScriptTiming } from './lib/script-summary.mjs';
 
 const HEADER_ALLOWLIST = new Set(['content-type', 'date', 'server', 'cf-ray', 'x-request-id', 'retry-after']);
@@ -18,6 +24,27 @@ const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
 const DEFAULT_OUTPUT_FORMAT = 'webp';
 const DEFAULT_OUTPUT_COMPRESSION = 100;
 const REQUEST_MODES = ['images-non-stream', 'images-sse', 'responses-non-stream', 'responses-sse'];
+const PARTIAL_SSE_EVENT_TYPES = new Set([
+  'image_generation.partial_image',
+  'image_edit.partial_image',
+  'image.generation.chunk',
+  'response.image_generation_call.partial_image',
+  'agent.partial_image'
+]);
+const FINAL_SSE_EVENT_TYPES = new Set([
+  'image_generation.completed',
+  'image_edit.completed',
+  'image.generation.result',
+  'response.image_generation_call.completed',
+  'response.output_item.done',
+  'response.completed',
+  'agent.completed'
+]);
+const RESPONSES_FINAL_SSE_EVENT_TYPES = new Set([
+  'response.image_generation_call.completed',
+  'response.output_item.done',
+  'response.completed'
+]);
 // Values are normalized by lowercasing and replacing underscores before lookup, so alias keys use hyphens only.
 const REQUEST_MODE_ALIASES = {
   all: 'all',
@@ -88,6 +115,15 @@ try {
     throw new Error('--format 必须是 png、jpeg 或 webp。');
   }
   if (options.outputCompression !== undefined) readOutputCompression(options);
+  if (options.saveFirstImagePath && !options.allowBillable) {
+    throw new Error('--save-first-image 需要同时传 --allow-billable。');
+  }
+  if (options.saveFirstImagePath && options.requestModes.length > 1) {
+    throw new Error('--save-first-image 只能与单个 --request-mode 一起使用。');
+  }
+  if (options.connectIp && isIP(options.connectIp) === 0) {
+    throw new Error('--connect-ip 必须是有效的 IPv4 或 IPv6 地址。');
+  }
 } catch (error) {
   console.error(errorMessage(error));
   printUsage();
@@ -99,6 +135,7 @@ const report = {
   billable: false,
   base_url: baseUrl,
   upstream_host: upstream.host,
+  ...(options.connectIp ? { connect_ip: options.connectIp } : {}),
   api_key_configured: Boolean(apiKey),
   dns: await probeDns(upstream.hostname),
   tls: await probeTls(upstream),
@@ -130,6 +167,8 @@ function parseArgs(argv) {
     format: DEFAULT_OUTPUT_FORMAT,
     outputCompression: undefined,
     timeoutMs: undefined,
+    saveFirstImagePath: undefined,
+    connectIp: undefined,
     requestModes: [],
     allowBillable: false,
     help: false
@@ -145,6 +184,8 @@ function parseArgs(argv) {
     else if (arg === '--format' || arg === '--output-format') parsed.format = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--output-compression') parsed.outputCompression = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--timeout-ms') parsed.timeoutMs = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--save-first-image') parsed.saveFirstImagePath = readOptionValue(argv, (index += 1), arg);
+    else if (arg === '--connect-ip') parsed.connectIp = readOptionValue(argv, (index += 1), arg);
     else if (arg === '--request-mode' || arg === '--request-modes') {
       const requestModes = readRequestModeList(readOptionValue(argv, (index += 1), arg));
       for (const requestMode of requestModes) {
@@ -158,6 +199,15 @@ function parseArgs(argv) {
 }
 
 async function probeDns(hostname) {
+  if (options.connectIp) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'connect_ip_override',
+      address: options.connectIp,
+      address_family: isIP(options.connectIp)
+    };
+  }
   const startedAt = Date.now();
   try {
     const result = await dns.lookup(hostname);
@@ -174,7 +224,7 @@ async function probeTls(url) {
   const startedAt = Date.now();
   return new Promise((resolve) => {
     const socket = tls.connect({
-      host: url.hostname,
+      host: options.connectIp || url.hostname,
       port: Number(url.port || 443),
       servername: url.hostname,
       timeout: timeoutMs
@@ -182,7 +232,13 @@ async function probeTls(url) {
     socket.once('secureConnect', () => {
       const protocol = socket.getProtocol() || undefined;
       socket.end();
-      resolve({ ok: true, elapsed_ms: Date.now() - startedAt, authorized: socket.authorized, protocol });
+      resolve({
+        ok: true,
+        elapsed_ms: Date.now() - startedAt,
+        authorized: socket.authorized,
+        protocol,
+        ...(options.connectIp ? { connect_ip: options.connectIp } : {})
+      });
     });
     socket.once('timeout', () => {
       socket.destroy();
@@ -275,10 +331,13 @@ async function probeImagesMode(requestMode, stream) {
     stream,
     modeKind: 'images'
   });
+  const savedImage = await maybeSaveFirstImage({ summary, response, json, text, modeKind: 'images' });
+  const finalSummary = applySaveImageResult(summary, savedImage);
   return {
     request_mode: requestMode,
     billable: true,
-    ...summary
+    ...finalSummary,
+    ...(savedImage ? { saved_image: savedImage } : {})
   };
 }
 
@@ -325,12 +384,211 @@ async function probeResponsesMode(requestMode, stream) {
     stream,
     modeKind: 'responses'
   });
+  const savedImage = await maybeSaveFirstImage({ summary, response, json, text, modeKind: 'responses' });
+  const finalSummary = applySaveImageResult(summary, savedImage);
   return {
     request_mode: requestMode,
     billable: true,
     responses_model: responsesModel,
-    ...summary
+    ...finalSummary,
+    ...(savedImage ? { saved_image: savedImage } : {})
   };
+}
+
+async function maybeSaveFirstImage({ summary, response, json, text, modeKind }) {
+  if (!options.saveFirstImagePath || !summary.ok || !response.ok) return undefined;
+  try {
+    const image = await readFirstConsumableFinalImageBytes({ response, json, text, modeKind });
+    if (!image) throw new Error('未找到可保存的内联或同源图片产物。');
+    const dimensions = readImageDimensions(image.bytes);
+    await mkdir(dirname(options.saveFirstImagePath), { recursive: true });
+    await writeFile(options.saveFirstImagePath, image.bytes, { flag: 'wx' });
+    return {
+      ok: true,
+      path: options.saveFirstImagePath,
+      byte_length: image.bytes.byteLength,
+      source: image.source,
+      dimensions
+    };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
+function applySaveImageResult(summary, savedImage) {
+  if (!savedImage || savedImage.ok) return summary;
+  return {
+    ...summary,
+    ok: false,
+    error: 'save_first_image_failed'
+  };
+}
+
+async function readFirstConsumableFinalImageBytes({ response, json, text, modeKind }) {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('text/event-stream')) return await readFirstConsumableFinalImageBytesFromSse(text);
+  if (modeKind === 'images') return await readFirstConsumableImageBytesFromValue(json?.data);
+  const imageCalls = Array.isArray(json?.output)
+    ? json.output.filter(isCompletedResponsesImageCall)
+    : [];
+  return await readFirstConsumableImageBytesFromValue(imageCalls);
+}
+
+async function readFirstConsumableFinalImageBytesFromSse(text) {
+  for (const event of parseSseEvents(text)) {
+    const candidates = readFinalImageCandidatesFromSseEvent(event);
+    for (const candidate of candidates) {
+      const image = await readFirstConsumableImageBytesFromValue(candidate);
+      if (image) return image;
+    }
+  }
+  return undefined;
+}
+
+async function readFirstConsumableImageBytesFromValue(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const image = await readFirstConsumableImageBytesFromValue(item);
+      if (image) return image;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== 'object') return undefined;
+  for (const [key, nestedValue] of Object.entries(value)) {
+    const normalizedKey = key.toLowerCase();
+    if (normalizedKey.includes('partial')) continue;
+    if (normalizedKey === 'b64_json' && typeof nestedValue === 'string') {
+      return decodeImageBase64(nestedValue, normalizedKey);
+    }
+    if ((normalizedKey === 'result' || normalizedKey === 'url') && typeof nestedValue === 'string') {
+      const image = await readImageBytesFromString(nestedValue, normalizedKey);
+      if (image) return image;
+    }
+    const image = await readFirstConsumableImageBytesFromValue(nestedValue);
+    if (image) return image;
+  }
+  return undefined;
+}
+
+function parseSseEvents(text) {
+  const events = [];
+  for (const block of text.split(/\n\s*\n/)) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+    const lines = trimmed.split('\n');
+    const eventLine = lines.find((line) => line.startsWith('event: '));
+    const eventType = eventLine ? eventLine.slice('event: '.length).trim() : undefined;
+    const data = lines
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice('data: '.length))
+      .join('\n');
+    if (data === '[DONE]') {
+      events.push({ eventType, done: true, value: undefined });
+      continue;
+    }
+    events.push({ eventType, done: false, value: parseJson(data) });
+  }
+  return events;
+}
+
+function readFinalImageCandidatesFromSseEvent(event) {
+  if (event.done || !event.value || containsPartialImageMarker(event)) return [];
+  const eventTypes = readSseEventTypes(event);
+  if (eventTypes.some((type) => RESPONSES_FINAL_SSE_EVENT_TYPES.has(type))) {
+    return readCompletedResponsesImageCalls(event.value);
+  }
+  if (eventTypes.some((type) => FINAL_SSE_EVENT_TYPES.has(type))) {
+    return readGeneralFinalImageCandidates(event.value);
+  }
+  return hasUnlabeledFinalImageData(event.value) ? readGeneralFinalImageCandidates(event.value) : [];
+}
+
+function readSseEventTypes(event) {
+  const eventTypes = [];
+  if (typeof event.eventType === 'string' && event.eventType) eventTypes.push(event.eventType);
+  if (event.value && typeof event.value === 'object' && typeof event.value.type === 'string') {
+    eventTypes.push(event.value.type);
+  }
+  return eventTypes;
+}
+
+function containsPartialImageMarker(event) {
+  return readSseEventTypes(event).some((type) => PARTIAL_SSE_EVENT_TYPES.has(type) || type.includes('partial_image'));
+}
+
+function readGeneralFinalImageCandidates(value) {
+  if (Array.isArray(value?.data)) return value.data;
+  return [value];
+}
+
+function hasUnlabeledFinalImageData(value) {
+  return Array.isArray(value?.data) && value.data.some(hasDirectImagePayload);
+}
+
+function hasDirectImagePayload(value) {
+  if (!value || typeof value !== 'object') return false;
+  return ['b64_json', 'result', 'url'].some((key) => typeof value[key] === 'string' && value[key].trim());
+}
+
+function readCompletedResponsesImageCalls(value) {
+  const calls = [];
+  const visit = (current, isRoot = false) => {
+    if (Array.isArray(current)) {
+      for (const item of current) visit(item);
+      return;
+    }
+    if (!current || typeof current !== 'object') return;
+    const type = typeof current.type === 'string' ? current.type : '';
+    const status = typeof current.status === 'string' ? current.status : '';
+    if (
+      (type === 'image_generation_call' || (isRoot && type === 'response.image_generation_call.completed')) &&
+      status !== 'failed' &&
+      status !== 'pending' &&
+      status !== 'in_progress' &&
+      hasDirectImagePayload(current)
+    ) {
+      calls.push(current);
+      return;
+    }
+    for (const key of ['item', 'response', 'output', 'data']) {
+      if (current[key] !== undefined) visit(current[key]);
+    }
+  };
+  visit(value, true);
+  return calls;
+}
+
+function isCompletedResponsesImageCall(value) {
+  if (!value || typeof value !== 'object' || value.type !== 'image_generation_call') return false;
+  return value.status !== 'failed' && value.status !== 'pending' && value.status !== 'in_progress';
+}
+
+async function readImageBytesFromString(value, key) {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('data:image/')) return decodeImageDataUrl(trimmed);
+  if (isRemoteUrl(trimmed) || key === 'url') {
+    if (!isSameOriginUrl(trimmed)) return undefined;
+    return await fetchSameOriginImage(trimmed);
+  }
+  return decodeImageBase64(trimmed, key);
+}
+
+function decodeImageDataUrl(value) {
+  const match = /^data:image\/[a-z0-9.+-]+;base64,(?<data>[a-z0-9+/=\s]+)$/i.exec(value);
+  if (!match?.groups?.data) throw new Error('图片 data URL 格式无效。');
+  return decodeImageBase64(match.groups.data, 'data_url');
+}
+
+function decodeImageBase64(value, source) {
+  return { bytes: Buffer.from(String(value).replace(/\s/g, ''), 'base64'), source };
+}
+
+async function fetchSameOriginImage(value) {
+  const resolved = new URL(value, baseUrl);
+  const { response, bytes } = await fetchBytes(resolved.href);
+  if (!response.ok) throw new Error(`下载同源图片产物失败，状态码 ${response.status}。`);
+  return { bytes, source: 'same_origin_url' };
 }
 
 function summarizeModeResponse(input) {
@@ -395,26 +653,15 @@ function summarizeSseText(text) {
   const eventTypes = [];
   let hasPartialImage = false;
   const imageCapability = createImageCapabilitySummary();
-  for (const block of text.split(/\n\s*\n/)) {
-    const trimmed = block.trim();
-    if (!trimmed) continue;
-    if (trimmed === 'data: [DONE]') {
+  for (const event of parseSseEvents(text)) {
+    if (event.done) {
       eventTypes.push('done');
       continue;
     }
-    const eventLine = trimmed
-      .split('\n')
-      .find((line) => line.startsWith('event: '));
-    if (eventLine) {
-      eventTypes.push(eventLine.slice('event: '.length).trim());
-    }
-    if (trimmed.includes('partial_image')) {
-      hasPartialImage = true;
-    }
-    const dataLines = trimmed.split('\n').filter((line) => line.startsWith('data: '));
-    for (const dataLine of dataLines) {
-      const eventData = parseJson(dataLine.slice('data: '.length));
-      mergeImageCapability(imageCapability, summarizeConsumableImageValue(eventData));
+    if (event.eventType) eventTypes.push(event.eventType);
+    if (containsPartialImageMarker(event)) hasPartialImage = true;
+    for (const candidate of readFinalImageCandidatesFromSseEvent(event)) {
+      mergeImageCapability(imageCapability, summarizeConsumableImageValue(candidate));
     }
   }
   return {
@@ -443,7 +690,7 @@ async function fetchJson(url, init) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
   try {
-    const response = await fetch(url, {
+    const response = await requestWithConnectIp(url, {
       ...init,
       headers: {
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
@@ -466,6 +713,75 @@ async function fetchJson(url, init) {
   }
 }
 
+async function fetchBytes(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await requestWithConnectIp(url, {
+      headers: {
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        'User-Agent': userAgent
+      },
+      signal: controller.signal
+    });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return { response, bytes };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function requestWithConnectIp(url, init) {
+  const target = new URL(url);
+  if (!options.connectIp || target.hostname !== upstream.hostname) return await fetch(url, init);
+  const transport = target.protocol === 'https:' ? https : http;
+  return await new Promise((resolve, reject) => {
+    const request = transport.request(
+      target,
+      {
+        method: init.method || 'GET',
+        headers: init.headers,
+        signal: init.signal,
+        lookup: (_hostname, lookupOptions, callback) => {
+          const family = isIP(options.connectIp);
+          if (lookupOptions?.all) {
+            callback(null, [{ address: options.connectIp, family }]);
+            return;
+          }
+          callback(null, options.connectIp, family);
+        }
+      },
+      (response) => {
+        readIncomingMessage(response).then(
+          (body) => resolve(new Response(body, { status: response.statusCode || 599, headers: toResponseHeaders(response.headers) })),
+          reject
+        );
+      }
+    );
+    request.once('error', reject);
+    if (init.body) request.write(init.body);
+    request.end();
+  });
+}
+
+async function readIncomingMessage(response) {
+  const chunks = [];
+  for await (const chunk of response) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+function toResponseHeaders(headers) {
+  const result = new Headers();
+  for (const [name, value] of Object.entries(headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) result.append(name, String(item));
+    } else if (value !== undefined) {
+      result.set(name, String(value));
+    }
+  }
+  return result;
+}
+
 function buildProbeSummary(value) {
   const timing = completeScriptTiming(scriptTiming);
   const configuredHeaderNames = readProbeConfiguredHeaderNames();
@@ -478,6 +794,7 @@ function buildProbeSummary(value) {
     transport: 'upstream_probe',
     endpoint: `${baseUrl}/models`,
     upstream_host: upstream.host,
+    ...(options.connectIp ? { connect_ip: options.connectIp } : {}),
     request_modes: value.request_modes || undefined,
     request_headers: {
       user_agent_effective: userAgent,
@@ -535,9 +852,7 @@ function summarizeResponsesJson(json, text) {
   if (!Array.isArray(json?.output)) {
     return { error: summarizeError(json, text) };
   }
-  const imageCalls = json.output.filter(
-    (item) => item && typeof item === 'object' && item.type === 'image_generation_call'
-  );
+  const imageCalls = json.output.filter(isCompletedResponsesImageCall);
   const firstCall = imageCalls[0];
   const firstResult =
     typeof firstCall?.result === 'string' ? firstCall.result : typeof firstCall?.url === 'string' ? firstCall.url : '';
@@ -566,6 +881,7 @@ function summarizeConsumableImageValue(value) {
   if (!value || typeof value !== 'object') return summary;
   for (const [key, nestedValue] of Object.entries(value)) {
     const normalizedKey = key.toLowerCase();
+    if (normalizedKey.includes('partial')) continue;
     if (normalizedKey === 'b64_json') {
       if (typeof nestedValue === 'string' && nestedValue.length > 0) {
         summary.has_inline_base64 = true;
@@ -719,7 +1035,7 @@ function printUsage() {
   console.error('用法：probe-upstream-image.mjs [options]');
   console.error('默认只请求 /models；添加 --allow-billable 才会调用请求方式探测。');
   console.error(
-    '常用参数：--base-url --model --responses-model --prompt --size --quality --format --output-compression --timeout-ms --request-mode --allow-billable'
+    '常用参数：--base-url --connect-ip --model --responses-model --prompt --size --quality --format --output-compression --timeout-ms --request-mode --save-first-image --allow-billable'
   );
   console.error('可用请求方式：images-non-stream、images-sse、responses-non-stream、responses-sse；可重复传 --request-mode，或传 all。');
 }

@@ -6,9 +6,10 @@ import {
     readCapabilitiesImageTransportTimeoutMs,
     resolveSameOriginUrl
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import { FIXTURE_IMAGE_BASE64 } from './local-image-upstream-fixture.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -516,6 +517,44 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
+    it('uses an explicit connection IP without changing the upstream hostname', async () => {
+        let hostHeader = '';
+        await withServer(
+            (request, response) => {
+                hostHeader = String(request.headers.host || '');
+                if (request.url === '/v1/models') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const localUrl = new URL(baseUrl);
+                const result = await runSkillScriptAsync('probe-upstream-image.mjs', [
+                    '--base-url',
+                    `http://upstream.invalid:${localUrl.port}/v1`,
+                    '--connect-ip',
+                    '127.0.0.1',
+                    '--timeout-ms',
+                    localUpstreamProbeTimeoutMs
+                ]);
+
+                assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+                assert.equal(result.stderr.trim(), '');
+                const body = JSON.parse(result.stdout);
+                assert.equal(body.connect_ip, '127.0.0.1');
+                assert.equal(body.summary.connect_ip, '127.0.0.1');
+                assert.equal(body.dns.reason, 'connect_ip_override');
+                assert.equal(body.dns.address, '127.0.0.1');
+                assert.equal(body.tls.reason, 'non_https_base_url');
+                assert.equal(body.models.first_model_id, 'gpt-image-2');
+                assert.equal(hostHeader, `upstream.invalid:${localUrl.port}`);
+            }
+        );
+    });
+
     it('reports configured upstream probe authorization without exposing the key', async () => {
         await withServer(
             (request, response) => {
@@ -712,6 +751,178 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(mode.has_remote_url_result, false);
             }
         );
+    });
+
+    it('does not mark pending Responses image calls as a usable request mode', async () => {
+        await withServer(
+            (request, response) => {
+                if (request.url === '/v1/models') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+                    return;
+                }
+                if (request.url === '/v1/responses') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(
+                        JSON.stringify({
+                            output: [
+                                {
+                                    type: 'image_generation_call',
+                                    status: 'pending',
+                                    result: FIXTURE_IMAGE_BASE64
+                                }
+                            ]
+                        })
+                    );
+                    return;
+                }
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'missing' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync('probe-upstream-image.mjs', [
+                    '--base-url',
+                    `${baseUrl}/v1`,
+                    '--allow-billable',
+                    '--request-mode',
+                    'responses-non-stream',
+                    '--responses-model',
+                    'gpt-4.1-mini',
+                    '--timeout-ms',
+                    '1000'
+                ]);
+
+                assert.equal(result.status, 1);
+                const body = JSON.parse(result.stdout);
+                const mode = body.request_modes.modes['responses-non-stream'];
+                assert.deepEqual(body.request_modes.passed, []);
+                assert.deepEqual(body.request_modes.failed, ['responses-non-stream']);
+                assert.equal(mode.ok, false);
+                assert.equal(mode.error, 'missing_image_call_result');
+                assert.equal(mode.has_consumable_image, false);
+            }
+        );
+    });
+
+    it('saves the first final upstream SSE image only when explicitly requested', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'probe-upstream-save-'));
+        const outputPath = join(tempRoot, 'probe.png');
+        const laterImageBase64 = fakePngBase64(2, 1);
+        try {
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/v1/models') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+                        return;
+                    }
+                    if (request.url === '/v1/images/generations') {
+                        response.writeHead(200, {
+                            'content-type': 'text/event-stream',
+                            'cache-control': 'no-cache',
+                            connection: 'keep-alive'
+                        });
+                        response.write(
+                            'event: image_generation.partial_image\n' +
+                                'data: {"type":"image_generation.partial_image","b64_json":"YmFzZTY0LWltYWdl"}\n\n'
+                        );
+                        response.write(
+                            'event: image_generation.completed\n' +
+                                `data: {"type":"image_generation.completed","b64_json":"${FIXTURE_IMAGE_BASE64}"}\n\n`
+                        );
+                        response.write(
+                            'event: image_generation.completed\n' +
+                                `data: {"type":"image_generation.completed","b64_json":"${laterImageBase64}"}\n\n`
+                        );
+                        response.end('data: [DONE]\n\n');
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync('probe-upstream-image.mjs', [
+                        '--base-url',
+                        baseUrl + '/v1',
+                        '--allow-billable',
+                        '--request-mode',
+                        'images-sse',
+                        '--save-first-image',
+                        outputPath,
+                        '--timeout-ms',
+                        '1000'
+                    ]);
+
+                    assert.equal(result.status, 0);
+                    const body = JSON.parse(result.stdout);
+                    const mode = body.request_modes.modes['images-sse'];
+                    assert.equal(mode.saved_image.ok, true);
+                    assert.equal(mode.saved_image.path, outputPath);
+                    assert.equal(mode.saved_image.byte_length, Buffer.from(FIXTURE_IMAGE_BASE64, 'base64').byteLength);
+                    assert.deepEqual(mode.saved_image.dimensions, { width: 1, height: 1 });
+                    assert.equal(mode.saved_image.source, 'b64_json');
+                    assert.equal(readFileSync(outputPath).toString('base64'), FIXTURE_IMAGE_BASE64);
+                    assert.equal(result.stdout.includes(FIXTURE_IMAGE_BASE64), false);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('does not save partial-only upstream SSE previews as final images', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'probe-upstream-partial-only-'));
+        const outputPath = join(tempRoot, 'probe.png');
+        try {
+            await withServer(
+                (request, response) => {
+                    if (request.url === '/v1/models') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }));
+                        return;
+                    }
+                    if (request.url === '/v1/images/generations') {
+                        response.writeHead(200, {
+                            'content-type': 'text/event-stream',
+                            'cache-control': 'no-cache',
+                            connection: 'keep-alive'
+                        });
+                        response.write(
+                            'event: image_generation.partial_image\n' +
+                                `data: {"type":"image_generation.partial_image","b64_json":"${FIXTURE_IMAGE_BASE64}"}\n\n`
+                        );
+                        response.end('data: [DONE]\n\n');
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync('probe-upstream-image.mjs', [
+                        '--base-url',
+                        `${baseUrl}/v1`,
+                        '--allow-billable',
+                        '--request-mode',
+                        'images-sse',
+                        '--save-first-image',
+                        outputPath,
+                        '--timeout-ms',
+                        '1000'
+                    ]);
+
+                    assert.equal(result.status, 1);
+                    const body = JSON.parse(result.stdout);
+                    const mode = body.request_modes.modes['images-sse'];
+                    assert.equal(mode.ok, false);
+                    assert.equal(mode.error, 'missing_final_image');
+                    assert.equal(mode.has_partial_image, true);
+                    assert.equal(mode.saved_image, undefined);
+                    assert.equal(existsSync(outputPath), false);
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
     });
 
     it('does not read prompt files during default generate dry-run', () => {
