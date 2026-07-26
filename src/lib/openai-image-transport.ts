@@ -1,6 +1,6 @@
 import type OpenAI from 'openai';
 import type { ClientOptions } from 'openai';
-import { fetch as undiciFetch, ProxyAgent } from 'undici';
+import { ProxyAgent } from 'undici';
 
 type ImageTransportEnv = Record<string, string | undefined>;
 
@@ -80,10 +80,8 @@ export function fetchOpenAIUpstream(
     }
     const normalizedProxyUrl = normalizeUpstreamProxyUrl(upstreamProxyUrl, UPSTREAM_PROXY_URL_ENV);
     const dispatcher = getUpstreamProxyDispatcher(normalizedProxyUrl);
-    return undiciFetch(
-        input as Parameters<typeof undiciFetch>[0],
-        { ...(init || {}), dispatcher } as Parameters<typeof undiciFetch>[1]
-    ) as unknown as Promise<Response>;
+    // Use Node's native fetch so OpenAI SDK multipart uploads retain native FormData encoding.
+    return fetch(input, { ...(init || {}), dispatcher } as Parameters<typeof fetch>[1]);
 }
 
 export function buildOpenAIImageRequestOptions(

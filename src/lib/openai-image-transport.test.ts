@@ -158,7 +158,52 @@ describe('openai image transport settings', () => {
             await upstream.close();
         }
     });
+
+    it('routes SDK image edits with multipart uploads through an HTTP proxy', async () => {
+        let receivedContentType = '';
+        let receivedBody = '';
+        const upstream = await startHttpServer(async (request, response) => {
+            receivedContentType = String(request.headers['content-type'] || '');
+            receivedBody = await readRequestBody(request);
+            response.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' });
+            response.end(JSON.stringify({ created: 0, data: [{ b64_json: 'aGVsbG8=' }] }));
+        });
+        const proxy = await startHttpConnectProxy();
+
+        try {
+            const client = new OpenAI(
+                createOpenAIImageClientOptions({
+                    apiKey: 'sk-proxy-test',
+                    baseURL: `${upstream.baseUrl}/v1`,
+                    upstreamProxyUrl: proxy.url,
+                    defaultHeaders: { Connection: 'close' }
+                })
+            );
+            const image = new File([Buffer.from('image')], 'input.png', { type: 'image/png' });
+
+            await client.images.edit({
+                image,
+                model: 'gpt-image-2',
+                prompt: 'proxy multipart regression test'
+            });
+
+            assert.match(receivedContentType, /^multipart\/form-data; boundary=/);
+            assert.match(receivedBody, /name="image"; filename="input\.png"/);
+            assert.match(receivedBody, /name="prompt"/);
+            assert.equal(proxy.connectTargets.length, 1);
+            assert.equal(proxy.connectTargets[0], upstream.origin);
+        } finally {
+            await proxy.close();
+            await upstream.close();
+        }
+    });
 });
+
+async function readRequestBody(request: http.IncomingMessage): Promise<string> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    return Buffer.concat(chunks).toString('utf8');
+}
 
 async function startHttpServer(
     handler: (request: http.IncomingMessage, response: http.ServerResponse) => void
