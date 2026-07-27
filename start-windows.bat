@@ -2,11 +2,11 @@
 setlocal
 
 cd /d "%~dp0"
-title GPT Image Playground Launcher
+title Visual Journal Launcher
 
 echo.
 echo ========================================
-echo GPT Image Playground Launcher
+echo Visual Journal Launcher
 echo ========================================
 echo.
 

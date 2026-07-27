@@ -2,11 +2,11 @@
 setlocal
 
 cd /d "%~dp0"
-title GPT Image Playground Customer Package
+title Visual Journal Customer Package
 
 echo.
 echo ========================================
-echo GPT Image Playground Customer Package
+echo Visual Journal Customer Package
 echo ========================================
 echo.
 

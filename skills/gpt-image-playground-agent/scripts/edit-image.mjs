@@ -362,7 +362,7 @@ async function readCapabilities() {
         });
     } catch (error) {
         const message = errorMessage(error);
-        throw new Error(`无法连接 GPT Image Playground：${baseUrl}。${message}`);
+        throw new Error(`无法连接图像手记（Visual Journal）：${baseUrl}。${message}`);
     }
     if (!response.ok) {
         const body = await response.text();

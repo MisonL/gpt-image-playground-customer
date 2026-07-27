@@ -1,4 +1,4 @@
-# GPT Image Playground Agent API 参考
+# 图像手记（Visual Journal）Agent API 参考
 
 Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平台。
 

@@ -3,16 +3,18 @@ sdk: docker
 app_port: 4783
 ---
 
-# GPT Image Playground
+# 图像手记 / Visual Journal
 
 ![Version](https://img.shields.io/badge/version-2.2.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.15.0-339933)
 
-本地优先的 AI 图片创作工作台，支持 `gpt-image-2` 与 OpenAI 兼容图片接口。提供文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪、多渠道路由和 Agent API。
+图像手记（Visual Journal）是本地优先的 AI 图片创作工作台，支持 `gpt-image-2` 与 OpenAI 兼容图片接口。提供文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪、多渠道路由和 Agent API。
+
+对外产品名称为“图像手记 / Visual Journal”。为保持已有部署和自动化客户端兼容，仓库包名、Docker 服务、HF Space slug、环境变量、API 路径和 Skill 标识继续使用 `gpt-image-playground` 相关技术名称。
 
 <p align="center">
-  <img src="./readme-images/interface.jpg" alt="GPT Image Playground 主界面" width="900"/>
+  <img src="./readme-images/interface.jpg" alt="图像手记主界面" width="900"/>
 </p>
 
 ## 快速开始

@@ -6,7 +6,7 @@ cd "$SCRIPT_DIR"
 
 echo
 echo "========================================"
-echo "GPT Image Playground Launcher"
+echo "Visual Journal Launcher"
 echo "========================================"
 echo
 

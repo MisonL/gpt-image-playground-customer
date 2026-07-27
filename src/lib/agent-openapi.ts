@@ -74,7 +74,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
     return {
         openapi: '3.1.0',
         info: {
-            title: 'GPT Image Playground Agent API',
+            title: 'Visual Journal Agent API',
             version: capabilities.api_version
         },
         servers: [{ url: readAgentPublicBaseUrl(env) }],
