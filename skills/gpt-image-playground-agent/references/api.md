@@ -189,7 +189,7 @@ node "<skill-root>/scripts/batch-images.mjs" --allow-billable --input tasks.json
 - `--request-mode` / `--request-modes`
 - `--allow-billable`
 
-上游探针默认只做非计费 `/models` 检查。添加 `--allow-billable` 后才会按 `--request-mode` 真实请求图片路径；可选值为 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`，也支持别名 `images-json`、`images-sse`、`responses-json`、`responses-sse` 和 `all`。探测 Responses 路径时必须提供 `--responses-model` 或配置 `OPENAI_RESPONSES_API_MODEL`，它是 `/responses` 顶层模型，不是图片模型。`request_modes.passed` 和 `request_modes.suggested_channel_config` 只是管理员写入 `OPENAI_CHANNEL_N_REQUEST_MODES` 的候选值；远程 URL-only、pending/poll_url、失败或未实测的 mode 不应写入。写入白名单后，默认按费用更少优先选择 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`；只有实测证明需要改变顺序时，才写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 或全局 `OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`。上游探针默认使用 `User-Agent: gpt-image-playground/probe`，可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖；输出的 `summary.request_headers` 只暴露脱敏摘要。
+上游探针默认只做非计费 `/models` 检查。添加 `--allow-billable` 后才会按 `--request-mode` 真实请求图片路径；可选值为 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`，也支持别名 `images-json`、`images-sse`、`responses-json`、`responses-sse` 和 `all`。探测 Responses 路径时必须提供 `--responses-model` 或配置 `OPENAI_RESPONSES_API_MODEL`，它是 `/responses` 顶层模型，不是图片模型。`request_modes.passed` 和 `request_modes.suggested_channel_config` 只是管理员写入 `OPENAI_CHANNEL_N_REQUEST_MODES` 的候选值；远程 URL-only、pending/poll_url、失败或未实测的 mode 不应写入。写入白名单后，默认按费用更少优先选择 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`；只有实测证明需要改变顺序时，才写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 或全局 `OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`。上游探针默认使用 `User-Agent: visual-journal/probe`，可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖；输出的 `summary.request_headers` 只暴露脱敏摘要。
 
 上游探针读取 `GPT_IMAGE_UPSTREAM_BASE_URL` 或 `OPENAI_API_BASE_URL` 作为上游地址，读取 `GPT_IMAGE_UPSTREAM_API_KEY` 或 `OPENAI_API_KEY` 作为上游鉴权。base URL 必须是无凭据、无查询参数和无片段的 `http`/`https` 绝对 URL。输出不会包含 key，也不会输出完整 base64。
 
@@ -284,7 +284,7 @@ GET /api/agent/capabilities
 
 普通 generate 默认使用 `orchestration.endpoint`，不是客户端直接选择 job endpoint。`agent_jobs.supported=true` 且 `mode=job_polling` 表示服务端编排和显式 `--job` 诊断路径可使用同一套 job 状态机。高分辨率 edit 和复杂 UI 批量生产仍按页面/批量规则使用页面端 `/api/images` SSE；页面流式有问题时，先诊断再显式选择 Agent JSON、Agent edit 或 job 路径。当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。
 
-上游请求头策略由服务端统一执行。默认 `User-Agent` 是 `gpt-image-playground/<package-version>`；可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖全局 UA，也可用 `OPENAI_CHANNEL_N_USER_AGENT` 和 `OPENAI_CHANNEL_N_UPSTREAM_HEADERS_JSON` 覆盖单渠道安全 header。`Authorization`、`Accept`、`Content-Type`、`Content-Length` 和 `Host` 等协议头不可由 extra headers 覆盖；固定业务头和鉴权头始终由调用路径设置。
+上游请求头策略由服务端统一执行。默认 `User-Agent` 是 `visual-journal/<package-version>`；可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖全局 UA，也可用 `OPENAI_CHANNEL_N_USER_AGENT` 和 `OPENAI_CHANNEL_N_UPSTREAM_HEADERS_JSON` 覆盖单渠道安全 header。`Authorization`、`Accept`、`Content-Type`、`Content-Length` 和 `Host` 等协议头不可由 extra headers 覆盖；固定业务头和鉴权头始终由调用路径设置。
 
 上游代理同样由服务端统一执行：`OPENAI_UPSTREAM_PROXY_URL` 为全局默认值，`OPENAI_CHANNEL_N_PROXY_URL` 可覆盖单个渠道。它们只接受无认证、无路径、无查询参数和无片段的 `http://` 或 `https://` 根代理地址，不支持 SOCKS；配置变更需重启或重新部署服务。代理适用于服务端上游 API、SSE、同源结果图下载、渠道恢复探测和 new-api 用量日志，不影响 Agent 客户端到 Playground 的连接。
 
@@ -424,7 +424,7 @@ Agent JSON 生成端点对外始终返回最终 JSON，不会对客户端返回 
         "selected_channel_id": "default",
         "upstream_host": "api.example.test",
         "request_headers": {
-            "user_agent_effective": "gpt-image-playground/2.2.0",
+            "user_agent_effective": "visual-journal/2.2.0",
             "has_extra_headers": false,
             "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
             "configured_header_names": []
@@ -668,7 +668,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
                 "transport": "agent_json",
                 "endpoint": "/api/agent/images/generate",
                 "request_headers": {
-                    "user_agent_effective": "gpt-image-playground/2.2.0",
+                    "user_agent_effective": "visual-journal/2.2.0",
                     "has_extra_headers": false,
                     "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
                     "configured_header_names": []

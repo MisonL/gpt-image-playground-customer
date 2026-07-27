@@ -217,7 +217,7 @@ describe('Agent route integration', () => {
                 request_modes: ['images-non-stream', 'images-sse'],
                 request_mode_priority: ['images-sse', 'images-non-stream'],
                 request_headers: {
-                    user_agent_effective: 'gpt-image-playground/2.2.0',
+                    user_agent_effective: 'visual-journal/2.2.0',
                     has_extra_headers: false,
                     allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
                     configured_header_names: []
@@ -502,7 +502,7 @@ describe('Agent route integration', () => {
                 upstream_host: new URL(upstream.baseUrl).host
             });
             assert.equal(firstBody.execution.upstream_host, new URL(upstream.baseUrl).host);
-            assert.equal(firstBody.execution.request_headers.user_agent_effective, 'gpt-image-playground/2.2.0');
+            assert.equal(firstBody.execution.request_headers.user_agent_effective, 'visual-journal/2.2.0');
             assert.equal(firstBody.execution.request_headers.has_extra_headers, false);
             assert.equal(typeof firstBody.timing.elapsed_ms, 'number');
             assert.equal(firstBody.timing.elapsed_ms >= 0, true);

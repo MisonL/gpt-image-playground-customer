@@ -19,7 +19,7 @@ import { readImageDimensions } from './lib/image-dimensions.mjs';
 import { completeScriptTiming, startScriptTiming } from './lib/script-summary.mjs';
 
 const HEADER_ALLOWLIST = new Set(['content-type', 'date', 'server', 'cf-ray', 'x-request-id', 'retry-after']);
-const DEFAULT_USER_AGENT = 'gpt-image-playground/probe';
+const DEFAULT_USER_AGENT = 'visual-journal/probe';
 const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
 const DEFAULT_OUTPUT_FORMAT = 'webp';
 const DEFAULT_OUTPUT_COMPRESSION = 100;

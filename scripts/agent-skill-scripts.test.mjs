@@ -508,11 +508,11 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.summary.billable, false);
                 assert.equal(body.summary.transport, 'upstream_probe');
                 assert.equal(body.summary.endpoint.endsWith('/v1/models'), true);
-                assert.equal(body.summary.request_headers.user_agent_effective, 'gpt-image-playground/probe');
+                assert.equal(body.summary.request_headers.user_agent_effective, 'visual-journal/probe');
                 assert.equal(body.summary.request_headers.has_extra_headers, false);
                 assert.deepEqual(body.summary.request_headers.allowed_header_names, ['authorization', 'user-agent']);
                 assert.deepEqual(body.summary.request_headers.configured_header_names, []);
-                assert.equal(userAgent, 'gpt-image-playground/probe');
+                assert.equal(userAgent, 'visual-journal/probe');
             }
         );
     });
@@ -8136,7 +8136,7 @@ describe('Agent skill script argument validation', () => {
                                         transport: 'agent_json',
                                         endpoint: '/api/agent/images/generate',
                                         request_headers: {
-                                            user_agent_effective: 'gpt-image-playground/2.2.0',
+                                            user_agent_effective: 'visual-journal/2.2.0',
                                             has_extra_headers: false
                                         }
                                     }
@@ -8197,7 +8197,7 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.agent_requests[0].diagnostics.response.timing.elapsed_ms, 61234);
                 assert.equal(
                     body.agent_requests[0].diagnostics.response.execution.request_headers.user_agent_effective,
-                    'gpt-image-playground/2.2.0'
+                    'visual-journal/2.2.0'
                 );
                 assert.equal(body.agent_requests[1].lookup.type, 'idempotency_key');
                 assert.equal(body.agent_requests[1].diagnostics.error.diagnostics.transport_error_kind, 'dns');

@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 const DEFAULT_HEADER_SUMMARY = {
-    user_agent_effective: 'gpt-image-playground/2.2.0',
+    user_agent_effective: 'visual-journal/2.2.0',
     has_extra_headers: false,
     allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
     configured_header_names: []
@@ -356,13 +356,13 @@ describe('getChannelPoolSummary', () => {
             OPENAI_CHANNEL_1_ID: 'example-provider',
             OPENAI_CHANNEL_1_BASE_URL: 'https://provider.example.invalid/v1',
             OPENAI_CHANNEL_1_API_KEYS: 'sk-one',
-            OPENAI_CHANNEL_1_USER_AGENT: 'gpt-image-playground/customer-node'
+            OPENAI_CHANNEL_1_USER_AGENT: 'visual-journal/customer-node'
         });
 
-        assert.equal(config.credentials[0]?.upstreamHeaders?.['User-Agent'], 'gpt-image-playground/customer-node');
+        assert.equal(config.credentials[0]?.upstreamHeaders?.['User-Agent'], 'visual-journal/customer-node');
         assert.deepEqual(getChannelPoolSummary(config).channels[0]?.requestHeaders, {
             ...DEFAULT_HEADER_SUMMARY,
-            user_agent_effective: 'gpt-image-playground/customer-node',
+            user_agent_effective: 'visual-journal/customer-node',
             configured_header_names: ['user-agent']
         });
         assert.equal(JSON.stringify(getChannelPoolSummary(config)).includes('sk-one'), false);

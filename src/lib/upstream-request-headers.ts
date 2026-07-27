@@ -9,7 +9,7 @@ export type UpstreamRequestHeaderSummary = {
     configured_header_names: string[];
 };
 
-const DEFAULT_PRODUCT_USER_AGENT = `gpt-image-playground/${packageJson.version}`;
+const DEFAULT_PRODUCT_USER_AGENT = `visual-journal/${packageJson.version}`;
 const CONFIGURABLE_HEADER_BLOCKLIST = new Set([
     'authorization',
     'accept',
