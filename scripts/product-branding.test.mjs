@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { GIT_DEPLOY_AUTHOR_EMAIL, GIT_DEPLOY_AUTHOR_NAME } from './deploy-hf-space.mjs';
+import { FORMAL_PRODUCT_NAME } from './status.mjs';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -39,5 +40,13 @@ describe('product branding', () => {
         assert.match(keepalive, /'User-Agent': KEEPALIVE_USER_AGENT/);
         assert.equal(GIT_DEPLOY_AUTHOR_NAME, 'Visual Journal deploy');
         assert.equal(GIT_DEPLOY_AUTHOR_EMAIL, 'deploy@visual-journal.local');
+    });
+
+    it('uses the formal product name in operational status while retaining the package identifier', () => {
+        const status = readRepositoryText('scripts/status.mjs');
+
+        assert.equal(FORMAL_PRODUCT_NAME, '图像手记 / Visual Journal');
+        assert.match(status, /product: FORMAL_PRODUCT_NAME,/);
+        assert.match(status, /package_name: packageJson\.name,/);
     });
 });

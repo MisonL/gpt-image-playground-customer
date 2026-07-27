@@ -9,6 +9,7 @@ import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_ADMIN_CONTROL } from '../sr
 
 const REMOTE_STATUS_TIMEOUT_MS = 30_000;
 const LOCAL_ENDPOINT_TIMEOUT_MS = 500;
+export const FORMAL_PRODUCT_NAME = '图像手记 / Visual Journal';
 const IMAGE_UPSTREAM_REAL_SMOKE_CASES = [
     { id: 'original-images-json', prefix: 'IMAGE_REAL_SMOKE_ORIGINAL', requestMode: 'images-non-stream' },
     { id: 'gaoren-images-sse', prefix: 'IMAGE_REAL_SMOKE_GAOREN', requestMode: 'images-sse' },
@@ -326,7 +327,8 @@ async function buildLocalStatus() {
     const statusEnv = readStatusEnvFromFiles(process.env);
     const imageUpstreamRealSmoke = buildImageUpstreamRealSmokeStatus(statusEnv);
     return {
-        product: packageJson.name,
+        product: FORMAL_PRODUCT_NAME,
+        package_name: packageJson.name,
         version: packageJson.version,
         branch,
         head,
