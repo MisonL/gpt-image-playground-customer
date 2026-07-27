@@ -1,4 +1,6 @@
 ---
+title: 图像手记 / Visual Journal
+short_description: 本地优先的 AI 图片创作工作台
 sdk: docker
 app_port: 4783
 ---
@@ -136,7 +138,7 @@ OPENAI_CHANNEL_2_REQUEST_MODES=images-non-stream
 GIP_BIND_HOST=0.0.0.0 npm run deploy:local
 ```
 
-文件系统图片保存在 `generated-images/`。自动清理、永久保留和 Agent artifact 生命周期配置见 [.env.example](./.env.example)。
+文件系统图片保存在 `generated-images/`。若 `.env.local` 将 `WEBUI_IMAGE_AUTO_CLEANUP_ENABLED` 设为 `1`、`true`、`yes` 或 `on`，部署脚本会先拒绝运行，避免服务启动后立即清理历史图片；确认可以执行时显式添加 `--allow-image-auto-cleanup`。自动清理、永久保留和 Agent artifact 生命周期配置见 [.env.example](./.env.example)。
 
 ### Hugging Face Space
 

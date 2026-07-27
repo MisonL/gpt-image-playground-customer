@@ -3201,7 +3201,7 @@ export default function HomePage() {
                 const url = URL.createObjectURL(zipBlob);
                 const link = document.createElement('a');
                 link.href = url;
-                link.download = `gpt-image-history-${item.timestamp}.zip`;
+                link.download = `visual-journal-history-${item.timestamp}.zip`;
                 document.body.appendChild(link);
                 link.click();
                 link.remove();

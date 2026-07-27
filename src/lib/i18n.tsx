@@ -481,7 +481,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'password.required': '需要访问码',
         'password.initialDescription': '设置用于访问页面的访问码。',
         'password.retryDescription': '服务器要求访问码，或上一次访问码不正确。请输入访问码后继续。',
-        'password.entryDescription': '请输入访问码以使用 GPT Image 生成服务。',
+        'password.entryDescription': '请输入访问码以使用图像手记服务。',
         'password.unlock': '解锁',
         'password.placeholder': '输入访问码',
         'password.empty': '访问码不能为空。',
@@ -1039,7 +1039,7 @@ const messages: Record<Locale, Record<string, string>> = {
         'password.initialDescription': 'Set the access code used to open this page.',
         'password.retryDescription':
             'The server requires an access code, or the previous one was incorrect. Please enter it to continue.',
-        'password.entryDescription': 'Enter the access code to use the GPT Image generation service.',
+        'password.entryDescription': 'Enter the access code to use Visual Journal.',
         'password.unlock': 'Unlock',
         'password.placeholder': 'Enter access code',
         'password.empty': 'Access code cannot be empty.',

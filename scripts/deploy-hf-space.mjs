@@ -16,8 +16,8 @@ const DEPLOY_MARKER_REPO_PATH = 'public/hf-space-deploy-marker.json';
 const DEPLOY_MARKER_API_ROUTE_PATH = 'src/app/api/deploy-marker/route.ts';
 const DEPLOY_MARKER_SERVICE_PATH = '/api/deploy-marker';
 const HF_SPACE_GIT_REMOTE_URL = `https://huggingface.co/spaces/${HF_SPACE_ID}`;
-const GIT_DEPLOY_AUTHOR_NAME = 'gpt-image-playground deploy';
-const GIT_DEPLOY_AUTHOR_EMAIL = 'deploy@localhost';
+export const GIT_DEPLOY_AUTHOR_NAME = 'Visual Journal deploy';
+export const GIT_DEPLOY_AUTHOR_EMAIL = 'deploy@visual-journal.local';
 export const GIT_ARCHIVE_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
 const SPACE_DEPLOY_EXCLUDED_PATH_PREFIXES = ['readme-images/'];
 
