@@ -18,19 +18,23 @@ RUN npm run build
 FROM node:26-alpine AS runner
 WORKDIR /app
 ARG NEXT_PUBLIC_IMAGE_STORAGE_MODE=fs
+ARG VCS_REF=unknown
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_PUBLIC_IMAGE_STORAGE_MODE=${NEXT_PUBLIC_IMAGE_STORAGE_MODE}
 ENV PORT=4783
 ENV HOSTNAME=0.0.0.0
+LABEL org.opencontainers.image.revision=$VCS_REF
 
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/node_modules/next/dist/compiled/next-server ./node_modules/next/dist/compiled/next-server
+COPY --from=builder --chown=node:node /app/scripts/docker-entrypoint.mjs ./scripts/docker-entrypoint.mjs
 
 RUN mkdir -p /app/generated-images && chown node:node /app/generated-images
 USER node
 
 EXPOSE 4783
-CMD ["node", "server.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["node", "-e", "const port = process.env.PORT || '4783'; fetch(`http://127.0.0.1:${port}/api/auth-status`, { signal: AbortSignal.timeout(4000) }).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));"]
+CMD ["node", "scripts/docker-entrypoint.mjs"]

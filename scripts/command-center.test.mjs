@@ -7,7 +7,17 @@ import {
     summarizeDockerMounts
 } from './cleanup-docker-fixtures.mjs';
 import { fetchJsonWithTimeout, parseJsonPayload, pickFailureOutput, runCommand } from './command-center-utils.mjs';
-import { assertLocalProbeMatchesMode, buildDockerComposeArgs, buildDockerComposeEnv } from './deploy-local.mjs';
+import {
+    assertDeploymentImageIdentity,
+    assertLocalProbeMatchesMode,
+    buildDeploymentImageReference,
+    buildDeploymentImageTag,
+    buildDockerComposeArgs,
+    buildDockerComposeEnv,
+    buildLocalBaseUrl,
+    parsePublishedContainerPortBindings,
+    waitForLocalEndpoints
+} from './deploy-local.mjs';
 import { buildFirstRunReport, formatFirstRunText } from './first-run.mjs';
 import {
     buildAdminCommands,
@@ -449,7 +459,19 @@ describe('Command center scripts', () => {
     });
 
     it('builds deterministic local deploy compose arguments', () => {
-        assert.deepEqual(buildDockerComposeArgs(), ['compose', '-f', 'docker-compose.yml', 'up', '-d', '--build']);
+        assert.deepEqual(buildDockerComposeArgs(), [
+            'compose',
+            '-f',
+            'docker-compose.yml',
+            'up',
+            '-d',
+            '--build',
+            '--force-recreate',
+            '--remove-orphans',
+            '--wait',
+            '--wait-timeout',
+            '120'
+        ]);
         assert.deepEqual(buildDockerComposeArgs({ memory: true }), [
             'compose',
             '-f',
@@ -458,8 +480,29 @@ describe('Command center scripts', () => {
             'docker-compose.memory.yml',
             'up',
             '-d',
-            '--build'
+            '--build',
+            '--force-recreate',
+            '--remove-orphans',
+            '--wait',
+            '--wait-timeout',
+            '120'
         ]);
+        assert.deepEqual(buildDockerComposeArgs({ postgres: true }), [
+            'compose',
+            '-f',
+            'docker-compose.yml',
+            '-f',
+            'docker-compose.postgres.yml',
+            'up',
+            '-d',
+            '--build',
+            '--force-recreate',
+            '--remove-orphans',
+            '--wait',
+            '--wait-timeout',
+            '120'
+        ]);
+        assert.throws(() => buildDockerComposeArgs({ memory: true, postgres: true }), /不能同时使用/);
     });
 
     it('uses plain compose progress for diagnosable local deploy output', () => {
@@ -467,6 +510,109 @@ describe('Command center scripts', () => {
             PATH: '/bin',
             COMPOSE_PROGRESS: 'plain'
         });
+        assert.deepEqual(
+            buildDockerComposeEnv(
+                { PATH: '/bin' },
+                {
+                    revision: '0123456789abcdef0123456789abcdef01234567',
+                    imageTag: 'local-0123456789abcdef0123456789abcdef01234567'
+                }
+            ),
+            {
+                PATH: '/bin',
+                COMPOSE_PROGRESS: 'plain',
+                GIP_IMAGE_REVISION: '0123456789abcdef0123456789abcdef01234567',
+                GIP_IMAGE_TAG: 'local-0123456789abcdef0123456789abcdef01234567'
+            }
+        );
+    });
+
+    it('uses immutable full-revision Docker image tags for deploys', () => {
+        const revision = '0123456789abcdef0123456789abcdef01234567';
+        assert.equal(buildDeploymentImageTag(revision), `local-${revision}`);
+        assert.equal(buildDeploymentImageReference(revision), `gpt-image-playground-customer:local-${revision}`);
+        assert.throws(() => buildDeploymentImageTag('0123456'), /40/);
+        assert.throws(() => buildDeploymentImageTag('z'.repeat(40)), /40/);
+    });
+
+    it('builds local probe URLs from the published container port mapping', () => {
+        assert.equal(buildLocalBaseUrl('127.0.0.1', '4783'), 'http://127.0.0.1:4783');
+        assert.equal(buildLocalBaseUrl('0.0.0.0', '4784'), 'http://127.0.0.1:4784');
+        assert.equal(buildLocalBaseUrl('::1', '4783'), 'http://[::1]:4783');
+        assert.deepEqual(parsePublishedContainerPortBindings('[{"HostIp":"127.0.0.1","HostPort":"4783"}]'), {
+            bindHost: '127.0.0.1',
+            hostPort: '4783',
+            baseUrl: 'http://127.0.0.1:4783'
+        });
+        assert.deepEqual(
+            parsePublishedContainerPortBindings('[{"HostIp":"::","HostPort":"4784"},{"HostIp":"0.0.0.0","HostPort":"4784"}]'),
+            {
+                bindHost: '0.0.0.0',
+                hostPort: '4784',
+                baseUrl: 'http://127.0.0.1:4784'
+            }
+        );
+        assert.throws(() => buildLocalBaseUrl('127.0.0.1', '0'), /1 到 65535/);
+        assert.throws(() => parsePublishedContainerPortBindings('not-json'), /端口映射/);
+        assert.throws(() => parsePublishedContainerPortBindings('null'), /未发布/);
+    });
+
+    it('waits only between failed local endpoint probe attempts', async () => {
+        let requestCount = 0;
+        let sleepCount = 0;
+
+        await assert.rejects(
+            waitForLocalEndpoints('http://127.0.0.1:4783', {
+                attempts: 2,
+                intervalMs: 2000,
+                fetchJson: async () => {
+                    requestCount += 1;
+                    throw new Error('container not ready');
+                },
+                sleep: async () => {
+                    sleepCount += 1;
+                }
+            }),
+            /container not ready/
+        );
+
+        assert.equal(requestCount, 2);
+        assert.equal(sleepCount, 1);
+    });
+
+    it('requires the running Docker image and revision label to match the deployed revision', () => {
+        const deployment = {
+            revision: '0123456789abcdef0123456789abcdef01234567',
+            imageTag: 'local-0123456789abcdef0123456789abcdef01234567'
+        };
+        assert.doesNotThrow(() =>
+            assertDeploymentImageIdentity(
+                {
+                    image: 'gpt-image-playground-customer:local-0123456789abcdef0123456789abcdef01234567',
+                    revision: deployment.revision
+                },
+                deployment
+            )
+        );
+        assert.throws(
+            () =>
+                assertDeploymentImageIdentity(
+                    { image: 'gpt-image-playground-customer:local', revision: deployment.revision },
+                    deployment
+                ),
+            /镜像不匹配/
+        );
+        assert.throws(
+            () =>
+                assertDeploymentImageIdentity(
+                    {
+                        image: 'gpt-image-playground-customer:local-0123456789abcdef0123456789abcdef01234567',
+                        revision: 'different'
+                    },
+                    deployment
+                ),
+            /revision 不匹配/
+        );
     });
 
     it('detects only the legacy fixture whole-repository Docker mount', () => {
@@ -540,14 +686,33 @@ describe('Command center scripts', () => {
         assert.equal(buildSkippedReport('custom', container.Mounts).removed, false);
     });
 
-    it('fails local memory deploy probes when the overlay did not take effect', () => {
+    it('requires local deploy probes to match the selected state and storage backend', () => {
         assert.doesNotThrow(() => assertLocalProbeMatchesMode({ stateBackend: 'sqlite', imageStorageMode: 'fs' }));
+        assert.throws(
+            () => assertLocalProbeMatchesMode({ stateBackend: 'memory', imageStorageMode: 'indexeddb' }),
+            /SQLite deployment mode did not take effect/
+        );
         assert.doesNotThrow(() =>
             assertLocalProbeMatchesMode({ stateBackend: 'memory', imageStorageMode: 'indexeddb' }, { memory: true })
         );
         assert.throws(
             () => assertLocalProbeMatchesMode({ stateBackend: 'sqlite', imageStorageMode: 'fs' }, { memory: true }),
-            /Memory overlay did not take effect/
+            /Memory deployment mode did not take effect/
+        );
+        assert.doesNotThrow(() =>
+            assertLocalProbeMatchesMode({ stateBackend: 'postgres', imageStorageMode: 'fs' }, { postgres: true })
+        );
+        assert.throws(
+            () => assertLocalProbeMatchesMode({ stateBackend: 'sqlite', imageStorageMode: 'fs' }, { postgres: true }),
+            /PostgreSQL deployment mode did not take effect/
+        );
+        assert.throws(
+            () =>
+                assertLocalProbeMatchesMode(
+                    { stateBackend: 'memory', imageStorageMode: 'indexeddb' },
+                    { memory: true, postgres: true }
+                ),
+            /不能同时使用/
         );
     });
 

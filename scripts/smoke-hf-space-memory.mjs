@@ -5,7 +5,11 @@ import { readPositiveIntegerEnv } from './env-utils.mjs';
 
 const imageName = process.env.HF_SPACE_SMOKE_IMAGE || 'gpt-image-playground:hf-space-memory-smoke';
 const containerName = process.env.HF_SPACE_SMOKE_CONTAINER || 'gpt-image-playground-hf-space-smoke';
-const hostPort = process.env.HF_SPACE_SMOKE_PORT || '4785';
+const parsedHostPort = readPositiveIntegerEnv('HF_SPACE_SMOKE_PORT', 4785);
+if (parsedHostPort > 65_535) {
+  throw new Error('HF_SPACE_SMOKE_PORT must be less than or equal to 65535');
+}
+const hostPort = String(parsedHostPort);
 const token = process.env.HF_SPACE_SMOKE_AGENT_TOKEN || 'hf-space-smoke-token';
 const baseUrl = `http://127.0.0.1:${hostPort}`;
 const readyTimeoutMs = readPositiveIntegerEnv('HF_SPACE_SMOKE_READY_TIMEOUT_MS', 45_000);
@@ -16,6 +20,9 @@ function run(command, args, options = {}) {
     encoding: 'utf8',
     env: { ...process.env, ...(options.env || {}) }
   });
+  if (result.error) {
+    throw new Error(`${command} ${args.join(' ')} failed to start: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
     throw new Error(`${command} ${args.join(' ')} failed${output ? `\n${output}` : ''}`);
@@ -93,7 +100,7 @@ try {
     '--name',
     containerName,
     '-p',
-    `${hostPort}:4783`,
+    `127.0.0.1:${hostPort}:4783`,
     '-e',
     'AGENT_STATE_BACKEND=memory',
     '-e',

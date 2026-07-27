@@ -344,6 +344,93 @@ describe('HF Space deploy script', () => {
         });
     });
 
+    it('does not sleep after the final transient management status error before verifying the marker', async () => {
+        const marker = buildDeployMarker(
+            '7777777777777777777777777777777777777777',
+            new Date('2026-06-20T14:00:00.000Z'),
+            'deploy-777'
+        );
+        let sleepCount = 0;
+
+        const runtime = await waitForRunning('cccccccccccccccccccccccccccccccccccccccc', marker, {
+            attempts: 1,
+            intervalMs: 10_000,
+            readInfo: () => {
+                throw new Error('httpx.ReadTimeout: timed out while reading Space status');
+            },
+            verifyMarker: async (expected) => assertDeployMarkerMatches(marker, expected),
+            sleep: async () => {
+                sleepCount += 1;
+            },
+            log: () => {}
+        });
+
+        assert.equal(sleepCount, 0);
+        assert.deepEqual(runtime, {
+            stage: 'unknown',
+            sha: 'unknown',
+            management_status: 'target_commit_not_confirmed',
+            verification_source: 'service_marker_after_management_timeout',
+            service_marker_verified: true,
+            warning:
+                'Hugging Face management status did not confirm RUNNING for cccccccccccccccccccccccccccccccccccccccc, but the public service returned the exact one-time deploy marker; last stage=unknown sha=unknown marker_error=unknown management_error=httpx.ReadTimeout: timed out while reading Space status',
+            marker
+        });
+    });
+
+    it('accepts an exact one-time service marker when management status remains stale', async () => {
+        const marker = buildDeployMarker(
+            '8888888888888888888888888888888888888888',
+            new Date('2026-06-20T15:00:00.000Z'),
+            'deploy-888'
+        );
+        let sleepCount = 0;
+
+        const runtime = await waitForRunning('dddddddddddddddddddddddddddddddddddddddd', marker, {
+            attempts: 1,
+            intervalMs: 0,
+            readInfo: () => ({ runtime: { stage: 'RUNNING' }, sha: 'stale-space-sha' }),
+            verifyMarker: async (expected) => assertDeployMarkerMatches(marker, expected),
+            sleep: async () => {
+                sleepCount += 1;
+            },
+            log: () => {}
+        });
+
+        assert.equal(sleepCount, 0);
+        assert.deepEqual(runtime, {
+            stage: 'RUNNING',
+            sha: 'stale-space-sha',
+            management_status: 'target_commit_not_confirmed',
+            verification_source: 'service_marker_after_management_timeout',
+            service_marker_verified: true,
+            warning:
+                'Hugging Face management status did not confirm RUNNING for dddddddddddddddddddddddddddddddddddddddd, but the public service returned the exact one-time deploy marker; last stage=RUNNING sha=stale-space-sha marker_error=unknown management_error=none',
+            marker
+        });
+    });
+
+    it('rejects a stale service marker after management status times out', async () => {
+        const marker = buildDeployMarker(
+            '9999999999999999999999999999999999999999',
+            new Date('2026-06-20T16:00:00.000Z'),
+            'deploy-999'
+        );
+        const staleMarker = { ...marker, deploy_id: 'deploy-stale' };
+
+        await assert.rejects(
+            waitForRunning('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', marker, {
+                attempts: 1,
+                intervalMs: 0,
+                readInfo: () => ({ runtime: { stage: 'RUNNING' }, sha: 'stale-space-sha' }),
+                verifyMarker: async (expected) => assertDeployMarkerMatches(staleMarker, expected),
+                sleep: async () => {},
+                log: () => {}
+            }),
+            /deploy_id mismatch/
+        );
+    });
+
     it('only classifies transient Hugging Face management transport errors as retryable', () => {
         assert.equal(
             isRetryableSpaceInfoReadError(

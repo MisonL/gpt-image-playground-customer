@@ -141,7 +141,7 @@ Authorization: Bearer <token>
 - `npm run status`：只读查看 git、Space 目标、Agent API、Skill 入口和独立真实图片上游 smoke 配置摘要；会自动读取 `.env.real-smoke.local`，不输出 URL 或 API Key。
 - `npm run doctor`：统一诊断本机与 HF Space 配置，不写 Secret。
 - `npm run verify`：运行提交前基线；需要真实 PostgreSQL gate 时加 `-- --postgres`。
-- `npm run deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `-- --memory` 会断言 memory/indexeddb overlay 生效。
+- `npm run deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `-- --memory` 会断言 memory/indexeddb overlay 生效，加 `-- --postgres` 会断言 postgres/fs overlay 生效。PostgreSQL 模式要求在运行环境或 Compose `.env` 中提供 `GPT_IMAGE_POSTGRES_PASSWORD`。
 - `npm run deploy:space`：部署干净 git HEAD 到固定 Space，并做只读公网验证。
 - `npm run agent:doctor`：执行非计费分层诊断，覆盖 capabilities、Agent contract、runtime backend、state backend 和 Responses/GPT2Image readiness；支持 `-- --base-url <url>`；真实 1K/2K smoke 必须显式加 `-- --allow-billable`。
 

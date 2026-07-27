@@ -353,7 +353,7 @@ export async function waitForRunning(spaceCommitSha, deployMarker, options = {})
             lastManagementError = error instanceof Error ? error.message : String(error);
             if (!isRetryableSpaceInfoReadError(error)) throw error;
             log(`attempt=${attempt} management_status=unavailable error=${lastManagementError}`);
-            await sleep(intervalMs);
+            if (attempt < attempts) await sleep(intervalMs);
             continue;
         }
         lastStage = info.runtime?.stage || 'unknown';
@@ -368,15 +368,16 @@ export async function waitForRunning(spaceCommitSha, deployMarker, options = {})
                 log(`attempt=${attempt} marker_status=not_ready error=${lastMarkerError}`);
             }
         }
-        await sleep(intervalMs);
+        if (attempt < attempts) await sleep(intervalMs);
     }
     const marker = await verifyMarker(deployMarker);
     return {
         stage: lastStage,
         sha: lastSha,
-        management_status: 'runtime_stage_not_running',
+        management_status: 'target_commit_not_confirmed',
+        verification_source: 'service_marker_after_management_timeout',
         service_marker_verified: true,
-        warning: `Space did not reach RUNNING with a matching service marker for ${spaceCommitSha}; last stage=${lastStage} sha=${lastSha} marker_error=${lastMarkerError} management_error=${lastManagementError}`,
+        warning: `Hugging Face management status did not confirm RUNNING for ${spaceCommitSha}, but the public service returned the exact one-time deploy marker; last stage=${lastStage} sha=${lastSha} marker_error=${lastMarkerError} management_error=${lastManagementError}`,
         marker
     };
 }

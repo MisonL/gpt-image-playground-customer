@@ -20,36 +20,21 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   gpt-image-playground:
-    build:
-      context: .
-    image: gpt-image-playground-customer:postgres
-    container_name: gpt-image-playground-customer
-    restart: unless-stopped
-    env_file:
-      - path: .env.local
-        required: false
     environment:
-      NODE_ENV: production
-      NEXT_TELEMETRY_DISABLED: "1"
-      NEXT_PUBLIC_IMAGE_STORAGE_MODE: fs
       AGENT_STATE_BACKEND: postgres
-      # Force Docker secret fields below even if .env.local contains AGENT_DATABASE_URL.
+      # Force Docker secret fields below even if .env.local contains direct database credentials.
       AGENT_DATABASE_URL: ""
+      AGENT_DB_PASSWORD: ""
       AGENT_DB_HOST: postgres
       AGENT_DB_PORT: "5432"
       AGENT_DB_NAME: gpt_image_playground
       AGENT_DB_USER: gpt_image
       AGENT_DB_PASSWORD_FILE: /run/secrets/postgres_password
-      PORT: "4783"
     secrets:
       - postgres_password
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "4783:4783"
-    volumes:
-      - ./generated-images:/app/generated-images
 
 volumes:
   postgres-data:

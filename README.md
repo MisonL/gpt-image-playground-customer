@@ -30,10 +30,10 @@ npm run first-run -- --base-url https://your-space.hf.space
 npm run first-run -- --json --base-url https://your-space.hf.space
 ```
 
-本地服务推荐用 Docker：
+本地服务推荐使用带健康检查和镜像 revision 核验的部署脚本：
 
 ```bash
-docker compose up -d --build --remove-orphans
+npm run deploy:local
 ```
 
 打开：
@@ -98,6 +98,7 @@ start-windows.bat
 
 | 场景               | 变量                                                                                                | 说明                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Docker 监听地址    | `GIP_BIND_HOST`、`GIP_PORT`                                                                         | Compose 默认仅发布到 `127.0.0.1:4783`。需要局域网或公网访问时显式设置非回环 `GIP_BIND_HOST`，并同时设置 `APP_PASSWORD`；容器会拒绝未设置访问码的非回环发布。                                                                                                                                                                                                                                                           |
 | 默认上游           | `OPENAI_API_KEY`、`OPENAI_API_BASE_URL`                                                             | 服务端默认 OpenAI 或兼容接口配置。页面 `API 设置` 优先级更高。                                                                                                                                                                                                                                                                                                                                                     |
 | 上游代理           | `OPENAI_UPSTREAM_PROXY_URL`、`OPENAI_CHANNEL_N_PROXY_URL`                                           | 可选。只用于服务端到图片上游的出站请求；渠道级地址优先于全局地址。仅接受无认证、无路径、无查询参数和无片段的 `http://` / `https://` 根代理地址，不支持 SOCKS。运行态和 Agent 诊断只公开是否启用及协议，不公开代理主机或端口。 |
 | 页面访问码         | `APP_PASSWORD`                                                                                      | 设置后访问页面和受保护图片需要访问码。公网部署建议开启。                                                                                                                                                                                                                                                                                                                                                           |
@@ -316,16 +317,16 @@ node skills/gpt-image-playground-agent/scripts/diagnose-request.mjs \
 
 ## Docker 与部署
 
-默认 Compose 使用 SQLite 状态库和本地图片目录：
-
-```bash
-docker compose up -d --build --remove-orphans
-```
-
-本地重建并探测真实端点：
+默认 Compose 使用 SQLite 状态库和本地图片目录，并且只绑定本机回环地址：
 
 ```bash
 npm run deploy:local
+```
+
+部署脚本会拒绝脏工作区、重建镜像、等待 Docker healthcheck、探测真实端点，并确认容器镜像的 revision 与当前 Git 提交一致。默认模式会断言 `sqlite/fs` 生效，`--memory` 会断言 `memory/indexeddb`，`--postgres` 会断言 `postgres/fs`。若确实需要局域网访问，先在 `.env.local` 设置 `APP_PASSWORD`，再显式指定绑定地址：
+
+```bash
+GIP_BIND_HOST=0.0.0.0 npm run deploy:local
 ```
 
 本仓库的 Compose 服务只挂载 `generated-images/`。不要用 `docker run -v "$PWD:/workspace"` 启动本地图片上游 fixture；这会把 `.git/`、`node_modules/` 和 `.next/` 暴露给 Docker Desktop 文件共享层，可能触发文件事件风暴。本地 fixture gate 使用进程内服务：
@@ -342,11 +343,13 @@ npm run docker:cleanup-fixtures
 
 常见部署模式：
 
-| 模式       | 命令或配置                                           | 适用场景                              |
-| ---------- | ---------------------------------------------------- | ------------------------------------- |
-| SQLite     | `docker-compose.yml`                                 | 本地单实例和长期本地服务。            |
-| Memory     | `docker-compose.yml` + `docker-compose.memory.yml`   | Hugging Face Space 或临时演示。       |
-| PostgreSQL | `docker-compose.yml` + `docker-compose.postgres.yml` | 高并发、多实例或集中状态库。          |
+| 模式       | 命令                                      | 适用场景                              |
+| ---------- | ----------------------------------------- | ------------------------------------- |
+| SQLite     | `npm run deploy:local`                    | 本地单实例和长期本地服务。            |
+| Memory     | `npm run deploy:local -- --memory`        | Hugging Face Space 或临时演示。       |
+| PostgreSQL | `npm run deploy:local -- --postgres`      | 高并发、多实例或集中状态库。          |
+
+PostgreSQL 模式要求在运行 Compose 的 shell 或 Compose `.env` 中提供 `GPT_IMAGE_POSTGRES_PASSWORD`。不要把该 Secret 写入 `.env.local`；overlay 会显式清空直连密码变量，确保应用只读取 Docker secret 文件。
 
 图片默认保存在：
 
