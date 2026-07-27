@@ -85,6 +85,7 @@ describe('live PostgreSQL test launcher cleanup', () => {
             assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
             assert.match(result.stdout, /NODE_ENV=test/);
             assert.match(result.stdout, /APP_LOG_TEST_CONSOLE_MIRROR=false/);
+            assert.match(result.stdout, /NODE_ARGS=.*--test-timeout=60000/);
         } finally {
             await rm(tempDir, { recursive: true, force: true });
         }
@@ -129,6 +130,7 @@ function buildEnvironmentNodeShim() {
     return `#!/bin/sh
 printf 'NODE_ENV=%s\\n' "$NODE_ENV"
 printf 'APP_LOG_TEST_CONSOLE_MIRROR=%s\\n' "$APP_LOG_TEST_CONSOLE_MIRROR"
+printf 'NODE_ARGS=%s\\n' "$*"
 exit 0
 `;
 }

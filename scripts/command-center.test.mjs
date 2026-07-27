@@ -9,13 +9,17 @@ import {
 import { fetchJsonWithTimeout, parseJsonPayload, pickFailureOutput, runCommand } from './command-center-utils.mjs';
 import {
     assertDeploymentImageIdentity,
+    assertComposeImageAutoCleanupDeploymentAllowed,
+    assertImageAutoCleanupDeploymentAllowed,
     assertLocalProbeMatchesMode,
     buildDeploymentImageReference,
     buildDeploymentImageTag,
     buildDockerComposeArgs,
     buildDockerComposeEnv,
     buildLocalBaseUrl,
+    isImageAutoCleanupEnabled,
     parsePublishedContainerPortBindings,
+    readImageAutoCleanupValueFromComposeEnvFile,
     waitForLocalEndpoints
 } from './deploy-local.mjs';
 import { buildFirstRunReport, formatFirstRunText } from './first-run.mjs';
@@ -30,11 +34,15 @@ import {
 import { buildVerifyPlan } from './verify.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const deployLocalScriptPath = fileURLToPath(new URL('./deploy-local.mjs', import.meta.url));
 
 describe('Command center scripts', () => {
     it('exposes a small stable administrator command set', () => {
@@ -528,6 +536,116 @@ describe('Command center scripts', () => {
                 GIP_IMAGE_TAG: 'local-0123456789abcdef0123456789abcdef01234567'
             }
         );
+    });
+
+    it('requires explicit confirmation before deploying with automatic WebUI image cleanup enabled', () => {
+        assert.equal(isImageAutoCleanupEnabled('true'), true);
+        assert.equal(isImageAutoCleanupEnabled('yes'), true);
+        assert.equal(isImageAutoCleanupEnabled('false'), false);
+        assert.equal(isImageAutoCleanupEnabled(undefined), false);
+        assert.doesNotThrow(() => assertImageAutoCleanupDeploymentAllowed({}));
+        assert.throws(
+            () => assertImageAutoCleanupDeploymentAllowed({ WEBUI_IMAGE_AUTO_CLEANUP_ENABLED: 'true' }),
+            /--allow-image-auto-cleanup/
+        );
+        assert.doesNotThrow(() =>
+            assertImageAutoCleanupDeploymentAllowed(
+                { WEBUI_IMAGE_AUTO_CLEANUP_ENABLED: 'true' },
+                { allowImageAutoCleanup: true }
+            )
+        );
+    });
+
+    it('reads the automatic cleanup setting from the Compose env file instead of the shell environment', async () => {
+        const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'deploy-local-cleanup-'));
+        try {
+            await writeFile(
+                path.join(temporaryDirectory, '.env.local'),
+                'WEBUI_IMAGE_AUTO_CLEANUP_ENABLED=true\nWEBUI_IMAGE_RETENTION_DAYS=30\n'
+            );
+
+            assert.equal(readImageAutoCleanupValueFromComposeEnvFile(temporaryDirectory), 'true');
+            assert.throws(
+                () => assertComposeImageAutoCleanupDeploymentAllowed({}, temporaryDirectory),
+                /--allow-image-auto-cleanup/
+            );
+            assert.doesNotThrow(() =>
+                assertComposeImageAutoCleanupDeploymentAllowed({ allowImageAutoCleanup: true }, temporaryDirectory)
+            );
+        } finally {
+            await rm(temporaryDirectory, { recursive: true, force: true });
+        }
+    });
+
+    it('blocks the deploy CLI before Docker runs unless automatic cleanup is explicitly confirmed', async () => {
+        const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'deploy-local-cleanup-cli-'));
+        const fakeBinDirectory = path.join(temporaryDirectory, 'bin');
+        const dockerCallLog = path.join(temporaryDirectory, 'docker-calls.log');
+        await mkdir(fakeBinDirectory);
+        await writeFile(
+            path.join(temporaryDirectory, '.env.local'),
+            'WEBUI_IMAGE_AUTO_CLEANUP_ENABLED=true\n'
+        );
+        await writeExecutable(
+            path.join(fakeBinDirectory, 'git'),
+            `#!/bin/sh
+if [ "$1" = "rev-parse" ]; then
+  printf '%s\\n' '0123456789abcdef0123456789abcdef01234567'
+  exit 0
+fi
+if [ "$1" = "status" ]; then
+  exit 0
+fi
+exit 1
+`
+        );
+        await writeExecutable(
+            path.join(fakeBinDirectory, 'docker'),
+            `#!/bin/sh
+printf '%s\\n' "$*" >> "$DEPLOY_LOCAL_DOCKER_CALL_LOG"
+if [ "$1" = "compose" ]; then
+  exit 0
+fi
+if [ "$1" = "inspect" ]; then
+  case "$3" in
+    *Config.Image*) printf '%s\\n' 'gpt-image-playground-customer:local-0123456789abcdef0123456789abcdef01234567' ;;
+    *NetworkSettings.Ports*) printf '%s\\n' '[{"HostIp":"127.0.0.1","HostPort":"4783"}]' ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  printf '%s\\n' '0123456789abcdef0123456789abcdef01234567'
+  exit 0
+fi
+exit 1
+`
+        );
+
+        try {
+            const baseEnv = {
+                PATH: `${fakeBinDirectory}${path.delimiter}${process.env.PATH || ''}`,
+                DEPLOY_LOCAL_DOCKER_CALL_LOG: dockerCallLog
+            };
+            const blocked = await runNodeCommandAsync([deployLocalScriptPath, '--skip-probe'], {
+                cwd: temporaryDirectory,
+                env: baseEnv
+            });
+
+            assert.equal(blocked.status, 1);
+            assert.match(blocked.stdout, /--allow-image-auto-cleanup/);
+            assert.equal(existsSync(dockerCallLog), false);
+
+            const confirmed = await runNodeCommandAsync(
+                [deployLocalScriptPath, '--allow-image-auto-cleanup', '--skip-probe'],
+                { cwd: temporaryDirectory, env: baseEnv }
+            );
+            assert.equal(confirmed.status, 0);
+            assert.equal(parseJsonPayload(confirmed.stdout).ok, true);
+            assert.match(await readFile(dockerCallLog, 'utf8'), /^compose /m);
+        } finally {
+            await rm(temporaryDirectory, { recursive: true, force: true });
+        }
     });
 
     it('uses immutable full-revision Docker image tags for deploys', () => {
@@ -1934,7 +2052,7 @@ async function withServer(handler, run) {
 function runNodeCommandAsync(args, options = {}) {
     return new Promise((resolve) => {
         const child = spawn(process.execPath, args, {
-            cwd: process.cwd(),
+            cwd: options.cwd || process.cwd(),
             env: { GPT_IMAGE_AGENT_LOAD_ENV_FILE: '0', ...options.env },
             stdio: ['ignore', 'pipe', 'pipe']
         });
@@ -1966,6 +2084,11 @@ function runNodeCommandAsync(args, options = {}) {
             });
         });
     });
+}
+
+async function writeExecutable(filepath, content) {
+    await writeFile(filepath, content);
+    await chmod(filepath, 0o755);
 }
 
 function readRequestText(request) {

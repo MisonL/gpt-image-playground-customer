@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { fetchJsonWithTimeout, isMainModule, pickFailureOutput, printJson, runCommand } from './command-center-utils.mjs';
+import { parseEnvContent } from './env-summary.mjs';
 
 const CONTAINER_NAME = 'gpt-image-playground-customer';
 const IMAGE_REPOSITORY = 'gpt-image-playground-customer';
@@ -15,6 +18,8 @@ const PROBE_TIMEOUT_MS = 5000;
 const DOCKER_COMPOSE_TIMEOUT_MS = 10 * 60 * 1000;
 const DOCKER_COMPOSE_WAIT_TIMEOUT_SECONDS = 120;
 const GIT_REVISION_PATTERN = /^[0-9a-f]{40}$/i;
+const IMAGE_AUTO_CLEANUP_ENABLED_ENV = 'WEBUI_IMAGE_AUTO_CLEANUP_ENABLED';
+const COMPOSE_ENV_FILE = '.env.local';
 
 export function buildDockerComposeArgs(options = {}) {
     assertSingleDeploymentMode(options);
@@ -106,13 +111,16 @@ export function assertDeploymentImageIdentity(identity, deployment) {
 }
 
 function parseArgs(argv) {
-    const unknown = argv.find((arg) => !['--help', '-h', '--memory', '--postgres', '--skip-probe'].includes(arg));
+    const unknown = argv.find(
+        (arg) => !['--help', '-h', '--memory', '--postgres', '--skip-probe', '--allow-image-auto-cleanup'].includes(arg)
+    );
     if (unknown) throw new Error(`Unknown option: ${unknown}`);
     const options = {
         help: argv.includes('--help') || argv.includes('-h'),
         memory: argv.includes('--memory'),
         postgres: argv.includes('--postgres'),
-        skipProbe: argv.includes('--skip-probe')
+        skipProbe: argv.includes('--skip-probe'),
+        allowImageAutoCleanup: argv.includes('--allow-image-auto-cleanup')
     };
     assertSingleDeploymentMode(options);
     return options;
@@ -127,8 +135,39 @@ function printHelp() {
 Options:
   --memory       Use docker-compose.memory.yml overlay for HF Space-like memory mode.
   --postgres     Use docker-compose.postgres.yml and require GPT_IMAGE_POSTGRES_PASSWORD.
+  --allow-image-auto-cleanup
+                 Confirm that the configured WebUI automatic image cleanup may run after deployment.
   --skip-probe   Rebuild and start the container without HTTP endpoint probes.
   --help         Show this help.`);
+}
+
+export function isImageAutoCleanupEnabled(value) {
+    return ['1', 'true', 'yes', 'on'].includes(value?.trim().toLowerCase());
+}
+
+export function assertImageAutoCleanupDeploymentAllowed(env = process.env, options = {}) {
+    if (!isImageAutoCleanupEnabled(env[IMAGE_AUTO_CLEANUP_ENABLED_ENV])) return;
+    if (options.allowImageAutoCleanup) return;
+    throw new Error(
+        `检测到 ${IMAGE_AUTO_CLEANUP_ENABLED_ENV} 已启用。部署会在服务启动后执行自动图片清理；如已确认，添加 --allow-image-auto-cleanup 后重试。`
+    );
+}
+
+export function readImageAutoCleanupValueFromComposeEnvFile(cwd = process.cwd()) {
+    const filepath = path.join(cwd, COMPOSE_ENV_FILE);
+    if (!existsSync(filepath)) return undefined;
+    let configuredValue;
+    for (const entry of parseEnvContent(readFileSync(filepath, 'utf8'))) {
+        if (entry.name === IMAGE_AUTO_CLEANUP_ENABLED_ENV) configuredValue = entry.value;
+    }
+    return configuredValue;
+}
+
+export function assertComposeImageAutoCleanupDeploymentAllowed(options = {}, cwd = process.cwd()) {
+    return assertImageAutoCleanupDeploymentAllowed(
+        { [IMAGE_AUTO_CLEANUP_ENABLED_ENV]: readImageAutoCleanupValueFromComposeEnvFile(cwd) },
+        options
+    );
 }
 
 function readCleanGitRevision() {
@@ -230,6 +269,7 @@ async function main() {
         return;
     }
 
+    assertComposeImageAutoCleanupDeploymentAllowed(options);
     const deployment = readCleanGitRevision();
     const docker = runCommand('docker', buildDockerComposeArgs(options), {
         env: buildDockerComposeEnv(process.env, deployment),

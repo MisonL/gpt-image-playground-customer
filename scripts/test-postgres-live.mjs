@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 const testFiles = ['src/lib/agent-state-postgres.test.ts', 'src/app/api/agent/agent-routes.test.ts'];
 const POSTGRES_READY_ATTEMPTS = 30;
 const POSTGRES_READY_INTERVAL_MS = 1000;
+const TEST_TIMEOUT_MS = 60_000;
 
 class CommandFailedError extends Error {
   constructor(command, args, status, stderr = '') {
@@ -30,7 +31,7 @@ function run(command, args, options = {}) {
 }
 
 function runTests(databaseUrl) {
-  run('node', ['--test', '--import', 'tsx', ...testFiles], {
+  run('node', ['--test', `--test-timeout=${TEST_TIMEOUT_MS}`, '--import', 'tsx', ...testFiles], {
     env: {
       ...process.env,
       NODE_ENV: 'test',
