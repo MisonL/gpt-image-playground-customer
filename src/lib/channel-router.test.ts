@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 const DEFAULT_HEADER_SUMMARY = {
-    user_agent_effective: 'gpt-image-playground/2.1.0',
+    user_agent_effective: 'gpt-image-playground/2.2.0',
     has_extra_headers: false,
     allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
     configured_header_names: []

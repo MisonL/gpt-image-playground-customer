@@ -6,6 +6,8 @@
 
 ## [未发布]
 
+## [2.2.0] - 2026-07-27
+
 ### 新增
 
 - 增加工作台生成活动状态播报、短屏布局和 API 设置弹窗的回归测试，覆盖生成、批量、继续编辑和配置草稿生命周期。
@@ -164,7 +166,8 @@
 - 支持基于 OpenAI 兼容 Images API 的本地图片生成和编辑流程。
 - 增加 Docker 部署支持和多平台启动脚本。
 
-[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.1.0...HEAD
+[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.4.0...v2.0.0
 [1.4.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.3.0...v1.4.0

@@ -424,7 +424,7 @@ Agent JSON 生成端点对外始终返回最终 JSON，不会对客户端返回 
         "selected_channel_id": "default",
         "upstream_host": "api.example.test",
         "request_headers": {
-            "user_agent_effective": "gpt-image-playground/2.1.0",
+            "user_agent_effective": "gpt-image-playground/2.2.0",
             "has_extra_headers": false,
             "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
             "configured_header_names": []
@@ -668,7 +668,7 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
                 "transport": "agent_json",
                 "endpoint": "/api/agent/images/generate",
                 "request_headers": {
-                    "user_agent_effective": "gpt-image-playground/2.1.0",
+                    "user_agent_effective": "gpt-image-playground/2.2.0",
                     "has_extra_headers": false,
                     "allowed_header_names": ["user-agent", "x-app-id", "x-app-secret"],
                     "configured_header_names": []

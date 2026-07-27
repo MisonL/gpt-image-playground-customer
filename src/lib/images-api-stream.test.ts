@@ -51,7 +51,7 @@ describe('createImagesApiGenerateStream', () => {
         assert.equal(observedAuthorization, 'Bearer test-key');
         assert.equal(observedAccept, 'text/event-stream, application/json');
         assert.equal(observedContentType, 'application/json');
-        assert.equal(observedUserAgent, 'gpt-image-playground/2.1.0');
+        assert.equal(observedUserAgent, 'gpt-image-playground/2.2.0');
         assert.equal(observedAppId, 'app-id');
         assert.equal(observedIdempotencyKey, 'stream-idempotency-key');
     });

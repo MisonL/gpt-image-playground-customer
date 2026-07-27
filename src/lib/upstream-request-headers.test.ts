@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 describe('upstream request headers', () => {
     it('uses a stable product User-Agent by default', () => {
         assert.deepEqual(buildDefaultUpstreamHeaders({}), {
-            'User-Agent': 'gpt-image-playground/2.1.0'
+            'User-Agent': 'gpt-image-playground/2.2.0'
         });
     });
 
