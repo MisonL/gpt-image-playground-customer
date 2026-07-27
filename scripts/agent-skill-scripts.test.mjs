@@ -4619,12 +4619,10 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /不要临时编写 Node\/Python\/shell 脚本、curl 命令或手写 fetch\/FormData/);
     });
 
-    it('documents backend-specific partial image limits for Agent clients', () => {
-        const readmeText = readFileSync(join(repoRoot, 'README.md'), 'utf8');
+    it('documents backend-specific partial image limits in dedicated Agent docs', () => {
         const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
         const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
 
-        assert.match(readmeText, /partial_images_by_backend\["responses-image-generation"\]/);
         assert.match(skillText, /limits\.partial_images_by_backend\[image_backend\]/);
         assert.match(
             skillText,
@@ -4702,18 +4700,6 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /responses_agent_generate_1k/);
         assert.match(apiReference, /request_mode_controls/);
         assert.match(apiReference, /summary\.real_smoke_checks/);
-        assert.match(readmeText, /不要手动并行启动多个单张脚本/);
-        assert.match(readmeText, /streamingBatch\.recommendedConcurrency/);
-        assert.match(readmeText, /channelQueue\.capacityPerCredential/);
-        assert.match(readmeText, /Agent edit 输出格式固定为 WebP，像素尺寸可能与页面 SSE 不完全一致/);
-        assert.match(
-            readmeText,
-            /不要直接输出 `\.env\.local`、`\.env\*\.local`、secret 文件或原始 `docker inspect \.Config\.Env`/
-        );
-        assert.match(readmeText, /npm run env:summary/);
-        assert.match(readmeText, /verification_scope\.mode=local_planning_only/);
-        assert.match(readmeText, /Hugging Face Space Secrets 只能写入和列出名称/);
-        assert.match(readmeText, /`page_sse_supported=true` 只是声明支持，不代表实测一定成功/);
         assert.match(skillText, /公开分享可直接打开 `direct_content_urls`，设置访问码时优先给用户 `share_urls`/);
         assert.match(apiReference, /公开分享可直接打开 `direct_content_urls`，设置访问码时优先给用户 `share_urls`/);
         assert.match(apiReference, /顶层 `shares`、`summary\.share_urls` 和 `summary\.direct_content_urls` 输出结果/);
@@ -4772,7 +4758,6 @@ describe('Agent skill script argument validation', () => {
         const localWorkbenchFeatures = ['灵感相册', '历史复用'];
 
         for (const endpoint of pageApiBoundaries) {
-            assert.match(readmeText, new RegExp(escapeRegExp(endpoint)));
             assert.match(skillText, new RegExp(escapeRegExp(endpoint)));
             assert.match(apiReference, new RegExp(escapeRegExp(endpoint)));
             assert.equal(agentEndpointValues.includes(endpoint), false);
@@ -4786,7 +4771,6 @@ describe('Agent skill script argument validation', () => {
         }
 
         for (const endpoint of agentReadableDiagnostics) {
-            assert.match(readmeText, new RegExp(escapeRegExp(endpoint)));
             assert.match(skillText, new RegExp(escapeRegExp(endpoint)));
             assert.match(apiReference, new RegExp(escapeRegExp(endpoint)));
             assert.equal(agentEndpointValues.includes(endpoint), true);
@@ -8722,7 +8706,6 @@ describe('Agent endpoint path drift guards', () => {
         assert.match(readmeText, /runtime-capabilities/);
         assert.match(skillText, /不触发上游探测或图片生成/);
         assert.match(apiReference, /不触发上游探测或图片生成/);
-        assert.match(readmeText, /state_initialized=false/);
         assert.match(skillText, /state_initialized=false/);
         assert.match(apiReference, /state_initialized=false/);
         assert.match(skillText, /不替代页面/);
