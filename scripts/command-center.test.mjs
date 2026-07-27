@@ -64,6 +64,7 @@ describe('Command center scripts', () => {
                 'dependencies:check',
                 'test',
                 'lint',
+                'format:check',
                 'lint:scripts',
                 'build',
                 'diff-check',
@@ -95,6 +96,7 @@ describe('Command center scripts', () => {
                 'dependencies:check',
                 'test',
                 'lint',
+                'format:check',
                 'lint:scripts',
                 'diff-check',
                 'diff-cached-check'
@@ -112,6 +114,7 @@ describe('Command center scripts', () => {
                 'dependencies:check',
                 'test',
                 'lint',
+                'format:check',
                 'lint:scripts',
                 'build',
                 'test:postgres',

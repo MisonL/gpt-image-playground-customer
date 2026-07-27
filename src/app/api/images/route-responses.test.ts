@@ -674,6 +674,4 @@ describe('POST /api/images streaming and Responses backends', { concurrency: fal
             await upstream.close();
         }
     });
-
-
 });

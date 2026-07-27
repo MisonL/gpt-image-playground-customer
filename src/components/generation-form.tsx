@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import { shouldRecommendImageStreaming } from '@/lib/image-streaming-recommendation';
 import type {
     ImageUpstreamFormBackend,
     ImageUpstreamFormPromptOptimization,
@@ -34,11 +35,7 @@ import {
     type ImageUpstreamProfile,
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
-import {
-    type ImageStreamMode,
-    type ImageStreamingStrategy
-} from '@/lib/image-upstream-strategy';
-import { shouldRecommendImageStreaming } from '@/lib/image-streaming-recommendation';
+import { type ImageStreamMode, type ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import {
     getPresetDimensions,
     getPresetTooltip,

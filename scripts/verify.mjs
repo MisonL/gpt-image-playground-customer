@@ -9,6 +9,7 @@ const FULL_VERIFY_PLAN = [
     { name: 'dependencies:check', command: 'npm', args: ['run', 'dependencies:check'] },
     { name: 'test', command: 'npm', args: ['test'] },
     { name: 'lint', command: 'npm', args: ['run', 'lint'] },
+    { name: 'format:check', command: 'npm', args: ['run', 'format:check'] },
     { name: 'lint:scripts', command: 'npm', args: ['run', 'lint:scripts'] },
     { name: 'build', command: 'npm', args: ['run', 'build'] },
     { name: 'diff-check', command: 'git', args: ['diff', '--check'] },

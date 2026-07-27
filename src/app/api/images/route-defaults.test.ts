@@ -539,6 +539,4 @@ describe('POST /api/images backend defaults and security boundaries', { concurre
             await upstream.close();
         }
     });
-
-
 });

@@ -735,6 +735,4 @@ describe('POST /api/images Images API streaming', { concurrency: false }, () => 
             await upstream.close();
         }
     });
-
-
 });

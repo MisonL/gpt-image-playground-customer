@@ -65,23 +65,27 @@ export function WorkbenchStatusStrip({
             ? t('app.apiCustomOverride')
             : runtimeHealthStatus === 'checking'
               ? t('app.apiRuntimeChecking')
-            : runtimeHealthStatus === 'runtime-ready'
-              ? t('app.apiRuntimeReady')
-              : runtimeHealthStatus === 'route-limited'
-                ? t('app.apiRouteLimited')
-                : t('app.apiDisconnected');
+              : runtimeHealthStatus === 'runtime-ready'
+                ? t('app.apiRuntimeReady')
+                : runtimeHealthStatus === 'route-limited'
+                  ? t('app.apiRouteLimited')
+                  : t('app.apiDisconnected');
     const runtimeStatusColorClass =
         runtimeHealthStatus === 'custom-override'
             ? 'text-amber-700 dark:text-amber-300'
             : runtimeHealthStatus === 'checking'
               ? 'text-sky-700 dark:text-sky-300'
-            : runtimeHealthStatus === 'runtime-ready'
-              ? 'text-emerald-700 dark:text-emerald-300'
-              : runtimeHealthStatus === 'route-limited'
-                ? 'text-amber-700 dark:text-amber-300'
-                : 'text-slate-600 dark:text-slate-300';
+              : runtimeHealthStatus === 'runtime-ready'
+                ? 'text-emerald-700 dark:text-emerald-300'
+                : runtimeHealthStatus === 'route-limited'
+                  ? 'text-amber-700 dark:text-amber-300'
+                  : 'text-slate-600 dark:text-slate-300';
     const RuntimeStatusIcon =
-        runtimeHealthStatus === 'checking' ? LoaderCircle : runtimeHealthStatus === 'runtime-ready' ? CircleCheck : CircleAlert;
+        runtimeHealthStatus === 'checking'
+            ? LoaderCircle
+            : runtimeHealthStatus === 'runtime-ready'
+              ? CircleCheck
+              : CircleAlert;
 
     return (
         <div
@@ -172,7 +176,7 @@ export function WorkbenchStatusStrip({
                     </span>
                 </span>
             )}
-            <span className='border-border bg-card inline-flex min-h-6 min-w-0 max-w-[11rem] items-center gap-2 rounded-md border px-2 py-0.5 sm:min-h-7 sm:max-w-none sm:px-2.5 sm:py-1'>
+            <span className='border-border bg-card inline-flex min-h-6 max-w-[11rem] min-w-0 items-center gap-2 rounded-md border px-2 py-0.5 sm:min-h-7 sm:max-w-none sm:px-2.5 sm:py-1'>
                 <span className='truncate'>{model}</span>
                 <span className='bg-border hidden h-3 w-px shrink-0 sm:block' aria-hidden='true' />
                 <span className='text-muted-foreground hidden truncate sm:inline'>{routeLabel}</span>

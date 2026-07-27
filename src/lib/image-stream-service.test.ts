@@ -95,11 +95,10 @@ describe('createImageStreamResponse', () => {
         assert.equal(events[0].output_format, 'webp');
         assert.equal(Buffer.from(String(events[0].b64_json || ''), 'base64').toString('ascii', 8, 12), 'WEBP');
         assert.equal(
-            Buffer.from(String((events[1].images as Array<Record<string, unknown>>)[0].b64_json || ''), 'base64').toString(
-                'ascii',
-                8,
-                12
-            ),
+            Buffer.from(
+                String((events[1].images as Array<Record<string, unknown>>)[0].b64_json || ''),
+                'base64'
+            ).toString('ascii', 8, 12),
             'WEBP'
         );
     });

@@ -45,11 +45,7 @@ describe('upstream request headers', () => {
     });
 
     it('filters proxy authentication from extra headers before dispatch', () => {
-        const merged = mergeUpstreamHeadersWithFixed(
-            { 'Proxy-Authorization': 'Basic c2VjcmV0' },
-            {},
-            {}
-        );
+        const merged = mergeUpstreamHeadersWithFixed({ 'Proxy-Authorization': 'Basic c2VjcmV0' }, {}, {});
 
         assert.equal(new Headers(merged).has('proxy-authorization'), false);
     });

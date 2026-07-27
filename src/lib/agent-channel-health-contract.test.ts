@@ -24,7 +24,10 @@ describe('Agent channel health diagnostics contract', () => {
 
         assert.ok(path);
         assert.ok(path.get);
-        assert.equal(path.get.responses['200'].content['application/json'].schema.$ref, '#/components/schemas/AgentChannelHealthDiagnosticsResponse');
+        assert.equal(
+            path.get.responses['200'].content['application/json'].schema.$ref,
+            '#/components/schemas/AgentChannelHealthDiagnosticsResponse'
+        );
         assert.ok(path.get.responses['401']);
         assert.ok(path.get.responses['500']);
         assert.equal(
@@ -43,10 +46,7 @@ describe('Agent channel health diagnostics contract', () => {
             document.components.schemas.AgentChannelHealthDiagnosticsResponse.properties.state_initialized.type,
             'boolean'
         );
-        assert.equal(
-            document.components.schemas.AgentChannelHealthFailure.properties.message,
-            undefined
-        );
+        assert.equal(document.components.schemas.AgentChannelHealthFailure.properties.message, undefined);
         assert.deepEqual(document.components.schemas.AgentChannelHealthRequestMode.properties.mode.enum, [
             'images-non-stream',
             'images-sse',

@@ -305,9 +305,7 @@ export class PostgresAgentStateStore implements AgentStateStore, ImageShareState
     }
 
     async listArtifactFilepaths(): Promise<string[]> {
-        const result = await this.pool.query(
-            'SELECT DISTINCT filepath FROM agent_artifacts ORDER BY filepath ASC'
-        );
+        const result = await this.pool.query('SELECT DISTINCT filepath FROM agent_artifacts ORDER BY filepath ASC');
         return (result.rows as Array<{ filepath: string }>).map((row) => row.filepath);
     }
 

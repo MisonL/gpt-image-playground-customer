@@ -50,6 +50,9 @@ jobs:
       - name: Lint source files
         run: npm run lint
 
+      - name: Check source formatting
+        run: npm run format:check
+
       - name: Check script syntax
         run: npm run lint:scripts
 

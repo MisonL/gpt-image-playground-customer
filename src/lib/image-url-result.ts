@@ -92,10 +92,7 @@ function buildDownloadHeaders(
     apiKey: string | undefined,
     upstreamHeaders: UpstreamRequestHeaders | undefined
 ): UpstreamRequestHeaders | undefined {
-    const headers = mergeUpstreamHeadersWithFixed(
-        upstreamHeaders,
-        apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
-    );
+    const headers = mergeUpstreamHeadersWithFixed(upstreamHeaders, apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
     return Object.keys(headers).length > 0 ? headers : undefined;
 }
 

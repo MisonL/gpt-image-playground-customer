@@ -1,3 +1,4 @@
+import { resetAgentStateStoreForTests } from './agent-state-runtime';
 import type { WebuiImageCleanupRun } from './webui-image-cleanup';
 import {
     getWebuiImageCleanupSummary,
@@ -6,7 +7,6 @@ import {
     startWebuiImageCleanupScheduler,
     type WebuiImageCleanupSchedulerOptions
 } from './webui-image-cleanup-runtime';
-import { resetAgentStateStoreForTests } from './agent-state-runtime';
 import {
     resetWebuiImageRetentionStoresForTests,
     resolveWebuiImageRetentionDatabasePath,

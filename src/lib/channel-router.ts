@@ -270,11 +270,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
     const channelIds = Array.from(new Set(options.credentials.map((credential) => credential.channelId)));
     let lastFailure: ChannelFailureReason | undefined;
 
-    const isCoolingDownAt = (
-        credential: ChannelCredential,
-        currentTime: number,
-        requestMode?: ChannelRequestMode
-    ) => {
+    const isCoolingDownAt = (credential: ChannelCredential, currentTime: number, requestMode?: ChannelRequestMode) => {
         return (
             (unhealthyUntilByCredentialId.get(credential.id) ?? 0) > currentTime ||
             (unhealthyUntilByChannelId.get(credential.channelId) ?? 0) > currentTime ||
@@ -335,7 +331,9 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                   ]
                 : [])
         ];
-        const activeValues = values.filter((value): value is number => typeof value === 'number' && value > currentTime);
+        const activeValues = values.filter(
+            (value): value is number => typeof value === 'number' && value > currentTime
+        );
         return activeValues.length ? Math.max(...activeValues) : undefined;
     };
     const getHealthState = (credential: ChannelCredential, currentTime: number, requestMode?: ChannelRequestMode) => {
@@ -353,9 +351,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
         ) {
             return credentialState;
         }
-        return requestModes.some((requestMode) => requestMode.state === 'probe_pending')
-            ? 'probe_pending'
-            : 'cooldown';
+        return requestModes.some((requestMode) => requestMode.state === 'probe_pending') ? 'probe_pending' : 'cooldown';
     };
     const recordFailure = (
         credential: ChannelCredential,
@@ -742,7 +738,9 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             return {
                 at: currentTime,
                 channels: channelIds.map((channelId) => {
-                    const channelCredentials = options.credentials.filter((credential) => credential.channelId === channelId);
+                    const channelCredentials = options.credentials.filter(
+                        (credential) => credential.channelId === channelId
+                    );
                     const credentials = channelCredentials.map((credential) => {
                         const requestModes = getEffectiveChannelRequestModes(credential).map((mode) => {
                             const cooldownUntil = getCooldownUntil(credential, currentTime, mode);
@@ -761,11 +759,15 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                         const cooldownUntil =
                             credentialState === 'healthy'
                                 ? credentialCooldownUntil
-                                : getLatestCooldownUntil([
-                                      credentialCooldownUntil,
-                                      ...requestModes.map((requestMode) => requestMode.cooldownUntil)
-                                  ], currentTime);
-                        const probeRequired = isWaitingForProbe(credential) || requestModes.some((mode) => mode.probeRequired);
+                                : getLatestCooldownUntil(
+                                      [
+                                          credentialCooldownUntil,
+                                          ...requestModes.map((requestMode) => requestMode.cooldownUntil)
+                                      ],
+                                      currentTime
+                                  );
+                        const probeRequired =
+                            isWaitingForProbe(credential) || requestModes.some((mode) => mode.probeRequired);
                         const lastCredentialFailure = toPublicChannelFailure(getCredentialLastFailure(credential));
                         return {
                             credentialId: credential.id,
@@ -776,7 +778,9 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                             requestModes
                         };
                     });
-                    const healthyCredentialCount = credentials.filter((credential) => credential.state === 'healthy').length;
+                    const healthyCredentialCount = credentials.filter(
+                        (credential) => credential.state === 'healthy'
+                    ).length;
                     return {
                         channelId,
                         upstreamProxy: summarizeOpenAIUpstreamProxy(channelCredentials[0]?.upstreamProxyUrl),

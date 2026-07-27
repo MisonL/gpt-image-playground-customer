@@ -41,7 +41,8 @@
         "start": "node scripts/start-standalone.mjs",
         "lint": "eslint src",
         "lint:scripts": "node scripts/check-node-syntax.mjs",
-        "format": "prettier --write \"src/**/*.{ts,tsx}\""
+        "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+        "format:check": "prettier --check \"src/**/*.{ts,tsx}\""
     },
     "dependencies": {
         "@next/env": "^16.2.10",

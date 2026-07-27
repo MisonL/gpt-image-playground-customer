@@ -3,9 +3,9 @@ import {
     getServerChannelState,
     resetServerChannelStateForTests
 } from '@/lib/server-channel-router';
+import { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { NextRequest } from 'next/server';
 
 let originalEnv: NodeJS.ProcessEnv;
 
