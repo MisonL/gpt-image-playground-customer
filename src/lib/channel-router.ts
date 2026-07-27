@@ -276,10 +276,10 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             (unhealthyUntilByChannelId.get(credential.channelId) ?? 0) > currentTime ||
             Boolean(
                 requestMode &&
-                    ((unhealthyUntilByCredentialRequestMode.get(credentialRequestModeKey(credential, requestMode)) ??
-                        0) > currentTime ||
-                        (unhealthyUntilByChannelRequestMode.get(channelRequestModeKey(credential, requestMode)) ?? 0) >
-                            currentTime)
+                ((unhealthyUntilByCredentialRequestMode.get(credentialRequestModeKey(credential, requestMode)) ?? 0) >
+                    currentTime ||
+                    (unhealthyUntilByChannelRequestMode.get(channelRequestModeKey(credential, requestMode)) ?? 0) >
+                        currentTime)
             )
         );
     };
@@ -293,8 +293,8 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             probeRequiredChannelIds.has(credential.channelId) ||
             Boolean(
                 requestMode &&
-                    (probeRequiredCredentialRequestModes.has(credentialRequestModeKey(credential, requestMode)) ||
-                        probeRequiredChannelRequestModes.has(channelRequestModeKey(credential, requestMode)))
+                (probeRequiredCredentialRequestModes.has(credentialRequestModeKey(credential, requestMode)) ||
+                    probeRequiredChannelRequestModes.has(channelRequestModeKey(credential, requestMode)))
             )
         );
     };

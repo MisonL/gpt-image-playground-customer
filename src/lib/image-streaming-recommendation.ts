@@ -1,10 +1,5 @@
 export type ImageStreamingRecommendationStrategy =
-    | 'off'
-    | 'auto'
-    | 'openai-sse'
-    | 'newapi-keepalive-sse'
-    | 'responses-sse'
-    | 'force-sse';
+    'off' | 'auto' | 'openai-sse' | 'newapi-keepalive-sse' | 'responses-sse' | 'force-sse';
 
 type ImageStreamingRecommendationInput = {
     streamingStrategy: ImageStreamingRecommendationStrategy;

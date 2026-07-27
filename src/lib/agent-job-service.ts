@@ -102,9 +102,7 @@ export function startAgentGenerateJob(options: {
 }
 
 type ResponseReadyResult =
-    | { type: 'response'; response: unknown }
-    | { type: 'stored_error'; error: AgentErrorBody }
-    | { type: 'running' };
+    { type: 'response'; response: unknown } | { type: 'stored_error'; error: AgentErrorBody } | { type: 'running' };
 
 async function runAgentGenerateJob(options: {
     store: AgentStateStore;

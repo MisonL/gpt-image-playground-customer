@@ -4,8 +4,7 @@ import type { ImageUpstreamProfile } from '@/lib/image-upstream-profile';
 type SizeValidationValues = Record<string, string | number>;
 
 export type SizeValidation =
-    | { valid: true }
-    | { valid: false; reason: string; reasonKey: string; values?: SizeValidationValues };
+    { valid: true } | { valid: false; reason: string; reasonKey: string; values?: SizeValidationValues };
 
 export const GPT_IMAGE_2_MIN_PIXELS = 655_360;
 export const GPT_IMAGE_2_MAX_PIXELS = 8_294_400;

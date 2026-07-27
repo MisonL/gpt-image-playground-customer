@@ -5,13 +5,7 @@ export const IMAGE_UPSTREAM_FORM_SERVER_DEFAULT = 'server-default';
 export type ImageUpstreamFormBackend = ImageGenerationBackend | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
 export type ImageUpstreamFormStreamingStrategy = ImageStreamingStrategy | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
 export type ImageUpstreamFormThinking =
-    | 'none'
-    | 'minimal'
-    | 'low'
-    | 'medium'
-    | 'high'
-    | 'xhigh'
-    | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
+    'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
 export type ImageUpstreamFormPromptOptimization = 'on' | 'off' | typeof IMAGE_UPSTREAM_FORM_SERVER_DEFAULT;
 export type ImageUpstreamRouteImpactKey =
     | 'upstream.backendImpactImages'
