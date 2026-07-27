@@ -89,6 +89,7 @@ npm run npm-install-policy:check
 npm run dependencies:check
 npm test
 npm run lint
+npm run format:check
 npm run lint:scripts
 npm run build
 git diff --check
@@ -132,6 +133,7 @@ docker compose up -d --build
 ```bash
 npm test
 npm run lint
+npm run format:check
 npm run lint:scripts
 npm run build
 git diff --check

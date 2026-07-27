@@ -378,6 +378,7 @@ Hugging Face Space 部署见 [docs/deployment/huggingface-space-free.md](./docs/
 | `npm run lint`                    | 检查 `src/` 代码。                                                                          |
 | `npm run lint:scripts`            | 检查仓库脚本和 skill 脚本语法。                                                             |
 | `npm run format`                  | 使用仓库 Prettier 配置格式化 `src/` 下 TypeScript 和 TSX 文件。                             |
+| `npm run format:check`            | 只检查 `src/` 下 TypeScript 和 TSX 文件格式，不写入文件。                                   |
 | `npm run version:check`           | 检查版本、README badge 和 CHANGELOG 口径。                                                  |
 | `npm run verify`                  | 运行提交前基线。                                                                            |
 | `npm run docker:cleanup-fixtures` | 清理遗留的整仓挂载 Docker fixture 容器。                                                    |
