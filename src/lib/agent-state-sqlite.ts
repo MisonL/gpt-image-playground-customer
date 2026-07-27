@@ -112,6 +112,13 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
         runSqliteMigrations(this.db);
     }
 
+    async close(): Promise<void> {
+        const db = this.db;
+        if (!db) return;
+        db.close();
+        this.db = undefined;
+    }
+
     async recoverExpiredRequests(now = new Date()): Promise<number> {
         const db = this.requireDb();
         const nowIso = isoDate(now);
@@ -337,8 +344,7 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
 
     async getRequest(requestId: string): Promise<AgentRequestRecord | undefined> {
         const row = this.requireDb().prepare('SELECT * FROM agent_requests WHERE request_id = ?').get(requestId) as
-            | SqliteRequestRow
-            | undefined;
+            SqliteRequestRow | undefined;
         return row ? this.mapRequestRow(row) : undefined;
     }
 
@@ -351,8 +357,7 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
 
     async getArtifact(id: string): Promise<AgentArtifactRecord | undefined> {
         const row = this.requireDb().prepare('SELECT * FROM agent_artifacts WHERE id = ?').get(id) as
-            | SqliteArtifactRow
-            | undefined;
+            SqliteArtifactRow | undefined;
         return row ? this.mapArtifactRow(row) : undefined;
     }
 
@@ -484,8 +489,7 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
 
     async readImageShareRecord(token: string): Promise<ImageShareRecord | undefined> {
         const row = this.requireDb().prepare('SELECT * FROM image_shares WHERE token = ?').get(token) as
-            | SqliteShareRow
-            | undefined;
+            SqliteShareRow | undefined;
         return row ? this.mapShareRow(row) : undefined;
     }
 
@@ -556,8 +560,7 @@ export class SqliteAgentStateStore implements AgentStateStore, ImageShareStateSt
 
     private assertArtifactCanBeInserted(artifact: AgentArtifactRecord): void {
         const existing = this.requireDb().prepare('SELECT * FROM agent_artifacts WHERE id = ?').get(artifact.id) as
-            | SqliteArtifactRow
-            | undefined;
+            SqliteArtifactRow | undefined;
         if (existing && !sameArtifactRecord(this.mapArtifactRow(existing), artifact)) {
             throw new Error('artifact metadata conflict');
         }

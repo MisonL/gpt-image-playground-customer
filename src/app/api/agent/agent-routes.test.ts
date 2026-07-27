@@ -91,14 +91,13 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-    const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } = await import(
-        '@/lib/agent-state-runtime'
-    );
+    const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } =
+        await import('@/lib/agent-state-runtime');
     const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
     restoreProcessEnv(originalEnv);
     process.chdir(originalCwd);
     setAgentStateStoreFactoryForTests(undefined);
-    resetAgentStateStoreForTests();
+    await resetAgentStateStoreForTests();
     resetServerChannelStateForTests();
     await rm(tempDir, { recursive: true, force: true });
 });
@@ -2215,9 +2214,8 @@ describe('Agent route integration', () => {
 
     it('returns structured errors for missing and expired jobs', async () => {
         const { getJob, getJobResult } = await loadAgentRoutes();
-        const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } = await import(
-            '@/lib/agent-state-runtime'
-        );
+        const { resetAgentStateStoreForTests, setAgentStateStoreFactoryForTests } =
+            await import('@/lib/agent-state-runtime');
 
         const missing = await getJob(new Request('http://localhost/api/agent/jobs/missing-job'), {
             params: Promise.resolve({ id: 'missing-job' })
@@ -2271,7 +2269,7 @@ describe('Agent route integration', () => {
                 return false;
             }
         }));
-        resetAgentStateStoreForTests();
+        await resetAgentStateStoreForTests();
 
         const expired = await getJobResult(new Request('http://localhost/api/agent/jobs/expired-job/result'), {
             params: Promise.resolve({ id: 'expired-job' })
@@ -3743,7 +3741,7 @@ describe(
 async function loadAgentRoutes() {
     const { resetAgentStateStoreForTests } = await import('@/lib/agent-state-runtime');
     const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
-    resetAgentStateStoreForTests();
+    await resetAgentStateStoreForTests();
     resetServerChannelStateForTests();
     const generateRoute = await import('./images/generate/route');
     const editRoute = await import('./images/edit/route');
@@ -4098,8 +4096,7 @@ function readStoredArtifactFilepath(id: string): string {
     const db = new Database(path.join(tempDir, 'agent.sqlite'), { readonly: true });
     try {
         const row = db.prepare('SELECT filepath FROM agent_artifacts WHERE id = ?').get(id) as
-            | { filepath: string }
-            | undefined;
+            { filepath: string } | undefined;
         assert.ok(row);
         return row.filepath;
     } finally {

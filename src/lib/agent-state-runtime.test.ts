@@ -14,9 +14,9 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
-afterEach(() => {
+afterEach(async () => {
     setAgentStateStoreFactoryForTests(undefined);
-    resetAgentStateStoreForTests();
+    await resetAgentStateStoreForTests();
 });
 
 describe('agent-state-runtime recovery scheduling', () => {
@@ -24,6 +24,136 @@ describe('agent-state-runtime recovery scheduling', () => {
         const store = getAgentStateStore({ AGENT_STATE_BACKEND: 'memory' });
 
         assert.ok(store instanceof MemoryAgentStateStore);
+    });
+
+    it('closes a cached store before clearing test state', async () => {
+        const store = createFakeStore();
+        let closeCalls = 0;
+        store.close = async () => {
+            closeCalls += 1;
+        };
+
+        setAgentStateStoreFactoryForTests(() => store);
+        getAgentStateStore({ AGENT_STATE_BACKEND: 'sqlite', AGENT_SQLITE_PATH: 'agent.sqlite' });
+        await resetAgentStateStoreForTests();
+
+        assert.equal(closeCalls, 1);
+    });
+
+    it('waits for initialization to finish before closing test state', async () => {
+        const store = createFakeStore();
+        let releaseInitialization: (() => void) | undefined;
+        const initialization = new Promise<void>((resolve) => {
+            releaseInitialization = resolve;
+        });
+        let closeCalls = 0;
+        store.init = async () => {
+            store.initCalls += 1;
+            await initialization;
+        };
+        store.close = async () => {
+            assert.equal(store.initCalls, 1);
+            closeCalls += 1;
+        };
+        setAgentStateStoreFactoryForTests(() => store);
+
+        getAgentStateStore({ AGENT_STATE_BACKEND: 'sqlite', AGENT_SQLITE_PATH: 'agent.sqlite' });
+        const reset = resetAgentStateStoreForTests();
+        await delay(10);
+        assert.equal(closeCalls, 0);
+        releaseInitialization?.();
+        await reset;
+
+        assert.equal(closeCalls, 1);
+    });
+
+    it('waits for an active recovery before closing test state', async () => {
+        const store = createFakeStore();
+        let releaseRecovery: (() => void) | undefined;
+        const recovery = new Promise<void>((resolve) => {
+            releaseRecovery = resolve;
+        });
+        let recoveryFinished = false;
+        let closeCalls = 0;
+        store.recoverExpiredRequests = async () => {
+            store.recoveryCalls += 1;
+            await recovery;
+            recoveryFinished = true;
+            return 0;
+        };
+        store.close = async () => {
+            assert.equal(recoveryFinished, true);
+            closeCalls += 1;
+        };
+        setAgentStateStoreFactoryForTests(() => store);
+        const env = {
+            AGENT_STATE_BACKEND: 'sqlite',
+            AGENT_SQLITE_PATH: 'agent.sqlite',
+            AGENT_RECOVERY_INTERVAL_MS: '1000'
+        };
+
+        const ready = ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.000Z'));
+        await delay(10);
+        const reset = resetAgentStateStoreForTests();
+        await delay(10);
+        assert.equal(closeCalls, 0);
+        releaseRecovery?.();
+        await ready;
+        await reset;
+
+        assert.equal(closeCalls, 1);
+    });
+
+    it('waits for explicit startup recovery before closing test state', async () => {
+        const store = createFakeStore();
+        let releaseRecovery: (() => void) | undefined;
+        const recovery = new Promise<void>((resolve) => {
+            releaseRecovery = resolve;
+        });
+        let recoveryFinished = false;
+        let closeCalls = 0;
+        store.recoverExpiredRequests = async () => {
+            store.recoveryCalls += 1;
+            await recovery;
+            recoveryFinished = true;
+            return 1;
+        };
+        store.close = async () => {
+            assert.equal(recoveryFinished, true);
+            closeCalls += 1;
+        };
+        setAgentStateStoreFactoryForTests(() => store);
+        const env = { AGENT_STATE_BACKEND: 'sqlite', AGENT_SQLITE_PATH: 'agent.sqlite' };
+
+        const startupRecovery = recoverAgentStateOnStartup(env);
+        await delay(10);
+        const reset = resetAgentStateStoreForTests();
+        await delay(10);
+        assert.equal(closeCalls, 0);
+        releaseRecovery?.();
+        await startupRecovery;
+        await reset;
+
+        assert.equal(closeCalls, 1);
+    });
+
+    it('rejects a configuration change instead of abandoning an active store', async () => {
+        const store = createFakeStore();
+        let closeCalls = 0;
+        store.close = async () => {
+            closeCalls += 1;
+        };
+        setAgentStateStoreFactoryForTests(() => store);
+
+        getAgentStateStore({ AGENT_STATE_BACKEND: 'sqlite', AGENT_SQLITE_PATH: 'first.sqlite' });
+        assert.throws(
+            () => getAgentStateStore({ AGENT_STATE_BACKEND: 'sqlite', AGENT_SQLITE_PATH: 'second.sqlite' }),
+            /configuration cannot change/
+        );
+        assert.equal(closeCalls, 0);
+        await resetAgentStateStoreForTests();
+
+        assert.equal(closeCalls, 1);
     });
 
     it('throttles request-time recovery checks by interval', async () => {
@@ -90,6 +220,10 @@ describe('agent-state-runtime recovery scheduling', () => {
     it('clears a failed store init so the next request can retry after the environment recovers', async () => {
         let shouldFailInit = true;
         const store = createFakeStore({ failInit: () => shouldFailInit });
+        let closeCalls = 0;
+        store.close = async () => {
+            closeCalls += 1;
+        };
         setAgentStateStoreFactoryForTests(() => store);
         const env = {
             AGENT_STATE_BACKEND: 'sqlite',
@@ -100,6 +234,7 @@ describe('agent-state-runtime recovery scheduling', () => {
             () => ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.000Z')),
             /init failed/
         );
+        assert.equal(closeCalls, 1);
         shouldFailInit = false;
         await ensureAgentStateStoreReady(env, new Date('2026-05-12T00:00:00.100Z'));
 

@@ -19,6 +19,7 @@ describe('SqliteAgentStateStore', () => {
     });
 
     after(async () => {
+        await store.close();
         await rm(tempDir, { recursive: true, force: true });
     });
 

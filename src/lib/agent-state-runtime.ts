@@ -17,24 +17,73 @@ type CachedStore = {
     key: string;
     store: AgentStateStore;
     initPromise: Promise<void>;
+    closePromise?: Promise<void>;
+    disposePromise?: Promise<void>;
+    disposing?: boolean;
     lastRecoveryAtMs?: number;
     recoveryPromise?: Promise<number>;
+    startupRecoveryPromise?: Promise<number>;
 };
 
 let cachedStore: CachedStore | undefined;
 let storeFactoryForTests:
-    | ((backend: AgentStateBackend, key: string, env: Record<string, string | undefined>) => AgentStateStore)
-    | undefined;
+    ((backend: AgentStateBackend, key: string, env: Record<string, string | undefined>) => AgentStateStore) | undefined;
 
-function cacheAgentStateStore(backend: AgentStateBackend, key: string, store: AgentStateStore): AgentStateStore {
-    const initPromise = store.init().catch((error) => {
-        if (cachedStore?.store === store && cachedStore.initPromise === initPromise) {
-            cachedStore = undefined;
+function cacheAgentStateStore(backend: AgentStateBackend, key: string, store: AgentStateStore): CachedStore {
+    const cached: CachedStore = { backend, key, store, initPromise: Promise.resolve() };
+    cachedStore = cached;
+    cached.initPromise = startStoreInitialization(store).catch(async (error) => {
+        if (cachedStore === cached) cachedStore = undefined;
+        try {
+            await closeCachedStore(cached);
+        } catch (closeError) {
+            throw new AggregateError([error, closeError], 'Agent state store initialization and cleanup failed.');
         }
         throw error;
     });
-    cachedStore = { backend, key, store, initPromise };
-    return store;
+    return cached;
+}
+
+function startStoreInitialization(store: AgentStateStore): Promise<void> {
+    try {
+        return Promise.resolve(store.init());
+    } catch (error) {
+        return Promise.reject(error);
+    }
+}
+
+function closeCachedStore(cached: CachedStore): Promise<void> {
+    if (!cached.closePromise) {
+        cached.closePromise = Promise.resolve().then(async () => {
+            await cached.store.close?.();
+        });
+    }
+    return cached.closePromise;
+}
+
+async function disposeCachedStore(cached: CachedStore): Promise<void> {
+    if (!cached.disposePromise) {
+        cached.disposing = true;
+        cached.disposePromise = (async () => {
+            try {
+                await cached.initPromise;
+            } catch {
+                // Initialization failure already attempts cleanup before rejecting.
+            }
+            try {
+                await cached.recoveryPromise;
+            } catch {
+                // Recovery errors are owned by the request that started recovery.
+            }
+            try {
+                await cached.startupRecoveryPromise;
+            } catch {
+                // Startup recovery errors are owned by server startup.
+            }
+            await closeCachedStore(cached);
+        })();
+    }
+    await cached.disposePromise;
 }
 
 function readEnvValue(env: Record<string, string | undefined>, fieldName: string): string | undefined {
@@ -68,8 +117,10 @@ export function readAgentDatabaseUrl(env: Record<string, string | undefined> = p
     return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${encodeURIComponent(database)}`;
 }
 
-export function resetAgentStateStoreForTests(): void {
+export async function resetAgentStateStoreForTests(): Promise<void> {
+    const cached = cachedStore;
     cachedStore = undefined;
+    if (cached) await disposeCachedStore(cached);
 }
 
 export function setAgentStateStoreFactoryForTests(
@@ -80,7 +131,7 @@ export function setAgentStateStoreFactoryForTests(
     storeFactoryForTests = factory;
 }
 
-export function getAgentStateStore(env: Record<string, string | undefined> = process.env): AgentStateStore {
+function getCachedAgentStateStore(env: Record<string, string | undefined> = process.env): CachedStore {
     const backend = readAgentStateBackend(env);
     const databaseUrl = backend === 'postgres' ? readAgentDatabaseUrl(env) : undefined;
     const key =
@@ -89,8 +140,11 @@ export function getAgentStateStore(env: Record<string, string | undefined> = pro
             : backend === 'memory'
               ? 'memory'
               : path.resolve(/* turbopackIgnore: true */ process.cwd(), readAgentSqlitePath(env));
-    if (cachedStore && cachedStore.backend === backend && cachedStore.key === key) {
-        return cachedStore.store;
+    if (cachedStore) {
+        if (cachedStore.backend === backend && cachedStore.key === key) return cachedStore;
+        throw new Error(
+            'Agent state store configuration cannot change after initialization. Restart the process first.'
+        );
     }
     if (storeFactoryForTests) {
         return cacheAgentStateStore(backend, key, storeFactoryForTests(backend, key, env));
@@ -107,59 +161,70 @@ export function getAgentStateStore(env: Record<string, string | undefined> = pro
     return cacheAgentStateStore(backend, key, new SqliteAgentStateStore(key));
 }
 
+export function getAgentStateStore(env: Record<string, string | undefined> = process.env): AgentStateStore {
+    return getCachedAgentStateStore(env).store;
+}
+
 export async function ensureAgentStateStoreReady(
     env: Record<string, string | undefined> = process.env,
     now = new Date()
 ): Promise<AgentStateStore> {
-    const store = getAgentStateStore(env);
-    await cachedStore?.initPromise;
-    await recoverAgentStateIfDue(store, env, now);
-    return store;
+    const cached = getCachedAgentStateStore(env);
+    await cached.initPromise;
+    await recoverAgentStateIfDue(cached, env, now);
+    return cached.store;
 }
 
 export async function recoverAgentStateOnStartup(
     env: Record<string, string | undefined> = process.env
 ): Promise<number> {
-    const store = getAgentStateStore(env);
-    await cachedStore?.initPromise;
-    const recovered = await store.recoverExpiredRequests();
-    await store.purgeExpiredRequests();
-    await purgeExpiredImageSharesForStore(store, new Date(), { purgeOrphanFiles: false });
-    if (cachedStore) {
-        cachedStore.lastRecoveryAtMs = Date.now();
+    const cached = getCachedAgentStateStore(env);
+    if (!cached.startupRecoveryPromise) {
+        cached.startupRecoveryPromise = (async () => {
+            await cached.initPromise;
+            if (cached.disposing) throw new Error('Agent state store is closing.');
+            const recovered = await cached.store.recoverExpiredRequests();
+            await cached.store.purgeExpiredRequests();
+            await purgeExpiredImageSharesForStore(cached.store, new Date(), { purgeOrphanFiles: false });
+            cached.lastRecoveryAtMs = Date.now();
+            return recovered;
+        })();
     }
-    return recovered;
+    const recoveryPromise = cached.startupRecoveryPromise;
+    try {
+        return await recoveryPromise;
+    } finally {
+        if (cached.startupRecoveryPromise === recoveryPromise) cached.startupRecoveryPromise = undefined;
+    }
 }
 
 async function recoverAgentStateIfDue(
-    store: AgentStateStore,
+    cached: CachedStore,
     env: Record<string, string | undefined>,
     now: Date
 ): Promise<void> {
-    if (!cachedStore) return;
+    if (cached.disposing) {
+        throw new Error('Agent state store is closing.');
+    }
     const nowMs = now.getTime();
     const intervalMs = readAgentRecoveryIntervalMs(env);
-    if (cachedStore.recoveryPromise) {
-        await cachedStore.recoveryPromise;
+    if (cached.recoveryPromise) {
+        await cached.recoveryPromise;
         return;
     }
-    if (cachedStore.lastRecoveryAtMs !== undefined && nowMs - cachedStore.lastRecoveryAtMs < intervalMs) {
+    if (cached.lastRecoveryAtMs !== undefined && nowMs - cached.lastRecoveryAtMs < intervalMs) {
         return;
     }
-    cachedStore.recoveryPromise = (async () => {
+    cached.recoveryPromise = (async () => {
         try {
-            await store.recoverExpiredRequests(now);
-            await store.purgeExpiredRequests(now);
-            await purgeExpiredImageSharesForStore(store, now, { purgeOrphanFiles: false });
-            if (cachedStore) {
-                cachedStore.lastRecoveryAtMs = nowMs;
-            }
+            await cached.store.recoverExpiredRequests(now);
+            await cached.store.purgeExpiredRequests(now);
+            await purgeExpiredImageSharesForStore(cached.store, now, { purgeOrphanFiles: false });
+            cached.lastRecoveryAtMs = nowMs;
             return 0;
         } finally {
-            if (cachedStore) {
-                cachedStore.recoveryPromise = undefined;
-            }
+            cached.recoveryPromise = undefined;
         }
     })();
-    await cachedStore.recoveryPromise;
+    await cached.recoveryPromise;
 }

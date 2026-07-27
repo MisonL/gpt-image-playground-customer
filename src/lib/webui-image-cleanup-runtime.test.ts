@@ -27,7 +27,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-    resetAgentStateStoreForTests();
+    await resetAgentStateStoreForTests();
     resetWebuiImageCleanupRuntimeForTests();
     resetWebuiImageRetentionStoresForTests();
     process.chdir(originalCwd);

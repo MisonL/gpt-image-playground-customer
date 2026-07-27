@@ -28,7 +28,7 @@ async function withTempCwd() {
 }
 
 afterEach(async () => {
-    resetAgentStateStoreForTests();
+    await resetAgentStateStoreForTests();
     if (previousCwd) process.chdir(previousCwd);
     if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
     previousCwd = '';

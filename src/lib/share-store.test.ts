@@ -15,7 +15,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-    resetAgentStateStoreForTests();
+    await resetAgentStateStoreForTests();
     process.chdir(originalCwd);
     await rm(tempDir, { recursive: true, force: true });
 });
@@ -112,6 +112,7 @@ describe('image share store', { concurrency: false }, () => {
         const secondDir = await mkdtemp(path.join(os.tmpdir(), 'image-share-second-'));
 
         try {
+            await resetAgentStateStoreForTests();
             process.chdir(secondDir);
             assert.equal(await readImageShare(first.token), undefined);
             const second = await createImageShare({
@@ -125,10 +126,12 @@ describe('image share store', { concurrency: false }, () => {
             const secondContent = await readImageShareContent(secondRecord);
 
             assert.equal(secondContent.buffer.toString(), 'second-image');
+            await resetAgentStateStoreForTests();
             process.chdir(tempDir);
             assert.equal(await readImageShare(second.token), undefined);
             assert.ok(await readImageShare(first.token));
         } finally {
+            await resetAgentStateStoreForTests();
             process.chdir(tempDir);
             await rm(secondDir, { recursive: true, force: true });
         }

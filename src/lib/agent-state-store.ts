@@ -74,6 +74,7 @@ export type RefreshAgentRequestLeaseInput = {
 
 export type AgentStateStore = {
     init(): Promise<void>;
+    close?(): Promise<void>;
     recoverExpiredRequests(now?: Date): Promise<number>;
     purgeExpiredRequests(now?: Date): Promise<number>;
     beginRequest(input: BeginAgentRequestInput): Promise<BeginAgentRequestResult>;
