@@ -200,6 +200,15 @@ describe('GenerationForm submit footer', () => {
 });
 
 describe('GenerationForm inactive state', { concurrency: false }, () => {
+    it('only shows the high-resolution streaming recommendation for the active form', () => {
+        const options = { size: 'landscape' as const, streamMode: 'non_stream' as const };
+        const activeHtml = renderGenerationForm(options);
+        const inactiveHtml = renderGenerationForm({ ...options, isActive: false });
+
+        assert.match(activeHtml, /当前是 high 质量大尺寸请求/);
+        assert.doesNotMatch(inactiveHtml, /当前是 high 质量大尺寸请求/);
+    });
+
     it('only applies profile-driven corrections after the form becomes active', async () => {
         const countCorrections: number[][] = [];
         const partialImageCorrections: number[] = [];

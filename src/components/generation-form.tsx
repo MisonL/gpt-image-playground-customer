@@ -424,14 +424,15 @@ export function GenerationForm({
     const streamingDisabledByStrategy = effectiveStreamingStrategy === 'off';
     const concreteSize = readConcreteSize({ size, model, customWidth, customHeight });
     const recommendStreaming = Boolean(
+        isActive &&
         concreteSize &&
-            shouldRecommendImageStreaming({
-                streamingStrategy: effectiveStreamingStrategy,
-                quality,
-                width: concreteSize.width,
-                height: concreteSize.height,
-                streamEnabled: streamMode !== 'non_stream'
-            })
+        shouldRecommendImageStreaming({
+            streamingStrategy: effectiveStreamingStrategy,
+            quality,
+            width: concreteSize.width,
+            height: concreteSize.height,
+            streamEnabled: streamMode !== 'non_stream'
+        })
     );
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(defaultAdvancedOpen);
     const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>(defaultAdvancedTab);
