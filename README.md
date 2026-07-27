@@ -12,7 +12,7 @@ app_port: 4783
 本地 AI 图片创作工作台，面向中文内容运营、设计草图和自动化生图流程。支持 `gpt-image-2`、OpenAI 兼容图片接口、文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪和 Agent API。
 
 <p align="center">
-  <img src="./readme-images/interface.jpg?v=20260608-07b596b" alt="GPT Image Playground 界面" width="900"/>
+  <img src="./readme-images/interface.jpg?v=20260727-7f75f27" alt="GPT Image Playground 界面" width="900"/>
 </p>
 
 ## 快速开始
@@ -83,13 +83,13 @@ start-windows.bat
 遮罩编辑示例：
 
 <p align="center">
-  <img src="./readme-images/mask-creation.jpg?v=20260608-07b596b" alt="遮罩创建" width="900"/>
+  <img src="./readme-images/mask-creation.jpg?v=20260727-7f75f27" alt="遮罩创建" width="900"/>
 </p>
 
 历史与费用示例：
 
 <p align="center">
-  <img src="./readme-images/history.jpg?v=20260608-07b596b" alt="历史面板" width="900"/>
+  <img src="./readme-images/history.jpg?v=20260727-7f75f27" alt="历史面板" width="900"/>
 </p>
 
 ## 配置
