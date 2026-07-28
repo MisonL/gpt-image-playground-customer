@@ -142,11 +142,17 @@ GIP_BIND_HOST=0.0.0.0 npm run deploy:local
 
 ### Hugging Face Space
 
+#### 创建私人 Space
+
 可直接复制官方 Space 到自己的 Hugging Face 账号或组织中，创建独立的私有服务：
 
 [![在 Hugging Face 复制此 Space](https://huggingface.co/datasets/huggingface/badges/resolve/main/duplicate-this-space-md.svg)](https://huggingface.co/spaces/misonL/gpt-image-playground-customer?duplicate=true)
 
 复制流程默认创建私有 Space，不会复制本服务的 API Key、访问码或 Agent token。创建后必须在新 Space 的 Settings 中配置 `APP_PASSWORD`、`AGENT_API_TOKEN` 和自己的上游凭证；Docker Space 的创建资格仍受 Hugging Face 当前账户政策约束。
+
+#### 维护本项目固定 Space
+
+下列命令只用于维护固定目标 `misonL/gpt-image-playground-customer`。复制出的私人 Space 在 Hugging Face Settings 中配置 Variables 和 Secrets；`npm run deploy:space` 不会自动定位或更新该私人副本。
 
 ```bash
 npm run doctor:hf-space

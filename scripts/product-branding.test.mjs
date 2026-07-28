@@ -32,6 +32,10 @@ describe('product branding', () => {
             /https:\/\/huggingface\.co\/spaces\/misonL\/gpt-image-playground-customer\?duplicate=true/
         );
         assert.match(readme, /复制流程默认创建私有 Space，不会复制本服务的 API Key、访问码或 Agent token。/);
+        assert.match(
+            readme,
+            /`npm run deploy:space` 不会自动定位或更新该私人副本。/
+        );
     });
 
     it('uses the formal product name in access-code guidance and history downloads', () => {
