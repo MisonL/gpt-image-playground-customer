@@ -3,7 +3,7 @@
 import { readPositiveIntegerEnv } from './env-utils.mjs';
 import { validateSpaceUrl } from './hf-space-doctor-utils.mjs';
 
-const DEFAULT_SPACE_URL = 'https://misonl-gpt-image-playground-customer.hf.space';
+const DEFAULT_SPACE_URL = 'https://misonl-visual-journal.hf.space';
 const KEEPALIVE_USER_AGENT = 'visual-journal-keepalive/1.0';
 const DEFAULT_KEEPALIVE_PATH = '/api/auth-status';
 const DEFAULT_TIMEOUT_MS = 30_000;

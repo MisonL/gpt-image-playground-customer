@@ -112,7 +112,7 @@ describe('HF Space keepalive script validation', () => {
         `);
         const result = runKeepalive(
             {
-                HF_SPACE_KEEPALIVE_URL: 'https://misonl-gpt-image-playground-customer.hf.space',
+                HF_SPACE_KEEPALIVE_URL: 'https://misonl-visual-journal.hf.space',
                 HF_SPACE_KEEPALIVE_PATH: '/api/auth-status',
                 HF_SPACE_KEEPALIVE_MAX_ATTEMPTS: '2',
                 HF_SPACE_KEEPALIVE_RETRY_DELAY_MS: '1',

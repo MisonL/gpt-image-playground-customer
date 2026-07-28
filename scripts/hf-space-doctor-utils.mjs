@@ -3,8 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const HF_SPACE_ID = 'misonL/gpt-image-playground-customer';
-export const HF_SPACE_URL = 'https://misonl-gpt-image-playground-customer.hf.space';
+export const HF_SPACE_ID = 'misonL/visual-journal';
+export const HF_SPACE_URL = 'https://misonl-visual-journal.hf.space';
 const DOCTOR_COMMAND_TIMEOUT_MS = 30_000;
 
 export function readEnvValue(name) {

@@ -110,11 +110,11 @@ npm run deploy:space
 配置或轮换 Variables/Secrets 时，直接使用官方 `hf` CLI：
 
 ```bash
-hf spaces variables add misonL/gpt-image-playground-customer -e AGENT_STATE_BACKEND=memory
-hf spaces variables add misonL/gpt-image-playground-customer -e NEXT_PUBLIC_IMAGE_STORAGE_MODE=indexeddb
-hf spaces variables add misonL/gpt-image-playground-customer -e APP_LOG_LEVEL=warn
-hf spaces secrets add misonL/gpt-image-playground-customer -s APP_PASSWORD=<page-access-code>
-hf spaces secrets add misonL/gpt-image-playground-customer -s AGENT_API_TOKEN=<long-random-agent-token>
+hf spaces variables add misonL/visual-journal -e AGENT_STATE_BACKEND=memory
+hf spaces variables add misonL/visual-journal -e NEXT_PUBLIC_IMAGE_STORAGE_MODE=indexeddb
+hf spaces variables add misonL/visual-journal -e APP_LOG_LEVEL=warn
+hf spaces secrets add misonL/visual-journal -s APP_PASSWORD=<page-access-code>
+hf spaces secrets add misonL/visual-journal -s AGENT_API_TOKEN=<long-random-agent-token>
 ```
 
 源码部署、远端诊断、Variables 和 Secrets 都由仓库命令与 `hf` CLI 协同完成；部署回退只使用现有 Git 凭据，不维护第二套 access-file 或 Secret 同步流程。
@@ -260,7 +260,7 @@ npm run smoke:hf-space-local
 
 - 工作流文件：`.github/workflows/hf-space-keepalive.yml`
 - 默认频率：每 6 小时一次，可手动触发 `workflow_dispatch`
-- 默认目标：`https://misonl-gpt-image-playground-customer.hf.space/api/auth-status`
+- 默认目标：`https://misonl-visual-journal.hf.space/api/auth-status`
 - GitHub Actions 使用 Node 26，并在最多 4 次请求中按 5 秒、10 秒、20 秒退避重试；每次超时 30 秒。失败日志会记录 HTTP 状态、响应类型和下一次等待时间，不把失败伪装成成功，也不会输出上游响应正文。
 - 行为边界：只访问只读鉴权状态端点，不携带 `APP_PASSWORD`、`AGENT_API_TOKEN` 或 OpenAI Key，不触发生图、不访问 Agent 生成接口。
 

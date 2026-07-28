@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { GIT_DEPLOY_AUTHOR_EMAIL, GIT_DEPLOY_AUTHOR_NAME } from './deploy-hf-space.mjs';
+import { HF_SPACE_ID, HF_SPACE_URL } from './hf-space-doctor-utils.mjs';
 import { FORMAL_PRODUCT_NAME } from './status.mjs';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -21,6 +22,8 @@ describe('product branding', () => {
             readme,
             /^---\ntitle: 图像手记 \/ Visual Journal\nshort_description: 本地优先的 AI 图片创作工作台\nsdk: docker\napp_port: 4783\n---/m
         );
+        assert.match(readme, /HF Space 已使用 `visual-journal` 名称；/);
+        assert.doesNotMatch(readme, /HF Space slug、环境变量、API 路径和 Skill 标识继续使用/);
         assert.match(favicon, /<title>图像手记 \/ Visual Journal<\/title>/);
     });
 
@@ -29,9 +32,9 @@ describe('product branding', () => {
 
         assert.match(
             readme,
-            /https:\/\/huggingface\.co\/spaces\/misonL\/gpt-image-playground-customer\?duplicate=true/
+            /https:\/\/huggingface\.co\/new-space\?duplicate=misonL%2Fvisual-journal/
         );
-        assert.match(readme, /复制流程默认创建私有 Space，不会复制本服务的 API Key、访问码或 Agent token。/);
+        assert.match(readme, /登录 Hugging Face 后，创建页会预填本 Space 作为复制来源。请在创建页选择 Private；/);
         assert.match(
             readme,
             /`npm run deploy:space` 不会自动定位或更新该私人副本。/
@@ -52,6 +55,8 @@ describe('product branding', () => {
 
         assert.match(keepalive, /const KEEPALIVE_USER_AGENT = 'visual-journal-keepalive\/1\.0';/);
         assert.match(keepalive, /'User-Agent': KEEPALIVE_USER_AGENT/);
+        assert.equal(HF_SPACE_ID, 'misonL/visual-journal');
+        assert.equal(HF_SPACE_URL, 'https://misonl-visual-journal.hf.space');
         assert.equal(GIT_DEPLOY_AUTHOR_NAME, 'Visual Journal deploy');
         assert.equal(GIT_DEPLOY_AUTHOR_EMAIL, 'deploy@visual-journal.local');
     });

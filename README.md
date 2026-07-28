@@ -13,7 +13,7 @@ app_port: 4783
 
 图像手记（Visual Journal）是本地优先的 AI 图片创作工作台，支持 `gpt-image-2` 与 OpenAI 兼容图片接口。提供文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪、多渠道路由和 Agent API。
 
-对外产品名称为“图像手记 / Visual Journal”。为保持已有部署和自动化客户端兼容，仓库包名、Docker 服务、HF Space slug、环境变量、API 路径和 Skill 标识继续使用 `gpt-image-playground` 相关技术名称。
+对外产品名称为“图像手记 / Visual Journal”。HF Space 已使用 `visual-journal` 名称；为保持已有部署和自动化客户端兼容，仓库包名、Docker 服务、环境变量、API 路径和 Skill 标识继续使用 `gpt-image-playground` 相关技术名称。
 
 <p align="center">
   <img src="./readme-images/interface.jpg" alt="图像手记主界面" width="900"/>
@@ -144,15 +144,15 @@ GIP_BIND_HOST=0.0.0.0 npm run deploy:local
 
 #### 创建私人 Space
 
-可直接复制官方 Space 到自己的 Hugging Face 账号或组织中，创建独立的私有服务：
+可直接进入 Hugging Face 的新建 Space 页面，复制官方 Space 到自己的账号或组织中，创建独立服务：
 
-[![在 Hugging Face 复制此 Space](https://huggingface.co/datasets/huggingface/badges/resolve/main/duplicate-this-space-md.svg)](https://huggingface.co/spaces/misonL/gpt-image-playground-customer?duplicate=true)
+[![在 Hugging Face 复制此 Space](https://huggingface.co/datasets/huggingface/badges/resolve/main/duplicate-this-space-md.svg)](https://huggingface.co/new-space?duplicate=misonL%2Fvisual-journal)
 
-复制流程默认创建私有 Space，不会复制本服务的 API Key、访问码或 Agent token。创建后必须在新 Space 的 Settings 中配置 `APP_PASSWORD`、`AGENT_API_TOKEN` 和自己的上游凭证；Docker Space 的创建资格仍受 Hugging Face 当前账户政策约束。
+登录 Hugging Face 后，创建页会预填本 Space 作为复制来源。请在创建页选择 Private；复制不会带出本服务的 API Key、访问码或 Agent token。创建后必须在新 Space 的 Settings 中配置 `APP_PASSWORD`、`AGENT_API_TOKEN` 和自己的上游凭证；Docker Space 的创建资格仍受 Hugging Face 当前账户政策约束。
 
 #### 维护本项目固定 Space
 
-下列命令只用于维护固定目标 `misonL/gpt-image-playground-customer`。复制出的私人 Space 在 Hugging Face Settings 中配置 Variables 和 Secrets；`npm run deploy:space` 不会自动定位或更新该私人副本。
+下列命令只用于维护固定目标 `misonL/visual-journal`。复制出的私人 Space 在 Hugging Face Settings 中配置 Variables 和 Secrets；`npm run deploy:space` 不会自动定位或更新该私人副本。
 
 ```bash
 npm run doctor:hf-space
