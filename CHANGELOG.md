@@ -6,22 +6,13 @@
 
 ## [未发布]
 
-### 变更
+暂无变更。
 
-- 产品正式名称统一为“图像手记 / Visual Journal”；现有技术标识保持兼容，并同步更新 Space 卡片、浏览器图标、访问码文案、历史下载名和运维标识。
-- 默认上游请求和上游能力探针 User-Agent 统一为 `visual-journal` 品牌标识。
-- Agent 状态库初始化、请求恢复和测试重置遵循显式资源释放顺序；运行中不允许切换状态库配置。
-- 本地部署在启用 WebUI 自动图片清理时要求显式确认，避免发布后立即清理历史图片。
-- Prettier 与 Tailwind 格式化插件升级到当前兼容版本，并收敛现有源码格式。
-
-### 修复
-
-- 非活动生成表单不再显示当前表单之外的高分辨率流式建议。
-
-## [2.2.0] - 2026-07-27
+## [2.2.0] - 2026-07-28
 
 ### 新增
 
+- README 增加 Hugging Face 官方复制入口，供其他用户创建独立的私有 Space；复制流程不会继承正式服务的凭证。
 - 增加工作台生成活动状态播报、短屏布局和 API 设置弹窗的回归测试，覆盖生成、批量、继续编辑和配置草稿生命周期。
 - 增加共享 DOM 测试辅助模块以及可转发 Node test runner 参数的脚本测试入口。
 - 增加默认关闭的 WebUI 文件系统图片自动清理，可配置保留天数，并通过运行时能力接口查询配置和最近执行摘要。
@@ -29,6 +20,11 @@
 
 ### 变更
 
+- 产品正式名称统一为“图像手记 / Visual Journal”；现有技术标识保持兼容，并同步更新 Space 卡片、浏览器图标、访问码文案、历史下载名和运维标识。
+- 默认上游请求和上游能力探针 User-Agent 统一为 `visual-journal` 品牌标识。
+- Agent 状态库初始化、请求恢复和测试重置遵循显式资源释放顺序；运行中不允许切换状态库配置。
+- 本地部署在启用 WebUI 自动图片清理时要求显式确认，避免发布后立即清理历史图片。
+- Prettier 与 Tailwind 格式化插件升级到当前兼容版本，并收敛现有源码格式。
 - Node.js 最低版本统一为 `22.15.0`，启动器、诊断脚本、客户说明和部署文档使用同一版本门槛。
 - 安装流程会确认 npm 支持 `--strict-allow-scripts`，避免旧 npm 静默忽略 `allowScripts` 白名单。
 - 独立启动脚本显式加载 Next.js 运行时环境，测试和版本检查脚本改为支持显式测试文件与 runner 参数。
@@ -39,6 +35,7 @@
 
 ### 修复
 
+- 非活动生成表单不再显示当前表单之外的高分辨率流式建议。
 - 修正生成完成、批量进度和继续编辑之间残留活动状态导致的实时播报错误。
 - 修正 API 设置弹窗常驻挂载后的草稿回填、焦点恢复和重复测试生命周期问题。
 - 修正移动端运行时状态加载引起的首屏布局位移，并增加键盘跳到主要内容入口。
@@ -178,12 +175,12 @@
 - 支持基于 OpenAI 兼容 Images API 的本地图片生成和编辑流程。
 - 增加 Docker 部署支持和多平台启动脚本。
 
-[未发布]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.2.0...HEAD
-[2.2.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.1.0...v2.2.0
-[2.1.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v2.0.0...v2.1.0
-[2.0.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.4.0...v2.0.0
-[1.4.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.3.0...v1.4.0
-[1.3.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/v1.1.0...v1.2.0
-[1.1.0]: https://github.com/MisonL/gpt-image-playground-customer/compare/dc7c8f5855e80cb9507517b5748c718e7155df52...v1.1.0
-[1.0.0]: https://github.com/MisonL/gpt-image-playground-customer/commit/dc7c8f5855e80cb9507517b5748c718e7155df52
+[未发布]: https://github.com/MisonL/visual-journal/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/MisonL/visual-journal/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/MisonL/visual-journal/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/MisonL/visual-journal/compare/v1.4.0...v2.0.0
+[1.4.0]: https://github.com/MisonL/visual-journal/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/MisonL/visual-journal/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/MisonL/visual-journal/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/MisonL/visual-journal/compare/dc7c8f5855e80cb9507517b5748c718e7155df52...v1.1.0
+[1.0.0]: https://github.com/MisonL/visual-journal/commit/dc7c8f5855e80cb9507517b5748c718e7155df52

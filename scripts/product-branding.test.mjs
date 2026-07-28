@@ -24,6 +24,16 @@ describe('product branding', () => {
         assert.match(favicon, /<title>图像手记 \/ Visual Journal<\/title>/);
     });
 
+    it('offers an isolated private Hugging Face Space copy without sharing production credentials', () => {
+        const readme = readRepositoryText('README.md');
+
+        assert.match(
+            readme,
+            /https:\/\/huggingface\.co\/spaces\/misonL\/gpt-image-playground-customer\?duplicate=true/
+        );
+        assert.match(readme, /复制流程默认创建私有 Space，不会复制本服务的 API Key、访问码或 Agent token。/);
+    });
+
     it('uses the formal product name in access-code guidance and history downloads', () => {
         const translations = readRepositoryText('src/lib/i18n.tsx');
         const page = readRepositoryText('src/app/page.tsx');

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const CHANGELOG_BASE_URL = 'https://github.com/MisonL/gpt-image-playground-customer';
+const CHANGELOG_BASE_URL = 'https://github.com/MisonL/visual-journal';
 
 function readText(path) {
     return readFileSync(join(REPO_ROOT, path), 'utf8');
