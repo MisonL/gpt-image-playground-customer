@@ -177,7 +177,7 @@ function createEditingFormProps({
         setEditPromptOptimization: noop,
         editForceWeb: false,
         setEditForceWeb: noop,
-        estimatedCostLabel: '预计 0.12 积分',
+        requestSummaryLabel: '请求 1 张图片',
         initialAdvancedOpen: advancedOpen,
         initialAdvancedTab: advancedTab
     };
@@ -374,7 +374,7 @@ describe('EditingForm advanced upstream controls', () => {
         const html = renderEditingForm({ backend: 'server-default', advancedOpen: false });
 
         assert.match(html, /默认线路/);
-        assert.match(html, /预计 0\.12 积分/);
+        assert.match(html, /请求 1 张图片/);
     });
 
     it('renders edit model controls only in the professional model tab', () => {

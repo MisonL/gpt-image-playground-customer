@@ -5,23 +5,23 @@ import { describe, it } from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 describe('WorkbenchStatusStrip', () => {
-    it('shows model, request route, streaming status, cost, and runtime state before generation', () => {
+    it('shows model, request route, streaming mode, requested image count, and runtime state before generation', () => {
         const html = renderToStaticMarkup(
             <I18nProvider>
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='images-sse'
-                    streamStatus='流式可用'
-                    costLabel='预计 0.12 积分'
+                    streamStatus='自动'
+                    requestSummaryLabel='请求 1 张图片'
                 />
             </I18nProvider>
         );
 
-        assert.match(html, /运行时可用/);
+        assert.match(html, /当前路由可参与请求/);
         assert.match(html, /gpt-image-2/);
         assert.match(html, /images-sse/);
-        assert.match(html, /流式可用/);
-        assert.match(html, /预计 0\.12 积分/);
+        assert.match(html, /自动/);
+        assert.match(html, /请求 1 张图片/);
     });
 
     it('shows explicit parallel batch state when the user enabled it for the current request', () => {
@@ -30,9 +30,9 @@ describe('WorkbenchStatusStrip', () => {
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='默认线路'
-                    streamStatus='流式可用'
+                    streamStatus='自动'
                     parallelBatchEnabled
-                    costLabel='预计 0.24 积分'
+                    requestSummaryLabel='请求 2 张图片'
                 />
             </I18nProvider>
         );
@@ -46,8 +46,8 @@ describe('WorkbenchStatusStrip', () => {
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='默认线路'
-                    streamStatus='普通生成'
-                    costLabel='预计 0.12 积分'
+                    streamStatus='非流式'
+                    requestSummaryLabel='请求 1 张图片'
                 />
             </I18nProvider>
         );
@@ -64,8 +64,8 @@ describe('WorkbenchStatusStrip', () => {
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='服务器默认'
-                    streamStatus='普通生成'
-                    costLabel='预计 0.12 积分'
+                    streamStatus='非流式'
+                    requestSummaryLabel='请求 1 张图片'
                     runtimeHealthStatus='checking'
                 />
             </I18nProvider>
@@ -75,8 +75,8 @@ describe('WorkbenchStatusStrip', () => {
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='服务器默认'
-                    streamStatus='普通生成'
-                    costLabel='预计 0.12 积分'
+                    streamStatus='非流式'
+                    requestSummaryLabel='请求 1 张图片'
                     runtimeHealthStatus='disconnected'
                 />
             </I18nProvider>
@@ -86,8 +86,8 @@ describe('WorkbenchStatusStrip', () => {
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='服务器默认'
-                    streamStatus='流式可用'
-                    costLabel='预计 0.12 积分'
+                    streamStatus='自动'
+                    requestSummaryLabel='请求 1 张图片'
                     runtimeHealthStatus='route-limited'
                 />
             </I18nProvider>
@@ -97,17 +97,17 @@ describe('WorkbenchStatusStrip', () => {
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='使用自定义上游'
-                    streamStatus='普通生成'
-                    costLabel='预计 0.12 积分'
+                    streamStatus='非流式'
+                    requestSummaryLabel='请求 1 张图片'
                     runtimeHealthStatus='custom-override'
                 />
             </I18nProvider>
         );
 
-        assert.match(checkingHtml, /正在检查运行时/);
+        assert.match(checkingHtml, /正在读取运行时状态/);
         assert.match(checkingHtml, /animate-spin/);
-        assert.match(disconnectedHtml, /运行时未连接/);
-        assert.match(routeLimitedHtml, /运行态受限/);
+        assert.match(disconnectedHtml, /未取得运行时状态/);
+        assert.match(routeLimitedHtml, /当前路由受限/);
         assert.match(customOverrideHtml, /使用自定义上游/);
     });
 
@@ -117,8 +117,8 @@ describe('WorkbenchStatusStrip', () => {
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='服务器默认'
-                    streamStatus='流式可用'
-                    costLabel='预计 0.12 积分'
+                    streamStatus='自动'
+                    requestSummaryLabel='请求 1 张图片'
                     channelRouting={{
                         effectiveRequestModes: ['images-non-stream', 'images-sse'],
                         requestModeHealth: [
@@ -150,7 +150,7 @@ describe('WorkbenchStatusStrip', () => {
 
         assert.match(html, /请求方式/);
         assert.match(html, /images-non-stream/);
-        assert.match(html, /已验证/);
+        assert.match(html, /可参与路由/);
         assert.match(html, /responses-sse/);
         assert.match(html, /冷却中或待探测/);
         assert.match(html, /最近渠道失败/);
@@ -165,8 +165,8 @@ describe('WorkbenchStatusStrip', () => {
                 <WorkbenchStatusStrip
                     model='gpt-image-2'
                     routeLabel='服务器默认'
-                    streamStatus='流式可用'
-                    costLabel='预计 0.12 积分'
+                    streamStatus='自动'
+                    requestSummaryLabel='请求 1 张图片'
                     channelRouting={{
                         effectiveRequestModes: ['images-non-stream'],
                         requestModeHealth: [

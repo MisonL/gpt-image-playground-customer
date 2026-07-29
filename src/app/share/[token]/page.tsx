@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useI18n } from '@/lib/i18n';
+import { resolveShareApiErrorMessage } from '@/lib/share-api-error';
 import { buildShareApiPath } from '@/lib/share-route-paths';
 import Image from 'next/image';
 import * as React from 'react';
@@ -18,6 +19,12 @@ type ShareMetadata = {
     accessCodeRequired: boolean;
     expired: boolean;
 };
+
+class SharePageUserError extends Error {}
+
+function resolveSharePageUserErrorMessage(error: unknown, fallback: string): string {
+    return error instanceof SharePageUserError ? error.message : fallback;
+}
 
 export default function SharePage({ params }: { params: Promise<{ token: string }> }) {
     const { t } = useI18n();
@@ -38,9 +45,9 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
             setError(null);
             try {
                 const response = await fetch(buildShareApiPath({ pathname: window.location.pathname, token }));
-                const body = await response.json();
+                const body: unknown = await response.json().catch(() => null);
                 if (!response.ok) {
-                    throw new Error(body.error || t('share.loadFailed'));
+                    throw new SharePageUserError(resolveShareApiErrorMessage(body, t, 'share.loadFailed'));
                 }
                 if (active) {
                     const nextMetadata = body as ShareMetadata;
@@ -55,11 +62,13 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                             }
                         );
                         if (!imageResponse.ok) {
-                            const imageBody = await imageResponse.json().catch(() => ({}));
-                            throw new Error(imageBody.error || t('share.unlockFailed'));
+                            const imageBody: unknown = await imageResponse.json().catch(() => null);
+                            throw new SharePageUserError(
+                                resolveShareApiErrorMessage(imageBody, t, 'share.unlockFailed')
+                            );
                         }
                         if (!imageResponse.headers.get('content-type')?.startsWith('image/')) {
-                            throw new Error(t('share.unlockFailed'));
+                            throw new SharePageUserError(t('share.unlockFailed'));
                         }
                         const blob = await imageResponse.blob();
                         const nextUrl = URL.createObjectURL(blob);
@@ -69,7 +78,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                     }
                 }
             } catch (err) {
-                if (active) setError(err instanceof Error ? err.message : t('share.loadFailed'));
+                if (active) setError(resolveSharePageUserErrorMessage(err, t('share.loadFailed')));
             } finally {
                 if (active) setIsLoading(false);
             }
@@ -100,11 +109,11 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
                 }
             );
             if (!response.ok) {
-                const body = await response.json().catch(() => ({}));
-                throw new Error(body.error || t('share.unlockFailed'));
+                const body: unknown = await response.json().catch(() => null);
+                throw new SharePageUserError(resolveShareApiErrorMessage(body, t, 'share.unlockFailed'));
             }
             if (!response.headers.get('content-type')?.startsWith('image/')) {
-                throw new Error(t('share.unlockFailed'));
+                throw new SharePageUserError(t('share.unlockFailed'));
             }
             const blob = await response.blob();
             const nextUrl = URL.createObjectURL(blob);
@@ -112,7 +121,7 @@ export default function SharePage({ params }: { params: Promise<{ token: string 
             imageUrlRef.current = nextUrl;
             setImageUrl(nextUrl);
         } catch (err) {
-            setError(err instanceof Error ? err.message : t('share.unlockFailed'));
+            setError(resolveSharePageUserErrorMessage(err, t('share.unlockFailed')));
         } finally {
             setIsUnlocking(false);
         }

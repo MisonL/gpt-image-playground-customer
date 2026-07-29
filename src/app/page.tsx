@@ -113,12 +113,10 @@ import type { ActualCostDetails } from '@/lib/upstream-cost/resolve';
 import { cn } from '@/lib/utils';
 import {
     mergeWebuiImageRetentionResults,
-    readApiErrorMessage,
     readWebuiImageFileOperationResults,
     readWebuiImageRetentionFilenames,
     type WebuiImageRetentionAction
 } from '@/lib/webui-image-retention-client';
-import { formatEstimatedCredits } from '@/lib/workbench-cost-label';
 import { createZipBlob } from '@/lib/zip-export';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Activity, ArrowUp, Loader2, Lock, Pause, PenLine, Settings2, X } from 'lucide-react';
@@ -759,19 +757,19 @@ export default function HomePage() {
         streamingStrategy: activeEffectiveStreamingStrategy,
         streamMode
     });
-    const activeTaskCount =
+    const activeRequestedImageCount =
         mode === 'generate' && workbenchMode === 'batch'
             ? readBatchPromptLines(genBatchPromptText).length
             : mode === 'generate'
               ? genN[0]
               : editN[0];
-    const activeEstimatedCostLabel = t('workbench.estimatedCost', {
-        credits: formatEstimatedCredits(activeTaskCount)
+    const activeRequestSummaryLabel = t('workbench.requestSummary', {
+        count: activeRequestedImageCount
     });
     const activeParallelBatchVisible = resolveStreamingBatchToggleState({
         allowStreamingBatch: streamingBatchEnabled,
         userEnabled: enableParallelBatch,
-        targetCount: activeTaskCount,
+        targetCount: activeRequestedImageCount,
         streamMode,
         streamingStrategy: activeEffectiveStreamingStrategy
     }).checked;
@@ -1387,11 +1385,25 @@ export default function HomePage() {
         const loadPermanentlySavedFilenames = async () => {
             try {
                 const response = await fetch('/api/image-retention', { signal: controller.signal });
-                const body: unknown = await response.json();
+                const body: unknown = await response.json().catch(() => null);
                 if (!response.ok) {
-                    throw new Error(readApiErrorMessage(body) ?? t('retention.loadFailed'));
+                    if (!controller.signal.aborted) {
+                        setError(
+                            (current) =>
+                                current ??
+                                createErrorNotice(
+                                    response.status === 401 ? t('error.unauthorized') : t('retention.loadFailed')
+                                )
+                        );
+                    }
+                    return;
                 }
-                const filenames = readWebuiImageRetentionFilenames(body);
+                let filenames: ReturnType<typeof readWebuiImageRetentionFilenames>;
+                try {
+                    filenames = readWebuiImageRetentionFilenames(body);
+                } catch {
+                    throw new Error(t('retention.loadFailed'));
+                }
                 if (!controller.signal.aborted) {
                     setLoadedWebuiImageRetentionState({
                         scopeKey: retentionScopeKey,
@@ -1400,7 +1412,7 @@ export default function HomePage() {
                 }
             } catch (error) {
                 if (controller.signal.aborted) return;
-                console.error('读取永久保存图片状态失败：', error);
+                console.error('读取自动清理保护状态失败：', error);
                 setError((current) => current ?? createErrorNotice(t('retention.loadFailed')));
             }
         };
@@ -1415,15 +1427,20 @@ export default function HomePage() {
                 throw new Error(t('retention.updateFailed'));
             }
 
-            const response = await fetch('/api/image-retention', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    action,
-                    filenames,
-                    ...(clientPasswordHash ? { passwordHash: clientPasswordHash } : {})
-                })
-            });
+            let response: Response;
+            try {
+                response = await fetch('/api/image-retention', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action,
+                        filenames,
+                        ...(clientPasswordHash ? { passwordHash: clientPasswordHash } : {})
+                    })
+                });
+            } catch {
+                throw new Error(t('retention.updateFailed'));
+            }
             let body: unknown;
             try {
                 body = await response.json();
@@ -1431,10 +1448,15 @@ export default function HomePage() {
                 throw new Error(t('retention.updateFailed'));
             }
             if (!response.ok && response.status !== 207) {
-                throw new Error(readApiErrorMessage(body) ?? t('retention.updateFailed'));
+                throw new Error(response.status === 401 ? t('error.unauthorized') : t('retention.updateFailed'));
             }
 
-            const results = readWebuiImageFileOperationResults(body);
+            let results: ReturnType<typeof readWebuiImageFileOperationResults>;
+            try {
+                results = readWebuiImageFileOperationResults(body);
+            } catch {
+                throw new Error(t('retention.updateFailed'));
+            }
             setLoadedWebuiImageRetentionState((current) =>
                 current?.scopeKey === retentionScopeKey
                     ? {
@@ -3136,9 +3158,7 @@ export default function HomePage() {
                 scheduleResultFeedbackDeleteTargets(feedbackDeleteTargets);
             } catch (e) {
                 console.error('清空历史记录失败：', e);
-                setError(
-                    createErrorNotice(t('error.clearHistory', { message: e instanceof Error ? e.message : String(e) }))
-                );
+                setError(createErrorNotice(t('error.clearHistory')));
             }
         }
     }, [createErrorNotice, history, scheduleResultFeedbackDeleteTargets, t]);
@@ -3158,7 +3178,7 @@ export default function HomePage() {
             }
             const response = await fetch(`/api/image/${filename}`);
             if (!response.ok) {
-                throw new Error(t('error.fetchImage', { statusText: response.statusText }));
+                throw new Error(t('error.fetchImage', { status: response.status }));
             }
             return response.blob();
         },
@@ -3321,7 +3341,7 @@ export default function HomePage() {
                     return false;
                 }
                 if (!response.ok) {
-                    throw new Error(t('error.fetchImage', { statusText: response.statusText }));
+                    throw new Error(t('error.fetchImage', { status: response.status }));
                 }
                 blob = await response.blob();
                 mimeType = response.headers.get('Content-Type') || mimeType;
@@ -3449,19 +3469,34 @@ export default function HomePage() {
                         apiPayload.passwordHash = clientPasswordHash;
                     }
 
-                    const response = await fetch('/api/image-delete', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(apiPayload)
-                    });
+                    let response: Response;
+                    try {
+                        response = await fetch('/api/image-delete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(apiPayload)
+                        });
+                    } catch {
+                        throw new Error(t('error.deleteUnexpected'));
+                    }
 
-                    const result: unknown = await response.json();
+                    let result: unknown;
+                    try {
+                        result = await response.json();
+                    } catch {
+                        throw new Error(t('error.deleteUnexpected'));
+                    }
                     if (!response.ok) {
                         throw new Error(
-                            readApiErrorMessage(result) ?? `API deletion failed with status ${response.status}`
+                            response.status === 401 ? t('error.unauthorized') : t('error.deleteUnexpected')
                         );
                     }
-                    const deletionResults = readWebuiImageFileOperationResults(result);
+                    let deletionResults: ReturnType<typeof readWebuiImageFileOperationResults>;
+                    try {
+                        deletionResults = readWebuiImageFileOperationResults(result);
+                    } catch {
+                        throw new Error(t('error.deleteUnexpected'));
+                    }
                     setLoadedWebuiImageRetentionState((current) =>
                         current?.scopeKey === retentionScopeKey
                             ? {
@@ -3707,7 +3742,7 @@ export default function HomePage() {
                                     routeLabel={activeRouteLabel}
                                     streamStatus={getStreamingStatusLabel(streamMode, t)}
                                     parallelBatchEnabled={activeParallelBatchVisible}
-                                    costLabel={activeEstimatedCostLabel}
+                                    requestSummaryLabel={activeRequestSummaryLabel}
                                     runtimeHealthStatus={activeRuntimeHealthStatus}
                                     channelRouting={runtimeCapabilities?.channelRouting ?? null}
                                     runtimeLastFailure={runtimeCapabilities?.streamingBatch.lastFailure ?? null}
@@ -3840,7 +3875,7 @@ export default function HomePage() {
                                         setPromptOptimization={setGenPromptOptimization}
                                         forceWeb={genForceWeb}
                                         setForceWeb={setGenForceWeb}
-                                        estimatedCostLabel={activeEstimatedCostLabel}
+                                        requestSummaryLabel={activeRequestSummaryLabel}
                                     />
                                 </div>
                                 <div
@@ -3935,7 +3970,7 @@ export default function HomePage() {
                                         setEditPromptOptimization={setEditPromptOptimization}
                                         editForceWeb={editForceWeb}
                                         setEditForceWeb={setEditForceWeb}
-                                        estimatedCostLabel={activeEstimatedCostLabel}
+                                        requestSummaryLabel={activeRequestSummaryLabel}
                                     />
                                 </div>
                             </section>

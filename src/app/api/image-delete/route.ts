@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
         {
-            message: allSucceeded ? '所有文件已删除。' : '部分文件未能完整删除或清理永久保存状态。',
+            message: allSucceeded ? '所有文件已删除。' : '部分文件未能完整删除或清理自动清理保护。',
             results: deletionResults
         },
         { status: allSucceeded ? 200 : 207 } // 部分失败时返回 207 Multi-Status。
@@ -99,13 +99,13 @@ async function deleteImageAndRetentionMarker(filename: string, outputDir: string
     try {
         await (await getWebuiImageRetentionStore()).remove([filename]);
     } catch (error) {
-        appLogger.error('删除图片后清理永久保存标记失败。', error);
+        appLogger.error('删除图片后清理自动清理保护失败。', error);
         return {
             filename,
             success: false,
             ...(fileDeleted ? { fileDeleted: true } : { fileAbsent: true }),
             markerRemoved: false,
-            error: fileDeleted ? '图片已删除，但永久保存状态清理失败。' : '图片已不存在，但永久保存状态清理失败。'
+            error: fileDeleted ? '图片已删除，但自动清理保护未能清理。' : '图片已不存在，但自动清理保护未能清理。'
         };
     }
 

@@ -43,6 +43,13 @@ describe('ImageOutput result actions', () => {
         assert.doesNotMatch(html, /1024 x 768/);
     });
 
+    it('uses the localized generated-image alt text when a caller does not override it', () => {
+        const html = renderImageOutput(0);
+
+        assert.match(html, /alt="生成图片输出"/);
+        assert.doesNotMatch(html, /Generated image output/);
+    });
+
     it('uses the no-image state in the preview header before generation', () => {
         const html = renderToStaticMarkup(
             <I18nProvider>

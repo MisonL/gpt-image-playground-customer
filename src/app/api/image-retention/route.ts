@@ -30,8 +30,8 @@ export async function GET(request: NextRequest) {
         const store = await getWebuiImageRetentionStore();
         return NextResponse.json({ filenames: await store.listPermanentFilenames() });
     } catch (error) {
-        appLogger.error('读取永久保存图片状态失败。', error);
-        return NextResponse.json({ error: '读取永久保存图片状态失败。' }, { status: 500 });
+        appLogger.error('读取自动清理保护状态失败。', error);
+        return NextResponse.json({ error: '读取自动清理保护状态失败。' }, { status: 500 });
     }
 }
 
@@ -51,8 +51,8 @@ export async function POST(request: NextRequest) {
         const results = await applyRetentionRequest(body);
         return NextResponse.json({ results }, { status: results.every((result) => result.success) ? 200 : 207 });
     } catch (error) {
-        appLogger.error('更新永久保存图片状态失败。', error);
-        return NextResponse.json({ error: '更新永久保存图片状态失败。' }, { status: 500 });
+        appLogger.error('更新自动清理保护状态失败。', error);
+        return NextResponse.json({ error: '更新自动清理保护状态失败。' }, { status: 500 });
     }
 }
 
@@ -160,7 +160,7 @@ async function validatePreservedFile(filename: string, outputDir: string): Promi
         return undefined;
     } catch (error) {
         if (isMissingFileError(error)) return '文件不存在。';
-        appLogger.error('校验永久保存图片文件失败。', error);
+        appLogger.error('校验自动清理保护图片文件失败。', error);
         return '读取文件失败。';
     }
 }

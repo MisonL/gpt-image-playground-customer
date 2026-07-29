@@ -3,6 +3,16 @@ import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 
 describe('page state regressions', () => {
+    it('keeps auxiliary image actions localized instead of rendering raw API text', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.doesNotMatch(source, /readApiErrorMessage/);
+        assert.doesNotMatch(source, /statusText: response\.statusText/);
+        assert.match(source, /t\('error\.fetchImage', \{ status: response\.status \}\)/);
+        assert.match(source, /response\.status === 401 \? t\('error\.unauthorized'\)/);
+        assert.match(source, /createErrorNotice\(t\('error\.clearHistory'\)\)/);
+    });
+
     it('passes the unified random inspiration picker and batch prompt setter into the generation form', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
         const generationFormBlock = source.match(/<GenerationForm([\s\S]*?)failedBatchPrompts=/)?.[1] ?? '';
@@ -113,6 +123,21 @@ describe('page state regressions', () => {
         assert.match(source, /const activeRouteLabel = getWorkbenchRouteLabel\(activeWorkbenchBackend, t\);/);
         assert.match(source, /routeLabel=\{activeRouteLabel\}/);
         assert.doesNotMatch(source, /const activeRequestModeLabel = React\.useMemo/);
+    });
+
+    it('labels the selected output count as requested images instead of tasks', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(
+            source,
+            /const activeRequestedImageCount =\s*mode === 'generate' && workbenchMode === 'batch'\s*\? readBatchPromptLines\(genBatchPromptText\)\.length\s*:\s*mode === 'generate'\s*\? genN\[0\]\s*:\s*editN\[0\];/
+        );
+        assert.match(
+            source,
+            /const activeRequestSummaryLabel = t\('workbench\.requestSummary', \{\s*count: activeRequestedImageCount\s*\}\);/
+        );
+        assert.match(source, /requestSummaryLabel=\{activeRequestSummaryLabel\}/);
+        assert.doesNotMatch(source, /workbench\.taskSummary/);
     });
 
     it('keeps mobile actions fixed normally and scrollable in short creation drawers', async () => {

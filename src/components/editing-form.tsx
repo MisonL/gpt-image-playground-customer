@@ -181,7 +181,7 @@ type EditingFormProps = {
     setEditPromptOptimization: React.Dispatch<React.SetStateAction<EditingFormData['promptOptimization']>>;
     editForceWeb: boolean;
     setEditForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
-    estimatedCostLabel: string;
+    requestSummaryLabel: string;
     initialAdvancedOpen?: boolean;
     initialAdvancedTab?: AdvancedTab;
 };
@@ -385,7 +385,7 @@ export function EditingForm({
     setEditPromptOptimization,
     editForceWeb,
     setEditForceWeb,
-    estimatedCostLabel,
+    requestSummaryLabel,
     initialAdvancedOpen = false,
     initialAdvancedTab = 'output'
 }: EditingFormProps) {
@@ -1042,7 +1042,7 @@ export function EditingForm({
                                   : t('edit.createMask')}
                             {editIsMaskSaved && !editShowMaskEditor && (
                                 <span className='ml-auto text-xs text-emerald-600 dark:text-emerald-400'>
-                                    ({t('common.saved')})
+                                    ({t('edit.maskAppliedStatus')})
                                 </span>
                             )}
                             <ScanEye className='mt-0.5' />
@@ -1499,12 +1499,24 @@ export function EditingForm({
                                                                 <SelectItem value='server-default'>
                                                                     {t('upstream.serverDefault')}
                                                                 </SelectItem>
-                                                                <SelectItem value='none'>none</SelectItem>
-                                                                <SelectItem value='minimal'>minimal</SelectItem>
-                                                                <SelectItem value='low'>low</SelectItem>
-                                                                <SelectItem value='medium'>medium</SelectItem>
-                                                                <SelectItem value='high'>high</SelectItem>
-                                                                <SelectItem value='xhigh'>xhigh</SelectItem>
+                                                                <SelectItem value='none'>
+                                                                    {t('upstream.thinkingNone')}
+                                                                </SelectItem>
+                                                                <SelectItem value='minimal'>
+                                                                    {t('upstream.thinkingMinimal')}
+                                                                </SelectItem>
+                                                                <SelectItem value='low'>
+                                                                    {t('upstream.thinkingLow')}
+                                                                </SelectItem>
+                                                                <SelectItem value='medium'>
+                                                                    {t('upstream.thinkingMedium')}
+                                                                </SelectItem>
+                                                                <SelectItem value='high'>
+                                                                    {t('upstream.thinkingHigh')}
+                                                                </SelectItem>
+                                                                <SelectItem value='xhigh'>
+                                                                    {t('upstream.thinkingXhigh')}
+                                                                </SelectItem>
                                                             </SelectContent>
                                                         </Select>
                                                     </div>
@@ -1876,7 +1888,7 @@ export function EditingForm({
                                 </span>
                             )}
                             <span className='border-primary/20 bg-primary/10 text-primary col-span-2 inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
-                                {estimatedCostLabel}
+                                {requestSummaryLabel}
                             </span>
                         </div>
                         {submitDisabledReason && (

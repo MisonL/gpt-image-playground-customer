@@ -6,7 +6,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { WorkbenchProDockProps, OutputFormat, Quality, SizePreset } from '@/components/workbench-pro-dock';
 import { WorkbenchProRoutePanel } from '@/components/workbench-pro-route-panel';
 import type { GptImageModel } from '@/lib/cost-utils';
-import type { Locale } from '@/lib/i18n';
 import { useI18n } from '@/lib/i18n';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
 import { getPresetDimensions } from '@/lib/size-utils';
@@ -49,10 +48,10 @@ function getStreamingStrategyLabel(strategy: ProPanelProps['streamingStrategy'],
     return t('upstream.serverDefault');
 }
 
-function formatResolution(size: SizePreset, model: GptImageModel, locale: Locale): string {
+function formatResolution(size: SizePreset, model: GptImageModel, t: Translation): string {
     const resolution = getPresetDimensions(size, model);
     if (resolution) return resolution;
-    if (size === 'custom') return locale === 'zh-CN' ? '自定义' : 'Custom';
+    if (size === 'custom') return t('common.custom');
     return '1024 px';
 }
 
@@ -78,8 +77,8 @@ export function WorkbenchEasySummary({
     streamingStrategy,
     defaultStreamingStrategy
 }: ProPanelProps) {
-    const { locale, t } = useI18n();
-    const resolution = formatResolution(size, model, locale);
+    const { t } = useI18n();
+    const resolution = formatResolution(size, model, t);
     const effectiveStreamingStrategy =
         streamingStrategy === 'server-default' ? defaultStreamingStrategy : streamingStrategy;
     const parallelBatchVisible = resolveStreamingBatchToggleState({
@@ -297,8 +296,8 @@ export function WorkbenchProPanel({
     defaultTab,
     ...props
 }: ProPanelProps & { defaultTab: 'output' | 'model' | 'stream' | 'route' }) {
-    const { locale, t } = useI18n();
-    const resolution = formatResolution(props.size, props.model, locale);
+    const { t } = useI18n();
+    const resolution = formatResolution(props.size, props.model, t);
     const strategyLabel = getStreamingStrategyLabel(props.streamingStrategy, t);
 
     return (

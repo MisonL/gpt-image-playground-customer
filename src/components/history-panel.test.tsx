@@ -198,7 +198,7 @@ describe('HistoryPanel recent history actions', () => {
         });
 
         assert.match(html, /aria-label="选择最近生成图片"/);
-        assert.match(html, /aria-label="已永久保存"/);
+        assert.match(html, /aria-label="已免于自动清理"/);
         assert.doesNotMatch(html, /data-retention-image="history-card\.png"/);
 
         const disabledHtml = renderHistoryPanel([fsHistoryItem], [], [], false, {
@@ -237,7 +237,7 @@ describe('HistoryPanel recent history actions', () => {
             await view.click(checkbox);
 
             const preserveButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
-                (button) => button.textContent === '永久保存'
+                (button) => button.textContent === '设为免于自动清理'
             );
             assert.ok(preserveButton, 'missing preserve action');
             await view.click(preserveButton);
@@ -286,7 +286,7 @@ describe('HistoryPanel recent history actions', () => {
             );
             assert.equal(retainedCheckbox?.getAttribute('data-state'), 'checked');
             const preserveButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
-                (button) => button.textContent === '永久保存'
+                (button) => button.textContent === '设为免于自动清理'
             );
             assert.ok(preserveButton, 'missing preserve action after history update');
             await view.click(preserveButton);
@@ -332,7 +332,7 @@ describe('HistoryPanel recent history actions', () => {
 
             assert.match(view.container.textContent ?? '', /已选择 0 张/);
             const preserveButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
-                (button) => button.textContent === '永久保存'
+                (button) => button.textContent === '设为免于自动清理'
             );
             assert.equal(preserveButton?.disabled, true);
             assert.deepEqual(updates, []);
@@ -351,7 +351,7 @@ describe('HistoryPanel recent history actions', () => {
                     cleanupEnabled: true,
                     permanentlySavedFilenames: new Set(),
                     onUpdatePermanentSave: async () => {
-                        throw new Error('部分图片的永久保存状态未更新。');
+                        throw new Error('部分图片的自动清理保护未更新。');
                     }
                 })
             );
@@ -366,12 +366,12 @@ describe('HistoryPanel recent history actions', () => {
             await view.click(checkbox);
 
             const preserveButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
-                (button) => button.textContent === '永久保存'
+                (button) => button.textContent === '设为免于自动清理'
             );
             assert.ok(preserveButton, 'missing preserve action');
             await view.click(preserveButton);
 
-            assert.match(view.container.textContent ?? '', /部分图片的永久保存状态未更新。/);
+            assert.match(view.container.textContent ?? '', /部分图片的自动清理保护未更新。/);
             assert.equal(checkbox.getAttribute('data-state'), 'checked');
         } finally {
             await view?.cleanup();

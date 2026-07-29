@@ -168,7 +168,7 @@ export function ImageOutput({
     imageBatch,
     viewMode,
     onViewChange,
-    altText = 'Generated image output',
+    altText,
     isLoading,
     onSendToEdit,
     onDownloadImage,
@@ -192,6 +192,7 @@ export function ImageOutput({
     logFilenames = []
 }: ImageOutputProps) {
     const { t } = useI18n();
+    const resolvedAltText = altText ?? t('output.alt');
     const [isLogDialogOpen, setIsLogDialogOpen] = React.useState(false);
     const [logs, setLogs] = React.useState<LogEntry[]>([]);
     const [logConnectionState, setLogConnectionState] = React.useState<'idle' | 'connected' | 'error'>('idle');
@@ -585,7 +586,7 @@ export function ImageOutput({
                         <div className='photo-paper relative aspect-[4/3] w-full max-w-[780px] p-3 2xl:max-w-[860px]'>
                             <Image
                                 src={imageBatch[viewMode].path}
-                                alt={altText}
+                                alt={resolvedAltText}
                                 fill
                                 sizes='(max-width: 768px) 92vw, (max-width: 1536px) 44vw, 860px'
                                 className='image-edge rounded-md object-contain'

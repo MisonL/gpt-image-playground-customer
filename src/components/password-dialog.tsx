@@ -22,13 +22,7 @@ interface PasswordDialogProps {
     description?: string;
 }
 
-export function PasswordDialog({
-    isOpen,
-    onOpenChange,
-    onSave,
-    title = 'Configure Access Code',
-    description
-}: PasswordDialogProps) {
+export function PasswordDialog({ isOpen, onOpenChange, onSave, title, description }: PasswordDialogProps) {
     const { t } = useI18n();
     const [currentPassword, setCurrentPassword] = React.useState('');
     const inputRef = React.useRef<HTMLInputElement>(null);
@@ -57,7 +51,7 @@ export function PasswordDialog({
         <Dialog open={isOpen} onOpenChange={handleDialogClose}>
             <DialogContent className='sm:max-w-[425px]'>
                 <DialogHeader>
-                    <DialogTitle>{title}</DialogTitle>
+                    <DialogTitle>{title ?? t('password.configure')}</DialogTitle>
                     {description && <DialogDescription>{description}</DialogDescription>}
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className='grid gap-4'>

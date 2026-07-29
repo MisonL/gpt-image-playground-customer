@@ -83,4 +83,20 @@ describe('createImageShareFromBlob', () => {
             /refresh failed/
         );
     });
+
+    it('uses the localized failure message instead of exposing an API error response', async () => {
+        await assert.rejects(
+            () =>
+                createImageShareFromBlob({
+                    filename: 'result.png',
+                    blob: new Blob([Buffer.from('image-bytes')], { type: 'image/png' }),
+                    values: { accessCode: '', expiresInMinutes: null },
+                    accessRefreshErrorMessage: 'refresh failed',
+                    createFailedMessage: 'create failed',
+                    refreshImageAccessCookie: async () => true,
+                    fetchImpl: async () => Response.json({ error: 'raw API error' }, { status: 400 })
+                }),
+            /create failed/
+        );
+    });
 });

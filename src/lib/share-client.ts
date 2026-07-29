@@ -43,10 +43,15 @@ export async function createImageShareFromBlob(options: CreateImageShareFromBlob
         form.set('expiresInMinutes', String(options.values.expiresInMinutes));
     }
 
-    const response = await (options.fetchImpl ?? fetch)('/api/shares', { method: 'POST', body: form });
-    const body = (await response.json().catch(() => ({}))) as { error?: unknown; url?: unknown };
+    let response: Response;
+    try {
+        response = await (options.fetchImpl ?? fetch)('/api/shares', { method: 'POST', body: form });
+    } catch {
+        throw new Error(options.createFailedMessage);
+    }
+    const body = (await response.json().catch(() => ({}))) as { url?: unknown };
     if (!response.ok) {
-        throw new Error(typeof body.error === 'string' ? body.error : options.createFailedMessage);
+        throw new Error(options.createFailedMessage);
     }
     if (typeof body.url !== 'string' || !body.url) {
         throw new Error(options.createFailedMessage);

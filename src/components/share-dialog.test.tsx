@@ -63,7 +63,7 @@ describe('ShareDialog', () => {
         assert.equal(getShareExpiryMinutes('unexpected'), 1440);
     });
 
-    it('keeps explicit never-expiring shares when selected', () => {
+    it('allows an explicit share without an expiry when selected', () => {
         assert.equal(getShareExpiryMinutes('none'), null);
     });
 

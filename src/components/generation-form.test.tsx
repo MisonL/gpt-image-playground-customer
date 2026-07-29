@@ -142,7 +142,7 @@ function createGenerationFormProps(options: GenerationRenderOptions = {}): React
         setPromptOptimization: noop,
         forceWeb: false,
         setForceWeb: noop,
-        estimatedCostLabel: '预计 0.12 积分',
+        requestSummaryLabel: '请求 1 张图片',
         defaultAdvancedOpen: options.defaultAdvancedOpen,
         defaultAdvancedTab: options.defaultAdvancedTab
     };
@@ -383,7 +383,7 @@ describe('GenerationForm advanced groups', () => {
         const html = renderGenerationForm();
 
         assert.match(html, /默认线路/);
-        assert.match(html, /预计 0\.12 积分/);
+        assert.match(html, /请求 1 张图片/);
     });
 
     it('labels the expanded mobile advanced drawer as professional mode', () => {

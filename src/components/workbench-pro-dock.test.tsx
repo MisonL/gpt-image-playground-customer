@@ -95,6 +95,39 @@ describe('WorkbenchProDock', () => {
         assert.doesNotMatch(html, /EXIF/);
     });
 
+    it('uses the shared localized label for a custom resolution', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <WorkbenchProDock
+                    outputFormat='png'
+                    onOutputFormatChange={setOutputFormat}
+                    quality='high'
+                    onQualityChange={setQuality}
+                    model='gpt-image-2'
+                    onModelChange={setModel}
+                    size='custom'
+                    streamMode='auto'
+                    onStreamModeChange={setStreamMode}
+                    allowStreamingBatch={false}
+                    enableParallelBatch={false}
+                    onEnableParallelBatchChange={setEnableParallelBatch}
+                    parallelBatchTargetCount={1}
+                    allowResponsesImageBackend
+                    hasDefaultResponsesModel
+                    imageBackend='server-default'
+                    onImageBackendChange={setImageBackend}
+                    streamingStrategy='server-default'
+                    defaultStreamingStrategy='auto'
+                    onStreamingStrategyChange={setStreamingStrategy}
+                    responsesModel=''
+                    onResponsesModelChange={setResponsesModel}
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /自定义/);
+    });
+
     it('renders interactive professional groups without fake output switches', () => {
         const html = renderToStaticMarkup(
             <I18nProvider>

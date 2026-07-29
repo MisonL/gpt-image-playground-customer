@@ -173,7 +173,7 @@ type GenerationFormProps = {
     setPromptOptimization: React.Dispatch<React.SetStateAction<GenerationFormData['promptOptimization']>>;
     forceWeb: boolean;
     setForceWeb: React.Dispatch<React.SetStateAction<boolean>>;
-    estimatedCostLabel: string;
+    requestSummaryLabel: string;
     defaultAdvancedOpen?: boolean;
     defaultAdvancedTab?: AdvancedTab;
 };
@@ -391,7 +391,7 @@ export function GenerationForm({
     setPromptOptimization,
     forceWeb,
     setForceWeb,
-    estimatedCostLabel,
+    requestSummaryLabel,
     defaultAdvancedOpen = false,
     defaultAdvancedTab = 'output'
 }: GenerationFormProps) {
@@ -1134,12 +1134,24 @@ export function GenerationForm({
                                                                 <SelectItem value='server-default'>
                                                                     {t('upstream.serverDefault')}
                                                                 </SelectItem>
-                                                                <SelectItem value='none'>none</SelectItem>
-                                                                <SelectItem value='minimal'>minimal</SelectItem>
-                                                                <SelectItem value='low'>low</SelectItem>
-                                                                <SelectItem value='medium'>medium</SelectItem>
-                                                                <SelectItem value='high'>high</SelectItem>
-                                                                <SelectItem value='xhigh'>xhigh</SelectItem>
+                                                                <SelectItem value='none'>
+                                                                    {t('upstream.thinkingNone')}
+                                                                </SelectItem>
+                                                                <SelectItem value='minimal'>
+                                                                    {t('upstream.thinkingMinimal')}
+                                                                </SelectItem>
+                                                                <SelectItem value='low'>
+                                                                    {t('upstream.thinkingLow')}
+                                                                </SelectItem>
+                                                                <SelectItem value='medium'>
+                                                                    {t('upstream.thinkingMedium')}
+                                                                </SelectItem>
+                                                                <SelectItem value='high'>
+                                                                    {t('upstream.thinkingHigh')}
+                                                                </SelectItem>
+                                                                <SelectItem value='xhigh'>
+                                                                    {t('upstream.thinkingXhigh')}
+                                                                </SelectItem>
                                                             </SelectContent>
                                                         </Select>
                                                     </div>
@@ -1531,7 +1543,7 @@ export function GenerationForm({
                                 </span>
                             )}
                             <span className='border-primary/20 bg-primary/10 text-primary col-span-2 inline-flex min-w-0 items-center justify-center rounded-md border px-2 py-1 text-center leading-4 break-words whitespace-normal'>
-                                {estimatedCostLabel}
+                                {requestSummaryLabel}
                             </span>
                         </div>
                         {submitDisabledReason && (

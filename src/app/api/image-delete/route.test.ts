@@ -30,7 +30,7 @@ afterEach(async () => {
 });
 
 describe('POST /api/image-delete', { concurrency: false }, () => {
-    it('removes the permanent marker after deleting an image successfully', async () => {
+    it('removes automatic-cleanup protection after deleting an image successfully', async () => {
         const filepath = await writeOutputFile(validFilename);
         const store = await getWebuiImageRetentionStore();
         await store.preserve([validFilename]);
@@ -46,7 +46,7 @@ describe('POST /api/image-delete', { concurrency: false }, () => {
         assert.deepEqual(await store.listPermanentFilenames(), []);
     });
 
-    it('reports a missing file as absent and releases its stale permanent marker', async () => {
+    it('reports a missing file as absent and releases stale automatic-cleanup protection', async () => {
         const store = await getWebuiImageRetentionStore();
         await store.preserve([missingFilename]);
 
@@ -104,7 +104,7 @@ describe('POST /api/image-delete', { concurrency: false }, () => {
                     success: false,
                     fileDeleted: true,
                     markerRemoved: false,
-                    error: '图片已删除，但永久保存状态清理失败。'
+                    error: '图片已删除，但自动清理保护未能清理。'
                 }
             ]);
             await assert.rejects(() => access(filepath));
@@ -142,7 +142,7 @@ describe('POST /api/image-delete', { concurrency: false }, () => {
                     success: false,
                     fileAbsent: true,
                     markerRemoved: false,
-                    error: '图片已不存在，但永久保存状态清理失败。'
+                    error: '图片已不存在，但自动清理保护未能清理。'
                 }
             ]);
             assert.deepEqual(await store.listPermanentFilenames(), [missingFilename]);

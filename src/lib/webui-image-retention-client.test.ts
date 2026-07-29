@@ -1,6 +1,5 @@
 import {
     mergeWebuiImageRetentionResults,
-    readApiErrorMessage,
     readWebuiImageFileOperationResults,
     readWebuiImageRetentionFilenames
 } from './webui-image-retention-client';
@@ -8,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 describe('WebUI image retention client contract', () => {
-    it('parses permanent filenames and file operation results from valid API responses', () => {
+    it('parses cleanup-protected filenames and file operation results from valid API responses', () => {
         assert.deepEqual(readWebuiImageRetentionFilenames({ filenames: ['one.png', 'two.png', 'one.png'] }), [
             'one.png',
             'two.png'
@@ -37,16 +36,14 @@ describe('WebUI image retention client contract', () => {
                 }
             ]
         );
-        assert.equal(readApiErrorMessage({ error: '未授权。' }), '未授权。');
     });
 
     it('rejects malformed API payloads instead of silently accepting them', () => {
         assert.throws(() => readWebuiImageRetentionFilenames({ filenames: ['one.png', 2] }), /格式无效/);
         assert.throws(() => readWebuiImageFileOperationResults({ results: [{ filename: 'one.png' }] }), /格式无效/);
-        assert.equal(readApiErrorMessage({ message: 'not an error field' }), undefined);
     });
 
-    it('merges only confirmed permanent-state changes into the filename set', () => {
+    it('merges only confirmed cleanup-protection changes into the filename set', () => {
         const results = [
             { filename: 'kept.png', success: true },
             {
@@ -61,7 +58,7 @@ describe('WebUI image retention client contract', () => {
                 success: false,
                 fileDeleted: true,
                 markerRemoved: false,
-                error: '图片已删除，但永久保存状态清理失败。'
+                error: '图片已删除，但自动清理保护未能清理。'
             }
         ];
 

@@ -16,4 +16,14 @@ describe('share page regressions', () => {
         assert.match(source, /id='share-page-access-code-hint'/);
         assert.match(source, /if \(accessCode\.trim\(\)\.length === 0\) \{\s*return;\s*\}/);
     });
+
+    it('maps share API error codes to localized messages instead of rendering API error text', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /resolveShareApiErrorMessage/);
+        assert.match(source, /resolveShareApiErrorMessage\(body, t, 'share\.loadFailed'\)/);
+        assert.match(source, /resolveShareApiErrorMessage\(imageBody, t, 'share\.unlockFailed'\)/);
+        assert.doesNotMatch(source, /body\.error/);
+        assert.doesNotMatch(source, /imageBody\.error/);
+    });
 });

@@ -11,10 +11,10 @@ export type WebuiImageFileOperationResult = {
 
 export function readWebuiImageRetentionFilenames(value: unknown): string[] {
     if (!isRecord(value) || !Array.isArray(value.filenames)) {
-        throw new Error('永久保存状态响应格式无效。');
+        throw new Error('自动清理保护状态响应格式无效。');
     }
     if (!value.filenames.every((filename): filename is string => typeof filename === 'string')) {
-        throw new Error('永久保存状态响应格式无效。');
+        throw new Error('自动清理保护状态响应格式无效。');
     }
     return [...new Set(value.filenames)];
 }
@@ -36,10 +36,6 @@ export function readWebuiImageFileOperationResults(value: unknown): WebuiImageFi
             ...(typeof result.error === 'string' ? { error: result.error } : {})
         };
     });
-}
-
-export function readApiErrorMessage(value: unknown): string | undefined {
-    return isRecord(value) && typeof value.error === 'string' ? value.error : undefined;
 }
 
 export function mergeWebuiImageRetentionResults(

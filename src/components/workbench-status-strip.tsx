@@ -31,7 +31,7 @@ type WorkbenchStatusStripProps = {
     routeLabel: string;
     streamStatus: string;
     parallelBatchEnabled?: boolean;
-    costLabel: string;
+    requestSummaryLabel: string;
     runtimeHealthStatus?: RuntimeHealthStatus;
     channelRouting?: RuntimeChannelRoutingSummary | null;
     runtimeLastFailure?: RuntimeLastFailure | null;
@@ -43,7 +43,7 @@ export function WorkbenchStatusStrip({
     routeLabel,
     streamStatus,
     parallelBatchEnabled = false,
-    costLabel,
+    requestSummaryLabel,
     runtimeHealthStatus = 'runtime-ready',
     channelRouting,
     runtimeLastFailure,
@@ -190,7 +190,7 @@ export function WorkbenchStatusStrip({
                 </span>
             )}
             <span className='border-primary/20 bg-primary/10 text-primary inline-flex min-h-6 shrink-0 items-center rounded-md border px-2 py-0.5 whitespace-nowrap sm:min-h-7 sm:px-2.5 sm:py-1'>
-                {costLabel}
+                {requestSummaryLabel}
             </span>
         </div>
     );
