@@ -1,4 +1,4 @@
-import { buildImageActionTarget, ImageOutput } from './image-output';
+import { buildImageActionTarget, formatLogTime, ImageOutput } from './image-output';
 import { I18nProvider } from '@/lib/i18n';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -50,6 +50,14 @@ describe('ImageOutput result actions', () => {
         assert.doesNotMatch(html, /Generated image output/);
     });
 
+    it('formats activity timestamps with the selected app locale and preserves invalid diagnostic values', () => {
+        const timestamp = '2026-05-31T12:15:30.000Z';
+
+        assert.equal(formatLogTime(timestamp, 'zh-CN'), new Date(timestamp).toLocaleTimeString('zh-CN'));
+        assert.equal(formatLogTime(timestamp, 'en-US'), new Date(timestamp).toLocaleTimeString('en-US'));
+        assert.equal(formatLogTime('not-a-timestamp', 'zh-CN'), 'not-a-timestamp');
+    });
+
     it('uses the no-image state in the preview header before generation', () => {
         const html = renderToStaticMarkup(
             <I18nProvider>
@@ -88,7 +96,7 @@ describe('ImageOutput result actions', () => {
         assert.doesNotMatch(html, /workbench-sample/);
         assert.doesNotMatch(html, /灵感样张/);
         assert.doesNotMatch(html, /1024 x 768/);
-        for (const action of ['继续编辑', '做变体', '复用提示词', '对比', '下载']) {
+        for (const action of ['继续编辑', '按相同参数再次生成', '复用提示词', '对比', '下载']) {
             assert.match(
                 html,
                 new RegExp(

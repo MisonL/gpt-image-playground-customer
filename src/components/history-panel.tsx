@@ -24,6 +24,13 @@ import {
     type ResultFeedbackValue
 } from '@/lib/history-metadata';
 import { useI18n } from '@/lib/i18n';
+import {
+    formatImageDurationLabel,
+    getImageBackgroundLabel,
+    getImageModerationLabel,
+    getImageOutputFormatLabel,
+    getImageQualityLabel
+} from '@/lib/image-display-labels';
 import { cn } from '@/lib/utils';
 import {
     Copy,
@@ -110,33 +117,16 @@ export type PromptApplySource =
 
 const emptyPermanentFilenames: ReadonlySet<string> = new Set();
 
-const formatDuration = (ms: number): string => {
-    if (ms < 1000) {
-        return `${ms}ms`;
-    }
-    const totalSeconds = Math.round(ms / 1000);
-    if (totalSeconds < 60) {
-        return `${(ms / 1000).toFixed(1)}s`;
-    }
-
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    const paddedSeconds = seconds.toString().padStart(2, '0');
-
-    if (hours > 0) {
-        return `${hours}h ${minutes.toString().padStart(2, '0')}m ${paddedSeconds}s`;
-    }
-    return `${minutes}m ${paddedSeconds}s`;
-};
-
-const calculateCost = (value: number, rate: number): string => {
+const calculateCost = (value: number, rate: number): string | null => {
     const cost = value * rate;
-    return isNaN(cost) ? 'N/A' : cost.toFixed(4);
+    return Number.isFinite(cost) ? cost.toFixed(4) : null;
 };
 
 const formatMoney = (value: number): string => value.toFixed(4);
-const formatEstimatedTokenCost = (value: number, rate: number): string => `$${calculateCost(value, rate)}`;
+const formatEstimatedTokenCost = (value: number, rate: number, unavailableLabel: string): string => {
+    const cost = calculateCost(value, rate);
+    return cost === null ? unavailableLabel : `$${cost}`;
+};
 
 function getStorageLabel(storageMode: HistoryMetadata['storageModeUsed'], t: ReturnType<typeof useI18n>['t']): string {
     return storageMode === 'fs' ? t('history.storageFile') : t('history.storageDb');
@@ -193,6 +183,32 @@ function getCostStatusLabel(
     if (item.actualCostDetails?.source === 'unavailable') return labels.unavailable;
     if (item.costDetails) return labels.estimated;
     return '-';
+}
+
+function getActualCostSourceLabel(source: string, t: ReturnType<typeof useI18n>['t']): string {
+    if (source === 'new-api-log-token') return t('history.costSourceMatchedLog');
+    if (source === 'pending') return t('history.costSourcePending');
+    if (source === 'unavailable') return t('history.costSourceUnavailable');
+    if (source === 'estimate') return t('history.costSourceEstimate');
+    return source;
+}
+
+function getActualCostConfidenceLabel(confidence: string, t: ReturnType<typeof useI18n>['t']): string {
+    if (confidence === 'exact') return t('history.costConfidenceExact');
+    if (confidence === 'high') return t('history.costConfidenceHigh');
+    if (confidence === 'low') return t('history.costConfidenceLow');
+    if (confidence === 'none') return t('history.costConfidenceNone');
+    return confidence;
+}
+
+function getActualCostReasonLabel(
+    details: NonNullable<HistoryMetadata['actualCostDetails']>,
+    t: ReturnType<typeof useI18n>['t']
+): string | null {
+    if (details.source === 'pending') return t('history.costReasonPending');
+    if (details.source === 'unavailable') return t('history.costReasonUnavailable');
+    if (details.confidence === 'low' || details.confidence === 'none') return t('history.costReasonLowConfidence');
+    return null;
 }
 
 function getHistoryStorageMode(item: HistoryMetadata): NonNullable<HistoryMetadata['storageModeUsed']> {
@@ -356,6 +372,10 @@ function HistoryPanelImpl({
                 minute: '2-digit'
             }),
         [locale]
+    );
+    const formatDuration = React.useCallback(
+        (durationMs: number) => formatImageDurationLabel(durationMs, locale, t),
+        [locale, t]
     );
     const handleThumbnailLoad = React.useCallback((filename: string, event: React.SyntheticEvent<HTMLImageElement>) => {
         const image = event.currentTarget;
@@ -691,6 +711,9 @@ function HistoryPanelImpl({
                                 unavailable: t('history.actualCostUnavailable'),
                                 estimated: t('history.estimatedCostShort')
                             });
+                            const actualCostReason = item.actualCostDetails
+                                ? getActualCostReasonLabel(item.actualCostDetails, t)
+                                : null;
 
                             let thumbnailUrl: string | undefined;
                             if (firstImage) {
@@ -800,7 +823,7 @@ function HistoryPanelImpl({
                                                 {item.output_format && (
                                                     <div className='bg-background/85 text-muted-foreground border-border flex items-center gap-1 rounded-sm border px-1 py-0.5 text-[11px]'>
                                                         <FileImage size={12} className='text-muted-foreground' />
-                                                        <span>{outputFormat.toUpperCase()}</span>
+                                                        <span>{getImageOutputFormatLabel(outputFormat, t)}</span>
                                                     </div>
                                                 )}
                                             </div>
@@ -909,7 +932,10 @@ function HistoryPanelImpl({
                                                                             <div className='flex justify-between gap-3'>
                                                                                 <span>{t('history.costSource')}</span>
                                                                                 <span className='text-right'>
-                                                                                    {item.actualCostDetails.source}
+                                                                                    {getActualCostSourceLabel(
+                                                                                        item.actualCostDetails.source,
+                                                                                        t
+                                                                                    )}
                                                                                 </span>
                                                                             </div>
                                                                             <div className='flex justify-between gap-3'>
@@ -917,7 +943,11 @@ function HistoryPanelImpl({
                                                                                     {t('history.costConfidence')}
                                                                                 </span>
                                                                                 <span>
-                                                                                    {item.actualCostDetails.confidence}
+                                                                                    {getActualCostConfidenceLabel(
+                                                                                        item.actualCostDetails
+                                                                                            .confidence,
+                                                                                        t
+                                                                                    )}
                                                                                 </span>
                                                                             </div>
                                                                             {typeof item.actualCostDetails
@@ -947,9 +977,9 @@ function HistoryPanelImpl({
                                                                                     </span>
                                                                                 </div>
                                                                             )}
-                                                                            {item.actualCostDetails.reason && (
+                                                                            {actualCostReason && (
                                                                                 <p className='text-xs'>
-                                                                                    {item.actualCostDetails.reason}
+                                                                                    {actualCostReason}
                                                                                 </p>
                                                                             )}
                                                                         </div>
@@ -968,7 +998,8 @@ function HistoryPanelImpl({
                                                                                     {formatEstimatedTokenCost(
                                                                                         item.costDetails
                                                                                             .text_input_tokens,
-                                                                                        rates.textInputPerToken
+                                                                                        rates.textInputPerToken,
+                                                                                        t('common.unavailable')
                                                                                     )}
                                                                                     )
                                                                                 </span>
@@ -987,7 +1018,8 @@ function HistoryPanelImpl({
                                                                                         {formatEstimatedTokenCost(
                                                                                             item.costDetails
                                                                                                 .image_input_tokens,
-                                                                                            rates.imageInputPerToken
+                                                                                            rates.imageInputPerToken,
+                                                                                            t('common.unavailable')
                                                                                         )}
                                                                                         )
                                                                                     </span>
@@ -1005,7 +1037,8 @@ function HistoryPanelImpl({
                                                                                     {formatEstimatedTokenCost(
                                                                                         item.costDetails
                                                                                             .image_output_tokens,
-                                                                                        rates.imageOutputPerToken
+                                                                                        rates.imageOutputPerToken,
+                                                                                        t('common.unavailable')
                                                                                     )}
                                                                                     )
                                                                                 </span>
@@ -1052,7 +1085,10 @@ function HistoryPanelImpl({
                                             {formatStatusTime(item.timestamp)}
                                             <span className='text-muted-foreground/70 px-1'>/</span>
                                             {isFailedItem
-                                                ? `${t('history.failedStatus')}，${formatDuration(item.durationMs)}`
+                                                ? t('history.statusFailedSummary', {
+                                                      status: t('history.failedStatus'),
+                                                      duration: formatDuration(item.durationMs)
+                                                  })
                                                 : t('history.statusBatchSummary', {
                                                       count: imageCount,
                                                       duration: formatDuration(item.durationMs)
@@ -1076,15 +1112,15 @@ function HistoryPanelImpl({
                                         </p>
                                         <p>
                                             <span className='text-foreground font-medium'>{t('history.quality')}</span>{' '}
-                                            {item.quality}
+                                            {getImageQualityLabel(item.quality, t)}
                                         </p>
                                         <p>
                                             <span className='text-foreground font-medium'>{t('history.bg')}</span>{' '}
-                                            {item.background}
+                                            {getImageBackgroundLabel(item.background, t)}
                                         </p>
                                         <p>
                                             <span className='text-foreground font-medium'>{t('history.mod')}</span>{' '}
-                                            {item.moderation}
+                                            {getImageModerationLabel(item.moderation, t)}
                                         </p>
                                         <p
                                             className='mt-2 max-h-10 min-h-8 overflow-hidden leading-5 break-words'
@@ -1401,7 +1437,7 @@ function HistoryPanelImpl({
                                                                     {t('history.quality')}
                                                                 </dt>
                                                                 <dd className='text-foreground font-medium'>
-                                                                    {item.quality}
+                                                                    {getImageQualityLabel(item.quality, t)}
                                                                 </dd>
                                                             </div>
                                                             <div>
@@ -1409,7 +1445,7 @@ function HistoryPanelImpl({
                                                                     {t('history.bg')}
                                                                 </dt>
                                                                 <dd className='text-foreground font-medium'>
-                                                                    {item.background}
+                                                                    {getImageBackgroundLabel(item.background, t)}
                                                                 </dd>
                                                             </div>
                                                             <div>
@@ -1417,7 +1453,7 @@ function HistoryPanelImpl({
                                                                     {t('history.mod')}
                                                                 </dt>
                                                                 <dd className='text-foreground font-medium'>
-                                                                    {item.moderation}
+                                                                    {getImageModerationLabel(item.moderation, t)}
                                                                 </dd>
                                                             </div>
                                                             <div>
@@ -1433,7 +1469,7 @@ function HistoryPanelImpl({
                                                                     {t('history.outputFormat')}
                                                                 </dt>
                                                                 <dd className='text-foreground font-medium'>
-                                                                    {outputFormat.toUpperCase()}
+                                                                    {getImageOutputFormatLabel(outputFormat, t)}
                                                                 </dd>
                                                             </div>
                                                             <div>
@@ -1441,9 +1477,7 @@ function HistoryPanelImpl({
                                                                     {t('history.storage')}
                                                                 </dt>
                                                                 <dd className='text-foreground font-medium'>
-                                                                    {originalStorageMode === 'fs'
-                                                                        ? t('history.storageFile')
-                                                                        : t('history.storageDb')}
+                                                                    {getStorageLabel(originalStorageMode, t)}
                                                                 </dd>
                                                             </div>
                                                             <div>

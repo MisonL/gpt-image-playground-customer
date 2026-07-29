@@ -7,6 +7,7 @@ import type { WorkbenchProDockProps, OutputFormat, Quality, SizePreset } from '@
 import { WorkbenchProRoutePanel } from '@/components/workbench-pro-route-panel';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import { getImageOutputFormatLabel } from '@/lib/image-display-labels';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
 import { getPresetDimensions } from '@/lib/size-utils';
 import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
@@ -19,11 +20,6 @@ const modelOptions: GptImageModel[] = ['gpt-image-2', 'gpt-image-1.5', 'gpt-imag
 const outputFormatOptions: OutputFormat[] = ['png', 'jpeg', 'webp'];
 const qualityOptions: Quality[] = ['auto', 'low', 'medium', 'high'];
 const streamModeOptions: ImageStreamMode[] = ['auto', 'stream', 'non_stream'];
-
-function getOutputFormatLabel(format: OutputFormat): string {
-    if (format === 'jpeg') return 'JPG';
-    return format.toUpperCase();
-}
 
 function getQualityLabel(quality: Quality, t: Translation): string {
     if (quality === 'auto') return t('common.auto');
@@ -99,7 +95,7 @@ export function WorkbenchEasySummary({
                         : getStreamModeLabel(streamMode, t)}
                 </span>
             </ReadonlyField>
-            <ReadonlyField label={t('form.outputFormat')}>{getOutputFormatLabel(outputFormat)}</ReadonlyField>
+            <ReadonlyField label={t('form.outputFormat')}>{getImageOutputFormatLabel(outputFormat, t)}</ReadonlyField>
             <ReadonlyField label={t('ux.resolution')}>{resolution}</ReadonlyField>
         </div>
     );
@@ -134,7 +130,7 @@ function OutputPanel({
                     <SelectContent>
                         {outputFormatOptions.map((format) => (
                             <SelectItem key={format} value={format}>
-                                {getOutputFormatLabel(format)}
+                                {getImageOutputFormatLabel(format, t)}
                             </SelectItem>
                         ))}
                     </SelectContent>

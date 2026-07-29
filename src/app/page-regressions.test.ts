@@ -3,6 +3,18 @@ import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 
 describe('page state regressions', () => {
+    it('keeps the locale selector available before and after entry authentication', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /import \{ LanguageSelector \} from '@\/components\/language-selector';/);
+        assert.equal((source.match(/<LanguageSelector \/>/g) ?? []).length, 2);
+        assert.match(
+            source,
+            /\{showEntryLock \? \(\s*<div[^>]*>\s*<div className='absolute top-3 right-4'>\s*<LanguageSelector \/>/
+        );
+        assert.match(source, /<WorkbenchStatusStrip[\s\S]*?<LanguageSelector \/>/);
+    });
+
     it('keeps auxiliary image actions localized instead of rendering raw API text', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
 
@@ -11,6 +23,13 @@ describe('page state regressions', () => {
         assert.match(source, /t\('error\.fetchImage', \{ status: response\.status \}\)/);
         assert.match(source, /response\.status === 401 \? t\('error\.unauthorized'\)/);
         assert.match(source, /createErrorNotice\(t\('error\.clearHistory'\)\)/);
+        assert.match(source, /function getLocalizedImageRequestError/);
+        assert.match(source, /t\('error\.invalidRequest'\)/);
+        assert.match(source, /t\('error\.networkRequest'\)/);
+        assert.match(source, /new ApiRequestError\(t\('error\.streaming'\)\)/);
+        assert.match(source, /if \(error instanceof BatchPausedError\)/);
+        assert.doesNotMatch(source, /new ApiRequestError\(event\.error/);
+        assert.doesNotMatch(source, /result\.error \|\|/);
     });
 
     it('passes the unified random inspiration picker and batch prompt setter into the generation form', async () => {

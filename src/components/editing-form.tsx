@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import { getImageOutputFormatLabel, getImageQualityLabel } from '@/lib/image-display-labels';
 import type {
     ImageUpstreamFormBackend,
     ImageUpstreamFormPromptOptimization,
@@ -294,19 +295,6 @@ function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => str
     return t('streaming.modeAuto');
 }
 
-function getQualityLabel(quality: EditingFormData['quality'], t: (key: string) => string): string {
-    if (quality === 'low') return t('common.low');
-    if (quality === 'medium') return t('common.medium');
-    if (quality === 'high') return t('common.high');
-    return t('common.auto');
-}
-
-function getOutputFormatLabel(format: EditingFormData['output_format'], t: (key: string) => string): string {
-    if (format === 'jpeg') return t('common.jpeg');
-    if (format === 'webp') return t('common.webp');
-    return t('common.png');
-}
-
 export function EditingForm({
     onSubmit,
     onSaveInspiration,
@@ -459,8 +447,8 @@ export function EditingForm({
         t
     ]);
     const advancedSummary = [
-        `${t('form.quality')}: ${getQualityLabel(editQuality, t)}`,
-        `${t('form.outputFormat')}: ${getOutputFormatLabel(editOutputFormat, t)}`,
+        `${t('form.quality')}: ${getImageQualityLabel(editQuality, t)}`,
+        `${t('form.outputFormat')}: ${getImageOutputFormatLabel(editOutputFormat, t)}`,
         getBackendLabel(editImageBackend, t)
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
@@ -1240,7 +1228,7 @@ export function EditingForm({
                                     </div>
                                 </div>
                                 <p className='text-muted-foreground ui-stat text-xs'>
-                                    {t('form.pixelsMeta', {
+                                    {t(usesPositiveIntegerCustomSize ? 'form.pixelsMeta' : 'form.pixelsMetaOfMaximum', {
                                         pixels: editCustomPixels.toLocaleString(locale),
                                         percent: ((editCustomPixels / 8_294_400) * 100).toFixed(1),
                                         ratio: editCustomRatio
@@ -1776,21 +1764,21 @@ export function EditingForm({
                                                 <RadioItemWithIcon
                                                     value='png'
                                                     id='edit-format-png'
-                                                    label='PNG'
+                                                    label={t('common.png')}
                                                     Icon={FileImage}
                                                     disabled={isLoading}
                                                 />
                                                 <RadioItemWithIcon
                                                     value='jpeg'
                                                     id='edit-format-jpeg'
-                                                    label='JPEG'
+                                                    label={t('common.jpeg')}
                                                     Icon={FileImage}
                                                     disabled={isLoading}
                                                 />
                                                 <RadioItemWithIcon
                                                     value='webp'
                                                     id='edit-format-webp'
-                                                    label='WebP'
+                                                    label={t('common.webp')}
                                                     Icon={FileImage}
                                                     disabled={isLoading}
                                                 />

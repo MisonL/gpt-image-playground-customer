@@ -283,10 +283,10 @@ describe('GenerationForm inactive state', { concurrency: false }, () => {
 
         try {
             const saveButton = [...view.container.querySelectorAll('button')].find((button) =>
-                button.textContent?.includes('存为灵感')
+                button.textContent?.includes('收藏提示词')
             );
             const randomButton = [...view.container.querySelectorAll('button')].find((button) =>
-                button.textContent?.includes('随便来点')
+                button.textContent?.includes('随机套用')
             );
 
             assert.ok(saveButton, 'missing generation save inspiration button');
@@ -321,7 +321,7 @@ describe('GenerationForm inactive state', { concurrency: false }, () => {
 
         try {
             const randomButton = [...view.container.querySelectorAll('button')].find((button) =>
-                button.textContent?.includes('随便来点')
+                button.textContent?.includes('随机套用')
             );
 
             assert.ok(randomButton, 'missing batch random inspiration button');
@@ -353,7 +353,7 @@ describe('GenerationForm advanced groups', () => {
     it('shows task-specific descriptions in the mode segmented control', () => {
         const html = renderGenerationForm();
 
-        for (const label of ['从灵感开始', '带图继续改', '一次多张', '套用旧稿']) {
+        for (const label of ['从灵感开始', '基于参考图编辑', '一次多张', '套用已有提示词']) {
             assert.match(html, new RegExp(label));
         }
     });
@@ -541,8 +541,8 @@ describe('GenerationForm advanced groups', () => {
     it('disables random inspiration when no saved prompt is available', () => {
         const html = renderGenerationForm({ canApplyRandomInspiration: false });
 
-        assert.match(html, /随便来点/);
-        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*随便来点[\s\S]*<\/button>/);
+        assert.match(html, /随机套用/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*随机套用[\s\S]*<\/button>/);
         assert.doesNotMatch(html, /夏日窗边的奶油色房间/);
     });
 

@@ -176,7 +176,9 @@ describe('HistoryPanel recent history actions', () => {
 
         assert.match(html, /最近生成/);
         assert.match(html, /用户真实历史提示词/);
-        assert.match(html, /数据库/);
+        assert.match(html, /浏览器本地数据库/);
+        assert.match(html, /1\.4 秒/);
+        assert.match(html, /收藏提示词/);
         assert.doesNotMatch(html, /Album/);
         assert.doesNotMatch(html, /Local/);
         assert.match(html, /收藏这条历史提示词/);
@@ -188,6 +190,20 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /aria-label="标记本次结果可用"/);
         assert.match(html, /aria-label="标记本次结果需要修改"/);
         assert.doesNotMatch(html, /2xl:grid-cols-2/);
+
+        const fsHtml = renderHistoryPanel([fsHistoryItem]);
+        assert.match(fsHtml, /服务器文件存储/);
+    });
+
+    it('renders persisted request enums with localized labels', () => {
+        const html = renderHistoryPanel([historyItem]);
+
+        assert.match(html, /清晰度：<\/span> 高/);
+        assert.match(html, /背景：<\/span> 自动/);
+        assert.match(html, /审核级别：<\/span> 自动/);
+        assert.match(html, />PNG<\/span>/);
+        assert.doesNotMatch(html, /清晰度：<\/span> high/);
+        assert.doesNotMatch(html, /背景：<\/span> auto/);
     });
 
     it('renders permanent-save selection controls only for fs history when cleanup is enabled', () => {
@@ -423,6 +439,19 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(source, /text_input_tokens\.toLocaleString\(\s*locale\s*\)/);
         assert.match(source, /image_input_tokens\.toLocaleString\(\s*locale\s*\)/);
         assert.match(source, /image_output_tokens\.toLocaleString\(\s*locale\s*\)/);
+        assert.match(source, /formatImageDurationLabel\(durationMs, locale, t\)/);
+        assert.match(source, /getStorageLabel\(originalStorageMode, t\)/);
+    });
+
+    it('localizes actual-cost diagnostics instead of rendering internal values', async () => {
+        const source = await readFile(new URL('./history-panel.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /getActualCostSourceLabel\(/);
+        assert.match(source, /getActualCostConfidenceLabel\(/);
+        assert.match(source, /getActualCostReasonLabel\(/);
+        assert.doesNotMatch(source, /\{item\.actualCostDetails\.source\}/);
+        assert.doesNotMatch(source, /\{item\.actualCostDetails\.confidence\}/);
+        assert.doesNotMatch(source, /\{item\.actualCostDetails\.reason\}/);
     });
 
     it('renders saved result feedback on completed history cards', () => {
@@ -495,7 +524,7 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /snap-x snap-mandatory/);
         assert.match(html, /w-\[min\(84vw,360px\)\]/);
         assert.match(html, /用户保存的真实灵感提示词/);
-        assert.match(html, /aria-label="套用灵感：用户保存的真实灵感提示词"/);
+        assert.match(html, /aria-label="套用提示词：用户保存的真实灵感提示词"/);
         assert.doesNotMatch(html, /窗边的花与书/);
         assert.doesNotMatch(html, /inspiration-flowers/);
     });
@@ -503,9 +532,9 @@ describe('HistoryPanel recent history actions', () => {
     it('does not render fake inspiration actions without handlers', () => {
         const html = renderHistoryPanel([], [inspirationItem]);
 
-        assert.match(html, /已保存的灵感/);
-        assert.match(html, /套用首个模板/);
-        assert.match(html, /1 条灵感/);
+        assert.match(html, /已保存的提示词/);
+        assert.match(html, /套用首条提示词/);
+        assert.match(html, /已保存 1 条提示词/);
         assert.doesNotMatch(html, /aria-label="收藏"/);
         assert.doesNotMatch(html, />管理</);
     });
@@ -518,7 +547,7 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, /xl:flex xl:max-h-none xl:flex-1 xl:flex-col/);
         assert.doesNotMatch(html, /xl:h-auto xl:self-start/);
         assert.doesNotMatch(html, /border-dashed/);
-        assert.match(html, /暂无已保存的灵感/);
+        assert.match(html, /暂无已保存的提示词/);
         assert.doesNotMatch(html, /activity-feed/);
         assert.doesNotMatch(html, /生成动态/);
     });

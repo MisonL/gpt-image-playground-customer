@@ -11,6 +11,7 @@ import {
     DialogTitle
 } from '@/components/ui/dialog';
 import { useI18n } from '@/lib/i18n';
+import { getActivityLogLevelLabel } from '@/lib/image-display-labels';
 import { buildLogScopeDiagnostics, filterLogsByScope, resolveLogClientRequestIds } from '@/lib/log-filter';
 import { cn } from '@/lib/utils';
 import {
@@ -92,10 +93,10 @@ export function buildImageActionTarget(image: ImageInfo | null): ImageActionTarg
     };
 }
 
-function formatLogTime(value: string): string {
+export function formatLogTime(value: string, locale: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleTimeString();
+    return date.toLocaleTimeString(locale);
 }
 
 function formatLogScopeValues(values: string[]): string {
@@ -191,7 +192,7 @@ export function ImageOutput({
     logClientRequestIds = [],
     logFilenames = []
 }: ImageOutputProps) {
-    const { t } = useI18n();
+    const { locale, t } = useI18n();
     const resolvedAltText = altText ?? t('output.alt');
     const [isLogDialogOpen, setIsLogDialogOpen] = React.useState(false);
     const [logs, setLogs] = React.useState<LogEntry[]>([]);
@@ -711,7 +712,7 @@ export function ImageOutput({
                             visibleLogs.map((entry) => (
                                 <div key={entry.id} className='border-border/50 border-b py-2 last:border-b-0'>
                                     <div className='flex flex-wrap items-center gap-2'>
-                                        <span className='text-muted-foreground'>{formatLogTime(entry.at)}</span>
+                                        <span className='text-muted-foreground'>{formatLogTime(entry.at, locale)}</span>
                                         <span
                                             className={cn(
                                                 'rounded border px-1.5 py-0.5 uppercase',
@@ -723,7 +724,7 @@ export function ImageOutput({
                                                     'border-blue-500/40 text-blue-700 dark:border-blue-300/30 dark:text-blue-100',
                                                 entry.level === 'debug' && 'border-border text-muted-foreground'
                                             )}>
-                                            {entry.level}
+                                            {getActivityLogLevelLabel(entry.level, t)}
                                         </span>
                                         <span className='text-foreground break-all'>{entry.message}</span>
                                     </div>

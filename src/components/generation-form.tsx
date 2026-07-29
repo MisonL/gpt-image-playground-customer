@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
+import { getImageOutputFormatLabel, getImageQualityLabel } from '@/lib/image-display-labels';
 import { shouldRecommendImageStreaming } from '@/lib/image-streaming-recommendation';
 import type {
     ImageUpstreamFormBackend,
@@ -311,19 +312,6 @@ function getStreamModeLabel(streamMode: ImageStreamMode, t: (key: string) => str
     return t('streaming.modeAuto');
 }
 
-function getQualityLabel(quality: GenerationFormData['quality'], t: (key: string) => string): string {
-    if (quality === 'low') return t('common.low');
-    if (quality === 'medium') return t('common.medium');
-    if (quality === 'high') return t('common.high');
-    return t('common.auto');
-}
-
-function getOutputFormatLabel(format: GenerationFormData['output_format'], t: (key: string) => string): string {
-    if (format === 'jpeg') return t('common.jpeg');
-    if (format === 'webp') return t('common.webp');
-    return t('common.png');
-}
-
 export function GenerationForm({
     onSubmit,
     onSaveInspiration,
@@ -471,8 +459,8 @@ export function GenerationForm({
         t
     ]);
     const advancedSummary = [
-        `${t('form.quality')}: ${getQualityLabel(quality, t)}`,
-        `${t('form.outputFormat')}: ${getOutputFormatLabel(outputFormat, t)}`,
+        `${t('form.quality')}: ${getImageQualityLabel(quality, t)}`,
+        `${t('form.outputFormat')}: ${getImageOutputFormatLabel(outputFormat, t)}`,
         getBackendLabel(imageBackend, t)
     ].join(', ');
     const streamModeLabel = getStreamModeLabel(streamMode, t);
@@ -800,7 +788,7 @@ export function GenerationForm({
                                     </div>
                                 </div>
                                 <p className='text-muted-foreground ui-stat text-xs'>
-                                    {t('form.pixelsMeta', {
+                                    {t(usesPositiveIntegerCustomSize ? 'form.pixelsMeta' : 'form.pixelsMetaOfMaximum', {
                                         pixels: customPixels.toLocaleString(locale),
                                         percent: ((customPixels / 8_294_400) * 100).toFixed(1),
                                         ratio: customRatio
@@ -888,21 +876,21 @@ export function GenerationForm({
                                 <RadioItemWithIcon
                                     value='jpeg'
                                     id='format-jpeg-quick'
-                                    label='JPG'
+                                    label={t('common.jpeg')}
                                     Icon={FileImage}
                                     disabled={isLoading}
                                 />
                                 <RadioItemWithIcon
                                     value='png'
                                     id='format-png-quick'
-                                    label='PNG'
+                                    label={t('common.png')}
                                     Icon={FileImage}
                                     disabled={isLoading}
                                 />
                                 <RadioItemWithIcon
                                     value='webp'
                                     id='format-webp-quick'
-                                    label='WEBP'
+                                    label={t('common.webp')}
                                     Icon={FileImage}
                                     disabled={isLoading}
                                 />
@@ -1449,21 +1437,21 @@ export function GenerationForm({
                                                 <RadioItemWithIcon
                                                     value='png'
                                                     id='format-png'
-                                                    label='PNG'
+                                                    label={t('common.png')}
                                                     Icon={FileImage}
                                                     disabled={isLoading}
                                                 />
                                                 <RadioItemWithIcon
                                                     value='jpeg'
                                                     id='format-jpeg'
-                                                    label='JPEG'
+                                                    label={t('common.jpeg')}
                                                     Icon={FileImage}
                                                     disabled={isLoading}
                                                 />
                                                 <RadioItemWithIcon
                                                     value='webp'
                                                     id='format-webp'
-                                                    label='WebP'
+                                                    label={t('common.webp')}
                                                     Icon={FileImage}
                                                     disabled={isLoading}
                                                 />

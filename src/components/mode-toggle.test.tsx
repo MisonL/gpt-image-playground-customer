@@ -16,7 +16,7 @@ describe('ModeToggle responsive labels', { concurrency: false }, () => {
             </I18nProvider>
         );
 
-        assert.match(html, /复用历史/);
+        assert.match(html, /复用提示词/);
         assert.match(html, /data-workbench-mode="generate"/);
         assert.match(html, /data-workbench-mode="edit"/);
         assert.match(html, /data-workbench-mode="batch"/);

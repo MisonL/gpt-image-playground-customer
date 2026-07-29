@@ -80,6 +80,7 @@ export type ApiImageResponseItem = {
 
 export type StreamingClientEvent = {
     type?: string;
+    status?: number;
     index?: number;
     b64_json?: string;
     filename?: string;

@@ -204,8 +204,8 @@ describe('EditingForm submit footer', { concurrency: false }, () => {
         assert.match(html, /min-w-0 items-center justify-center rounded-md/);
         assert.doesNotMatch(html, /text-center whitespace-nowrap/);
         assert.doesNotMatch(html, /min-\[1760px\]:flex/);
-        assert.match(html, /存为灵感/);
-        assert.match(html, /随便来点/);
+        assert.match(html, /收藏提示词/);
+        assert.match(html, /随机套用/);
         assert.match(html, /min-h-11 min-w-0 items-center justify-center/);
         assert.match(html, /focus-visible:ring-2 focus-visible:outline-none/);
         assert.match(html, /flex min-h-0 flex-1 flex-col overflow-hidden/);
@@ -231,8 +231,8 @@ describe('EditingForm submit footer', { concurrency: false }, () => {
             canApplyRandomInspiration: false
         });
 
-        assertButtonDisabled(html, '存为灵感');
-        assertButtonDisabled(html, '随便来点');
+        assertButtonDisabled(html, '收藏提示词');
+        assertButtonDisabled(html, '随机套用');
         assert.doesNotMatch(html, /用户保存的编辑提示词/);
     });
 
@@ -257,10 +257,10 @@ describe('EditingForm submit footer', { concurrency: false }, () => {
 
         try {
             const saveButton = [...view.container.querySelectorAll('button')].find((button) =>
-                button.textContent?.includes('存为灵感')
+                button.textContent?.includes('收藏提示词')
             );
             const randomButton = [...view.container.querySelectorAll('button')].find((button) =>
-                button.textContent?.includes('随便来点')
+                button.textContent?.includes('随机套用')
             );
 
             assert.ok(saveButton, 'missing edit save inspiration button');

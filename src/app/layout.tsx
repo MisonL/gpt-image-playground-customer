@@ -4,8 +4,8 @@ import { I18nProvider } from '@/lib/i18n';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-    title: '图像手记 | Visual Journal',
-    description: '图像手记（Visual Journal），面向中文创作者的 AI 图像创作工作台。',
+    title: '图像手记 | AI 图像创作工作台',
+    description: '图像手记是用于生成、编辑和管理图像的 AI 图像创作工作台。',
     icons: {
         icon: '/favicon.svg'
     }

@@ -17,7 +17,7 @@ describe('WorkbenchStatusStrip', () => {
             </I18nProvider>
         );
 
-        assert.match(html, /当前路由可参与请求/);
+        assert.match(html, /当前请求路径已就绪/);
         assert.match(html, /gpt-image-2/);
         assert.match(html, /images-sse/);
         assert.match(html, /自动/);
@@ -150,13 +150,14 @@ describe('WorkbenchStatusStrip', () => {
 
         assert.match(html, /请求方式/);
         assert.match(html, /images-non-stream/);
-        assert.match(html, /可参与路由/);
+        assert.match(html, /可用于请求/);
         assert.match(html, /responses-sse/);
         assert.match(html, /冷却中或待探测/);
         assert.match(html, /最近渠道失败/);
         assert.match(html, /HTTP 403/);
         assert.match(html, /responses-sse/);
         assert.match(html, /OPENAI_CHANNEL_N_REQUEST_MODES=images-non-stream/);
+        assert.match(html, /建议的环境变量/);
     });
 
     it('keeps request mode details constrained on narrow screens', () => {

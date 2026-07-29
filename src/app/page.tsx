@@ -5,6 +5,7 @@ import { EditingForm, type EditingFormData, type EditingReuseContext } from '@/c
 import { GenerationForm, type GenerationFormData, type WorkbenchReuseContext } from '@/components/generation-form';
 import { HistoryPanel, type InspirationItem, type PromptApplySource } from '@/components/history-panel';
 import { ImageOutput } from '@/components/image-output';
+import { LanguageSelector } from '@/components/language-selector';
 import type { WorkbenchMode } from '@/components/mode-toggle';
 import { PasswordDialog } from '@/components/password-dialog';
 import { ShareDialog, type ShareDialogValues } from '@/components/share-dialog';
@@ -433,12 +434,22 @@ class ApiRequestError extends Error {
     }
 }
 
-function summarizeApiError(error: unknown, fallbackMessage: string): { message: string; status?: number } {
+function getLocalizedImageRequestError(t: ReturnType<typeof useI18n>['t'], status: number | undefined): string {
+    if (status === 400) return t('error.invalidRequest');
+    if (status === undefined) return t('error.streaming');
+    return t('error.apiFailed', { status });
+}
+
+function summarizeApiError(
+    error: unknown,
+    fallbackMessage: string,
+    t: ReturnType<typeof useI18n>['t']
+): { message: string; status?: number } {
     if (error instanceof ApiRequestError) {
         return { message: error.message, status: error.status };
     }
-    if (error instanceof Error) {
-        return { message: error.message };
+    if (error instanceof BatchPausedError) {
+        return { message: t('batch.pausedFailure') };
     }
     return { message: fallbackMessage };
 }
@@ -1610,7 +1621,7 @@ export default function HomePage() {
                 const indexedDbImages = await Promise.all(
                     images.map(async (img) => {
                         if (!img.b64_json) {
-                            throw new Error(t('error.imageMissingBase64', { filename: img.filename }));
+                            throw new ApiRequestError(t('error.imageMissingBase64', { filename: img.filename }));
                         }
                         const byteCharacters = atob(img.b64_json);
                         const byteNumbers = new Array(byteCharacters.length);
@@ -1646,7 +1657,7 @@ export default function HomePage() {
                     ...(img.clientRequestId ? { clientRequestId: img.clientRequestId } : {})
                 }));
             if (fsImages.length !== images.length) {
-                throw new Error(t('error.apiOmittedPaths'));
+                throw new ApiRequestError(t('error.apiOmittedPaths'));
             }
             return fsImages;
         },
@@ -1665,7 +1676,7 @@ export default function HomePage() {
             promptOverride?: string
         ) => {
             if (images.length === 0) {
-                throw new Error(t('error.noImages'));
+                throw new ApiRequestError(t('error.noImages'));
             }
 
             const processedImages = await materializeImages(images);
@@ -1711,7 +1722,7 @@ export default function HomePage() {
             if (isPasswordRequiredByBackend && effectivePasswordHash) {
                 apiFormData.append('passwordHash', effectivePasswordHash);
             } else if (isPasswordRequiredByBackend && !effectivePasswordHash) {
-                throw new Error(t('error.passwordRequired'));
+                throw new ApiRequestError(t('error.passwordRequired'));
             }
             apiFormData.append('mode', requestMode);
             if (apiSettings.apiKey) {
@@ -1809,15 +1820,20 @@ export default function HomePage() {
             } = {}
         ): Promise<{ images: ApiImageResponseItem[]; usage: unknown; actualCost?: ActualCostDetails }> => {
             const formClientRequestId = String(apiFormData.get('clientRequestId') || '');
-            const response = await fetch('/api/images', {
-                method: 'POST',
-                body: apiFormData
-            });
+            let response: Response;
+            try {
+                response = await fetch('/api/images', {
+                    method: 'POST',
+                    body: apiFormData
+                });
+            } catch {
+                throw new ApiRequestError(t('error.networkRequest'));
+            }
 
             const contentType = response.headers.get('content-type');
             if (contentType?.includes('text/event-stream')) {
                 if (!response.body) {
-                    throw new Error(t('error.responseBodyNull'));
+                    throw new ApiRequestError(t('error.responseBodyNull'));
                 }
 
                 const reader = response.body.getReader();
@@ -1834,7 +1850,12 @@ export default function HomePage() {
                         .map((line) => line.slice(6));
                     if (dataLines.length === 0) return;
 
-                    const event = JSON.parse(dataLines.join('\n'));
+                    let event: StreamingClientEvent;
+                    try {
+                        event = JSON.parse(dataLines.join('\n')) as StreamingClientEvent;
+                    } catch {
+                        throw new ApiRequestError(t('error.streaming'));
+                    }
                     if (event.type === 'partial_image') {
                         const imageIndex = options.previewIndexOffset ?? event.index ?? 0;
                         const dataUrl = `data:image/png;base64,${event.b64_json}`;
@@ -1844,14 +1865,24 @@ export default function HomePage() {
                             return newMap;
                         });
                     } else if (event.type === 'error') {
-                        throw new ApiRequestError(event.error || t('error.streaming'), event.status);
+                        throw new ApiRequestError(getLocalizedImageRequestError(t, event.status), event.status);
                     } else if (event.type === 'completed' || event.type === 'done') {
-                        streamingState = applyStreamingClientEvent(streamingState, event as StreamingClientEvent);
+                        try {
+                            streamingState = applyStreamingClientEvent(streamingState, event);
+                        } catch {
+                            throw new ApiRequestError(t('error.streaming'));
+                        }
                     }
                 };
 
                 while (true) {
-                    const { done, value } = await reader.read();
+                    let chunk: ReadableStreamReadResult<Uint8Array>;
+                    try {
+                        chunk = await reader.read();
+                    } catch {
+                        throw new ApiRequestError(t('error.streaming'));
+                    }
+                    const { done, value } = chunk;
                     if (done) break;
 
                     buffer += decoder.decode(value, { stream: true });
@@ -1891,9 +1922,9 @@ export default function HomePage() {
                 result = await response.json();
             } catch (error) {
                 if (!response.ok) {
-                    throw new ApiRequestError(t('error.apiFailed', { status: response.status }), response.status);
+                    throw new ApiRequestError(getLocalizedImageRequestError(t, response.status), response.status);
                 }
-                throw error;
+                throw new ApiRequestError(t('error.unexpected'), response.status);
             }
 
             if (!response.ok) {
@@ -1920,10 +1951,7 @@ export default function HomePage() {
                     promptForExpiredPassword();
                     throw new ApiRequestError(t('error.passwordExpired'), 401, { preserveDisplayedError: true });
                 }
-                throw new ApiRequestError(
-                    result.error || t('error.apiFailed', { status: response.status }),
-                    response.status
-                );
+                throw new ApiRequestError(getLocalizedImageRequestError(t, response.status), response.status);
             }
 
             return {
@@ -2158,7 +2186,7 @@ export default function HomePage() {
                 }
                 if (successes.length === 0) {
                     setFailedBatchPrompts(failedPromptBatch);
-                    throw errors[0] || new Error(t('error.noImages'));
+                    throw errors[0] || new ApiRequestError(t('error.noImages'));
                 }
                 const images = successes.flatMap((result) => result.images);
                 const usage = mergeUsageValues(successes.map((result) => result.usage));
@@ -2185,7 +2213,7 @@ export default function HomePage() {
                             buildBatchPartialFailureMessage({
                                 failed: errors.length,
                                 total: jobs.length,
-                                errors: errors.map((error) => summarizeApiError(error, t('error.unexpected'))),
+                                errors: errors.map((error) => summarizeApiError(error, t('error.unexpected'), t)),
                                 t
                             })
                         )
@@ -2218,7 +2246,7 @@ export default function HomePage() {
                     return;
                 }
                 if (successes.length === 0) {
-                    throw errors[0] || new Error(t('error.noImages'));
+                    throw errors[0] || new ApiRequestError(t('error.noImages'));
                 }
                 const images = successes.flatMap((result) => result.images);
                 const usage = mergeUsageValues(successes.map((result) => result.usage));
@@ -2241,7 +2269,7 @@ export default function HomePage() {
                             buildBatchPartialFailureMessage({
                                 failed: errors.length,
                                 total: jobs.length,
-                                errors: errors.map((error) => summarizeApiError(error, t('error.unexpected'))),
+                                errors: errors.map((error) => summarizeApiError(error, t('error.unexpected'), t)),
                                 t
                             })
                         )
@@ -2272,7 +2300,7 @@ export default function HomePage() {
                 setStreamingPreviewImages(new Map());
                 return;
             }
-            const errorSummary = summarizeApiError(err, t('error.unexpected'));
+            const errorSummary = summarizeApiError(err, t('error.unexpected'), t);
             const message = buildUserFacingApiErrorMessage({ ...errorSummary, t });
             setError(createErrorNotice(message));
             setGenerationFailureMessage(message);
@@ -3168,19 +3196,28 @@ export default function HomePage() {
             if (storageMode === 'indexeddb') {
                 const record = allDbImages?.find((img) => img.filename === filename);
                 if (!record?.blob) {
-                    throw new Error(t('error.imageNotFoundDb', { filename }));
+                    throw new ApiRequestError(t('error.imageNotFoundDb', { filename }));
                 }
                 return record.blob;
             }
 
             if (!(await refreshImageAccessCookie())) {
-                throw new Error(t('error.imageAccessRefreshFailed'));
+                throw new ApiRequestError(t('error.imageAccessRefreshFailed'));
             }
-            const response = await fetch(`/api/image/${filename}`);
+            let response: Response;
+            try {
+                response = await fetch(`/api/image/${filename}`);
+            } catch {
+                throw new ApiRequestError(t('error.retrieveImage', { filename }));
+            }
             if (!response.ok) {
-                throw new Error(t('error.fetchImage', { status: response.status }));
+                throw new ApiRequestError(t('error.fetchImage', { status: response.status }));
             }
-            return response.blob();
+            try {
+                return await response.blob();
+            } catch {
+                throw new ApiRequestError(t('error.retrieveImage', { filename }));
+            }
         },
         [allDbImages, refreshImageAccessCookie, t]
     );
@@ -3199,7 +3236,9 @@ export default function HomePage() {
                 window.setTimeout(() => URL.revokeObjectURL(url), 150);
             } catch (error) {
                 setError(
-                    createErrorNotice(error instanceof Error ? error.message : t('error.retrieveImage', { filename }))
+                    createErrorNotice(
+                        error instanceof ApiRequestError ? error.message : t('error.retrieveImage', { filename })
+                    )
                 );
             }
         },
@@ -3228,9 +3267,7 @@ export default function HomePage() {
                 window.setTimeout(() => URL.revokeObjectURL(url), 150);
             } catch (error) {
                 setError(
-                    createErrorNotice(
-                        error instanceof Error ? error.message : t('error.retrieveImage', { filename: 'history.zip' })
-                    )
+                    createErrorNotice(error instanceof ApiRequestError ? error.message : t('error.downloadHistory'))
                 );
             }
         },
@@ -3319,13 +3356,18 @@ export default function HomePage() {
                     blob = record.blob;
                     mimeType = blob.type || mimeType;
                 } else {
-                    throw new Error(t('error.imageNotFoundDb', { filename }));
+                    throw new ApiRequestError(t('error.imageNotFoundDb', { filename }));
                 }
             } else {
                 if (!(await refreshImageAccessCookie())) {
                     return false;
                 }
-                const response = await fetch(`/api/image/${filename}`);
+                let response: Response;
+                try {
+                    response = await fetch(`/api/image/${filename}`);
+                } catch {
+                    throw new ApiRequestError(t('error.sendToEdit'));
+                }
                 if (response.status === 401 && isPasswordRequiredByBackend) {
                     let result: { code?: string } = {};
                     try {
@@ -3341,14 +3383,18 @@ export default function HomePage() {
                     return false;
                 }
                 if (!response.ok) {
-                    throw new Error(t('error.fetchImage', { status: response.status }));
+                    throw new ApiRequestError(t('error.fetchImage', { status: response.status }));
                 }
-                blob = await response.blob();
+                try {
+                    blob = await response.blob();
+                } catch {
+                    throw new ApiRequestError(t('error.sendToEdit'));
+                }
                 mimeType = response.headers.get('Content-Type') || mimeType;
             }
 
             if (!blob) {
-                throw new Error(t('error.retrieveImage', { filename }));
+                throw new ApiRequestError(t('error.retrieveImage', { filename }));
             }
 
             const newFile = new File([blob], filename, { type: mimeType });
@@ -3365,7 +3411,7 @@ export default function HomePage() {
             return true;
         } catch (err: unknown) {
             console.error('发送图片到编辑模式失败：', err);
-            const errorMessage = err instanceof Error ? err.message : t('error.sendToEdit');
+            const errorMessage = err instanceof ApiRequestError ? err.message : t('error.sendToEdit');
             setError(createErrorNotice(errorMessage));
             return false;
         } finally {
@@ -3477,17 +3523,17 @@ export default function HomePage() {
                             body: JSON.stringify(apiPayload)
                         });
                     } catch {
-                        throw new Error(t('error.deleteUnexpected'));
+                        throw new ApiRequestError(t('error.deleteUnexpected'));
                     }
 
                     let result: unknown;
                     try {
                         result = await response.json();
                     } catch {
-                        throw new Error(t('error.deleteUnexpected'));
+                        throw new ApiRequestError(t('error.deleteUnexpected'));
                     }
                     if (!response.ok) {
-                        throw new Error(
+                        throw new ApiRequestError(
                             response.status === 401 ? t('error.unauthorized') : t('error.deleteUnexpected')
                         );
                     }
@@ -3495,7 +3541,7 @@ export default function HomePage() {
                     try {
                         deletionResults = readWebuiImageFileOperationResults(result);
                     } catch {
-                        throw new Error(t('error.deleteUnexpected'));
+                        throw new ApiRequestError(t('error.deleteUnexpected'));
                     }
                     setLoadedWebuiImageRetentionState((current) =>
                         current?.scopeKey === retentionScopeKey
@@ -3560,7 +3606,7 @@ export default function HomePage() {
                 scheduleResultFeedbackDeleteTargets(buildHistoryFeedbackDeleteTargets([item]));
             } catch (e: unknown) {
                 console.error('删除条目失败：', e);
-                setError(createErrorNotice(e instanceof Error ? e.message : t('error.deleteUnexpected')));
+                setError(createErrorNotice(e instanceof ApiRequestError ? e.message : t('error.deleteUnexpected')));
             } finally {
                 setItemToDeleteConfirm(null);
             }
@@ -3672,6 +3718,9 @@ export default function HomePage() {
             ) : null}
             {showEntryLock ? (
                 <div className='mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-6 px-4 text-center'>
+                    <div className='absolute top-3 right-4'>
+                        <LanguageSelector />
+                    </div>
                     <div className='bg-primary text-primary-foreground border-primary/20 flex size-14 items-center justify-center rounded-full border shadow-sm'>
                         <Lock className='h-6 w-6' />
                     </div>
@@ -3747,6 +3796,7 @@ export default function HomePage() {
                                     channelRouting={runtimeCapabilities?.channelRouting ?? null}
                                     runtimeLastFailure={runtimeCapabilities?.streamingBatch.lastFailure ?? null}
                                 />
+                                <LanguageSelector />
                                 <div className='text-muted-foreground hidden items-center sm:flex'>
                                     <button
                                         type='button'
