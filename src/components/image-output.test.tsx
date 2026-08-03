@@ -1,7 +1,9 @@
-import { buildImageActionTarget, formatLogTime, ImageOutput } from './image-output';
+import { buildImageActionTarget, formatLogTime, ImageOutput, resolveLogScopeCopy } from './image-output';
 import { I18nProvider } from '@/lib/i18n';
+import { renderInClientDom } from '@/test-utils/react-dom';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { act } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const noop = () => {};
@@ -96,7 +98,7 @@ describe('ImageOutput result actions', () => {
         assert.doesNotMatch(html, /workbench-sample/);
         assert.doesNotMatch(html, /灵感样张/);
         assert.doesNotMatch(html, /1024 x 768/);
-        for (const action of ['继续编辑', '按相同参数再次生成', '复用提示词', '对比', '下载']) {
+        for (const action of ['继续编辑', '再次生成', '复用提示词', '对比', '下载']) {
             assert.match(
                 html,
                 new RegExp(
@@ -289,6 +291,125 @@ describe('ImageOutput result actions', () => {
         );
     });
 
+    it('closes comparison and disables a target that fails to load', async () => {
+        const view = await renderInClientDom(
+            <I18nProvider>
+                <ImageOutput
+                    imageBatch={[{ path: '/api/image/current.png', filename: 'current.png' }]}
+                    compareImage={{ path: '/api/image/missing.png', filename: 'missing.png' }}
+                    viewMode={0}
+                    onViewChange={noop}
+                    isLoading={false}
+                    onSendToEdit={noop}
+                    onDownloadImage={noop}
+                    onShareImage={noop}
+                    onCreateVariant={noop}
+                    onReusePrompt={noop}
+                    canCreateVariant
+                    canReusePrompt
+                    currentMode='generate'
+                    baseImagePreviewUrl={null}
+                    clientPasswordHash={null}
+                    canOpenLogs={false}
+                />
+            </I18nProvider>
+        );
+        try {
+            const compareButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+                button.textContent?.includes('对比')
+            );
+            assert.ok(compareButton, 'missing compare button');
+            await view.click(compareButton);
+
+            const compareImage = [...view.container.querySelectorAll<HTMLImageElement>('img')].find(
+                (image) => image.alt === '上一张 missing.png'
+            );
+            assert.ok(compareImage, 'missing comparison target image');
+            const errorEvent = new compareImage.ownerDocument.defaultView!.Event('error', { bubbles: true });
+            await act(async () => {
+                compareImage.dispatchEvent(errorEvent);
+            });
+
+            assert.match(view.container.textContent ?? '', /对比中的图片已不可访问，已退出对比/);
+            const disabledCompareButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+                (button) => button.textContent?.includes('对比')
+            );
+            assert.equal(disabledCompareButton?.disabled, true);
+        } finally {
+            await view.cleanup();
+        }
+    });
+
+    it('closes comparison and disables it when the current image fails to load', async () => {
+        const view = await renderInClientDom(
+            <I18nProvider>
+                <ImageOutput
+                    imageBatch={[{ path: '/api/image/current.png', filename: 'current.png' }]}
+                    compareImage={{ path: '/api/image/previous.png', filename: 'previous.png' }}
+                    viewMode={0}
+                    onViewChange={noop}
+                    isLoading={false}
+                    onSendToEdit={noop}
+                    onDownloadImage={noop}
+                    onShareImage={noop}
+                    onCreateVariant={noop}
+                    onReusePrompt={noop}
+                    canCreateVariant
+                    canReusePrompt
+                    currentMode='generate'
+                    baseImagePreviewUrl={null}
+                    clientPasswordHash={null}
+                    canOpenLogs={false}
+                />
+            </I18nProvider>
+        );
+        try {
+            const compareButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+                button.textContent?.includes('对比')
+            );
+            assert.ok(compareButton, 'missing compare button');
+            await view.click(compareButton);
+
+            const currentImage = [...view.container.querySelectorAll<HTMLImageElement>('img')].find(
+                (image) => image.alt === '当前图 current.png'
+            );
+            assert.ok(currentImage, 'missing current comparison image');
+            const errorEvent = new currentImage.ownerDocument.defaultView!.Event('error', { bubbles: true });
+            await act(async () => {
+                currentImage.dispatchEvent(errorEvent);
+            });
+
+            assert.match(view.container.textContent ?? '', /对比中的图片已不可访问，已退出对比/);
+            const disabledCompareButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+                (button) => button.textContent?.includes('对比')
+            );
+            assert.equal(disabledCompareButton?.disabled, true);
+        } finally {
+            await view.cleanup();
+        }
+    });
+
+    it('uses batch-specific activity scope copy for a multi-image grid', () => {
+        assert.deepEqual(
+            resolveLogScopeCopy({
+                hasLogScope: true,
+                hasSelectedImageBatch: true,
+                hasScopeCandidate: true,
+                isLogScopeBatch: true
+            }),
+            { scopeKey: 'logs.scopeBatch', emptyKey: 'logs.emptyForBatch' }
+        );
+        assert.deepEqual(
+            resolveLogScopeCopy({
+                hasLogScope: false,
+                hasSelectedImageBatch: true,
+                hasScopeCandidate: false,
+                isLogScopeBatch: true
+            }),
+            { scopeKey: 'logs.scopeMissingBatch', emptyKey: 'logs.historyBatchWithoutScope' }
+        );
+    });
+
     it('uses user-facing generation activity copy for the activity entry', () => {
         const html = renderToStaticMarkup(
             <I18nProvider>
@@ -345,5 +466,35 @@ describe('ImageOutput result actions', () => {
         assert.match(html, /上游或 API 中转站异常。请稍后重试。/);
         assert.match(html, new RegExp(`<button[^>]*>${buttonContentPattern}重试生成${buttonContentPattern}</button>`));
         assert.doesNotMatch(html, /灵感样张/);
+    });
+
+    it('uses edit-specific failure and retry text for an image-edit request', () => {
+        const html = renderToStaticMarkup(
+            <I18nProvider>
+                <ImageOutput
+                    imageBatch={null}
+                    viewMode='grid'
+                    onViewChange={noop}
+                    isLoading={false}
+                    onSendToEdit={noop}
+                    onDownloadImage={noop}
+                    onShareImage={noop}
+                    onCreateVariant={noop}
+                    onReusePrompt={noop}
+                    failureMessage='编辑上游不可用。'
+                    onRetry={noop}
+                    canCreateVariant={false}
+                    canReusePrompt={false}
+                    currentMode='edit'
+                    baseImagePreviewUrl={null}
+                    clientPasswordHash={null}
+                    canOpenLogs={false}
+                />
+            </I18nProvider>
+        );
+
+        assert.match(html, /编辑失败/);
+        assert.match(html, new RegExp(`<button[^>]*>${buttonContentPattern}重试编辑${buttonContentPattern}</button>`));
+        assert.doesNotMatch(html, /重试生成/);
     });
 });

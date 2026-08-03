@@ -14,8 +14,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GptImageModel } from '@/lib/cost-utils';
+import {
+    formatEditSourceValidationFailure,
+    formatEditUploadLimit,
+    getResponsesEditInputLimitLabel,
+    isResponsesEditInputLimitActive,
+    validateEditSourceInput
+} from '@/lib/edit-source-limits';
 import { useI18n } from '@/lib/i18n';
 import { getImageOutputFormatLabel, getImageQualityLabel } from '@/lib/image-display-labels';
+import { MAX_PROMPT_LENGTH } from '@/lib/image-request-limits';
 import type {
     ImageUpstreamFormBackend,
     ImageUpstreamFormPromptOptimization,
@@ -30,14 +38,17 @@ import {
 import {
     buildIntegerRangeOptions,
     clampIntegerToRange,
-    getPartialImagesRangeForBackend,
+    getImageBackendCompatibility,
+    resolveImageBackendSelection,
     type ImageUpstreamProfile,
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
-import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import type { ImageGenerationBackend, ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import {
     getPresetTooltip,
     getSizePresetOptions,
+    formatExactImagePixelCount,
+    readImageSizeNumberInput,
     validateGptImage2Size,
     validatePositiveIntegerImageSize
 } from '@/lib/size-utils';
@@ -144,6 +155,7 @@ type EditingFormProps = {
     setEditCompression: React.Dispatch<React.SetStateAction<number[]>>;
     upstreamProfile: ImageUpstreamProfile;
     upstreamProfileMixed?: boolean;
+    defaultImageBackend?: ImageGenerationBackend;
     editModeration: EditingFormData['moderation'];
     setEditModeration: React.Dispatch<React.SetStateAction<EditingFormData['moderation']>>;
     editBrushSize: number[];
@@ -335,6 +347,7 @@ export function EditingForm({
     setEditCompression,
     upstreamProfile,
     upstreamProfileMixed = false,
+    defaultImageBackend,
     editModeration,
     setEditModeration,
     editBrushSize,
@@ -389,15 +402,14 @@ export function EditingForm({
                 : validateGptImage2Size(editCustomWidth, editCustomHeight)
             : { valid: true as const };
     const customSizeInvalid = editSize === 'custom' && !customSizeValidation.valid;
-    const editCustomPixels = editCustomWidth * editCustomHeight;
-    const editCustomRatio =
-        editCustomWidth > 0 && editCustomHeight > 0
-            ? t('form.ratio', {
-                  ratio: (
-                      Math.max(editCustomWidth, editCustomHeight) / Math.min(editCustomWidth, editCustomHeight)
-                  ).toFixed(2)
-              })
-            : t('form.noRatio');
+    const editCustomPixelCount = formatExactImagePixelCount(editCustomWidth, editCustomHeight, locale);
+    const editCustomRatio = editCustomPixelCount
+        ? t('form.ratio', {
+              ratio: (
+                  Math.max(editCustomWidth, editCustomHeight) / Math.min(editCustomWidth, editCustomHeight)
+              ).toFixed(2)
+          })
+        : t('form.noRatio');
     const editCustomSizeError = customSizeValidation.valid
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
@@ -420,13 +432,64 @@ export function EditingForm({
 
     const [isAdvancedOpen, setIsAdvancedOpen] = React.useState(initialAdvancedOpen);
     const [advancedTab, setAdvancedTab] = React.useState<AdvancedTab>(initialAdvancedTab);
+    const effectiveImageBackend = resolveImageBackendSelection(editImageBackend, defaultImageBackend);
+    const responsesBackendUnavailable =
+        effectiveImageBackend === 'responses-image-generation' && !allowResponsesImageBackend;
     const requiresResponsesModel =
-        editImageBackend === 'responses-image-generation' && !hasDefaultResponsesModel && !editResponsesModel.trim();
+        effectiveImageBackend === 'responses-image-generation' &&
+        !hasDefaultResponsesModel &&
+        !editResponsesModel.trim();
+    const backendCompatibility = React.useMemo(
+        () => getImageBackendCompatibility(upstreamProfile, 'edit', editImageBackend, defaultImageBackend),
+        [defaultImageBackend, editImageBackend, upstreamProfile]
+    );
+    const backendCompatibilityMessage = backendCompatibility.compatible
+        ? ''
+        : backendCompatibility.errors.map((error) => error.message).join(' ');
+    const editPromptOverLimit = editPrompt.length > MAX_PROMPT_LENGTH;
+    const editSourceValidationFailure = React.useMemo(
+        () =>
+            validateEditSourceInput({
+                imageFiles,
+                maskFile: editGeneratedMaskFile,
+                upstreamProfile,
+                imageBackend: editImageBackend,
+                defaultImageBackend
+            }),
+        [defaultImageBackend, editGeneratedMaskFile, editImageBackend, imageFiles, upstreamProfile]
+    );
+    const editSourceValidationMessage = editSourceValidationFailure
+        ? formatEditSourceValidationFailure(editSourceValidationFailure, t)
+        : '';
+    const editUploadHint = React.useMemo(() => {
+        const values: Record<string, string | number> = {
+            count: maxImages,
+            singleLimit: formatEditUploadLimit(upstreamProfile.upload.maxSingleBytes),
+            totalHint:
+                upstreamProfile.upload.maxTotalBytes === undefined
+                    ? t('edit.referenceNoTotalLimit')
+                    : t('edit.referenceTotalLimit', {
+                          limit: formatEditUploadLimit(upstreamProfile.upload.maxTotalBytes)
+                      })
+        };
+        return t('edit.referenceHint', values);
+    }, [maxImages, t, upstreamProfile.upload.maxSingleBytes, upstreamProfile.upload.maxTotalBytes]);
+    const editReferenceEmptyHint = t('edit.referenceEmpty', {
+        singleLimit: formatEditUploadLimit(upstreamProfile.upload.maxSingleBytes)
+    });
+    const responsesEditInputLimitActive = isResponsesEditInputLimitActive({
+        imageBackend: editImageBackend,
+        defaultImageBackend
+    });
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (imageFiles.length === 0) return t('ux.disabledSourceImage');
         if (imageFiles.length > maxImages) return t('alert.maxImages', { count: maxImages });
+        if (editSourceValidationMessage) return editSourceValidationMessage;
+        if (responsesBackendUnavailable) return t('upstream.backendResponsesUnavailable');
+        if (backendCompatibilityMessage) return backendCompatibilityMessage;
         if (!editPrompt.trim()) return t('ux.disabledPrompt');
+        if (editPromptOverLimit) return t('ux.disabledPromptLength', { limit: MAX_PROMPT_LENGTH });
         if (editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved) {
             return t('ux.disabledUnsavedMask');
         }
@@ -435,15 +498,19 @@ export function EditingForm({
         return '';
     }, [
         customSizeInvalid,
+        backendCompatibilityMessage,
         editCustomSizeError,
         editDrawnPoints.length,
         editGeneratedMaskFile,
         editIsMaskSaved,
         editPrompt,
+        editPromptOverLimit,
+        editSourceValidationMessage,
         imageFiles.length,
         isLoading,
         maxImages,
         requiresResponsesModel,
+        responsesBackendUnavailable,
         t
     ]);
     const advancedSummary = [
@@ -456,10 +523,14 @@ export function EditingForm({
     const workbenchBackendLabel = getWorkbenchBackendLabel(editImageBackend, t);
     const editSizePresetOptions = getSizePresetOptions({ model: editModel, upstreamProfile });
     const partialImagesRange = React.useMemo(
-        () => getPartialImagesRangeForBackend(upstreamProfile, editImageBackend),
-        [editImageBackend, upstreamProfile]
+        () => backendCompatibility.partialImagesRange ?? { min: 1, max: 3 },
+        [backendCompatibility.partialImagesRange]
     );
     const partialImageOptions = buildIntegerRangeOptions(partialImagesRange) as PartialImagesCount[];
+    const editCountRange = React.useMemo(
+        () => backendCompatibility.imageCountRange ?? { min: 1, max: 1 },
+        [backendCompatibility.imageCountRange]
+    );
 
     // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
     React.useEffect(() => {
@@ -481,10 +552,10 @@ export function EditingForm({
     }, [isActive, partialImages, partialImagesRange, setPartialImages]);
 
     React.useEffect(() => {
-        if (isActive && (editN[0] < upstreamProfile.editCount.min || editN[0] > upstreamProfile.editCount.max)) {
-            setEditN([Math.min(upstreamProfile.editCount.max, Math.max(upstreamProfile.editCount.min, editN[0]))]);
+        if (isActive && (editN[0] < editCountRange.min || editN[0] > editCountRange.max)) {
+            setEditN([clampIntegerToRange(editN[0], editCountRange)]);
         }
-    }, [editN, isActive, setEditN, upstreamProfile.editCount.max, upstreamProfile.editCount.min]);
+    }, [editCountRange, editN, isActive, setEditN]);
 
     const canvasRef = React.useRef<HTMLCanvasElement>(null);
     const visualFeedbackCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
@@ -680,6 +751,20 @@ export function EditingForm({
         offscreenCanvas.toBlob((blob) => {
             if (blob) {
                 const maskFile = new File([blob], 'generated-mask.png', { type: 'image/png' });
+                const validationFailure = validateEditSourceInput({
+                    imageFiles,
+                    maskFile,
+                    upstreamProfile,
+                    imageBackend: editImageBackend,
+                    defaultImageBackend
+                });
+                if (validationFailure) {
+                    alert(formatEditSourceValidationFailure(validationFailure, t));
+                    setEditGeneratedMaskFile(null);
+                    setEditIsMaskSaved(false);
+                    setEditMaskPreviewUrl(null);
+                    return;
+                }
                 setEditGeneratedMaskFile(maskFile);
                 setEditIsMaskSaved(true);
             } else {
@@ -697,12 +782,21 @@ export function EditingForm({
 
             if (totalFiles > maxImages) {
                 alert(t('alert.maxImages', { count: maxImages }));
-                const allowedNewFiles = newFiles.slice(0, maxImages - imageFiles.length);
-                if (allowedNewFiles.length === 0) {
-                    event.target.value = '';
-                    return;
-                }
-                newFiles.splice(allowedNewFiles.length);
+                event.target.value = '';
+                return;
+            }
+
+            const validationFailure = validateEditSourceInput({
+                imageFiles: [...imageFiles, ...newFiles],
+                maskFile: editGeneratedMaskFile,
+                upstreamProfile,
+                imageBackend: editImageBackend,
+                defaultImageBackend
+            });
+            if (validationFailure) {
+                alert(formatEditSourceValidationFailure(validationFailure, t));
+                event.target.value = '';
+                return;
             }
 
             setImageFiles((prevFiles) => [...prevFiles, ...newFiles]);
@@ -740,8 +834,15 @@ export function EditingForm({
             return;
         }
 
-        if (file.type !== 'image/png') {
-            alert(t('alert.maskInvalidType'));
+        const validationFailure = validateEditSourceInput({
+            imageFiles,
+            maskFile: file,
+            upstreamProfile,
+            imageBackend: editImageBackend,
+            defaultImageBackend
+        });
+        if (validationFailure) {
+            alert(formatEditSourceValidationFailure(validationFailure, t));
             event.target.value = '';
             return;
         }
@@ -799,6 +900,13 @@ export function EditingForm({
             alert(t('alert.maxImages', { count: maxImages }));
             return;
         }
+        if (editSourceValidationMessage) {
+            alert(editSourceValidationMessage);
+            return;
+        }
+        if (!editPrompt.trim() || editPromptOverLimit) {
+            return;
+        }
         if (editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved) {
             alert(t('alert.saveMaskBeforeSubmit'));
             return;
@@ -810,8 +918,8 @@ export function EditingForm({
             setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
             return;
         }
-        if (editN[0] < upstreamProfile.editCount.min || editN[0] > upstreamProfile.editCount.max) {
-            setEditN([clampIntegerToRange(editN[0], upstreamProfile.editCount)]);
+        if (editN[0] < editCountRange.min || editN[0] > editCountRange.max) {
+            setEditN([clampIntegerToRange(editN[0], editCountRange)]);
             return;
         }
 
@@ -910,7 +1018,7 @@ export function EditingForm({
                                 <p
                                     id='source-image-upload-description'
                                     className='text-muted-foreground text-xs leading-5'>
-                                    {t('edit.referenceHint', { count: maxImages })}
+                                    {editUploadHint}
                                 </p>
                             </div>
                             <span className='border-primary/20 bg-primary/10 text-primary ui-stat rounded-full border px-2 py-1 text-xs'>
@@ -939,7 +1047,7 @@ export function EditingForm({
                                     {hasSourceImages ? t('edit.referenceAddMore') : t('edit.referenceAction')}
                                 </span>
                                 <span className='text-muted-foreground block max-w-[18rem] text-xs leading-5'>
-                                    {hasSourceImages ? t('edit.referenceReady') : t('edit.referenceEmpty')}
+                                    {hasSourceImages ? t('edit.referenceReady') : editReferenceEmptyHint}
                                 </span>
                             </span>
                         </button>
@@ -963,6 +1071,13 @@ export function EditingForm({
                             <div className='border-border/70 bg-background/60 text-muted-foreground rounded-md border px-3 py-2 text-xs leading-5'>
                                 {t('edit.referencePreparing')}
                             </div>
+                        )}
+                        {responsesEditInputLimitActive && (
+                            <p className='text-muted-foreground text-xs leading-5'>
+                                {t('edit.responsesInputLimit', {
+                                    limit: getResponsesEditInputLimitLabel()
+                                })}
+                            </p>
                         )}
                         {hasSourcePreviews && (
                             <div className='flex space-x-2 overflow-x-auto pt-1.5'>
@@ -1002,12 +1117,13 @@ export function EditingForm({
                                 placeholder={t('form.editPromptPlaceholder')}
                                 value={editPrompt}
                                 onChange={(e) => setEditPrompt(e.target.value)}
+                                maxLength={MAX_PROMPT_LENGTH}
                                 required
                                 disabled={isLoading}
                                 className='bg-muted/45 min-h-[118px] rounded-md px-4 py-3 pb-9 leading-7 shadow-inner'
                             />
                             <span className='text-muted-foreground ui-stat pointer-events-none absolute bottom-3 left-4 text-xs'>
-                                {editPrompt.trim().length} / 1000
+                                {editPrompt.length.toLocaleString(locale)} / {MAX_PROMPT_LENGTH.toLocaleString(locale)}
                             </span>
                         </div>
                     </div>
@@ -1016,6 +1132,11 @@ export function EditingForm({
                         <div className='text-foreground block text-sm leading-none font-medium select-none'>
                             {t('edit.mask')}
                         </div>
+                        <p className='text-muted-foreground text-xs leading-5'>
+                            {t('edit.maskHint', {
+                                singleLimit: formatEditUploadLimit(upstreamProfile.upload.maxSingleBytes)
+                            })}
+                        </p>
                         <Button
                             type='button'
                             variant='outline'
@@ -1204,7 +1325,9 @@ export function EditingForm({
                                             max={usesPositiveIntegerCustomSize ? undefined : 3840}
                                             step={usesPositiveIntegerCustomSize ? 1 : 16}
                                             value={editCustomWidth}
-                                            onChange={(e) => setEditCustomWidth(parseInt(e.target.value, 10) || 0)}
+                                            onChange={(e) =>
+                                                setEditCustomWidth(readImageSizeNumberInput(e.target.value))
+                                            }
                                             disabled={isLoading}
                                         />
                                     </div>
@@ -1222,17 +1345,29 @@ export function EditingForm({
                                             max={usesPositiveIntegerCustomSize ? undefined : 3840}
                                             step={usesPositiveIntegerCustomSize ? 1 : 16}
                                             value={editCustomHeight}
-                                            onChange={(e) => setEditCustomHeight(parseInt(e.target.value, 10) || 0)}
+                                            onChange={(e) =>
+                                                setEditCustomHeight(readImageSizeNumberInput(e.target.value))
+                                            }
                                             disabled={isLoading}
                                         />
                                     </div>
                                 </div>
                                 <p className='text-muted-foreground ui-stat text-xs'>
-                                    {t(usesPositiveIntegerCustomSize ? 'form.pixelsMeta' : 'form.pixelsMetaOfMaximum', {
-                                        pixels: editCustomPixels.toLocaleString(locale),
-                                        percent: ((editCustomPixels / 8_294_400) * 100).toFixed(1),
-                                        ratio: editCustomRatio
-                                    })}
+                                    {editCustomPixelCount
+                                        ? t(
+                                              usesPositiveIntegerCustomSize
+                                                  ? 'form.pixelsMeta'
+                                                  : 'form.pixelsMetaOfMaximum',
+                                              {
+                                                  pixels: editCustomPixelCount,
+                                                  percent: (
+                                                      ((editCustomWidth * editCustomHeight) / 8_294_400) *
+                                                      100
+                                                  ).toFixed(1),
+                                                  ratio: editCustomRatio
+                                              }
+                                          )
+                                        : t('form.pixelsUnavailable')}
                                 </p>
                                 {editCustomSizeError && (
                                     <p className='text-destructive text-xs'>{editCustomSizeError}</p>
@@ -1843,8 +1978,8 @@ export function EditingForm({
                                                 id='edit-n-slider'
                                                 name='edit-n'
                                                 thumbLabel={t('form.numberOfImages', { count: editN[0] })}
-                                                min={1}
-                                                max={upstreamProfile.editCount.max}
+                                                min={editCountRange.min}
+                                                max={editCountRange.max}
                                                 step={1}
                                                 value={editN}
                                                 onValueChange={setEditN}

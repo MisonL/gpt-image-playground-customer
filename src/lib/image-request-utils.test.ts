@@ -152,6 +152,13 @@ describe('readImageFiles', () => {
         );
         assert.throws(() => readImageFiles(oversizedFormData, IMAGE_UPSTREAM_PROFILES.matsca), /10 MB/);
     });
+
+    it('rejects source image formats outside the documented PNG, JPEG, and WebP contract', () => {
+        const formData = new FormData();
+        formData.append('image_0', new File(['image'], 'source.gif', { type: 'image/gif' }));
+
+        assert.throws(() => readImageFiles(formData), /PNG、JPEG 或 WebP/);
+    });
 });
 
 describe('Matsca upstream image parameter compatibility', () => {

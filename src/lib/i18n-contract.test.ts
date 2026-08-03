@@ -102,6 +102,49 @@ describe('WebUI translation contract', () => {
 
         assert.deepEqual(optionalPluralValues, []);
     });
+
+    it('keeps automatic-cleanup protection copy aligned with local-history clearing behavior', async () => {
+        const catalogs = await readCatalogs();
+
+        assert.match(catalogs['zh-CN']['retention.hint'], /手动删除会移除服务器图片/);
+        assert.match(catalogs['zh-CN']['retention.hint'], /清空历史只会清除当前浏览器中的记录/);
+        assert.match(catalogs['en-US']['retention.hint'], /Manual deletion removes the server image/);
+        assert.match(catalogs['en-US']['retention.hint'], /clearing history only clears records in this browser/);
+    });
+
+    it('distinguishes browser-only history clearing from IndexedDB image deletion', async () => {
+        const catalogs = await readCatalogs();
+
+        assert.match(catalogs['zh-CN']['confirm.clearHistoryFs'], /服务器图片不会被删除/);
+        assert.match(catalogs['en-US']['confirm.clearHistoryFs'], /Server images will not be deleted/);
+        assert.match(catalogs['zh-CN']['confirm.clearHistoryIndexedDb'], /永久删除已存储图片/);
+        assert.match(catalogs['en-US']['confirm.clearHistoryIndexedDb'], /permanently delete all stored images/);
+    });
+
+    it('states edit upload format and size limits in both locales', async () => {
+        const catalogs = await readCatalogs();
+
+        assert.match(catalogs['zh-CN']['edit.referenceEmpty'], /PNG、JPEG、WebP/);
+        assert.match(catalogs['zh-CN']['edit.referenceHint'], /singleLimit/);
+        assert.match(catalogs['zh-CN']['edit.referenceTotalLimit'], /总大小/);
+        assert.match(catalogs['zh-CN']['edit.responsesInputLimit'], /参考图和蒙版/);
+        assert.match(catalogs['zh-CN']['edit.maskHint'], /透明区域/);
+        assert.match(catalogs['en-US']['edit.referenceEmpty'], /PNG, JPEG, and WebP/);
+        assert.match(catalogs['en-US']['edit.referenceHint'], /singleLimit/);
+        assert.match(catalogs['en-US']['edit.referenceTotalLimit'], /together cannot exceed/);
+        assert.match(catalogs['en-US']['edit.responsesInputLimit'], /reference images and the mask/);
+        assert.match(catalogs['en-US']['edit.maskHint'], /transparent areas/);
+    });
+
+    it('keeps English edit upload summaries independent of trailing translation whitespace', async () => {
+        const catalogs = await readCatalogs();
+        const english = catalogs['en-US'];
+
+        for (const key of ['edit.referenceTotalLimit', 'edit.referenceNoTotalLimit']) {
+            assert.equal(english[key], english[key].trimEnd(), `${key} must not carry layout whitespace`);
+        }
+        assert.match(english['edit.referenceHint'], /per image\. \{totalHint\} Add the image/);
+    });
 });
 
 async function readCatalogs(): Promise<Catalogs> {

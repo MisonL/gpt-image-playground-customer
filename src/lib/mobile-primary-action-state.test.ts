@@ -1,3 +1,4 @@
+import { MAX_PROMPT_LENGTH } from './image-request-limits';
 import { resolveMobilePrimaryDisabledReason } from './mobile-primary-action-state';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -7,7 +8,9 @@ const messages: Record<string, string> = {
     'sizeError.positive': '宽度和高度必须为正数。',
     'upstream.responsesModelRequired': 'Responses image_generation 需要填写 GPT 顶层模型。',
     'ux.disabledBatchPrompts': '请至少填写一条批量提示词。',
+    'ux.disabledBatchPromptLength': '第 {index} 条批量提示词不能超过 {limit} 个字符。',
     'ux.disabledPrompt': '请输入提示词后再提交。',
+    'ux.disabledPromptLength': '提示词不能超过 {limit} 个字符。',
     'ux.disabledSourceImage': '请先放入参考图。',
     'ux.disabledUnsavedMask': '请先保存已绘制的蒙版。'
 };
@@ -33,7 +36,10 @@ function resolveReason(overrides: Partial<MobileOptions>): string {
         isBatchMode: false,
         prompt: '用户真实提示词',
         batchPromptCount: 0,
+        batchPromptOverLimitIndex: null,
         hasEditSourceImage: false,
+        editSourceValidationMessage: '',
+        backendCompatibilityMessage: '',
         hasUnsavedMask: false,
         imageBackend: 'server-default',
         responsesModel: '',
@@ -64,6 +70,34 @@ describe('resolveMobilePrimaryDisabledReason', () => {
         assert.equal(reason, '请至少填写一条批量提示词。');
     });
 
+    it('blocks an oversized single prompt with the same limit as the form', () => {
+        const reason = resolveReason({
+            prompt: 'a'.repeat(MAX_PROMPT_LENGTH + 1)
+        });
+
+        assert.equal(reason, `提示词不能超过 ${MAX_PROMPT_LENGTH} 个字符。`);
+    });
+
+    it('identifies the oversized line in a mobile batch request', () => {
+        const reason = resolveReason({
+            isBatchMode: true,
+            batchPromptCount: 2,
+            batchPromptOverLimitIndex: 1
+        });
+
+        assert.equal(reason, `第 2 条批量提示词不能超过 ${MAX_PROMPT_LENGTH} 个字符。`);
+    });
+
+    it('does not apply the aggregate prompt limit to valid mobile batch lines', () => {
+        const reason = resolveReason({
+            isBatchMode: true,
+            prompt: `${'a'.repeat(20_000)}\n${'b'.repeat(20_000)}`,
+            batchPromptCount: 2
+        });
+
+        assert.equal(reason, '');
+    });
+
     it('explains missing reference images before edit prompt issues', () => {
         const reason = resolveReason({
             mode: 'edit',
@@ -72,6 +106,25 @@ describe('resolveMobilePrimaryDisabledReason', () => {
         });
 
         assert.equal(reason, '请先放入参考图。');
+    });
+
+    it('uses the same edit upload validation message as the desktop submit control', () => {
+        const reason = resolveReason({
+            mode: 'edit',
+            prompt: '用户真实编辑要求',
+            hasEditSourceImage: true,
+            editSourceValidationMessage: '单张参考图不能超过 25 MB。'
+        });
+
+        assert.equal(reason, '单张参考图不能超过 25 MB。');
+    });
+
+    it('blocks a backend with incompatible provider constraints before submission', () => {
+        const reason = resolveReason({
+            backendCompatibilityMessage: '图片数量范围没有可用交集（min=2, max=1）。'
+        });
+
+        assert.equal(reason, '图片数量范围没有可用交集（min=2, max=1）。');
     });
 
     it('surfaces custom size validation after required content is present', () => {

@@ -34,6 +34,7 @@ import {
 import { resolveAcceptedImageTaskResponse, type AcceptedImageTaskResponseError } from './image-service';
 import { createImageStreamResponse } from './image-stream-service';
 import {
+    getImageCountRangeCompatibilityForBackend,
     mergeUpstreamHeadersWithFixed,
     type ImageUpstreamProfile,
     type PartialImagesCount,
@@ -56,6 +57,7 @@ type CommonModeInput = {
     model: GptImageModel;
     prompt: string;
     streamEnabled: boolean;
+    imageBackend: ImageBackend;
     partialImagesCount: PartialImagesCount;
     upstreamProfile: ImageUpstreamProfile;
     upstreamHeaders?: UpstreamRequestHeaders;
@@ -125,14 +127,20 @@ function toResponsesPartialImagesCount(value: PartialImagesCount): 1 | 2 | 3 {
     throw new RequestValidationError('Responses API 图片后端的 partial_images 必须在 1 到 3 之间。', 400);
 }
 
-function readGenerateOptions(input: CommonModeInput): GenerateOptions {
-    const n = readCount(
-        input.formData,
-        'n',
-        1,
-        input.upstreamProfile.generateCount.min,
-        input.upstreamProfile.generateCount.max
+function readImageCountForBackend(input: CommonModeInput, operation: 'generate' | 'edit'): number {
+    const compatibility = getImageCountRangeCompatibilityForBackend(
+        input.upstreamProfile,
+        operation,
+        input.imageBackend
     );
+    if (!compatibility.compatible) {
+        throw new RequestValidationError(compatibility.error.message, 422);
+    }
+    return readCount(input.formData, 'n', compatibility.range.min, compatibility.range.min, compatibility.range.max);
+}
+
+function readGenerateOptions(input: CommonModeInput): GenerateOptions {
+    const n = readImageCountForBackend(input, 'generate');
     const size = readSize(input.formData, 'size', '1024x1024', input.model, input.upstreamProfile, {
         forceRequest: input.forceRequest === true
     });
@@ -408,9 +416,7 @@ async function createGenerateStreamResponse(
     return appendAccessCookie(response, input.accessCookie);
 }
 
-export async function handleGenerateImageMode(
-    input: CommonModeInput & { imageBackend: ImageBackend }
-): Promise<ImageModeResult> {
+export async function handleGenerateImageMode(input: CommonModeInput): Promise<ImageModeResult> {
     const options = readGenerateOptions(input);
     if (input.imageBackend === 'responses-image-generation') {
         if (input.streamEnabled) {
@@ -428,13 +434,7 @@ export async function handleGenerateImageMode(
 }
 
 function readEditOptions(input: CommonModeInput): EditOptions {
-    const n = readCount(
-        input.formData,
-        'n',
-        1,
-        input.upstreamProfile.editCount.min,
-        input.upstreamProfile.editCount.max
-    );
+    const n = readImageCountForBackend(input, 'edit');
     const size = readSize(input.formData, 'size', 'auto', input.model, input.upstreamProfile, {
         forceRequest: input.forceRequest === true
     });
@@ -552,9 +552,7 @@ async function createEditStreamResponse(input: CommonModeInput, options: EditOpt
     return appendAccessCookie(response, input.accessCookie);
 }
 
-export async function handleEditImageMode(
-    input: CommonModeInput & { imageBackend: ImageBackend }
-): Promise<ImageModeResult> {
+export async function handleEditImageMode(input: CommonModeInput): Promise<ImageModeResult> {
     const options = readEditOptions(input);
     await assertMaskCompatibility(options.maskFile, options.imageFiles);
     if (input.imageBackend === 'responses-image-generation') {

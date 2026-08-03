@@ -22,6 +22,7 @@ export type ResultFeedback = {
 export const RESULT_FEEDBACK_NOTE_MAX_LENGTH = 500;
 
 export type HistoryMetadata = {
+    id?: string;
     timestamp: number;
     images: HistoryImage[];
     status?: 'completed' | 'failed';
@@ -51,6 +52,45 @@ export type HistoryMetadata = {
 
 export type RequestMode = HistoryMetadata['mode'];
 
+export function createHistoryEntryId(): string {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+        return `history-${globalThis.crypto.randomUUID()}`;
+    }
+    return `history-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function getHistoryEntryId(
+    item: Pick<HistoryMetadata, 'id' | 'timestamp' | 'images' | 'mode' | 'prompt' | 'clientRequestIds'>
+): string {
+    if (typeof item.id === 'string' && item.id.trim().length > 0) return item.id.trim();
+    return `legacy-${encodeURIComponent(
+        JSON.stringify({
+            timestamp: item.timestamp,
+            mode: item.mode,
+            prompt: item.prompt,
+            images: item.images.map((image) => [image.filename, image.clientRequestId ?? '']),
+            clientRequestIds: item.clientRequestIds ?? []
+        })
+    )}`;
+}
+
+export function isSameHistoryEntry(left: HistoryMetadata, right: HistoryMetadata): boolean {
+    return getHistoryEntryId(left) === getHistoryEntryId(right);
+}
+
+export function normalizeHistoryEntries(history: HistoryMetadata[]): HistoryMetadata[] {
+    const usedIds = new Set<string>();
+    return history.map((item) => {
+        const existingId = typeof item.id === 'string' ? item.id.trim() : '';
+        let id = existingId;
+        while (!id || usedIds.has(id)) {
+            id = createHistoryEntryId();
+        }
+        usedIds.add(id);
+        return item.id === id ? item : { ...item, id };
+    });
+}
+
 export function uniqueStrings(values: Array<string | undefined>): string[] {
     return Array.from(
         new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))
@@ -68,7 +108,7 @@ export function resolveHistoryImageClientRequestId(item: HistoryMetadata, imageI
 
 export function updateHistoryResultFeedback(input: {
     history: HistoryMetadata[];
-    timestamp: number;
+    item: HistoryMetadata;
     value: ResultFeedbackValue;
     updatedAt?: number;
     note?: string;
@@ -76,7 +116,7 @@ export function updateHistoryResultFeedback(input: {
     const hasNoteInput = Object.prototype.hasOwnProperty.call(input, 'note');
     const updatedAt = input.updatedAt ?? Date.now();
     return input.history.map((item) => {
-        if (item.timestamp !== input.timestamp) return item;
+        if (!isSameHistoryEntry(item, input.item)) return item;
         const rawNote = hasNoteInput ? input.note : item.resultFeedback?.note;
         const note = normalizeResultFeedbackNote(rawNote);
         return {
@@ -142,12 +182,21 @@ export function readHistorySizeSelection(
 
     const customMatch = /^(\d+)x(\d+)$/.exec(rawSize);
     if (customMatch && model === 'gpt-image-2') {
-        return {
-            size: 'custom',
-            customWidth: Number(customMatch[1]),
-            customHeight: Number(customMatch[2]),
-            restored: true
-        };
+        const customWidth = Number(customMatch[1]);
+        const customHeight = Number(customMatch[2]);
+        if (
+            Number.isSafeInteger(customWidth) &&
+            Number.isSafeInteger(customHeight) &&
+            customWidth > 0 &&
+            customHeight > 0
+        ) {
+            return {
+                size: 'custom',
+                customWidth,
+                customHeight,
+                restored: true
+            };
+        }
     }
 
     return { size: 'auto', customWidth: null, customHeight: null, restored: false };
@@ -252,6 +301,7 @@ export function buildCompletedHistoryEntry(input: {
     const currentModel = getRequestModel(input.formData, input.requestMode);
     const costDetails = calculateApiCost(input.usage as Parameters<typeof calculateApiCost>[0], currentModel);
     return {
+        id: createHistoryEntryId(),
         timestamp: Date.now(),
         images: input.images.map((img) => ({
             filename: img.filename,
@@ -295,6 +345,7 @@ export function buildFailedHistoryEntry(input: {
     storageMode: 'fs' | 'indexeddb';
 }): HistoryMetadata {
     return {
+        id: createHistoryEntryId(),
         timestamp: Date.now(),
         images: [],
         status: 'failed',

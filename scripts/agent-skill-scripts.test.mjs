@@ -4,7 +4,9 @@ import { AGENT_ENDPOINTS as SERVER_AGENT_ENDPOINTS } from '../src/lib/agent-api-
 import {
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
-    resolveSameOriginUrl
+    resolveSameOriginUrl,
+    validateAgentEditRequestAgainstCapabilities,
+    validateAgentGenerateRequestAgainstCapabilities
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
 import { FIXTURE_IMAGE_BASE64 } from './local-image-upstream-fixture.mjs';
 import assert from 'node:assert/strict';
@@ -31,6 +33,15 @@ function agentGenerateCapabilities(extra = {}) {
         agent_jobs: { supported: true, mode: 'job_polling' },
         limits: {
             generate_images: { min: 1, max: 4 },
+            edit_images: { min: 1, max: 4 },
+            generate_images_by_backend: {
+                'images-api': { min: 1, max: 4 },
+                'responses-image-generation': { min: 1, max: 1 }
+            },
+            edit_images_by_backend: {
+                'images-api': { min: 1, max: 4 },
+                'responses-image-generation': { min: 1, max: 1 }
+            },
             partial_images: { min: 0, max: 4 },
             partial_images_by_backend: {
                 'images-api': { min: 0, max: 4 },
@@ -44,6 +55,49 @@ function agentGenerateCapabilities(extra = {}) {
 }
 
 describe('Agent skill script argument validation', () => {
+    it('prioritizes backend-specific output limits and falls back for older capabilities', () => {
+        const capabilities = agentGenerateCapabilities();
+
+        assert.doesNotThrow(() =>
+            validateAgentGenerateRequestAgainstCapabilities({ n: 4, image_backend: 'images-api' }, capabilities)
+        );
+        assert.throws(
+            () =>
+                validateAgentGenerateRequestAgainstCapabilities(
+                    { n: 2, image_backend: 'responses-image-generation' },
+                    capabilities
+                ),
+            /n 必须在当前 capabilities 允许的 1 到 1 之间/
+        );
+        assert.throws(
+            () =>
+                validateAgentEditRequestAgainstCapabilities(
+                    { n: 2, image_backend: 'responses-image-generation' },
+                    capabilities
+                ),
+            /n 必须在当前 capabilities 允许的 1 到 1 之间/
+        );
+
+        const legacyCapabilities = {
+            limits: {
+                generate_images: { min: 1, max: 4 },
+                edit_images: { min: 1, max: 4 }
+            }
+        };
+        assert.doesNotThrow(() =>
+            validateAgentGenerateRequestAgainstCapabilities(
+                { n: 4, image_backend: 'responses-image-generation' },
+                legacyCapabilities
+            )
+        );
+        assert.doesNotThrow(() =>
+            validateAgentEditRequestAgainstCapabilities(
+                { n: 4, image_backend: 'responses-image-generation' },
+                legacyCapabilities
+            )
+        );
+    });
+
     it('rejects invalid generate numeric options before dry-run output', () => {
         const result = runSkillScript('generate-image.mjs', ['--n', 'abc', 'prompt']);
 
@@ -4619,11 +4673,14 @@ describe('Agent skill script argument validation', () => {
         assert.match(apiReference, /不要临时编写 Node\/Python\/shell 脚本、curl 命令或手写 fetch\/FormData/);
     });
 
-    it('documents backend-specific partial image limits in dedicated Agent docs', () => {
+    it('documents backend-specific image output and preview limits in dedicated Agent docs', () => {
         const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
         const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
 
         assert.match(skillText, /limits\.partial_images_by_backend\[image_backend\]/);
+        assert.match(skillText, /limits\.generate_images_by_backend\[image_backend\]/);
+        assert.match(skillText, /limits\.edit_images_by_backend\[image_backend\]/);
+        assert.match(skillText, /`responses-image-generation` 当前生成和页面 SSE 编辑都只允许 `n=1`/);
         assert.match(
             skillText,
             /Agent edit 不接受 `image_backend`，其内部上游流式字段按默认 Images API\/profile 范围校验/
@@ -4642,6 +4699,9 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /`--image-backend responses-image-generation` 只用于页面 SSE edit/);
         assert.match(skillText, /不要把 Matsca `limits\.partial_images=0\.\.4` 误套到 `responses-image-generation`/);
         assert.match(apiReference, /limits\.partial_images_by_backend\[image_backend\]/);
+        assert.match(apiReference, /limits\.generate_images_by_backend/);
+        assert.match(apiReference, /limits\.edit_images_by_backend/);
+        assert.match(apiReference, /`responses-image-generation` 当前两种操作都只允许 `n=1`/);
         assert.match(apiReference, /只代表“声明支持”，不代表当前渠道每次实测都能成功/);
         assert.match(apiReference, /如果 `selected_channel_id`、`upstream_host` 为空/);
         assert.match(apiReference, /Agent edit 不接收 `image_backend`、`output_format` 或 `output_compression`/);

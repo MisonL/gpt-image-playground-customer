@@ -13,6 +13,10 @@ export type CostDetails = {
     image_output_tokens: number;
 };
 
+export const GPT_IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'] as const;
+
+export type GptImageModel = (typeof GPT_IMAGE_MODELS)[number];
+
 // gpt-image-1 价格。
 const GPT_IMAGE_1_TEXT_INPUT_COST_PER_TOKEN = 0.000005; // $5.00/1M
 const GPT_IMAGE_1_IMAGE_INPUT_COST_PER_TOKEN = 0.00001; // $10.00/1M
@@ -33,8 +37,6 @@ const GPT_IMAGE_2_TEXT_INPUT_COST_PER_TOKEN = 0.000005; // $5.00/1M
 const GPT_IMAGE_2_IMAGE_INPUT_COST_PER_TOKEN = 0.000008; // $8.00/1M
 const GPT_IMAGE_2_IMAGE_OUTPUT_COST_PER_TOKEN = 0.00003; // $30.00/1M
 
-export type GptImageModel = 'gpt-image-1' | 'gpt-image-1-mini' | 'gpt-image-1.5' | 'gpt-image-2';
-
 export type ModelRates = {
     textInputPerToken: number;
     imageInputPerToken: number;
@@ -44,45 +46,66 @@ export type ModelRates = {
     imageOutputPerMillion: number;
 };
 
-export function getModelRates(model: GptImageModel): ModelRates {
-    if (model === 'gpt-image-1-mini') {
-        return {
-            textInputPerToken: GPT_IMAGE_1_MINI_TEXT_INPUT_COST_PER_TOKEN,
-            imageInputPerToken: GPT_IMAGE_1_MINI_IMAGE_INPUT_COST_PER_TOKEN,
-            imageOutputPerToken: GPT_IMAGE_1_MINI_IMAGE_OUTPUT_COST_PER_TOKEN,
-            textInputPerMillion: 2,
-            imageInputPerMillion: 2.5,
-            imageOutputPerMillion: 8
-        };
-    }
-    if (model === 'gpt-image-1.5') {
-        return {
-            textInputPerToken: GPT_IMAGE_1_5_TEXT_INPUT_COST_PER_TOKEN,
-            imageInputPerToken: GPT_IMAGE_1_5_IMAGE_INPUT_COST_PER_TOKEN,
-            imageOutputPerToken: GPT_IMAGE_1_5_IMAGE_OUTPUT_COST_PER_TOKEN,
-            textInputPerMillion: 5,
-            imageInputPerMillion: 8,
-            imageOutputPerMillion: 32
-        };
-    }
-    if (model === 'gpt-image-2') {
-        return {
-            textInputPerToken: GPT_IMAGE_2_TEXT_INPUT_COST_PER_TOKEN,
-            imageInputPerToken: GPT_IMAGE_2_IMAGE_INPUT_COST_PER_TOKEN,
-            imageOutputPerToken: GPT_IMAGE_2_IMAGE_OUTPUT_COST_PER_TOKEN,
-            textInputPerMillion: 5,
-            imageInputPerMillion: 8,
-            imageOutputPerMillion: 30
-        };
-    }
-    return {
+const MODEL_RATES: Record<GptImageModel, ModelRates> = {
+    'gpt-image-2': {
+        textInputPerToken: GPT_IMAGE_2_TEXT_INPUT_COST_PER_TOKEN,
+        imageInputPerToken: GPT_IMAGE_2_IMAGE_INPUT_COST_PER_TOKEN,
+        imageOutputPerToken: GPT_IMAGE_2_IMAGE_OUTPUT_COST_PER_TOKEN,
+        textInputPerMillion: 5,
+        imageInputPerMillion: 8,
+        imageOutputPerMillion: 30
+    },
+    'gpt-image-1.5': {
+        textInputPerToken: GPT_IMAGE_1_5_TEXT_INPUT_COST_PER_TOKEN,
+        imageInputPerToken: GPT_IMAGE_1_5_IMAGE_INPUT_COST_PER_TOKEN,
+        imageOutputPerToken: GPT_IMAGE_1_5_IMAGE_OUTPUT_COST_PER_TOKEN,
+        textInputPerMillion: 5,
+        imageInputPerMillion: 8,
+        imageOutputPerMillion: 32
+    },
+    'gpt-image-1': {
         textInputPerToken: GPT_IMAGE_1_TEXT_INPUT_COST_PER_TOKEN,
         imageInputPerToken: GPT_IMAGE_1_IMAGE_INPUT_COST_PER_TOKEN,
         imageOutputPerToken: GPT_IMAGE_1_IMAGE_OUTPUT_COST_PER_TOKEN,
         textInputPerMillion: 5,
         imageInputPerMillion: 10,
         imageOutputPerMillion: 40
-    };
+    },
+    'gpt-image-1-mini': {
+        textInputPerToken: GPT_IMAGE_1_MINI_TEXT_INPUT_COST_PER_TOKEN,
+        imageInputPerToken: GPT_IMAGE_1_MINI_IMAGE_INPUT_COST_PER_TOKEN,
+        imageOutputPerToken: GPT_IMAGE_1_MINI_IMAGE_OUTPUT_COST_PER_TOKEN,
+        textInputPerMillion: 2,
+        imageInputPerMillion: 2.5,
+        imageOutputPerMillion: 8
+    }
+};
+
+export function isGptImageModel(value: unknown): value is GptImageModel {
+    return typeof value === 'string' && (GPT_IMAGE_MODELS as readonly string[]).includes(value);
+}
+
+export function getModelRates(model: GptImageModel): ModelRates {
+    return MODEL_RATES[model];
+}
+
+export function isNonNegativeFiniteNumber(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+export function isNonNegativeSafeInteger(value: unknown): value is number {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function isValidCostDetails(value: unknown): value is CostDetails {
+    if (!value || typeof value !== 'object') return false;
+    const details = value as Partial<CostDetails>;
+    return (
+        isNonNegativeFiniteNumber(details.estimated_cost_usd) &&
+        isNonNegativeSafeInteger(details.text_input_tokens) &&
+        isNonNegativeSafeInteger(details.image_input_tokens) &&
+        isNonNegativeSafeInteger(details.image_output_tokens)
+    );
 }
 
 /**
@@ -104,40 +127,29 @@ export function calculateApiCost(
     const imgInT = usage.input_tokens_details.image_tokens ?? 0;
     const imgOutT = usage.output_tokens ?? 0;
 
-    // 校验 token 类型。
-    if (typeof textInT !== 'number' || typeof imgInT !== 'number' || typeof imgOutT !== 'number') {
-        console.error('usage 数据中的 token 类型无效：', usage);
+    // Token 必须是可精确表达的非负整数，避免伪造或溢出用量污染本地估算。
+    if (!isNonNegativeSafeInteger(textInT) || !isNonNegativeSafeInteger(imgInT) || !isNonNegativeSafeInteger(imgOutT)) {
+        console.error('usage 数据中的 token 值无效：', usage);
         return null;
     }
 
-    // 按模型选择价格。
-    let textInputCost: number;
-    let imageInputCost: number;
-    let imageOutputCost: number;
+    const rates = getModelRates(model);
 
-    if (model === 'gpt-image-1-mini') {
-        textInputCost = GPT_IMAGE_1_MINI_TEXT_INPUT_COST_PER_TOKEN;
-        imageInputCost = GPT_IMAGE_1_MINI_IMAGE_INPUT_COST_PER_TOKEN;
-        imageOutputCost = GPT_IMAGE_1_MINI_IMAGE_OUTPUT_COST_PER_TOKEN;
-    } else if (model === 'gpt-image-1.5') {
-        textInputCost = GPT_IMAGE_1_5_TEXT_INPUT_COST_PER_TOKEN;
-        imageInputCost = GPT_IMAGE_1_5_IMAGE_INPUT_COST_PER_TOKEN;
-        imageOutputCost = GPT_IMAGE_1_5_IMAGE_OUTPUT_COST_PER_TOKEN;
-    } else if (model === 'gpt-image-2') {
-        textInputCost = GPT_IMAGE_2_TEXT_INPUT_COST_PER_TOKEN;
-        imageInputCost = GPT_IMAGE_2_IMAGE_INPUT_COST_PER_TOKEN;
-        imageOutputCost = GPT_IMAGE_2_IMAGE_OUTPUT_COST_PER_TOKEN;
-    } else {
-        // 默认按 gpt-image-1 计价。
-        textInputCost = GPT_IMAGE_1_TEXT_INPUT_COST_PER_TOKEN;
-        imageInputCost = GPT_IMAGE_1_IMAGE_INPUT_COST_PER_TOKEN;
-        imageOutputCost = GPT_IMAGE_1_IMAGE_OUTPUT_COST_PER_TOKEN;
+    const costUSD =
+        textInT * rates.textInputPerToken + imgInT * rates.imageInputPerToken + imgOutT * rates.imageOutputPerToken;
+
+    if (!isNonNegativeFiniteNumber(costUSD)) {
+        console.error('usage 数据计算出的费用无效：', usage);
+        return null;
     }
-
-    const costUSD = textInT * textInputCost + imgInT * imageInputCost + imgOutT * imageOutputCost;
 
     // 保留 4 位小数。
     const costRounded = Math.round(costUSD * 10000) / 10000;
+
+    if (!isNonNegativeFiniteNumber(costRounded)) {
+        console.error('usage 数据四舍五入后的费用无效：', usage);
+        return null;
+    }
 
     return {
         estimated_cost_usd: costRounded,

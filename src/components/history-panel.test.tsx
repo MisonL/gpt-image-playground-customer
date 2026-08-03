@@ -1,6 +1,7 @@
 import {
     HistoryPanel,
     resolveHistoryPanelTabSync,
+    summarizeHistoryCosts,
     type GenerationActivityItem,
     type InspirationItem
 } from './history-panel';
@@ -66,7 +67,6 @@ const inspirationItem: InspirationItem = {
 };
 const clientDomLayoutStyles =
     '.relative{position:relative}.h-7{display:block;height:1.75rem}.w-7{display:block;width:1.75rem}.aspect-square{height:8rem;width:8rem}';
-
 function renderHistoryPanel(
     history: HistoryMetadata[],
     inspirations: InspirationItem[] = [],
@@ -204,6 +204,96 @@ describe('HistoryPanel recent history actions', () => {
         assert.match(html, />PNG<\/span>/);
         assert.doesNotMatch(html, /清晰度：<\/span> high/);
         assert.doesNotMatch(html, /背景：<\/span> auto/);
+    });
+
+    it('calculates the average only from images with a local estimate', () => {
+        const estimatedHistoryItem: HistoryMetadata = {
+            ...batchHistoryItem,
+            costDetails: {
+                estimated_cost_usd: 0.12,
+                text_input_tokens: 100,
+                image_input_tokens: 0,
+                image_output_tokens: 3000
+            }
+        };
+        const history = [estimatedHistoryItem, historyItem];
+        const html = renderHistoryPanel(history);
+
+        assert.match(html, /本地估算：\$0\.1200/);
+        assert.match(html, /查看估算总成本摘要/);
+        assert.match(html, /本地估算 \$0\.1200/);
+
+        assert.deepEqual(summarizeHistoryCosts(history), {
+            totalCost: 0.12,
+            totalImages: 4,
+            estimatedImages: 3,
+            averageCost: 0.04
+        });
+    });
+
+    it('does not invent a model rate for legacy history without a recorded model', () => {
+        const legacyItem: HistoryMetadata = {
+            ...historyItem,
+            model: undefined,
+            costDetails: {
+                estimated_cost_usd: 0.03,
+                text_input_tokens: 100,
+                image_input_tokens: 0,
+                image_output_tokens: 500
+            }
+        };
+        const html = renderHistoryPanel([legacyItem]);
+
+        assert.match(html, /模型：<\/span>\s*未记录/);
+        assert.match(html, /本地估算 \$0\.0300/);
+
+        assert.match(html, /本地估算 \$0\.0300/);
+        assert.match(html, /模型：<\/span>\s*未记录/);
+        assert.doesNotMatch(html, /gpt-image-1 本地估算费率/);
+    });
+
+    it('excludes malformed estimates and zero-image records from the cost denominator', () => {
+        const summary = summarizeHistoryCosts([
+            {
+                ...historyItem,
+                images: [{ filename: 'estimated.png' }],
+                costDetails: {
+                    estimated_cost_usd: 0.0312,
+                    text_input_tokens: 10,
+                    image_input_tokens: 0,
+                    image_output_tokens: 1000
+                }
+            },
+            {
+                ...historyItem,
+                timestamp: historyItem.timestamp + 1,
+                images: [{ filename: 'malformed.png' }],
+                costDetails: {
+                    estimated_cost_usd: Number.NaN,
+                    text_input_tokens: 10,
+                    image_input_tokens: 0,
+                    image_output_tokens: 1000
+                }
+            },
+            {
+                ...historyItem,
+                timestamp: historyItem.timestamp + 2,
+                images: [],
+                costDetails: {
+                    estimated_cost_usd: 0,
+                    text_input_tokens: 0,
+                    image_input_tokens: 0,
+                    image_output_tokens: 0
+                }
+            }
+        ]);
+
+        assert.deepEqual(summary, {
+            totalCost: 0.0312,
+            totalImages: 2,
+            estimatedImages: 1,
+            averageCost: 0.0312
+        });
     });
 
     it('renders permanent-save selection controls only for fs history when cleanup is enabled', () => {
@@ -516,6 +606,30 @@ describe('HistoryPanel recent history actions', () => {
         assert.doesNotMatch(html, /新图已入册 0 张/);
         assert.doesNotMatch(html, /结果反馈/);
         assert.doesNotMatch(html, /标记本次结果可用/);
+    });
+
+    it('labels failed edit history as an edit failure in cards and details', () => {
+        const html = renderHistoryPanel([{ ...failedHistoryItem, mode: 'edit' }]);
+
+        assert.match(html, /编辑失败/);
+        assert.match(html, /查看 .* 的失败记录/);
+    });
+
+    it('does not render malformed saved cost values as a local estimate', () => {
+        const html = renderHistoryPanel([
+            {
+                ...historyItem,
+                costDetails: {
+                    estimated_cost_usd: Number.NaN,
+                    text_input_tokens: 100,
+                    image_input_tokens: 0,
+                    image_output_tokens: Number.POSITIVE_INFINITY
+                }
+            }
+        ]);
+
+        assert.doesNotMatch(html, /本地估算：/);
+        assert.doesNotMatch(html, /NaN|Infinity/);
     });
 
     it('renders inspirations as a mobile horizontal snap album', () => {

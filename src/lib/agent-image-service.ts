@@ -75,6 +75,9 @@ import {
 } from './image-service';
 import { collectOpenAiImagesFromStream } from './image-stream-collector';
 import {
+    clampIntegerToRange,
+    getImageBackendCompatibility,
+    getImageCountRangeCompatibilityForBackend,
     readImageUpstreamProfile,
     mergeUpstreamHeadersWithFixed,
     summarizeUpstreamRequestHeaders,
@@ -321,13 +324,16 @@ export async function prepareAgentEdit(formData: FormData, headers: Headers): Pr
     const forceRequest = readAgentEditForceRequest(formData);
     assertImageFilesPresent(formData);
     const credentialContext = createOpenAiClient(headers, resolveAgentEditChannelRequestModePlan(formData));
-    const n = readCount(
-        formData,
-        'n',
-        1,
-        credentialContext.upstreamProfile.editCount.min,
-        credentialContext.upstreamProfile.editCount.max
+    const editCountCompatibility = getImageCountRangeCompatibilityForBackend(
+        credentialContext.upstreamProfile,
+        'edit',
+        'images-api'
     );
+    if (!editCountCompatibility.compatible) {
+        throw new RequestValidationError(editCountCompatibility.error.message, 422);
+    }
+    const editCountRange = editCountCompatibility.range;
+    const n = readCount(formData, 'n', editCountRange.min, editCountRange.min, editCountRange.max);
     const size = readSize(formData, 'size', 'auto', model, credentialContext.upstreamProfile, {
         forceRequest
     }) as OpenAI.Images.ImageEditParams['size'];
@@ -591,18 +597,21 @@ function validateAgentGenerateAgainstUpstreamProfile(
     upstreamProfile: ImageUpstreamProfile,
     options: { forceRequest?: boolean } = {}
 ): void {
-    if (request.n < upstreamProfile.generateCount.min || request.n > upstreamProfile.generateCount.max) {
-        throw new RequestValidationError(
-            `n 必须在 ${upstreamProfile.generateCount.min} 到 ${upstreamProfile.generateCount.max} 之间。`,
-            422
-        );
+    const compatibility = getImageBackendCompatibility(upstreamProfile, 'generate', request.image_backend);
+    if (!compatibility.compatible) {
+        throw new RequestValidationError(compatibility.errors.map((error) => error.message).join(' '), 422);
     }
-    if (
-        request.partial_images < upstreamProfile.partialImages.min ||
-        request.partial_images > upstreamProfile.partialImages.max
-    ) {
+    const imageCountRange = compatibility.imageCountRange;
+    const partialImagesRange = compatibility.partialImagesRange;
+    if (!imageCountRange || !partialImagesRange) {
+        throw new RequestValidationError('当前图片后端没有可用的图片数量约束。', 422);
+    }
+    if (request.n < imageCountRange.min || request.n > imageCountRange.max) {
+        throw new RequestValidationError(`n 必须在 ${imageCountRange.min} 到 ${imageCountRange.max} 之间。`, 422);
+    }
+    if (request.partial_images < partialImagesRange.min || request.partial_images > partialImagesRange.max) {
         throw new RequestValidationError(
-            `partial_images 必须在 ${upstreamProfile.partialImages.min} 到 ${upstreamProfile.partialImages.max} 之间。`,
+            `partial_images 必须在 ${partialImagesRange.min} 到 ${partialImagesRange.max} 之间。`,
             422
         );
     }
@@ -1392,15 +1401,16 @@ function readAgentEditStreamRequest(formData: FormData, upstreamProfile: ImageUp
             streamingStrategy
         });
     }
+    const partialImagesRange = upstreamProfile.partialImages;
     return {
         streamMode,
         streamingStrategy,
         partialImages: readCount(
             formData,
             'partial_images',
-            2,
-            upstreamProfile.partialImages.min,
-            upstreamProfile.partialImages.max
+            clampIntegerToRange(2, partialImagesRange),
+            partialImagesRange.min,
+            partialImagesRange.max
         ) as PartialImagesCount
     };
 }

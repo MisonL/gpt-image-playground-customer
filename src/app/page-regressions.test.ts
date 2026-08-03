@@ -57,6 +57,47 @@ describe('page state regressions', () => {
         );
     });
 
+    it('uses the runtime default backend for form ranges and rejects stale values before requests', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+        const generationFormBlock = source.match(/<GenerationForm\s([\s\S]*?)\n\s*\/>/)?.[1] ?? '';
+        const editingFormBlock = source.match(/<EditingForm\s([\s\S]*?)\n\s*\/>/)?.[1] ?? '';
+
+        assert.ok(generationFormBlock, 'missing generation form props block');
+        assert.ok(editingFormBlock, 'missing editing form props block');
+        assert.match(generationFormBlock, /defaultImageBackend=\{defaultImageBackend\}/);
+        assert.match(editingFormBlock, /defaultImageBackend=\{defaultImageBackend\}/);
+        assert.match(
+            source,
+            /const runtimeDefaultImageBackend = latestRuntimeCapabilities\?\.streaming\?\.defaultBackend;/
+        );
+        assert.match(source, /const runtimeBackendCompatibility = getImageBackendCompatibility\(/);
+        assert.match(source, /runtimeFormData\.image_backend,\s*runtimeDefaultImageBackend/);
+        assert.match(source, /if \(!runtimeBackendCompatibility\.compatible\) \{/);
+        assert.match(source, /runtimeBackendCompatibility\.errors\.map\(\(error\) => error\.message\)\.join\(' '\)/);
+        assert.match(source, /const runtimeCountRange = runtimeBackendCompatibility\.imageCountRange;/);
+        assert.match(
+            source,
+            /t\('error\.imageCountOutOfRange', \{\s*min: runtimeCountRange\.min,\s*max: runtimeCountRange\.max/
+        );
+        assert.match(source, /const runtimePartialImagesRange = runtimeBackendCompatibility\.partialImagesRange;/);
+        assert.match(
+            source,
+            /t\('error\.partialImagesOutOfRange', \{\s*min: runtimePartialImagesRange\.min,\s*max: runtimePartialImagesRange\.max/
+        );
+    });
+
+    it('uses one edit upload validator for paste, history reuse, and the final runtime preflight', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /imageFiles: \[\.\.\.editImageFiles, file\],\s*maskFile: editGeneratedMaskFile/);
+        assert.match(source, /imageFiles: \[newFile\],\s*upstreamProfile: activeUpstreamProfile/);
+        assert.match(
+            source,
+            /const editFormData = runtimeFormData as EditingFormData;[\s\S]*?maskFile: editFormData\.maskFile,[\s\S]*?upstreamProfile: runtimeUpstreamProfile/
+        );
+        assert.match(source, /formatEditSourceValidationFailure\(validationFailure, t\)/);
+    });
+
     it('loads permanent filenames only when filesystem cleanup is enabled and forwards batch actions to HistoryPanel', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
 
@@ -149,7 +190,7 @@ describe('page state regressions', () => {
 
         assert.match(
             source,
-            /const activeRequestedImageCount =\s*mode === 'generate' && workbenchMode === 'batch'\s*\? readBatchPromptLines\(genBatchPromptText\)\.length\s*:\s*mode === 'generate'\s*\? genN\[0\]\s*:\s*editN\[0\];/
+            /const activeRequestedImageCount =\s*mode === 'generate' && workbenchMode === 'batch'\s*\? activeBatchPrompts\.length\s*:\s*mode === 'generate'\s*\? genN\[0\]\s*:\s*editN\[0\];/
         );
         assert.match(
             source,

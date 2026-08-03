@@ -68,6 +68,7 @@ type ImageOutputProps = {
     openLogsSignal?: number;
     logClientRequestIds?: string[];
     logFilenames?: string[];
+    isLogScopeBatch?: boolean;
 };
 
 type LogEntry = {
@@ -85,6 +86,11 @@ type ImageDimensions = {
     height: number;
 };
 
+type UnavailableCompareImage = {
+    imageBatch: ImageInfo[] | null;
+    filenames: string[];
+};
+
 export function buildImageActionTarget(image: ImageInfo | null): ImageActionTarget | null {
     if (!image) return null;
     return {
@@ -97,6 +103,34 @@ export function formatLogTime(value: string, locale: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
     return date.toLocaleTimeString(locale);
+}
+
+export function resolveLogScopeCopy(input: {
+    hasLogScope: boolean;
+    hasSelectedImageBatch: boolean;
+    hasScopeCandidate: boolean;
+    isLogScopeBatch: boolean;
+}): { scopeKey: string; emptyKey: string } {
+    if (input.hasLogScope) {
+        return {
+            scopeKey: input.isLogScopeBatch ? 'logs.scopeBatch' : 'logs.scopeSelected',
+            emptyKey: input.isLogScopeBatch ? 'logs.emptyForBatch' : 'logs.emptyForSelection'
+        };
+    }
+
+    if (input.hasSelectedImageBatch) {
+        return {
+            scopeKey: input.isLogScopeBatch ? 'logs.scopeMissingBatch' : 'logs.scopeMissing',
+            emptyKey:
+                !input.hasScopeCandidate && input.isLogScopeBatch
+                    ? 'logs.historyBatchWithoutScope'
+                    : !input.hasScopeCandidate
+                      ? 'logs.historyWithoutScope'
+                      : 'logs.selectImage'
+        };
+    }
+
+    return { scopeKey: 'logs.scopeNone', emptyKey: 'logs.selectImage' };
 }
 
 function formatLogScopeValues(values: string[]): string {
@@ -190,7 +224,8 @@ export function ImageOutput({
     canOpenLogs,
     openLogsSignal,
     logClientRequestIds = [],
-    logFilenames = []
+    logFilenames = [],
+    isLogScopeBatch = false
 }: ImageOutputProps) {
     const { locale, t } = useI18n();
     const resolvedAltText = altText ?? t('output.alt');
@@ -203,6 +238,7 @@ export function ImageOutput({
         selectedImageIndex: number;
         compareTargetFilename: string;
     } | null>(null);
+    const [unavailableCompareImage, setUnavailableCompareImage] = React.useState<UnavailableCompareImage | null>(null);
     const [imageDimensions, setImageDimensions] = React.useState<Record<string, ImageDimensions>>({});
     const logEndRef = React.useRef<HTMLDivElement | null>(null);
     const resolvedLogClientRequestIds = React.useMemo(
@@ -225,6 +261,12 @@ export function ImageOutput({
     const hasSelectedImageBatch = !!imageBatch && imageBatch.length > 0;
     const hasLogScope = resolvedLogClientRequestIds.length > 0;
     const hasScopeCandidate = logClientRequestIds.length > 0 || logFilenames.length > 0;
+    const logScopeCopy = resolveLogScopeCopy({
+        hasLogScope,
+        hasSelectedImageBatch,
+        hasScopeCandidate,
+        isLogScopeBatch
+    });
     const visibleLogs = React.useMemo(() => (hasLogScope ? filteredLogs : []), [filteredLogs, hasLogScope]);
     const showCarousel = Boolean(imageBatch && imageBatch.length > 1);
     const selectedImageIndex =
@@ -241,15 +283,29 @@ export function ImageOutput({
         : null;
     const sameBatchCompareTargetImage =
         sameBatchCompareTargetIndex === null ? null : imageBatch?.[sameBatchCompareTargetIndex] || null;
-    const compareTargetImage = sameBatchCompareTargetImage || compareImage || null;
+    const candidateCompareTargetImage = sameBatchCompareTargetImage || compareImage || null;
+    const unavailableCompareFilenames =
+        unavailableCompareImage?.imageBatch === imageBatch ? unavailableCompareImage.filenames : [];
+    const isSelectedImageUnavailable =
+        selectedImage !== null && unavailableCompareFilenames.includes(selectedImage.filename);
+    const isCandidateCompareTargetUnavailable =
+        candidateCompareTargetImage !== null &&
+        unavailableCompareFilenames.includes(candidateCompareTargetImage.filename);
+    const compareTargetImage =
+        candidateCompareTargetImage && !isCandidateCompareTargetUnavailable ? candidateCompareTargetImage : null;
+    const compareError =
+        isSelectedImageUnavailable || isCandidateCompareTargetUnavailable ? t('output.compareUnavailable') : null;
     const selectedImageDimensions = selectedImage ? imageDimensions[selectedImage.filename] : null;
     const hasFailure = !isLoading && !hasSelectedImageBatch && Boolean(failureMessage);
     const hasEditReferencePreview = currentMode === 'edit' && Boolean(baseImagePreviewUrl);
     const isGenerateEmptyState = !isLoading && !hasFailure && !hasSelectedImageBatch && currentMode === 'generate';
+    const failureTitle = currentMode === 'edit' ? t('output.editFailedTitle') : t('output.failedTitle');
+    const failureKicker = currentMode === 'edit' ? t('output.editFailedKicker') : t('output.failedKicker');
+    const retryLabel = currentMode === 'edit' ? t('output.retryEdit') : t('output.retry');
     const previewStateLabel = isLoading
         ? t('output.progressDeveloping')
         : hasFailure
-          ? t('output.failedTitle')
+          ? failureTitle
           : hasEditReferencePreview
             ? t('output.editReferenceReady')
             : currentMode === 'edit'
@@ -275,7 +331,7 @@ export function ImageOutput({
         isLoading ? (isStreamingRequest ? t('output.streaming') : t('output.progressGenerating')) : null
     ].filter((item): item is string => Boolean(item));
     const canUseSelectedImageActions = !isLoading && !!selectedImage;
-    const canCompareImages = !isLoading && !!selectedImage && !!compareTargetImage;
+    const canCompareImages = !isLoading && !!selectedImage && !isSelectedImageUnavailable && !!compareTargetImage;
     const isCompareView =
         !!compareSelection &&
         compareSelection.imageBatch === imageBatch &&
@@ -306,10 +362,30 @@ export function ImageOutput({
     };
 
     const handleCompareClick = () => {
+        if (isCompareView) {
+            setCompareSelection(null);
+            return;
+        }
         if (canCompareImages && imageBatch && selectedImageIndex !== null && compareTargetImage) {
             setCompareSelection({ imageBatch, selectedImageIndex, compareTargetFilename: compareTargetImage.filename });
         }
     };
+
+    const handleCompareImageError = React.useCallback(
+        (image: ImageInfo) => {
+            if (image.filename !== selectedImage?.filename && image.filename !== compareTargetImage?.filename) return;
+            setUnavailableCompareImage((current) => {
+                if (current?.imageBatch === imageBatch && current.filenames.includes(image.filename)) return current;
+                return {
+                    imageBatch,
+                    filenames:
+                        current?.imageBatch === imageBatch ? [...current.filenames, image.filename] : [image.filename]
+                };
+            });
+            setCompareSelection(null);
+        },
+        [compareTargetImage?.filename, imageBatch, selectedImage?.filename]
+    );
 
     const handleImageLoad = React.useCallback((filename: string, event: React.SyntheticEvent<HTMLImageElement>) => {
         const source = event.currentTarget.currentSrc || event.currentTarget.src;
@@ -520,9 +596,9 @@ export function ImageOutput({
                 ) : hasFailure ? (
                     <div className='photo-paper relative flex aspect-[4/3] w-full max-w-[780px] flex-col justify-between p-5 sm:p-6 2xl:max-w-[860px]'>
                         <div className='space-y-3'>
-                            <div className='text-muted-foreground text-xs'>{t('output.failedKicker')}</div>
+                            <div className='text-muted-foreground text-xs'>{failureKicker}</div>
                             <div className='space-y-2'>
-                                <h3 className='editorial-title text-2xl font-semibold'>{t('output.failedTitle')}</h3>
+                                <h3 className='editorial-title text-2xl font-semibold'>{failureTitle}</h3>
                                 <p className='text-muted-foreground max-w-[46rem] text-sm leading-6'>
                                     {failureMessage}
                                 </p>
@@ -532,7 +608,7 @@ export function ImageOutput({
                             {onRetry ? (
                                 <Button type='button' onClick={onRetry} className='min-h-11'>
                                     <RefreshCcw className='mr-2 h-4 w-4' />
-                                    {t('output.retry')}
+                                    {retryLabel}
                                 </Button>
                             ) : null}
                             {canOpenLogs ? (
@@ -553,6 +629,7 @@ export function ImageOutput({
                         leftLabel={compareReferenceLabel}
                         rightImage={selectedImage}
                         rightLabel={t('output.compareCurrent')}
+                        onImageError={handleCompareImageError}
                     />
                 ) : imageBatch && imageBatch.length > 0 ? (
                     viewMode === 'grid' ? (
@@ -646,6 +723,14 @@ export function ImageOutput({
                 )}
             </div>
 
+            {compareError ? (
+                <div
+                    role='status'
+                    className='border-destructive/30 bg-destructive/5 text-destructive mx-3 mt-3 rounded-md border px-3 py-2 text-xs'>
+                    {compareError}
+                </div>
+            ) : null}
+
             <Dialog open={isLogDialogOpen} onOpenChange={handleLogDialogOpenChange}>
                 <DialogContent className='sm:max-w-[760px]'>
                     <DialogHeader>
@@ -658,15 +743,15 @@ export function ImageOutput({
                     </div>
                     {hasLogScope ? (
                         <div className='text-muted-foreground border-border bg-muted/20 rounded-md border px-3 py-2 text-xs'>
-                            {t('logs.scopeSelected')}
+                            {t(logScopeCopy.scopeKey)}
                         </div>
                     ) : hasSelectedImageBatch ? (
                         <div className='text-muted-foreground border-border rounded-md border border-dashed px-3 py-2 text-xs'>
-                            {t('logs.scopeMissing')}
+                            {t(logScopeCopy.scopeKey)}
                         </div>
                     ) : (
                         <div className='text-muted-foreground border-border rounded-md border border-dashed px-3 py-2 text-xs'>
-                            {t('logs.scopeNone')}
+                            {t(logScopeCopy.scopeKey)}
                         </div>
                     )}
                     <div className='border-border bg-card/70 flex flex-col gap-2 rounded-md border px-3 py-2 text-xs sm:flex-row sm:items-start sm:justify-between'>
@@ -701,13 +786,7 @@ export function ImageOutput({
                     </div>
                     <div className='literary-scrollbar bg-muted/30 border-border text-foreground/80 h-[420px] overflow-y-auto rounded-md border p-3 font-mono text-xs leading-5'>
                         {visibleLogs.length === 0 ? (
-                            <p className='text-muted-foreground'>
-                                {hasLogScope
-                                    ? t('logs.emptyForSelection')
-                                    : hasSelectedImageBatch && !hasScopeCandidate
-                                      ? t('logs.historyWithoutScope')
-                                      : t('logs.selectImage')}
-                            </p>
+                            <p className='text-muted-foreground'>{t(logScopeCopy.emptyKey)}</p>
                         ) : (
                             visibleLogs.map((entry) => (
                                 <div key={entry.id} className='border-border/50 border-b py-2 last:border-b-0'>
@@ -741,7 +820,7 @@ export function ImageOutput({
                     <DialogFooter>
                         <Button type='button' variant='outline' size='sm' onClick={() => setLogs([])}>
                             <Trash2 className='mr-2 h-4 w-4' />
-                            {t('logs.clear')}
+                            {t('logs.clearCurrent')}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
@@ -831,7 +910,7 @@ export function ImageOutput({
                         />
                         <ResultActionButton
                             icon={<GitCompare className='mr-2 h-4 w-4' />}
-                            label={t('output.compare')}
+                            label={isCompareView ? t('output.exitCompare') : t('output.compare')}
                             onClick={handleCompareClick}
                             disabled={!canCompareImages}
                             active={isCompareView}

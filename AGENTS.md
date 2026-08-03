@@ -76,7 +76,7 @@
 ### 5.1 测试布局
 
 - 当前仓库测试采用同目录 `node:test` 方案，命名为 `*.test.ts`。
-- 测试文件主要位于 `src/lib/**/*.test.ts`、`src/app/api/**/*.test.ts`。
+- 测试文件主要位于 `src/lib/**/*.test.ts`、`src/app/api/**/*.test.ts`、`src/components/**/*.test.tsx` 和 `scripts/**/*.test.mjs`。
 - 新增测试优先沿用现有同目录模式，不额外引入第二套测试目录约定。
 
 ### 5.2 验证基线
@@ -119,7 +119,20 @@ npm run dev
 - 本地默认访问地址是 `http://localhost:4783`。
 - `npm run dev` 使用 Turbopack，并固定端口 `4783`。
 
-### 6.2 Docker 验证
+### 6.2 Standalone 验证
+
+```bash
+npm run build
+WEBUI_IMAGE_AUTO_CLEANUP_ENABLED=false \
+IMAGE_OUTPUT_DIR=generated-images/.ui-audit \
+AGENT_SQLITE_PATH=generated-images/.ui-audit/.agent-state/agent.sqlite \
+PORT=4784 HOSTNAME=127.0.0.1 npm run start
+```
+
+- standalone 必须通过 `npm run start` 或 `node scripts/start-standalone.mjs` 启动；该脚本会复制 `public/` 和 `.next/static/`。直接执行 `.next/standalone/server.js` 会导致静态资源 404 和空白页面。
+- 若本机 `.env.local` 启用了图片自动清理，做只读 UI 验证前必须显式关闭清理，并使用独立的图片目录和 Agent SQLite 路径。环境变量优先于 env 文件。
+
+### 6.3 Docker 验证
 
 ```bash
 docker compose up -d --build
@@ -128,7 +141,7 @@ docker compose up -d --build
 - 需要容器验证时，以最新代码重建后再做页面或接口检查。
 - 不能只看容器启动成功就声称验证完成，必须补至少一项真实访问或真实请求证据。
 
-### 6.3 常用检查
+### 6.4 常用检查
 
 ```bash
 npm test

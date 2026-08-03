@@ -1,3 +1,4 @@
+import { resolveImageBackendSelection } from './image-upstream-profile';
 import type { ImageGenerationBackend, ImageStreamingStrategy } from './image-upstream-strategy';
 
 export const IMAGE_UPSTREAM_FORM_SERVER_DEFAULT = 'server-default';
@@ -42,21 +43,26 @@ export function isResponsesImageBackendRuntimeEnabled(input: {
 
 export function shouldAllowResponsesImageBackend(input: {
     runtimeCapabilities?: {
-        responsesImageBackend?: { enabled?: boolean } | null;
+        responsesImageBackend?: { enabled?: boolean; featureEnabled?: boolean } | null;
         channelRouting?: { effectiveRequestModes?: readonly string[] } | null;
     } | null;
     hasRequestApiOverride: boolean;
 }): boolean {
+    const responsesImageBackend = input.runtimeCapabilities?.responsesImageBackend;
+    if (input.hasRequestApiOverride) {
+        return responsesImageBackend?.featureEnabled === true || responsesImageBackend?.enabled === true;
+    }
     if (!isResponsesImageBackendRuntimeEnabled(input.runtimeCapabilities ?? {})) return false;
-    if (input.hasRequestApiOverride) return true;
     return hasResponsesChannelRequestMode(input.runtimeCapabilities ?? {});
 }
 
 export function shouldBlockExplicitResponsesRequest(input: {
     imageBackend: ImageUpstreamFormBackend;
     allowResponsesImageBackend: boolean;
+    defaultImageBackend?: ImageGenerationBackend | null;
 }): boolean {
-    return input.imageBackend === 'responses-image-generation' && !input.allowResponsesImageBackend;
+    const effectiveBackend = resolveImageBackendSelection(input.imageBackend, input.defaultImageBackend);
+    return effectiveBackend === 'responses-image-generation' && !input.allowResponsesImageBackend;
 }
 
 export function shouldBlockResponsesRequestWithoutModel(input: {

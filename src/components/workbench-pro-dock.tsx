@@ -20,6 +20,8 @@ export type WorkbenchProDockProps = {
     model: GptImageModel;
     onModelChange: React.Dispatch<React.SetStateAction<GptImageModel>>;
     size: SizePreset;
+    customWidth?: number;
+    customHeight?: number;
     streamMode: ImageStreamMode;
     onStreamModeChange: React.Dispatch<React.SetStateAction<ImageStreamMode>>;
     allowStreamingBatch: boolean;

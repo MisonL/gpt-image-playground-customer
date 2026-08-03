@@ -145,6 +145,30 @@ describe('image upstream provider manifest', () => {
                 validateImageProviderManifest({
                     id: 'ok_provider',
                     modes: { generate: { submit: { path: '/images/generations' } } },
+                    constraints: { generate_count: { min: 0, max: 2 } }
+                }),
+            /constraints\.generate_count\.min 必须是正整数/
+        );
+        assert.throws(
+            () =>
+                validateImageProviderManifest({
+                    id: 'ok_provider',
+                    modes: { generate: { submit: { path: '/images/generations' } } },
+                    constraints: { edit_count: { min: 0, max: 2 } }
+                }),
+            /constraints\.edit_count\.min 必须是正整数/
+        );
+        const zeroPartialImages = validateImageProviderManifest({
+            id: 'ok_provider',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { partial_images: { min: 0, max: 0 } }
+        });
+        assert.deepEqual(zeroPartialImages.constraints?.partial_images, { min: 0, max: 0 });
+        assert.throws(
+            () =>
+                validateImageProviderManifest({
+                    id: 'ok_provider',
+                    modes: { generate: { submit: { path: '/images/generations' } } },
                     constraints: { partial_images: { min: 0, max: 5 } }
                 }),
             /partial_images\.max 不能大于 4/

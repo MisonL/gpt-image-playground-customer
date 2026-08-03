@@ -12,6 +12,7 @@ type ImageCompareViewProps = {
     leftLabel: string;
     rightImage: CompareImage;
     rightLabel: string;
+    onImageError?: (image: CompareImage) => void;
 };
 
 export function resolveCompareTargetIndex(imageCount: number, selectedImageIndex: number | null): number | null {
@@ -22,7 +23,13 @@ export function resolveCompareTargetIndex(imageCount: number, selectedImageIndex
     return selectedImageIndex > 0 ? selectedImageIndex - 1 : 1;
 }
 
-export function ImageCompareView({ leftImage, leftLabel, rightImage, rightLabel }: ImageCompareViewProps) {
+export function ImageCompareView({
+    leftImage,
+    leftLabel,
+    rightImage,
+    rightLabel,
+    onImageError
+}: ImageCompareViewProps) {
     return (
         <div className='grid w-full max-w-[760px] grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3'>
             {[
@@ -39,6 +46,7 @@ export function ImageCompareView({ leftImage, leftLabel, rightImage, rightLabel 
                             fill
                             sizes='(max-width: 768px) 46vw, 28vw'
                             className='object-contain'
+                            onError={() => onImageError?.(image)}
                             unoptimized
                         />
                     </div>

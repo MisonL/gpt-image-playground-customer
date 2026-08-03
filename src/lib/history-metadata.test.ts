@@ -151,7 +151,7 @@ describe('history metadata helpers', () => {
         const second = { ...historyWithSize('3072x2048'), timestamp: 2 };
         const updated = updateHistoryResultFeedback({
             history: [first, second],
-            timestamp: second.timestamp,
+            item: second,
             value: 'usable',
             updatedAt: 1770000000000
         });
@@ -167,7 +167,7 @@ describe('history metadata helpers', () => {
         const base = historyWithSize('2048x2048');
         const withNote = updateHistoryResultFeedback({
             history: [base],
-            timestamp: base.timestamp,
+            item: base,
             value: 'usable',
             updatedAt: 1770000000001,
             note: '  首版已经可以发给运营确认  '
@@ -181,7 +181,7 @@ describe('history metadata helpers', () => {
 
         const preservedNote = updateHistoryResultFeedback({
             history: withNote,
-            timestamp: base.timestamp,
+            item: withNote[0],
             value: 'needs_revision',
             updatedAt: 1770000000002
         });
@@ -194,7 +194,7 @@ describe('history metadata helpers', () => {
 
         const clearedNote = updateHistoryResultFeedback({
             history: preservedNote,
-            timestamp: base.timestamp,
+            item: preservedNote[0],
             value: 'needs_revision',
             updatedAt: 1770000000003,
             note: ''
@@ -219,6 +219,17 @@ describe('history metadata helpers', () => {
             customHeight: 1536,
             restored: true
         });
+    });
+
+    it('does not restore zero or unsafe custom dimensions from saved history', () => {
+        for (const size of ['0x1536', '2304x0', '9007199254740992x1536']) {
+            assert.deepEqual(readHistorySizeSelection(historyWithSize(size), 'gpt-image-2'), {
+                size: 'auto',
+                customWidth: null,
+                customHeight: null,
+                restored: false
+            });
+        }
     });
 
     it('restores legacy preset dimensions even when the current fallback model differs', () => {

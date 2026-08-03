@@ -84,7 +84,11 @@ export function readPartialImages(value, name = 'partial_images') {
 }
 
 export function validateAgentGenerateRequestAgainstCapabilities(body, capabilities) {
-  assertNumberWithinCapabilities(body.n, capabilities?.limits?.generate_images, 'n');
+  assertNumberWithinCapabilities(
+    body.n,
+    readImageCountLimitForBackend(body.image_backend ?? body.imageBackend, capabilities, 'generate_images'),
+    'n'
+  );
   assertNumberWithinCapabilities(
     body.partial_images,
     readPartialImagesLimitForBackend(body.image_backend ?? body.imageBackend, capabilities),
@@ -93,7 +97,11 @@ export function validateAgentGenerateRequestAgainstCapabilities(body, capabiliti
 }
 
 export function validateAgentEditRequestAgainstCapabilities(input, capabilities) {
-  assertNumberWithinCapabilities(input.n, capabilities?.limits?.edit_images, 'n');
+  assertNumberWithinCapabilities(
+    input.n,
+    readImageCountLimitForBackend(input.image_backend ?? input.imageBackend, capabilities, 'edit_images'),
+    'n'
+  );
   assertNumberWithinCapabilities(
     input.partial_images,
     readPartialImagesLimitForBackend(input.image_backend ?? input.imageBackend, capabilities),
@@ -106,6 +114,12 @@ function readPartialImagesLimitForBackend(backend, capabilities) {
   const normalizedBackend =
     backend === 'responses' || backend === 'responses-image-generation' ? 'responses-image-generation' : 'images-api';
   return capabilities?.limits?.partial_images_by_backend?.[normalizedBackend] || capabilities?.limits?.partial_images;
+}
+
+function readImageCountLimitForBackend(backend, capabilities, legacyField) {
+  const normalizedBackend =
+    backend === 'responses' || backend === 'responses-image-generation' ? 'responses-image-generation' : 'images-api';
+  return capabilities?.limits?.[`${legacyField}_by_backend`]?.[normalizedBackend] || capabilities?.limits?.[legacyField];
 }
 
 function assertNumberWithinCapabilities(value, limits, fieldName) {

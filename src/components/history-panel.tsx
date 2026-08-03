@@ -16,10 +16,18 @@ import {
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { getModelRates, type GptImageModel } from '@/lib/cost-utils';
+import {
+    getModelRates,
+    GPT_IMAGE_MODELS,
+    isGptImageModel,
+    isNonNegativeFiniteNumber,
+    isValidCostDetails
+} from '@/lib/cost-utils';
 import type { GenerationActivityItem } from '@/lib/generation-activity';
 import {
     RESULT_FEEDBACK_NOTE_MAX_LENGTH,
+    getHistoryEntryId,
+    isSameHistoryEntry,
     type HistoryMetadata,
     type ResultFeedbackValue
 } from '@/lib/history-metadata';
@@ -118,15 +126,51 @@ export type PromptApplySource =
 const emptyPermanentFilenames: ReadonlySet<string> = new Set();
 
 const calculateCost = (value: number, rate: number): string | null => {
+    if (!isNonNegativeFiniteNumber(value) || !isNonNegativeFiniteNumber(rate)) return null;
     const cost = value * rate;
-    return Number.isFinite(cost) ? cost.toFixed(4) : null;
+    return isNonNegativeFiniteNumber(cost) ? cost.toFixed(4) : null;
 };
 
-const formatMoney = (value: number): string => value.toFixed(4);
-const formatEstimatedTokenCost = (value: number, rate: number, unavailableLabel: string): string => {
+const formatMoney = (value: number): string | null => (isNonNegativeFiniteNumber(value) ? value.toFixed(4) : null);
+const formatEstimatedTokenCost = (value: number, rate: number | undefined, unavailableLabel: string): string => {
+    if (rate === undefined) return unavailableLabel;
     const cost = calculateCost(value, rate);
     return cost === null ? unavailableLabel : `$${cost}`;
 };
+
+export type HistoryCostSummary = {
+    totalCost: number;
+    totalImages: number;
+    estimatedImages: number;
+    averageCost: number;
+};
+
+export function summarizeHistoryCosts(history: HistoryMetadata[]): HistoryCostSummary {
+    let totalCost = 0;
+    let totalImages = 0;
+    let estimatedImages = 0;
+
+    for (const item of history) {
+        const imageCount = item.images.length;
+        totalImages += imageCount;
+        if (!isValidCostDetails(item.costDetails)) continue;
+
+        totalCost += item.costDetails.estimated_cost_usd;
+        estimatedImages += imageCount;
+    }
+
+    const roundedTotalCost = Math.round(totalCost * 10000) / 10000;
+    return {
+        totalCost: roundedTotalCost,
+        totalImages,
+        estimatedImages,
+        averageCost: estimatedImages > 0 ? roundedTotalCost / estimatedImages : 0
+    };
+}
+
+function getHistoryModelLabel(item: HistoryMetadata, t: ReturnType<typeof useI18n>['t']): string {
+    return item.model ?? t('history.modelNotRecorded');
+}
 
 function getStorageLabel(storageMode: HistoryMetadata['storageModeUsed'], t: ReturnType<typeof useI18n>['t']): string {
     return storageMode === 'fs' ? t('history.storageFile') : t('history.storageDb');
@@ -138,15 +182,17 @@ function getCostBadge(
 ): { label: string; actual: boolean } | null {
     if (
         item.actualCostDetails?.source === 'new-api-log-token' &&
-        typeof item.actualCostDetails.actualAmount === 'number'
+        isNonNegativeFiniteNumber(item.actualCostDetails.actualAmount)
     ) {
-        return { label: `${labels.actual} $${formatMoney(item.actualCostDetails.actualAmount)}`, actual: true };
+        const amount = formatMoney(item.actualCostDetails.actualAmount);
+        if (amount) return { label: `${labels.actual} $${amount}`, actual: true };
     }
     if (item.actualCostDetails?.source === 'pending') {
         return { label: labels.pending, actual: false };
     }
-    if (item.costDetails) {
-        return { label: `${labels.estimated} $${formatMoney(item.costDetails.estimated_cost_usd)}`, actual: false };
+    if (isValidCostDetails(item.costDetails)) {
+        const amount = formatMoney(item.costDetails.estimated_cost_usd);
+        if (amount) return { label: `${labels.estimated} $${amount}`, actual: false };
     }
     return null;
 }
@@ -157,9 +203,10 @@ function formatActualCostLabel(item: HistoryMetadata, unavailableLabel: string, 
     }
     if (
         item.actualCostDetails?.source === 'new-api-log-token' &&
-        typeof item.actualCostDetails.actualAmount === 'number'
+        isNonNegativeFiniteNumber(item.actualCostDetails.actualAmount)
     ) {
-        return `$${formatMoney(item.actualCostDetails.actualAmount)}`;
+        const amount = formatMoney(item.actualCostDetails.actualAmount);
+        return amount ? `$${amount}` : unavailableLabel;
     }
     return unavailableLabel;
 }
@@ -178,10 +225,15 @@ function getCostStatusLabel(
     item: HistoryMetadata,
     labels: { actual: string; pending: string; unavailable: string; estimated: string }
 ) {
-    if (item.actualCostDetails?.source === 'new-api-log-token') return labels.actual;
+    if (
+        item.actualCostDetails?.source === 'new-api-log-token' &&
+        isNonNegativeFiniteNumber(item.actualCostDetails.actualAmount)
+    ) {
+        return labels.actual;
+    }
     if (item.actualCostDetails?.source === 'pending') return labels.pending;
     if (item.actualCostDetails?.source === 'unavailable') return labels.unavailable;
-    if (item.costDetails) return labels.estimated;
+    if (isValidCostDetails(item.costDetails)) return labels.estimated;
     return '-';
 }
 
@@ -213,6 +265,10 @@ function getActualCostReasonLabel(
 
 function getHistoryStorageMode(item: HistoryMetadata): NonNullable<HistoryMetadata['storageModeUsed']> {
     return item.storageModeUsed ?? 'fs';
+}
+
+function getHistoryFailureStatusLabel(item: HistoryMetadata, t: ReturnType<typeof useI18n>['t']): string {
+    return item.mode === 'edit' ? t('history.editFailedStatus') : t('history.failedStatus');
 }
 
 function isRetentionManagedHistoryItem(item: HistoryMetadata): boolean {
@@ -248,13 +304,13 @@ function HistoryPanelImpl({
     const [activeTab, setActiveTab] = React.useState<HistoryPanelTab>(() =>
         history.length > 0 && inspirations.length === 0 ? 'history' : 'inspiration'
     );
-    const [openPromptDialogTimestamp, setOpenPromptDialogTimestamp] = React.useState<number | null>(null);
-    const [openCostDialogTimestamp, setOpenCostDialogTimestamp] = React.useState<number | null>(null);
+    const [openPromptDialogId, setOpenPromptDialogId] = React.useState<string | null>(null);
+    const [openCostDialogId, setOpenCostDialogId] = React.useState<string | null>(null);
     const [isTotalCostDialogOpen, setIsTotalCostDialogOpen] = React.useState(false);
-    const [copiedTimestamp, setCopiedTimestamp] = React.useState<number | null>(null);
+    const [copiedHistoryId, setCopiedHistoryId] = React.useState<string | null>(null);
     const [imageResolutions, setImageResolutions] = React.useState<Record<string, string>>({});
     const [failedThumbnails, setFailedThumbnails] = React.useState<Record<string, boolean>>({});
-    const [expandedBatchTimestamp, setExpandedBatchTimestamp] = React.useState<number | null>(null);
+    const [expandedBatchId, setExpandedBatchId] = React.useState<string | null>(null);
     const [isSelectingRetention, setIsSelectingRetention] = React.useState(false);
     const [selectedRetentionFilenames, setSelectedRetentionFilenames] = React.useState<Set<string>>(() => new Set());
     const [isUpdatingRetention, setIsUpdatingRetention] = React.useState(false);
@@ -281,20 +337,10 @@ function HistoryPanelImpl({
     );
     const isRetentionSelectionActive = isSelectingRetention && canManageRetention && effectiveActiveTab === 'history';
 
-    const { totalCost, totalImages } = React.useMemo(() => {
-        let cost = 0;
-        let images = 0;
-        history.forEach((item) => {
-            if (item.costDetails) {
-                cost += item.costDetails.estimated_cost_usd;
-            }
-            images += item.images?.length ?? 0;
-        });
-
-        return { totalCost: Math.round(cost * 10000) / 10000, totalImages: images };
-    }, [history]);
-
-    const averageCost = totalImages > 0 ? totalCost / totalImages : 0;
+    const { totalCost, totalImages, estimatedImages, averageCost } = React.useMemo(
+        () => summarizeHistoryCosts(history),
+        [history]
+    );
 
     const clearRetentionSelection = React.useCallback(() => {
         setIsSelectingRetention(false);
@@ -351,12 +397,12 @@ function HistoryPanelImpl({
         [activeSelectedRetentionFilenames, isUpdatingRetention, onUpdatePermanentSave, t]
     );
 
-    const handleCopy = async (text: string | null | undefined, timestamp: number) => {
+    const handleCopy = async (text: string | null | undefined, historyId: string) => {
         if (!text) return;
         try {
             await navigator.clipboard.writeText(text);
-            setCopiedTimestamp(timestamp);
-            setTimeout(() => setCopiedTimestamp(null), 1500);
+            setCopiedHistoryId(historyId);
+            setTimeout(() => setCopiedHistoryId(null), 1500);
         } catch (err) {
             console.error('复制文本失败：', err);
         }
@@ -407,7 +453,7 @@ function HistoryPanelImpl({
                 'workbench-panel text-card-foreground border-border flex h-auto min-h-[17.5rem] w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 xl:h-full xl:min-h-0'
             )}>
             <CardHeader className='border-border/70 flex flex-col gap-2 border-b px-4 pt-3 !pb-3'>
-                {totalCost > 0 ? (
+                {estimatedImages > 0 ? (
                     <div className='flex items-center justify-end gap-3'>
                         <Dialog open={isTotalCostDialogOpen} onOpenChange={setIsTotalCostDialogOpen}>
                             <DialogTrigger asChild>
@@ -426,59 +472,37 @@ function HistoryPanelImpl({
                                     </DialogDescription>
                                 </DialogHeader>
                                 <div className='text-muted-foreground space-y-1 pt-1 text-xs'>
-                                    <p className='font-medium'>gpt-image-2:</p>
-                                    <ul className='list-disc pl-4'>
-                                        <li>
-                                            {t('history.textInput')} $5{t('history.tokens1m')}
-                                        </li>
-                                        <li>
-                                            {t('history.imageInput')} $8{t('history.tokens1m')}
-                                        </li>
-                                        <li>
-                                            {t('history.imageOutput')} $30{t('history.tokens1m')}
-                                        </li>
-                                    </ul>
-                                    <p className='mt-2 font-medium'>gpt-image-1.5:</p>
-                                    <ul className='list-disc pl-4'>
-                                        <li>
-                                            {t('history.textInput')} $5{t('history.tokens1m')}
-                                        </li>
-                                        <li>
-                                            {t('history.imageInput')} $8{t('history.tokens1m')}
-                                        </li>
-                                        <li>
-                                            {t('history.imageOutput')} $32{t('history.tokens1m')}
-                                        </li>
-                                    </ul>
-                                    <p className='mt-2 font-medium'>gpt-image-1:</p>
-                                    <ul className='list-disc pl-4'>
-                                        <li>
-                                            {t('history.textInput')} $5{t('history.tokens1m')}
-                                        </li>
-                                        <li>
-                                            {t('history.imageInput')} $10{t('history.tokens1m')}
-                                        </li>
-                                        <li>
-                                            {t('history.imageOutput')} $40{t('history.tokens1m')}
-                                        </li>
-                                    </ul>
-                                    <p className='mt-2 font-medium'>gpt-image-1-mini:</p>
-                                    <ul className='list-disc pl-4'>
-                                        <li>
-                                            {t('history.textInput')} $2{t('history.tokens1m')}
-                                        </li>
-                                        <li>
-                                            {t('history.imageInput')} $2.50{t('history.tokens1m')}
-                                        </li>
-                                        <li>
-                                            {t('history.imageOutput')} $8{t('history.tokens1m')}
-                                        </li>
-                                    </ul>
+                                    {GPT_IMAGE_MODELS.map((model) => {
+                                        const rates = getModelRates(model);
+                                        return (
+                                            <React.Fragment key={model}>
+                                                <p className='mt-2 font-medium first:mt-0'>{model}:</p>
+                                                <ul className='list-disc pl-4'>
+                                                    <li>
+                                                        {t('history.textInput')} ${rates.textInputPerMillion}
+                                                        {t('history.tokens1m')}
+                                                    </li>
+                                                    <li>
+                                                        {t('history.imageInput')} ${rates.imageInputPerMillion}
+                                                        {t('history.tokens1m')}
+                                                    </li>
+                                                    <li>
+                                                        {t('history.imageOutput')} ${rates.imageOutputPerMillion}
+                                                        {t('history.tokens1m')}
+                                                    </li>
+                                                </ul>
+                                            </React.Fragment>
+                                        );
+                                    })}
                                 </div>
                                 <div className='text-muted-foreground space-y-2 py-4 text-sm'>
                                     <div className='flex justify-between'>
                                         <span>{t('history.totalImages')}</span>{' '}
                                         <span className='ui-stat'>{totalImages.toLocaleString(locale)}</span>
+                                    </div>
+                                    <div className='flex justify-between'>
+                                        <span>{t('history.estimatedImages')}</span>{' '}
+                                        <span className='ui-stat'>{estimatedImages.toLocaleString(locale)}</span>
                                     </div>
                                     <div className='flex justify-between'>
                                         <span>{t('history.averageCost')}</span>{' '}
@@ -681,7 +705,7 @@ function HistoryPanelImpl({
                             const isFailedItem = item.status === 'failed';
                             const failureMessage = item.failureMessage?.trim();
                             const isMultiImage = imageCount > 1;
-                            const itemKey = item.timestamp;
+                            const itemKey = getHistoryEntryId(item);
                             const hasPrompt = item.prompt.trim().length > 0;
                             const resultFeedback = item.resultFeedback;
                             const resultFeedbackNote = resultFeedback?.note ?? '';
@@ -704,7 +728,7 @@ function HistoryPanelImpl({
                             });
                             const requestIds = getHistoryClientRequestIds(item);
                             const filenames = item.images.map((image) => image.filename);
-                            const isBatchExpanded = expandedBatchTimestamp === item.timestamp;
+                            const isBatchExpanded = expandedBatchId === itemKey;
                             const costStatus = getCostStatusLabel(item, {
                                 actual: t('history.actualCostShort'),
                                 pending: t('history.actualCostPending'),
@@ -714,6 +738,7 @@ function HistoryPanelImpl({
                             const actualCostReason = item.actualCostDetails
                                 ? getActualCostReasonLabel(item.actualCostDetails, t)
                                 : null;
+                            const failureStatusLabel = getHistoryFailureStatusLabel(item, t);
 
                             let thumbnailUrl: string | undefined;
                             if (firstImage) {
@@ -747,9 +772,11 @@ function HistoryPanelImpl({
                                                     ? 'cursor-default'
                                                     : 'hover:border-foreground/20 cursor-pointer hover:-translate-y-0.5 hover:brightness-110'
                                             )}
-                                            aria-label={t('history.viewBatch', {
-                                                time: formatTimestamp(item.timestamp)
-                                            })}>
+                                            aria-label={
+                                                isFailedItem
+                                                    ? t('history.viewFailed', { time: formatTimestamp(item.timestamp) })
+                                                    : t('history.viewBatch', { time: formatTimestamp(item.timestamp) })
+                                            }>
                                             {isFailedItem ? (
                                                 <div className='bg-destructive/5 text-muted-foreground flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-center text-xs'>
                                                     <AlertTriangle
@@ -758,7 +785,7 @@ function HistoryPanelImpl({
                                                         aria-hidden='true'
                                                     />
                                                     <span className='text-foreground font-medium'>
-                                                        {t('history.failedStatus')}
+                                                        {failureStatusLabel}
                                                     </span>
                                                     <span className='line-clamp-2'>
                                                         {failureMessage || t('history.failedReasonUnavailable')}
@@ -800,7 +827,7 @@ function HistoryPanelImpl({
                                                     <SparklesIcon size={12} />
                                                 )}
                                                 {isFailedItem
-                                                    ? t('history.failedStatus')
+                                                    ? failureStatusLabel
                                                     : item.mode === 'edit'
                                                       ? t('history.modeEdit')
                                                       : t('history.modeCreate')}
@@ -857,14 +884,14 @@ function HistoryPanelImpl({
                                         ) : null}
                                         {costBadge && (
                                             <Dialog
-                                                open={openCostDialogTimestamp === itemKey}
-                                                onOpenChange={(isOpen) => !isOpen && setOpenCostDialogTimestamp(null)}>
+                                                open={openCostDialogId === itemKey}
+                                                onOpenChange={(isOpen) => !isOpen && setOpenCostDialogId(null)}>
                                                 <DialogTrigger asChild>
                                                     <button
                                                         type='button'
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            setOpenCostDialogTimestamp(itemKey);
+                                                            setOpenCostDialogId(itemKey);
                                                         }}
                                                         className={cn(
                                                             'ui-stat absolute top-7 right-1 z-20 flex min-h-9 cursor-pointer items-center gap-0.5 rounded-sm px-2 py-1 text-[11px] text-white shadow-sm transition-[background-color,transform] hover:-translate-y-0.5 active:translate-y-0 lg:min-h-7',
@@ -885,34 +912,41 @@ function HistoryPanelImpl({
                                                         </DialogDescription>
                                                     </DialogHeader>
                                                     {(() => {
-                                                        const modelForRates: GptImageModel = (item.model ||
-                                                            'gpt-image-1') as GptImageModel;
-                                                        const rates = getModelRates(modelForRates);
+                                                        const modelForRates = item.model;
+                                                        const rates = isGptImageModel(modelForRates)
+                                                            ? getModelRates(modelForRates)
+                                                            : undefined;
                                                         return (
                                                             <>
                                                                 <div className='text-muted-foreground space-y-1 pt-1 text-xs'>
-                                                                    <p>
-                                                                        {t('history.pricingFor', {
-                                                                            model: modelForRates
-                                                                        })}
-                                                                    </p>
-                                                                    <ul className='list-disc pl-4'>
-                                                                        <li>
-                                                                            {t('history.textInput')} $
-                                                                            {rates.textInputPerMillion}
-                                                                            {t('history.tokens1m')}
-                                                                        </li>
-                                                                        <li>
-                                                                            {t('history.imageInput')} $
-                                                                            {rates.imageInputPerMillion}
-                                                                            {t('history.tokens1m')}
-                                                                        </li>
-                                                                        <li>
-                                                                            {t('history.imageOutput')} $
-                                                                            {rates.imageOutputPerMillion}
-                                                                            {t('history.tokens1m')}
-                                                                        </li>
-                                                                    </ul>
+                                                                    {modelForRates && rates ? (
+                                                                        <>
+                                                                            <p>
+                                                                                {t('history.pricingFor', {
+                                                                                    model: modelForRates
+                                                                                })}
+                                                                            </p>
+                                                                            <ul className='list-disc pl-4'>
+                                                                                <li>
+                                                                                    {t('history.textInput')} $
+                                                                                    {rates.textInputPerMillion}
+                                                                                    {t('history.tokens1m')}
+                                                                                </li>
+                                                                                <li>
+                                                                                    {t('history.imageInput')} $
+                                                                                    {rates.imageInputPerMillion}
+                                                                                    {t('history.tokens1m')}
+                                                                                </li>
+                                                                                <li>
+                                                                                    {t('history.imageOutput')} $
+                                                                                    {rates.imageOutputPerMillion}
+                                                                                    {t('history.tokens1m')}
+                                                                                </li>
+                                                                            </ul>
+                                                                        </>
+                                                                    ) : (
+                                                                        <p>{t('history.pricingUnavailable')}</p>
+                                                                    )}
                                                                 </div>
                                                                 <div className='text-muted-foreground space-y-2 py-4 text-sm'>
                                                                     {item.actualCostDetails && (
@@ -984,7 +1018,7 @@ function HistoryPanelImpl({
                                                                             )}
                                                                         </div>
                                                                     )}
-                                                                    {item.costDetails && (
+                                                                    {isValidCostDetails(item.costDetails) && (
                                                                         <>
                                                                             <div className='flex justify-between'>
                                                                                 <span>
@@ -998,7 +1032,7 @@ function HistoryPanelImpl({
                                                                                     {formatEstimatedTokenCost(
                                                                                         item.costDetails
                                                                                             .text_input_tokens,
-                                                                                        rates.textInputPerToken,
+                                                                                        rates?.textInputPerToken,
                                                                                         t('common.unavailable')
                                                                                     )}
                                                                                     )
@@ -1018,7 +1052,7 @@ function HistoryPanelImpl({
                                                                                         {formatEstimatedTokenCost(
                                                                                             item.costDetails
                                                                                                 .image_input_tokens,
-                                                                                            rates.imageInputPerToken,
+                                                                                            rates?.imageInputPerToken,
                                                                                             t('common.unavailable')
                                                                                         )}
                                                                                         )
@@ -1037,7 +1071,7 @@ function HistoryPanelImpl({
                                                                                     {formatEstimatedTokenCost(
                                                                                         item.costDetails
                                                                                             .image_output_tokens,
-                                                                                        rates.imageOutputPerToken,
+                                                                                        rates?.imageOutputPerToken,
                                                                                         t('common.unavailable')
                                                                                     )}
                                                                                     )
@@ -1086,7 +1120,7 @@ function HistoryPanelImpl({
                                             <span className='text-muted-foreground/70 px-1'>/</span>
                                             {isFailedItem
                                                 ? t('history.statusFailedSummary', {
-                                                      status: t('history.failedStatus'),
+                                                      status: failureStatusLabel,
                                                       duration: formatDuration(item.durationMs)
                                                   })
                                                 : t('history.statusBatchSummary', {
@@ -1102,7 +1136,7 @@ function HistoryPanelImpl({
                                         )}
                                         <p>
                                             <span className='text-foreground font-medium'>{t('history.model')}</span>{' '}
-                                            {item.model || 'gpt-image-1'}
+                                            {getHistoryModelLabel(item, t)}
                                         </p>
                                         <p>
                                             <span className='text-foreground font-medium'>
@@ -1250,10 +1284,10 @@ function HistoryPanelImpl({
                                                         size='sm'
                                                         className='text-muted-foreground hover:text-foreground min-h-11 w-full justify-between px-2 text-[11px] lg:h-7 lg:min-h-0'
                                                         aria-expanded={isBatchExpanded}
-                                                        aria-controls={`history-batch-${item.timestamp}`}
+                                                        aria-controls={`history-batch-${itemKey}`}
                                                         onClick={() =>
-                                                            setExpandedBatchTimestamp((current) =>
-                                                                current === item.timestamp ? null : item.timestamp
+                                                            setExpandedBatchId((current) =>
+                                                                current === itemKey ? null : itemKey
                                                             )
                                                         }>
                                                         <span>
@@ -1274,7 +1308,7 @@ function HistoryPanelImpl({
                                                 ) : null}
                                                 {(isBatchExpanded || isRetentionSelectionActive) && (
                                                     <div
-                                                        id={`history-batch-${item.timestamp}`}
+                                                        id={`history-batch-${itemKey}`}
                                                         className='batch-thumbnail-strip grid grid-cols-3 gap-1.5'
                                                         aria-label={t('history.batchThumbnails')}>
                                                         {item.images.map((image, index) => {
@@ -1293,7 +1327,7 @@ function HistoryPanelImpl({
 
                                                             return (
                                                                 <div
-                                                                    key={`${item.timestamp}-${image.filename}`}
+                                                                    key={`${itemKey}-${image.filename}`}
                                                                     className='border-border bg-muted image-edge relative aspect-square overflow-hidden rounded-sm border'>
                                                                     {!isRetentionSelectionActive ? (
                                                                         <button
@@ -1368,16 +1402,14 @@ function HistoryPanelImpl({
                                         )}
                                         <div className='mt-1 flex items-center gap-1'>
                                             <Dialog
-                                                open={openPromptDialogTimestamp === itemKey}
-                                                onOpenChange={(isOpen) =>
-                                                    !isOpen && setOpenPromptDialogTimestamp(null)
-                                                }>
+                                                open={openPromptDialogId === itemKey}
+                                                onOpenChange={(isOpen) => !isOpen && setOpenPromptDialogId(null)}>
                                                 <DialogTrigger asChild>
                                                     <Button
                                                         variant='outline'
                                                         size='sm'
                                                         className='min-h-11 flex-grow px-2 py-1 text-xs lg:min-h-7'
-                                                        onClick={() => setOpenPromptDialogTimestamp(itemKey)}>
+                                                        onClick={() => setOpenPromptDialogId(itemKey)}>
                                                         {t('history.showDetails')}
                                                     </Button>
                                                 </DialogTrigger>
@@ -1421,7 +1453,7 @@ function HistoryPanelImpl({
                                                                     {t('history.model')}
                                                                 </dt>
                                                                 <dd className='text-foreground font-medium'>
-                                                                    {item.model || 'gpt-image-1'}
+                                                                    {getHistoryModelLabel(item, t)}
                                                                 </dd>
                                                             </div>
                                                             <div>
@@ -1494,7 +1526,7 @@ function HistoryPanelImpl({
                                                                         {t('history.status')}
                                                                     </dt>
                                                                     <dd className='text-destructive font-medium'>
-                                                                        {t('history.failedStatus')}
+                                                                        {failureStatusLabel}
                                                                     </dd>
                                                                 </div>
                                                             )}
@@ -1515,7 +1547,7 @@ function HistoryPanelImpl({
                                                                     {t('history.totalEstimatedCost')}
                                                                 </dt>
                                                                 <dd className='text-foreground font-medium'>
-                                                                    {item.costDetails
+                                                                    {isValidCostDetails(item.costDetails)
                                                                         ? `$${item.costDetails.estimated_cost_usd.toFixed(4)}`
                                                                         : '-'}
                                                                 </dd>
@@ -1591,12 +1623,12 @@ function HistoryPanelImpl({
                                                             variant='outline'
                                                             size='sm'
                                                             onClick={() => handleCopy(item.prompt, itemKey)}>
-                                                            {copiedTimestamp === itemKey ? (
+                                                            {copiedHistoryId === itemKey ? (
                                                                 <Check className='mr-2 h-4 w-4 text-emerald-600 dark:text-emerald-400' />
                                                             ) : (
                                                                 <Copy className='mr-2 h-4 w-4' />
                                                             )}
-                                                            {copiedTimestamp === itemKey
+                                                            {copiedHistoryId === itemKey
                                                                 ? t('common.copied')
                                                                 : t('common.copy')}
                                                         </Button>
@@ -1613,7 +1645,10 @@ function HistoryPanelImpl({
                                                 </DialogContent>
                                             </Dialog>
                                             <Dialog
-                                                open={itemPendingDeleteConfirmation?.timestamp === item.timestamp}
+                                                open={Boolean(
+                                                    itemPendingDeleteConfirmation &&
+                                                    isSameHistoryEntry(itemPendingDeleteConfirmation, item)
+                                                )}
                                                 onOpenChange={(isOpen) => {
                                                     if (!isOpen) onCancelDeletion();
                                                 }}>
@@ -1639,7 +1674,7 @@ function HistoryPanelImpl({
                                                     </DialogHeader>
                                                     <div className='flex items-center space-x-2 py-2'>
                                                         <Checkbox
-                                                            id={`dont-ask-${item.timestamp}`}
+                                                            id={`dont-ask-${itemKey}`}
                                                             checked={deletePreferenceDialogValue}
                                                             onCheckedChange={(checked) =>
                                                                 onDeletePreferenceDialogChange(!!checked)
@@ -1647,7 +1682,7 @@ function HistoryPanelImpl({
                                                             className='data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground'
                                                         />
                                                         <label
-                                                            htmlFor={`dont-ask-${item.timestamp}`}
+                                                            htmlFor={`dont-ask-${itemKey}`}
                                                             className='text-muted-foreground text-sm leading-none font-medium peer-disabled:cursor-not-allowed peer-disabled:opacity-70'>
                                                             {t('history.dontAskAgain')}
                                                         </label>

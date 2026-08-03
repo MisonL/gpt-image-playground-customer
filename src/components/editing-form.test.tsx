@@ -1,5 +1,6 @@
 import { EditingForm, type EditingFormData } from './editing-form';
 import { I18nProvider } from '@/lib/i18n';
+import { MAX_OPENAI_UPLOAD_BYTES, MAX_PROMPT_LENGTH } from '@/lib/image-request-limits';
 import {
     IMAGE_UPSTREAM_PROFILES,
     type ImageUpstreamProfile,
@@ -25,12 +26,16 @@ type RenderOptions = {
     defaultStreamingStrategy?: ImageStreamingStrategy;
     allowResponsesImageBackend?: boolean;
     hasDefaultResponsesModel?: boolean;
+    defaultImageBackend?: React.ComponentProps<typeof EditingForm>['defaultImageBackend'];
     editResponsesModel?: string;
     editPrompt?: string;
     editModel?: React.ComponentProps<typeof EditingForm>['editModel'];
     editSize?: React.ComponentProps<typeof EditingForm>['editSize'];
+    editCustomWidth?: number;
+    editCustomHeight?: number;
     canApplyRandomInspiration?: boolean;
     imageFiles?: File[];
+    maskFile?: File | null;
     upstreamProfile?: ImageUpstreamProfile;
     upstreamProfileMixed?: boolean;
     isActive?: boolean;
@@ -85,12 +90,16 @@ function createEditingFormProps({
     defaultStreamingStrategy = 'auto',
     allowResponsesImageBackend = true,
     hasDefaultResponsesModel = true,
+    defaultImageBackend,
     editResponsesModel = '',
     editPrompt = '',
     editModel = 'gpt-image-2',
     editSize = 'auto',
+    editCustomWidth = 1024,
+    editCustomHeight = 1024,
     canApplyRandomInspiration = true,
     imageFiles = [],
+    maskFile = null,
     upstreamProfile = IMAGE_UPSTREAM_PROFILES['openai-compatible'],
     upstreamProfileMixed = false,
     isActive = true,
@@ -127,9 +136,9 @@ function createEditingFormProps({
         setEditN: noop,
         editSize,
         setEditSize: noop,
-        editCustomWidth: 1024,
+        editCustomWidth,
         setEditCustomWidth: noop,
-        editCustomHeight: 1024,
+        editCustomHeight,
         setEditCustomHeight: noop,
         editQuality: 'auto',
         setEditQuality: noop,
@@ -145,7 +154,7 @@ function createEditingFormProps({
         setEditBrushSize: noop,
         editShowMaskEditor: false,
         setEditShowMaskEditor: noop,
-        editGeneratedMaskFile: null,
+        editGeneratedMaskFile: maskFile,
         setEditGeneratedMaskFile: noop,
         editIsMaskSaved: false,
         setEditIsMaskSaved: noop,
@@ -164,6 +173,7 @@ function createEditingFormProps({
         setPartialImages: noop,
         allowResponsesImageBackend,
         hasDefaultResponsesModel,
+        defaultImageBackend,
         editImageBackend: backend,
         setEditImageBackend: noop,
         editStreamingStrategy: streamingStrategy,
@@ -192,6 +202,14 @@ function renderEditingForm(options: RenderOptions): string {
 }
 
 describe('EditingForm submit footer', { concurrency: false }, () => {
+    it('uses the server prompt limit in the instruction counter and input constraint', () => {
+        const html = renderEditingForm({ backend: 'server-default', editPrompt: '用户真实编辑要求' });
+
+        assert.match(html, new RegExp(`maxLength="${MAX_PROMPT_LENGTH}"`));
+        assert.match(html, new RegExp(`\\/ ${MAX_PROMPT_LENGTH.toLocaleString('zh-CN')}`));
+        assert.doesNotMatch(html, /\/ 1000/);
+    });
+
     it('keeps the submit footer available outside desktop breakpoints', () => {
         const html = renderEditingForm({
             backend: 'server-default',
@@ -413,17 +431,46 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(html, /edit-partial-4/);
     });
 
-    it('intersects Matsca edit partial image options with the Responses backend contract', () => {
-        const html = renderEditingForm({
+    it('intersects Matsca edit output and preview options with the Responses backend contract', () => {
+        const streamHtml = renderEditingForm({
             backend: 'responses-image-generation',
             advancedTab: 'stream',
             upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
         });
+        const outputHtml = renderEditingForm({
+            backend: 'responses-image-generation',
+            advancedTab: 'output',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
 
-        assert.doesNotMatch(html, /edit-partial-0/);
-        assert.match(html, /edit-partial-1/);
-        assert.match(html, /edit-partial-3/);
-        assert.doesNotMatch(html, /edit-partial-4/);
+        assert.doesNotMatch(streamHtml, /edit-partial-0/);
+        assert.match(streamHtml, /edit-partial-1/);
+        assert.match(streamHtml, /edit-partial-3/);
+        assert.doesNotMatch(streamHtml, /edit-partial-4/);
+        assert.match(outputHtml, /id="edit-n-slider"/);
+        assert.match(outputHtml, /aria-valuemax="1"/);
+    });
+
+    it('applies Responses limits to the default edit route when runtime selects that backend', () => {
+        const streamHtml = renderEditingForm({
+            backend: 'server-default',
+            defaultImageBackend: 'responses-image-generation',
+            advancedTab: 'stream',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+        const outputHtml = renderEditingForm({
+            backend: 'server-default',
+            defaultImageBackend: 'responses-image-generation',
+            advancedTab: 'output',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.doesNotMatch(streamHtml, /edit-partial-0/);
+        assert.match(streamHtml, /edit-partial-1/);
+        assert.match(streamHtml, /edit-partial-3/);
+        assert.doesNotMatch(streamHtml, /edit-partial-4/);
+        assert.match(outputHtml, /id="edit-n-slider"/);
+        assert.match(outputHtml, /aria-valuemax="1"/);
     });
 
     it('uses Matsca edit upload limits when the active upstream profile requires them', () => {
@@ -445,6 +492,38 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*编辑图像[\s\S]*<\/button>/);
     });
 
+    it('explains active profile upload limits and blocks invalid reference files before submit', () => {
+        const emptyFile = { name: 'empty.png', size: 0, type: 'image/png' } as File;
+        const html = renderEditingForm({
+            backend: 'server-default',
+            advancedOpen: false,
+            editPrompt: '用户真实编辑要求',
+            imageFiles: [emptyFile]
+        });
+
+        assert.match(html, /单张不超过 25 MB/);
+        assert.match(html, /当前线路未声明参考图总大小上限/);
+        assert.match(html, /参考图不能为空/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*编辑图像[\s\S]*<\/button>/);
+    });
+
+    it('shows the Responses combined input limit and disables an oversized reference-plus-mask set', () => {
+        const imageFiles = [
+            { name: 'source-a.png', size: MAX_OPENAI_UPLOAD_BYTES, type: 'image/png' } as File,
+            { name: 'source-b.png', size: MAX_OPENAI_UPLOAD_BYTES, type: 'image/png' } as File
+        ];
+        const html = renderEditingForm({
+            backend: 'responses-image-generation',
+            advancedOpen: false,
+            editPrompt: '用户真实编辑要求',
+            imageFiles,
+            maskFile: { name: 'mask.png', size: 1, type: 'image/png' } as File
+        });
+
+        assert.match(html, /当前 Responses 路线下，参考图和蒙版合计不能超过 50 MB/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*编辑图像[\s\S]*<\/button>/);
+    });
+
     it('renders profile-aware high resolution edit size presets', () => {
         const openAiHtml = renderEditingForm({ backend: 'server-default' });
         const matscaHtml = renderEditingForm({
@@ -457,6 +536,19 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(matscaHtml, /id="edit-size-square-4k"/);
     });
 
+    it('does not present unsafe custom edit dimensions as a valid exact pixel calculation', () => {
+        const html = renderEditingForm({
+            backend: 'server-default',
+            editSize: 'custom',
+            editCustomWidth: Number.MAX_SAFE_INTEGER + 1,
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.match(html, /请先输入可精确计算的正整数尺寸。/);
+        assert.match(html, /宽度和高度超出可精确处理的整数范围。/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*编辑图像[\s\S]*<\/button>/);
+    });
+
     it('renders an explicit parallel batch toggle in edit stream settings', () => {
         const html = renderEditingForm({
             backend: 'server-default',
@@ -467,7 +559,7 @@ describe('EditingForm advanced upstream controls', () => {
         });
 
         assert.match(html, /并发批量/);
-        assert.match(html, /多张图或多条提示词会按当前渠道容量并发执行/);
+        assert.match(html, /多张图或多条提示词会按当前服务端配置的并发上限尝试执行/);
         assert.match(html, /id="edit-parallel-batch-enabled"/);
         assert.match(html, /aria-checked="true"/);
     });
@@ -538,7 +630,10 @@ describe('EditingForm advanced upstream controls', () => {
         assert.match(html, /影响说明/);
         assert.match(html, /Responses image_generation 需要实验开关和顶层模型/);
         assert.match(html, /当前服务端渠道包含不同上游模式/);
-        assert.match(html, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.match(
+            html,
+            /当前自动策略会由服务端按渠道选择传输方式，可能直接使用非流式；仅在实际选中流式且上游支持时使用流式。/
+        );
         assert.match(html, /GPT 顶层模型/);
         assert.match(html, /思考强度/);
         assert.match(html, /提示词优化/);
@@ -560,9 +655,9 @@ describe('EditingForm advanced upstream controls', () => {
         });
 
         assert.match(offHtml, /关闭流式会减少长连接不稳定因素/);
-        assert.doesNotMatch(offHtml, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.doesNotMatch(offHtml, /当前自动策略会由服务端按渠道选择传输方式/);
         assert.match(forceHtml, /强制 SSE 会跳过自动判断/);
-        assert.doesNotMatch(forceHtml, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.doesNotMatch(forceHtml, /当前自动策略会由服务端按渠道选择传输方式/);
     });
 
     it('disables the experimental Responses backend when runtime capabilities do not allow it', () => {

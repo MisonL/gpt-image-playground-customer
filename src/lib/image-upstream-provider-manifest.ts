@@ -128,9 +128,12 @@ export function validateImageProviderManifest(value: unknown): ImageProviderMani
     const baseUrl = readOptionalString(manifest, 'base_url');
     if (baseUrl) validateManifestBaseUrl(baseUrl);
     const constraints = readConstraintsField(manifest.constraints).constraints;
-    if (constraints?.generate_count) validateRangeConstraint(constraints.generate_count, 'constraints.generate_count');
-    if (constraints?.edit_count) validateRangeConstraint(constraints.edit_count, 'constraints.edit_count');
-    if (constraints?.partial_images) validateRangeConstraint(constraints.partial_images, 'constraints.partial_images');
+    if (constraints?.generate_count)
+        validateRangeConstraint(constraints.generate_count, 'constraints.generate_count', { allowZero: false });
+    if (constraints?.edit_count)
+        validateRangeConstraint(constraints.edit_count, 'constraints.edit_count', { allowZero: false });
+    if (constraints?.partial_images)
+        validateRangeConstraint(constraints.partial_images, 'constraints.partial_images', { allowZero: true });
     if (constraints?.generate_count)
         validateRangeUpperBound(constraints.generate_count, 'constraints.generate_count', MAX_PROVIDER_IMAGE_COUNT);
     if (constraints?.edit_count)
@@ -188,13 +191,17 @@ export function createProviderManifestProfile(manifest: ImageProviderManifest): 
         generateCount: readRangeConstraint(
             constraints.generate_count,
             baseProfile.generateCount,
-            'constraints.generate_count'
+            'constraints.generate_count',
+            { allowZero: false }
         ),
-        editCount: readRangeConstraint(constraints.edit_count, baseProfile.editCount, 'constraints.edit_count'),
+        editCount: readRangeConstraint(constraints.edit_count, baseProfile.editCount, 'constraints.edit_count', {
+            allowZero: false
+        }),
         partialImages: readRangeConstraint(
             constraints.partial_images,
             baseProfile.partialImages,
-            'constraints.partial_images'
+            'constraints.partial_images',
+            { allowZero: true }
         ),
         upload: {
             maxImages: readPositiveIntegerConstraint(
@@ -323,18 +330,25 @@ function readResponseFormat(mode: ImageProviderModeManifest): ProviderResponseFo
 function readRangeConstraint(
     value: PartialRange | undefined,
     fallback: { min: number; max: number },
-    fieldName: string
+    fieldName: string,
+    options: { allowZero: boolean }
 ): { min: number; max: number } {
     if (!value) return fallback;
-    const min = readPositiveIntegerConstraint(value.min, fallback.min, `${fieldName}.min`, { allowZero: true });
-    const max = readPositiveIntegerConstraint(value.max, fallback.max, `${fieldName}.max`, { allowZero: true });
+    const min = readPositiveIntegerConstraint(value.min, fallback.min, `${fieldName}.min`, options);
+    const max = readPositiveIntegerConstraint(value.max, fallback.max, `${fieldName}.max`, options);
     if (min > max) {
         throw new RequestValidationError(`${fieldName}.min 不能大于 max。`, 500);
     }
     return { min, max };
 }
 
-function validateRangeConstraint(value: PartialRange, fieldName: string): void {
+function validateRangeConstraint(value: PartialRange, fieldName: string, options: { allowZero: boolean }): void {
+    if (!options.allowZero && value.min !== undefined && value.min < 1) {
+        throw new RequestValidationError(`${fieldName}.min 必须是正整数。`, 500);
+    }
+    if (!options.allowZero && value.max !== undefined && value.max < 1) {
+        throw new RequestValidationError(`${fieldName}.max 必须是正整数。`, 500);
+    }
     if (value.min !== undefined && value.max !== undefined && value.min > value.max) {
         throw new RequestValidationError(`${fieldName}.min 不能大于 max。`, 500);
     }

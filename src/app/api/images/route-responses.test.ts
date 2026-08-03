@@ -307,7 +307,7 @@ describe('POST /api/images streaming and Responses backends', { concurrency: fal
             })
         );
         assert.equal(multiImage.status, 400);
-        assert.match(String(((await multiImage.json()) as Record<string, unknown>).error), /单张生成/);
+        assert.match(String(((await multiImage.json()) as Record<string, unknown>).error), /n 必须在 1 到 1 之间/);
     });
 
     it('rejects multi-image edit requests for the Responses API backend before contacting upstream', async () => {
@@ -326,7 +326,50 @@ describe('POST /api/images streaming and Responses backends', { concurrency: fal
             })
         );
         assert.equal(edit.status, 400);
-        assert.match(String(((await edit.json()) as Record<string, unknown>).error), /单张编辑/);
+        assert.match(String(((await edit.json()) as Record<string, unknown>).error), /n 必须在 1 到 1 之间/);
+    });
+
+    it('rejects Responses requests when a provider requires two output images', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+        process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+        let upstreamCalls = 0;
+        const upstream = await startResponsesImageUpstream(async () => {
+            upstreamCalls += 1;
+            return { output: [] };
+        });
+
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'fixed-two';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'responses-non-stream';
+            process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'fixed_two_provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { generate_count: { min: 2, max: 2 } }
+            });
+            const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+            resetServerChannelStateForTests();
+            const { POST } = await import('./route');
+
+            const response = await POST(
+                imageFormRequest({
+                    stream: false,
+                    streamMode: 'non_stream',
+                    imageBackend: 'responses-image-generation'
+                })
+            );
+
+            assert.equal(response.status, 422);
+            const body = (await response.json()) as Record<string, unknown>;
+            assert.match(String(body.error), /图片数量范围没有可用交集/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
     });
 
     it('uses the Responses API image backend only when the flag and request opt-in are both present', async () => {
@@ -519,7 +562,7 @@ describe('POST /api/images streaming and Responses backends', { concurrency: fal
 
         assert.equal(response.status, 400);
         const body = (await response.json()) as Record<string, unknown>;
-        assert.match(String(body.error), /Responses API.*partial_images/);
+        assert.match(String(body.error), /partial_images 必须在 1 到 3 之间/);
     });
 
     it('keeps separate Responses final items when their base64 payloads match', async () => {

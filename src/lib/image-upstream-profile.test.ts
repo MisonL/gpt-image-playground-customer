@@ -1,5 +1,7 @@
 import {
     buildMatscaAppHeaders,
+    getImageCountRangeForBackend,
+    getPartialImagesRangeForBackend,
     IMAGE_UPSTREAM_PROFILES,
     readImageUpstreamProfile,
     summarizeImageUpstreamProfile
@@ -34,6 +36,50 @@ describe('buildMatscaAppHeaders', () => {
         assert.equal(buildMatscaAppHeaders({}), undefined);
         assert.throws(() => buildMatscaAppHeaders({ appId: 'app' }), /必须同时配置/);
         assert.throws(() => buildMatscaAppHeaders({ appSecret: 'secret' }), /必须同时配置/);
+    });
+});
+
+describe('backend-specific image limits', () => {
+    it('keeps Responses image_generation to one image and one to three previews', () => {
+        const profile = IMAGE_UPSTREAM_PROFILES.matsca;
+
+        assert.deepEqual(getImageCountRangeForBackend(profile, 'generate', 'images-api'), { min: 1, max: 4 });
+        assert.deepEqual(getImageCountRangeForBackend(profile, 'edit', 'images-api'), { min: 1, max: 4 });
+        assert.deepEqual(getImageCountRangeForBackend(profile, 'generate', 'responses-image-generation'), {
+            min: 1,
+            max: 1
+        });
+        assert.deepEqual(getImageCountRangeForBackend(profile, 'edit', 'responses-image-generation'), {
+            min: 1,
+            max: 1
+        });
+        assert.deepEqual(
+            getImageCountRangeForBackend(profile, 'generate', 'server-default', 'responses-image-generation'),
+            { min: 1, max: 1 }
+        );
+        assert.deepEqual(getPartialImagesRangeForBackend(profile, 'responses-image-generation'), { min: 1, max: 3 });
+        assert.deepEqual(getPartialImagesRangeForBackend(profile, 'server-default', 'responses-image-generation'), {
+            min: 1,
+            max: 3
+        });
+        assert.deepEqual(getPartialImagesRangeForBackend(profile, 'server-default'), { min: 0, max: 4 });
+    });
+
+    it('rejects a Responses backend when the upstream count range has no overlap', () => {
+        const profile = {
+            ...IMAGE_UPSTREAM_PROFILES['openai-compatible'],
+            generateCount: { min: 2, max: 2 },
+            editCount: { min: 2, max: 2 }
+        };
+
+        assert.throws(
+            () => getImageCountRangeForBackend(profile, 'generate', 'responses-image-generation'),
+            /图片数量范围没有可用交集/
+        );
+        assert.throws(
+            () => getImageCountRangeForBackend(profile, 'edit', 'responses-image-generation'),
+            /图片数量范围没有可用交集/
+        );
     });
 });
 

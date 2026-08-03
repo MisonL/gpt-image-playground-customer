@@ -13,10 +13,11 @@ import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { readBatchPromptLines } from '@/lib/batch-prompts';
+import { findBatchPromptOverLimitIndex, readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
 import { getImageOutputFormatLabel, getImageQualityLabel } from '@/lib/image-display-labels';
+import { MAX_PROMPT_LENGTH } from '@/lib/image-request-limits';
 import { shouldRecommendImageStreaming } from '@/lib/image-streaming-recommendation';
 import type {
     ImageUpstreamFormBackend,
@@ -32,15 +33,22 @@ import {
 import {
     buildIntegerRangeOptions,
     clampIntegerToRange,
-    getPartialImagesRangeForBackend,
+    getImageBackendCompatibility,
+    resolveImageBackendSelection,
     type ImageUpstreamProfile,
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
-import { type ImageStreamMode, type ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import {
+    type ImageGenerationBackend,
+    type ImageStreamMode,
+    type ImageStreamingStrategy
+} from '@/lib/image-upstream-strategy';
 import {
     getPresetDimensions,
     getPresetTooltip,
     getSizePresetOptions,
+    formatExactImagePixelCount,
+    readImageSizeNumberInput,
     validateGptImage2Size,
     validatePositiveIntegerImageSize
 } from '@/lib/size-utils';
@@ -150,6 +158,7 @@ type GenerationFormProps = {
     setBackground: React.Dispatch<React.SetStateAction<GenerationFormData['background']>>;
     upstreamProfile: ImageUpstreamProfile;
     upstreamProfileMixed?: boolean;
+    defaultImageBackend?: ImageGenerationBackend;
     moderation: GenerationFormData['moderation'];
     setModeration: React.Dispatch<React.SetStateAction<GenerationFormData['moderation']>>;
     streamMode: ImageStreamMode;
@@ -355,6 +364,7 @@ export function GenerationForm({
     setBackground,
     upstreamProfile,
     upstreamProfileMixed = false,
+    defaultImageBackend,
     moderation,
     setModeration,
     streamMode,
@@ -394,13 +404,12 @@ export function GenerationForm({
                 : validateGptImage2Size(customWidth, customHeight)
             : { valid: true as const };
     const customSizeInvalid = size === 'custom' && !customSizeValidation.valid;
-    const customPixels = customWidth * customHeight;
-    const customRatio =
-        customWidth > 0 && customHeight > 0
-            ? t('form.ratio', {
-                  ratio: (Math.max(customWidth, customHeight) / Math.min(customWidth, customHeight)).toFixed(2)
-              })
-            : t('form.noRatio');
+    const customPixelCount = formatExactImagePixelCount(customWidth, customHeight, locale);
+    const customRatio = customPixelCount
+        ? t('form.ratio', {
+              ratio: (Math.max(customWidth, customHeight) / Math.min(customWidth, customHeight)).toFixed(2)
+          })
+        : t('form.noRatio');
     const customSizeError = customSizeValidation.valid
         ? null
         : t(customSizeValidation.reasonKey, customSizeValidation.values);
@@ -427,6 +436,11 @@ export function GenerationForm({
     const isBatchMode = currentMode === 'batch';
     const isReuseMode = currentMode === 'reuse';
     const batchPrompts = React.useMemo(() => readBatchPromptLines(batchPromptText), [batchPromptText]);
+    const batchPromptOverLimitIndex = React.useMemo(
+        () => findBatchPromptOverLimitIndex(batchPrompts, MAX_PROMPT_LENGTH),
+        [batchPrompts]
+    );
+    const promptOverLimit = prompt.length > MAX_PROMPT_LENGTH;
     const parallelBatchTargetCount = isBatchMode ? batchPrompts.length : n[0];
     const parallelBatchToggle = resolveStreamingBatchToggleState({
         allowStreamingBatch,
@@ -439,22 +453,45 @@ export function GenerationForm({
     const parallelBatchChecked = parallelBatchToggle.checked;
     const parallelBatchUnavailableKey = parallelBatchToggle.unavailableReasonKey;
     const hasFailedBatchPrompts = isBatchMode && failedBatchPrompts.length > 0;
+    const effectiveImageBackend = resolveImageBackendSelection(imageBackend, defaultImageBackend);
+    const responsesBackendUnavailable =
+        effectiveImageBackend === 'responses-image-generation' && !allowResponsesImageBackend;
     const requiresResponsesModel =
-        imageBackend === 'responses-image-generation' && !hasDefaultResponsesModel && !responsesModel.trim();
+        effectiveImageBackend === 'responses-image-generation' && !hasDefaultResponsesModel && !responsesModel.trim();
+    const backendCompatibility = React.useMemo(
+        () => getImageBackendCompatibility(upstreamProfile, 'generate', imageBackend, defaultImageBackend),
+        [defaultImageBackend, imageBackend, upstreamProfile]
+    );
+    const backendCompatibilityMessage = backendCompatibility.compatible
+        ? ''
+        : backendCompatibility.errors.map((error) => error.message).join(' ');
     const submitDisabledReason = React.useMemo(() => {
         if (isLoading) return '';
         if (isBatchMode && batchPrompts.length === 0) return t('ux.disabledBatchPrompts');
+        if (isBatchMode && batchPromptOverLimitIndex !== null) {
+            return t('ux.disabledBatchPromptLength', {
+                index: batchPromptOverLimitIndex + 1,
+                limit: MAX_PROMPT_LENGTH
+            });
+        }
+        if (responsesBackendUnavailable) return t('upstream.backendResponsesUnavailable');
+        if (backendCompatibilityMessage) return backendCompatibilityMessage;
         if (!isBatchMode && !prompt.trim()) return t('ux.disabledPrompt');
+        if (!isBatchMode && promptOverLimit) return t('ux.disabledPromptLength', { limit: MAX_PROMPT_LENGTH });
         if (requiresResponsesModel) return t('upstream.responsesModelRequired');
         if (customSizeInvalid) return customSizeError || t('ux.disabledCustomSize');
         return '';
     }, [
         batchPrompts.length,
+        batchPromptOverLimitIndex,
+        backendCompatibilityMessage,
         customSizeError,
         customSizeInvalid,
         isBatchMode,
         isLoading,
+        responsesBackendUnavailable,
         prompt,
+        promptOverLimit,
         requiresResponsesModel,
         t
     ]);
@@ -468,11 +505,15 @@ export function GenerationForm({
     const workbenchBackendLabel = getWorkbenchBackendLabel(imageBackend, t);
     const sizePresetOptions = getSizePresetOptions({ model, upstreamProfile });
     const partialImagesRange = React.useMemo(
-        () => getPartialImagesRangeForBackend(upstreamProfile, imageBackend),
-        [imageBackend, upstreamProfile]
+        () => backendCompatibility.partialImagesRange ?? { min: 1, max: 3 },
+        [backendCompatibility.partialImagesRange]
     );
     const partialImageOptions = buildIntegerRangeOptions(partialImagesRange) as PartialImagesCount[];
-    const generationCountOptions = buildIntegerRangeOptions(upstreamProfile.generateCount);
+    const generationCountRange = React.useMemo(
+        () => backendCompatibility.imageCountRange ?? { min: 1, max: 1 },
+        [backendCompatibility.imageCountRange]
+    );
+    const generationCountOptions = buildIntegerRangeOptions(generationCountRange);
     const footerPromptTarget = resolveGenerationFooterPromptTarget({
         currentMode,
         prompt,
@@ -483,8 +524,8 @@ export function GenerationForm({
         if (isActive && (partialImages < partialImagesRange.min || partialImages > partialImagesRange.max)) {
             setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
         }
-        if (isActive && (n[0] < upstreamProfile.generateCount.min || n[0] > upstreamProfile.generateCount.max)) {
-            setN([clampIntegerToRange(n[0], upstreamProfile.generateCount)]);
+        if (isActive && (n[0] < generationCountRange.min || n[0] > generationCountRange.max)) {
+            setN([clampIntegerToRange(n[0], generationCountRange)]);
         }
         if (isActive && background === 'transparent' && !upstreamProfile.gptImage2.allowTransparentBackground) {
             setBackground('auto');
@@ -493,12 +534,12 @@ export function GenerationForm({
         background,
         isActive,
         n,
+        generationCountRange,
         partialImages,
         partialImagesRange,
         setBackground,
         setN,
         setPartialImages,
-        upstreamProfile.generateCount,
         upstreamProfile.gptImage2.allowTransparentBackground
     ]);
 
@@ -516,6 +557,12 @@ export function GenerationForm({
     }, [isActive, isGptImage2, setSize, size]);
 
     const handleSubmit = () => {
+        if (isBatchMode && batchPromptOverLimitIndex !== null) {
+            return;
+        }
+        if (!isBatchMode && promptOverLimit) {
+            return;
+        }
         if (customSizeInvalid) {
             return;
         }
@@ -523,8 +570,8 @@ export function GenerationForm({
             setPartialImages(clampIntegerToRange(partialImages, partialImagesRange) as PartialImagesCount);
             return;
         }
-        if (n[0] < upstreamProfile.generateCount.min || n[0] > upstreamProfile.generateCount.max) {
-            setN([clampIntegerToRange(n[0], upstreamProfile.generateCount)]);
+        if (n[0] < generationCountRange.min || n[0] > generationCountRange.max) {
+            setN([clampIntegerToRange(n[0], generationCountRange)]);
             return;
         }
         if (background === 'transparent' && !upstreamProfile.gptImage2.allowTransparentBackground) {
@@ -609,12 +656,14 @@ export function GenerationForm({
                                         placeholder={t('form.promptPlaceholder')}
                                         value={prompt}
                                         onChange={(e) => setPrompt(e.target.value)}
+                                        maxLength={MAX_PROMPT_LENGTH}
                                         required
                                         disabled={isLoading}
                                         className='bg-muted/45 min-h-[104px] rounded-md px-4 py-3 pb-8 leading-6 shadow-inner lg:min-h-[92px]'
                                     />
                                     <span className='text-muted-foreground ui-stat pointer-events-none absolute bottom-3 left-4 text-xs'>
-                                        {prompt.trim().length} / 1000
+                                        {prompt.length.toLocaleString(locale)} /{' '}
+                                        {MAX_PROMPT_LENGTH.toLocaleString(locale)}
                                     </span>
                                 </div>
                             </>
@@ -674,10 +723,14 @@ export function GenerationForm({
                                     name='batchPrompts'
                                     value={batchPromptText}
                                     onChange={(event) => setBatchPromptText(event.target.value)}
+                                    aria-describedby='batch-prompt-length-hint'
                                     disabled={isLoading}
                                     className='bg-muted/45 min-h-[132px] rounded-md px-3 py-2 leading-6 shadow-inner'
                                     placeholder={t('batch.promptPlaceholder')}
                                 />
+                                <p id='batch-prompt-length-hint' className='text-muted-foreground text-xs'>
+                                    {t('batch.promptLengthHint', { limit: MAX_PROMPT_LENGTH })}
+                                </p>
                                 {hasFailedBatchPrompts && (
                                     <div className='border-destructive/25 bg-destructive/5 text-muted-foreground flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs leading-5'>
                                         <span>
@@ -764,7 +817,7 @@ export function GenerationForm({
                                             max={usesPositiveIntegerCustomSize ? undefined : 3840}
                                             step={usesPositiveIntegerCustomSize ? 1 : 16}
                                             value={customWidth}
-                                            onChange={(e) => setCustomWidth(parseInt(e.target.value, 10) || 0)}
+                                            onChange={(e) => setCustomWidth(readImageSizeNumberInput(e.target.value))}
                                             disabled={isLoading}
                                         />
                                     </div>
@@ -782,17 +835,26 @@ export function GenerationForm({
                                             max={usesPositiveIntegerCustomSize ? undefined : 3840}
                                             step={usesPositiveIntegerCustomSize ? 1 : 16}
                                             value={customHeight}
-                                            onChange={(e) => setCustomHeight(parseInt(e.target.value, 10) || 0)}
+                                            onChange={(e) => setCustomHeight(readImageSizeNumberInput(e.target.value))}
                                             disabled={isLoading}
                                         />
                                     </div>
                                 </div>
                                 <p className='text-muted-foreground ui-stat text-xs'>
-                                    {t(usesPositiveIntegerCustomSize ? 'form.pixelsMeta' : 'form.pixelsMetaOfMaximum', {
-                                        pixels: customPixels.toLocaleString(locale),
-                                        percent: ((customPixels / 8_294_400) * 100).toFixed(1),
-                                        ratio: customRatio
-                                    })}
+                                    {customPixelCount
+                                        ? t(
+                                              usesPositiveIntegerCustomSize
+                                                  ? 'form.pixelsMeta'
+                                                  : 'form.pixelsMetaOfMaximum',
+                                              {
+                                                  pixels: customPixelCount,
+                                                  percent: (((customWidth * customHeight) / 8_294_400) * 100).toFixed(
+                                                      1
+                                                  ),
+                                                  ratio: customRatio
+                                              }
+                                          )
+                                        : t('form.pixelsUnavailable')}
                                 </p>
                                 {customSizeError && <p className='text-destructive text-xs'>{customSizeError}</p>}
                                 <p className='text-muted-foreground text-xs'>{t('form.customConstraints')}</p>

@@ -71,9 +71,11 @@ export function buildGenerationActivityItems(options: GenerationActivityOptions)
     }
 
     if (options.errorMessage) {
+        const failedLabel =
+            options.mode === 'edit' ? options.t('history.activityEditFailed') : options.t('history.activityFailed');
         items.push({
             id: 'failed',
-            label: options.t('history.activityFailed'),
+            label: failedLabel,
             detail: buildFailureActivityDetail(options.errorMessage, options.t),
             tone: 'warning'
         });
@@ -137,10 +139,6 @@ export function countCompletedBatchResults(results: GenerationBatchResult[]): nu
 export function buildFailureActivityDetail(message: string, t: Translate): string {
     const trimmedMessage = message.trim();
     const effectiveMessage = trimmedMessage || t('error.unexpected');
-    if (effectiveMessage.includes('建议：') || effectiveMessage.includes('Recommendation:')) {
-        return effectiveMessage;
-    }
-
     return t('history.activityFailedDetail', { message: effectiveMessage });
 }
 

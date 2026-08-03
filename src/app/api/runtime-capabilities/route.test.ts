@@ -584,6 +584,37 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.deepEqual(enabled.responsesImageBackend.missingEnv, []);
     });
 
+    it('disables Responses when provider image-count constraints have no valid overlap', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        process.env.OPENAI_CHANNEL_1_ID = 'fixed-two';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://custom.example.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'configured';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed_two_provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { generate_count: { min: 2, max: 2 } }
+        });
+        process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+        process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as {
+            responsesImageBackend: {
+                enabled: boolean;
+                featureEnabled: boolean;
+                incompatibleConstraints?: string[];
+            };
+        };
+
+        assert.equal(body.responsesImageBackend.featureEnabled, true);
+        assert.equal(body.responsesImageBackend.enabled, false);
+        assert.deepEqual(body.responsesImageBackend.incompatibleConstraints, ['generate_images']);
+    });
+
     it('exposes sanitized channel request modes for routing diagnostics', async () => {
         process.env.OPENAI_ROUTING_STRATEGY = 'round_robin';
         process.env.OPENAI_CHANNEL_1_ID = 'images';

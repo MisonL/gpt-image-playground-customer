@@ -14,7 +14,8 @@ const messages: Record<string, string> = {
     'error.unexpected': '发生未知错误。',
     'history.activityEditingDetail': '正在根据参考图生成新画面，完成后会进入最近生成。',
     'history.activityFailed': '生成失败',
-    'history.activityFailedDetail': '{message} 建议检查 API 设置后重试，或切换可用渠道。',
+    'history.activityEditFailed': '编辑失败',
+    'history.activityFailedDetail': '{message}',
     'history.activityBatchProgress': '批量进度',
     'history.activityBatchProgressDetail': '已完成 {completed}/{total} 条任务。',
     'history.activityBatchProgressWithFailures': '已完成 {completed}/{total} 条任务，失败 {failed} 条。',
@@ -52,7 +53,8 @@ describe('buildGenerationActivityItems', () => {
         assert.match(items[0].detail, /参考图生成新画面/);
         assert.match(items[1].detail, /2 张过程预览/);
         assert.match(items[2].detail, /上游服务不可用/);
-        assert.match(items[2].detail, /建议检查 API 设置后重试/);
+        assert.equal(items[2].label, '编辑失败');
+        assert.doesNotMatch(items[2].detail, /建议检查 API 设置后重试/);
     });
 
     it('reports saved completion only after loading ends with a completed generation count', () => {
@@ -123,7 +125,7 @@ describe('buildGenerationActivityItems', () => {
         assert.equal(items[0].tone, 'warning');
     });
 
-    it('keeps existing API advice instead of appending a second retry suggestion', () => {
+    it('preserves upstream advice without appending a generic recommendation', () => {
         const detail = buildFailureActivityDetail('API 请求失败。建议：稍后重试。', t);
 
         assert.equal(detail, 'API 请求失败。建议：稍后重试。');

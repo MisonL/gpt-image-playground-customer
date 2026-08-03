@@ -1,6 +1,11 @@
 import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_ADMIN_CONTROL } from '@/lib/channel-request-mode';
 import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
-import { summarizeImageUpstreamProfile } from '@/lib/image-upstream-profile';
+import {
+    getImageBackendCompatibility,
+    getImageCountRangeCompatibilityForBackend,
+    getPartialImagesRangeCompatibilityForBackend,
+    summarizeImageUpstreamProfile
+} from '@/lib/image-upstream-profile';
 import {
     readImageGenerationBackend,
     readImageStreamMode,
@@ -24,7 +29,7 @@ export async function GET() {
         const requestModeHealthSummary = serverChannelState.router?.getRequestModeHealthSummary();
         const maxStreamsPerCredential = readPositiveIntegerEnv(process.env, 'OPENAI_MAX_STREAMS_PER_CREDENTIAL', 1);
         const channelQueueSummary = serverChannelState.channelCapacityQueue.summary();
-        const responsesImageBackendEnabled = readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND');
+        const responsesImageBackendFeatureEnabled = readBooleanEnv(process.env, 'ENABLE_RESPONSES_IMAGE_BACKEND');
         const responsesImageBackendHasDefaultModel = Boolean(process.env.OPENAI_RESPONSES_API_MODEL?.trim());
         const responsesImageBackendMissingEnv = readResponsesImageBackendMissingEnv(process.env);
         const recommendedStreamingConcurrency = computeStreamingBatchRecommendation({
@@ -35,6 +40,11 @@ export async function GET() {
         const upstreamProfile = summarizeImageUpstreamProfile({
             serverProfiles: summary.channels.map((channel) => channel.effectiveProfile)
         });
+        const responsesImageBackendIncompatibleConstraints = readResponsesImageBackendIncompatibleConstraints(
+            upstreamProfile.activeConstraints
+        );
+        const responsesImageBackendEnabled =
+            responsesImageBackendFeatureEnabled && responsesImageBackendIncompatibleConstraints.length === 0;
         const providerManifests = summary.channels
             .filter((channel) => channel.providerManifest)
             .map((channel) => ({
@@ -121,16 +131,34 @@ export async function GET() {
             webuiImageCleanup: await getWebuiImageCleanupSummary(process.env),
             responsesImageBackend: {
                 enabled: responsesImageBackendEnabled,
+                featureEnabled: responsesImageBackendFeatureEnabled,
                 mode: 'experimental',
                 requiredEnv: [...RESPONSES_IMAGE_BACKEND_REQUIRED_ENV],
                 optionalEnv: [...RESPONSES_IMAGE_BACKEND_OPTIONAL_ENV],
                 hasDefaultModel: responsesImageBackendHasDefaultModel,
-                missingEnv: responsesImageBackendMissingEnv
+                missingEnv: responsesImageBackendMissingEnv,
+                ...(responsesImageBackendIncompatibleConstraints.length > 0
+                    ? { incompatibleConstraints: responsesImageBackendIncompatibleConstraints }
+                    : {})
             }
         });
     } catch (error) {
         return NextResponse.json({ error: error instanceof Error ? error.message : '配置错误' }, { status: 500 });
     }
+}
+
+function readResponsesImageBackendIncompatibleConstraints(profile: Parameters<typeof getImageBackendCompatibility>[0]) {
+    const incompatible: string[] = [];
+    if (!getImageCountRangeCompatibilityForBackend(profile, 'generate', 'responses-image-generation').compatible) {
+        incompatible.push('generate_images');
+    }
+    if (!getImageCountRangeCompatibilityForBackend(profile, 'edit', 'responses-image-generation').compatible) {
+        incompatible.push('edit_images');
+    }
+    if (!getPartialImagesRangeCompatibilityForBackend(profile, 'responses-image-generation').compatible) {
+        incompatible.push('partial_images');
+    }
+    return incompatible;
 }
 
 function readResponsesImageBackendMissingEnv(env: Record<string, string | undefined>): string[] {

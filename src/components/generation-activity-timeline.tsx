@@ -1,7 +1,7 @@
 'use client';
 
 import { selectAnnouncedGenerationActivity, type GenerationActivityItem } from '@/lib/generation-activity';
-import type { HistoryMetadata } from '@/lib/history-metadata';
+import { getHistoryEntryId, type HistoryMetadata } from '@/lib/history-metadata';
 import { cn } from '@/lib/utils';
 import Image from 'next/image';
 
@@ -207,7 +207,7 @@ export function ActivityTimeline({
                     <GenerationActivityRows items={activityItems} t={t} compact />
                     {history.slice(0, 4).map((item, index) => (
                         <ActivityHistoryRow
-                            key={item.timestamp}
+                            key={getHistoryEntryId(item)}
                             item={item}
                             index={index}
                             hasLiveActivity={activityItems.length > 0}

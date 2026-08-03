@@ -1,3 +1,4 @@
+import { MAX_OPENAI_UPLOAD_BYTES } from './image-request-limits';
 import type { ImageProviderManifestSummary } from './image-upstream-provider-manifest';
 import type { ImageGenerationBackend } from './image-upstream-strategy';
 
@@ -16,6 +17,37 @@ export type ImageUpstreamProfileId = 'openai-compatible' | 'matsca';
 export type PartialImagesCount = 0 | 1 | 2 | 3 | 4;
 
 export type NumericRange = { min: number; max: number };
+
+export type ImageRequestOperation = 'generate' | 'edit';
+
+export type ImageBackendRangeCompatibility =
+    { compatible: true; range: NumericRange } | { compatible: false; error: ImageUpstreamRangeError };
+
+export type ImageBackendCompatibility = {
+    compatible: boolean;
+    imageCountRange?: NumericRange;
+    partialImagesRange?: NumericRange;
+    errors: ImageUpstreamRangeError[];
+};
+
+type ImageBackendSelection = ImageGenerationBackend | 'server-default';
+
+export const RESPONSES_IMAGE_COUNT_RANGE = { min: 1, max: 1 } as const;
+export const RESPONSES_PARTIAL_IMAGES_RANGE = { min: 1, max: 3 } as const;
+
+export class ImageUpstreamRangeError extends RangeError {
+    readonly rangeLabel: string;
+    readonly min: number;
+    readonly max: number;
+
+    constructor(rangeLabel: string, min: number, max: number) {
+        super(`${rangeLabel}范围没有可用交集（min=${min}, max=${max}）。`);
+        this.name = 'ImageUpstreamRangeError';
+        this.rangeLabel = rangeLabel;
+        this.min = min;
+        this.max = max;
+    }
+}
 
 export type ImageUpstreamProfile = {
     id: ImageUpstreamProfileId;
@@ -54,7 +86,7 @@ export const IMAGE_UPSTREAM_PROFILES: Record<ImageUpstreamProfileId, ImageUpstre
         partialImages: { min: 1, max: 3 },
         upload: {
             maxImages: 10,
-            maxSingleBytes: 25 * 1024 * 1024
+            maxSingleBytes: MAX_OPENAI_UPLOAD_BYTES
         },
         gptImage2: {
             allowTransparentBackground: false,
@@ -90,12 +122,88 @@ export function clampIntegerToRange(value: number, range: NumericRange): number 
     return Math.min(range.max, Math.max(range.min, value));
 }
 
+export function resolveImageBackendSelection(
+    imageBackend: ImageBackendSelection,
+    defaultBackend?: ImageGenerationBackend | null
+): ImageGenerationBackend | undefined {
+    return imageBackend === 'server-default' ? (defaultBackend ?? undefined) : imageBackend;
+}
+
+export function getImageCountRangeForBackend(
+    profile: Pick<ImageUpstreamProfile, 'generateCount' | 'editCount'>,
+    operation: ImageRequestOperation,
+    imageBackend: ImageBackendSelection,
+    defaultBackend?: ImageGenerationBackend | null
+): NumericRange {
+    const profileRange = normalizePositiveImageCountRange(
+        operation === 'generate' ? profile.generateCount : profile.editCount
+    );
+    const effectiveBackend = resolveImageBackendSelection(imageBackend, defaultBackend);
+    if (effectiveBackend !== 'responses-image-generation') return profileRange;
+    return intersectRanges([profileRange, RESPONSES_IMAGE_COUNT_RANGE], '图片数量');
+}
+
+export function getImageCountRangeCompatibilityForBackend(
+    profile: Pick<ImageUpstreamProfile, 'generateCount' | 'editCount'>,
+    operation: ImageRequestOperation,
+    imageBackend: ImageBackendSelection,
+    defaultBackend?: ImageGenerationBackend | null
+): ImageBackendRangeCompatibility {
+    try {
+        return {
+            compatible: true,
+            range: getImageCountRangeForBackend(profile, operation, imageBackend, defaultBackend)
+        };
+    } catch (error) {
+        if (error instanceof ImageUpstreamRangeError) return { compatible: false, error };
+        throw error;
+    }
+}
+
 export function getPartialImagesRangeForBackend(
     profile: Pick<ImageUpstreamProfile, 'partialImages'>,
-    imageBackend: ImageGenerationBackend | 'server-default'
+    imageBackend: ImageBackendSelection,
+    defaultBackend?: ImageGenerationBackend | null
 ): NumericRange {
-    if (imageBackend !== 'responses-image-generation') return profile.partialImages;
-    return intersectRanges([profile.partialImages, { min: 1, max: 3 }]);
+    const effectiveBackend = resolveImageBackendSelection(imageBackend, defaultBackend);
+    if (effectiveBackend !== 'responses-image-generation') return profile.partialImages;
+    return intersectRanges([profile.partialImages, RESPONSES_PARTIAL_IMAGES_RANGE], 'partial_images');
+}
+
+export function getPartialImagesRangeCompatibilityForBackend(
+    profile: Pick<ImageUpstreamProfile, 'partialImages'>,
+    imageBackend: ImageBackendSelection,
+    defaultBackend?: ImageGenerationBackend | null
+): ImageBackendRangeCompatibility {
+    try {
+        return {
+            compatible: true,
+            range: getPartialImagesRangeForBackend(profile, imageBackend, defaultBackend)
+        };
+    } catch (error) {
+        if (error instanceof ImageUpstreamRangeError) return { compatible: false, error };
+        throw error;
+    }
+}
+
+export function getImageBackendCompatibility(
+    profile: Pick<ImageUpstreamProfile, 'generateCount' | 'editCount' | 'partialImages'>,
+    operation: ImageRequestOperation,
+    imageBackend: ImageBackendSelection,
+    defaultBackend?: ImageGenerationBackend | null
+): ImageBackendCompatibility {
+    const imageCount = getImageCountRangeCompatibilityForBackend(profile, operation, imageBackend, defaultBackend);
+    const partialImages = getPartialImagesRangeCompatibilityForBackend(profile, imageBackend, defaultBackend);
+    const errors = [
+        ...(imageCount.compatible ? [] : [imageCount.error]),
+        ...(partialImages.compatible ? [] : [partialImages.error])
+    ];
+    return {
+        compatible: errors.length === 0,
+        ...(imageCount.compatible ? { imageCountRange: imageCount.range } : {}),
+        ...(partialImages.compatible ? { partialImagesRange: partialImages.range } : {}),
+        errors
+    };
 }
 
 export function normalizeImageUpstreamProfileId(value: string | undefined): ImageUpstreamProfileId | undefined {
@@ -168,9 +276,18 @@ export function combineImageUpstreamProfiles(profiles: ImageUpstreamProfile[]): 
     const maxTotalBytes = minDefined(profiles.map((profile) => profile.upload.maxTotalBytes));
     return {
         id,
-        generateCount: intersectRanges(profiles.map((profile) => profile.generateCount)),
-        editCount: intersectRanges(profiles.map((profile) => profile.editCount)),
-        partialImages: intersectRanges(profiles.map((profile) => profile.partialImages)),
+        generateCount: intersectRanges(
+            profiles.map((profile) => profile.generateCount),
+            '图片数量'
+        ),
+        editCount: intersectRanges(
+            profiles.map((profile) => profile.editCount),
+            '图片数量'
+        ),
+        partialImages: intersectRanges(
+            profiles.map((profile) => profile.partialImages),
+            'partial_images'
+        ),
         upload: {
             maxImages: Math.min(...profiles.map((profile) => profile.upload.maxImages)),
             maxSingleBytes: Math.min(...profiles.map((profile) => profile.upload.maxSingleBytes)),
@@ -185,11 +302,17 @@ export function combineImageUpstreamProfiles(profiles: ImageUpstreamProfile[]): 
     };
 }
 
-function intersectRanges(ranges: Array<{ min: number; max: number }>): { min: number; max: number } {
-    return {
-        min: Math.max(...ranges.map((range) => range.min)),
-        max: Math.min(...ranges.map((range) => range.max))
-    };
+function intersectRanges(ranges: Array<{ min: number; max: number }>, rangeLabel: string): NumericRange {
+    const min = Math.max(...ranges.map((range) => range.min));
+    const max = Math.min(...ranges.map((range) => range.max));
+    if (min > max) throw new ImageUpstreamRangeError(rangeLabel, min, max);
+    return { min, max };
+}
+
+function normalizePositiveImageCountRange(range: NumericRange): NumericRange {
+    const min = Math.max(1, range.min);
+    if (min > range.max) throw new ImageUpstreamRangeError('图片数量', min, range.max);
+    return { min, max: range.max };
 }
 
 function minDefined(values: Array<number | undefined>): number | undefined {

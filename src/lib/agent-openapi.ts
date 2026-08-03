@@ -47,6 +47,30 @@ function buildAgentOpenApiSecuritySchemes(schemes: readonly AgentAuthScheme[]) {
     return securitySchemes;
 }
 
+function buildImageBackendRangeSchema(
+    limits: Record<(typeof AGENT_IMAGE_BACKENDS)[number], { min: number; max: number }>
+) {
+    return {
+        type: 'object',
+        required: [...AGENT_IMAGE_BACKENDS],
+        properties: Object.fromEntries(
+            AGENT_IMAGE_BACKENDS.map((backend) => [
+                backend,
+                {
+                    type: 'object',
+                    required: ['min', 'max'],
+                    properties: {
+                        min: { type: 'integer', const: limits[backend].min },
+                        max: { type: 'integer', const: limits[backend].max }
+                    },
+                    additionalProperties: false
+                }
+            ])
+        ),
+        additionalProperties: false
+    };
+}
+
 export function buildAgentOpenApiDocument(env: Record<string, string | undefined>) {
     const capabilities = buildAgentCapabilities(env);
     const maxGenerateImageCount = capabilities.limits.generate_images.max;
@@ -602,6 +626,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'max_images',
                                 'generate_images',
                                 'edit_images',
+                                'generate_images_by_backend',
+                                'edit_images_by_backend',
                                 'upload_images',
                                 'max_upload_mb',
                                 'partial_images',
@@ -630,6 +656,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     },
                                     additionalProperties: false
                                 },
+                                generate_images_by_backend: buildImageBackendRangeSchema(
+                                    capabilities.limits.generate_images_by_backend
+                                ),
+                                edit_images_by_backend: buildImageBackendRangeSchema(
+                                    capabilities.limits.edit_images_by_backend
+                                ),
                                 upload_images: {
                                     type: 'object',
                                     required: ['max'],
@@ -913,8 +945,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         supported: { type: 'boolean', const: true },
                         enabled: { type: 'boolean' },
                         required_env: { type: 'array', items: { type: 'string' } },
-                        missing_env: { type: 'array', items: { type: 'string' } }
-                    }
+                        missing_env: { type: 'array', items: { type: 'string' } },
+                        incompatible_constraints: { type: 'array', items: { type: 'string' } }
+                    },
+                    additionalProperties: false
                 },
                 AppLogRetentionMetadata: {
                     type: 'object',
@@ -1448,6 +1482,18 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             },
                             then: {
                                 properties: {
+                                    n: {
+                                        type: 'integer',
+                                        minimum:
+                                            capabilities.limits.generate_images_by_backend['responses-image-generation']
+                                                .min,
+                                        maximum:
+                                            capabilities.limits.generate_images_by_backend['responses-image-generation']
+                                                .max,
+                                        default:
+                                            capabilities.limits.generate_images_by_backend['responses-image-generation']
+                                                .min
+                                    },
                                     partial_images: {
                                         type: 'integer',
                                         minimum:

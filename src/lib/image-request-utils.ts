@@ -1,3 +1,4 @@
+import { MAX_OPENAI_UPLOAD_BYTES, MAX_PROMPT_LENGTH } from './image-request-limits';
 import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from './image-upstream-profile';
 import { validateGptImage2Size } from './size-utils';
 import { promisify } from 'node:util';
@@ -6,8 +7,8 @@ import type OpenAI from 'openai';
 
 export const VALID_IMAGE_FILENAME_PATTERN = /^\d{13}(?:-[a-f0-9]{16})?-\d+\.(png|jpe?g|webp)$/i;
 export const MAX_IMAGE_COUNT = 10;
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-export const MAX_PROMPT_LENGTH = 32000;
+export const MAX_UPLOAD_BYTES = MAX_OPENAI_UPLOAD_BYTES;
+export { MAX_PROMPT_LENGTH } from './image-request-limits';
 
 const VALID_MODE_VALUES = ['generate', 'edit'] as const;
 const VALID_MODEL_VALUES = ['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2'] as const;
@@ -17,6 +18,7 @@ const VALID_EDIT_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
 const VALID_BACKGROUND_VALUES = ['transparent', 'opaque', 'auto'] as const;
 const VALID_MODERATION_VALUES = ['low', 'auto'] as const;
 const VALID_LEGACY_SIZE_VALUES = ['auto', '1024x1024', '1536x1024', '1024x1536'] as const;
+const VALID_UPLOAD_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 const IMAGE_UPLOAD_CONTROL_FIELDS = new Set(['image_backend', 'image_streaming_strategy']);
 const DEFAULT_IMAGE_PROFILE = IMAGE_UPSTREAM_PROFILES['openai-compatible'];
 const DEFAULT_OUTPUT_FORMAT = 'webp';
@@ -434,11 +436,11 @@ function validateUploadFile(
     if (file.size > maxBytes) {
         throw new RequestValidationError(`${fieldName} 超过 ${maxBytes / 1024 / 1024} MB 限制。`);
     }
-    if (!file.type.startsWith('image/')) {
-        throw new RequestValidationError(`${fieldName} 必须是图片文件。`);
-    }
     if (options.requirePng && file.type !== 'image/png') {
         throw new RequestValidationError(`${fieldName} 必须是 PNG 文件。`);
+    }
+    if (!VALID_UPLOAD_IMAGE_TYPES.includes(file.type as (typeof VALID_UPLOAD_IMAGE_TYPES)[number])) {
+        throw new RequestValidationError(`${fieldName} 必须是 PNG、JPEG 或 WebP 图片。`);
     }
 }
 

@@ -27,6 +27,13 @@ export function validateGptImage2Size(width: number, height: number): SizeValida
             reasonKey: 'sizeError.whole'
         };
     }
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
+        return {
+            valid: false,
+            reason: '宽度和高度超出可精确处理的整数范围。',
+            reasonKey: 'sizeError.safeInteger'
+        };
+    }
     if (width % GPT_IMAGE_2_EDGE_MULTIPLE !== 0 || height % GPT_IMAGE_2_EDGE_MULTIPLE !== 0) {
         return {
             valid: false,
@@ -88,7 +95,26 @@ export function validatePositiveIntegerImageSize(width: number, height: number):
             reasonKey: 'sizeError.whole'
         };
     }
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
+        return {
+            valid: false,
+            reason: '宽度和高度超出可精确处理的整数范围。',
+            reasonKey: 'sizeError.safeInteger'
+        };
+    }
     return { valid: true };
+}
+
+export function formatExactImagePixelCount(width: number, height: number, locale: string): string | null {
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+        return null;
+    }
+    return (BigInt(width) * BigInt(height)).toLocaleString(locale);
+}
+
+export function readImageSizeNumberInput(value: string): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export type SizePreset =

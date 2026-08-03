@@ -38,6 +38,10 @@ type WorkbenchStatusStripProps = {
     className?: string;
 };
 
+function getRuntimeFailureScopeLabel(scope: RuntimeLastFailure['scope'], t: ReturnType<typeof useI18n>['t']): string {
+    return scope === 'credential' ? t('app.failureScopeCredential') : t('app.failureScopeChannel');
+}
+
 export function WorkbenchStatusStrip({
     model,
     routeLabel,
@@ -146,7 +150,7 @@ export function WorkbenchStatusStrip({
                             <p className='text-muted-foreground'>
                                 {t('app.recentChannelFailure')}:{' '}
                                 {[
-                                    runtimeLastFailure.scope,
+                                    getRuntimeFailureScopeLabel(runtimeLastFailure.scope, t),
                                     runtimeLastFailure.status ? `HTTP ${runtimeLastFailure.status}` : undefined,
                                     runtimeLastFailure.code,
                                     runtimeLastFailure.requestMode,

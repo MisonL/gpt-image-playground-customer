@@ -39,6 +39,8 @@ import {
     persistOpenAiImages
 } from '@/lib/image-service';
 import {
+    clampIntegerToRange,
+    getImageBackendCompatibility,
     mergeUpstreamHeadersWithFixed,
     readImageUpstreamProfile,
     type PartialImagesCount
@@ -514,13 +516,22 @@ export async function POST(request: NextRequest) {
             requestLogContext
         );
 
+        assertResponsesImageBackendAllowed({ imageBackend, mode });
+        const backendCompatibility = getImageBackendCompatibility(upstreamProfile, mode, imageBackend);
+        if (!backendCompatibility.compatible) {
+            throw new RequestValidationError(backendCompatibility.errors.map((error) => error.message).join(' '), 422);
+        }
+        const partialImagesRange = backendCompatibility.partialImagesRange;
+        if (!partialImagesRange) {
+            throw new RequestValidationError('当前图片后端没有可用的 partial_images 约束。', 422);
+        }
         const partialImagesCount = toPartialImagesCount(
             readCount(
                 formData,
                 'partial_images',
-                2,
-                upstreamProfile.partialImages.min,
-                upstreamProfile.partialImages.max
+                clampIntegerToRange(2, partialImagesRange),
+                partialImagesRange.min,
+                partialImagesRange.max
             )
         );
         const streamResolution = resolvePageStream({
@@ -535,7 +546,6 @@ export async function POST(request: NextRequest) {
             }),
             forceNonStream: channelSelection.forcedNonStream
         });
-        assertResponsesImageBackendAllowed({ imageBackend, mode });
         appLogger.info('图片上游兼容策略。', {
             ...requestLogContext,
             imageBackend,

@@ -17,7 +17,7 @@ describe('WorkbenchStatusStrip', () => {
             </I18nProvider>
         );
 
-        assert.match(html, /当前请求路径已就绪/);
+        assert.match(html, /本地路由已配置，可尝试请求/);
         assert.match(html, /gpt-image-2/);
         assert.match(html, /images-sse/);
         assert.match(html, /自动/);
@@ -107,8 +107,8 @@ describe('WorkbenchStatusStrip', () => {
         assert.match(checkingHtml, /正在读取运行时状态/);
         assert.match(checkingHtml, /animate-spin/);
         assert.match(disconnectedHtml, /未取得运行时状态/);
-        assert.match(routeLimitedHtml, /当前路由受限/);
-        assert.match(customOverrideHtml, /使用自定义上游/);
+        assert.match(routeLimitedHtml, /当前配置无法使用所选路径/);
+        assert.match(customOverrideHtml, /使用本次自定义 API 凭据/);
     });
 
     it('shows request mode health details and suggested channel env in the status strip', () => {
@@ -148,16 +148,18 @@ describe('WorkbenchStatusStrip', () => {
             </I18nProvider>
         );
 
-        assert.match(html, /请求方式/);
+        assert.match(html, /请求方式状态/);
         assert.match(html, /images-non-stream/);
-        assert.match(html, /可用于请求/);
+        assert.match(html, /未处于冷却，可尝试请求/);
         assert.match(html, /responses-sse/);
-        assert.match(html, /冷却中或待探测/);
+        assert.match(html, /冷却中或等待恢复探测/);
         assert.match(html, /最近渠道失败/);
+        assert.match(html, /渠道/);
+        assert.doesNotMatch(html, /channel\s*\/\s*HTTP 403/);
         assert.match(html, /HTTP 403/);
         assert.match(html, /responses-sse/);
         assert.match(html, /OPENAI_CHANNEL_N_REQUEST_MODES=images-non-stream/);
-        assert.match(html, /建议的环境变量/);
+        assert.match(html, /请求方式配置参考/);
     });
 
     it('keeps request mode details constrained on narrow screens', () => {

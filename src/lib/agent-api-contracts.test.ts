@@ -125,6 +125,24 @@ describe('validateAgentGenerateRequest', () => {
         );
     });
 
+    it('rejects Responses backend output counts outside the backend contract', () => {
+        assert.throws(
+            () =>
+                validateAgentGenerateRequest({
+                    prompt: 'draw more than one responses image',
+                    image_backend: 'responses-image-generation',
+                    n: 2
+                }),
+            (error) => {
+                assert.ok(error instanceof RequestValidationError);
+                assert.equal(error.status, 422);
+                const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                assert.match(details.fields.n, /1 到 1/);
+                return true;
+            }
+        );
+    });
+
     it('uses deployed upstream profile limits when validating Agent partial image counts', () => {
         const originalEnv = { ...process.env };
         try {
@@ -410,6 +428,14 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(capabilities.limits.partial_images_by_backend, {
             'images-api': { min: 1, max: 3 },
             'responses-image-generation': { min: 1, max: 3 }
+        });
+        assert.deepEqual(capabilities.limits.generate_images_by_backend, {
+            'images-api': { min: 1, max: 10 },
+            'responses-image-generation': { min: 1, max: 1 }
+        });
+        assert.deepEqual(capabilities.limits.edit_images_by_backend, {
+            'images-api': { min: 1, max: 10 },
+            'responses-image-generation': { min: 1, max: 1 }
         });
         assert.equal(capabilities.limits.max_images, 10);
         assert.deepEqual(capabilities.limits.generate_images, { min: 1, max: 10 });
@@ -783,6 +809,14 @@ describe('buildAgentCapabilities', () => {
             'images-api': { min: 0, max: 4 },
             'responses-image-generation': { min: 1, max: 3 }
         });
+        assert.deepEqual(capabilities.limits.generate_images_by_backend, {
+            'images-api': { min: 1, max: 4 },
+            'responses-image-generation': { min: 1, max: 1 }
+        });
+        assert.deepEqual(capabilities.limits.edit_images_by_backend, {
+            'images-api': { min: 1, max: 4 },
+            'responses-image-generation': { min: 1, max: 1 }
+        });
         assert.equal(capabilities.limits.upstream_profile, 'matsca');
         assert.equal(capabilities.limits.upstream_profile_mixed, false);
         assert.equal(capabilities.model_limits['gpt-image-2'].size_policy, 'positive-integer');
@@ -816,6 +850,83 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.limits.upload_images.max, 3);
         assert.equal(capabilities.limits.max_upload_mb, 10);
         assert.deepEqual(capabilities.limits.partial_images, { min: 1, max: 2 });
+    });
+
+    it('rejects Agent n=0 when a provider manifest tries to lower the count bound to zero', () => {
+        const originalEnv = { ...process.env };
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'zero-count';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://custom.example.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'configured';
+            process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'zero_count_provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { generate_count: { min: 0, max: 2 } }
+            });
+
+            assert.throws(
+                () => validateAgentGenerateRequest({ prompt: 'reject zero output count', n: 0 }),
+                (error) => {
+                    assert.ok(error instanceof RequestValidationError);
+                    assert.equal(error.status, 500);
+                    assert.match(error.message, /constraints\.generate_count\.min 必须是正整数/);
+                    return true;
+                }
+            );
+        } finally {
+            restoreEnv(originalEnv);
+        }
+    });
+
+    it('disables Responses when its provider count range has no valid intersection', () => {
+        const capabilities = buildAgentCapabilities({
+            ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+            OPENAI_RESPONSES_API_MODEL: 'gpt-4.1',
+            OPENAI_CHANNEL_1_ID: 'fixed-two',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://custom.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'fixed_two_provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { generate_count: { min: 2, max: 2 } }
+            })
+        });
+
+        assert.deepEqual(capabilities.supported.enabled_image_backends, ['images-api']);
+        assert.equal(capabilities.supported.image_backend_requirements['responses-image-generation'].enabled, false);
+        assert.deepEqual(
+            capabilities.supported.image_backend_requirements['responses-image-generation'].incompatible_constraints,
+            ['generate_images']
+        );
+    });
+
+    it('keeps Images-only capabilities valid when Responses is disabled', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_CHANNEL_1_ID: 'fixed-two',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://custom.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'fixed_two_provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: {
+                    generate_count: { min: 2, max: 2 },
+                    partial_images: { min: 0, max: 0 }
+                }
+            })
+        });
+
+        assert.deepEqual(capabilities.supported.enabled_image_backends, ['images-api']);
+        assert.deepEqual(capabilities.limits.generate_images_by_backend, {
+            'images-api': { min: 2, max: 2 },
+            'responses-image-generation': { min: 1, max: 1 }
+        });
+        assert.deepEqual(capabilities.limits.partial_images_by_backend, {
+            'images-api': { min: 0, max: 0 },
+            'responses-image-generation': { min: 1, max: 3 }
+        });
     });
 
     it('reports mixed Agent limits when only one OpenAI-compatible channel has provider constraints', () => {
@@ -1099,6 +1210,12 @@ describe('buildAgentCapabilities', () => {
             maximum: 3,
             default: 2
         });
+        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.n, {
+            type: 'integer',
+            minimum: 1,
+            maximum: 1,
+            default: 1
+        });
         assert.deepEqual(generateProperties.background.enum, ['transparent', 'opaque', 'auto']);
         assert.deepEqual(document.components.schemas.GenerateRequest.allOf[1], {
             if: {
@@ -1162,6 +1279,16 @@ describe('buildAgentCapabilities', () => {
             capabilityProperties.limits.properties.partial_images_by_backend.properties['responses-image-generation']
                 .properties.max.const,
             3
+        );
+        assert.equal(
+            capabilityProperties.limits.properties.generate_images_by_backend.properties['responses-image-generation']
+                .properties.max.const,
+            1
+        );
+        assert.equal(
+            capabilityProperties.limits.properties.edit_images_by_backend.properties['responses-image-generation']
+                .properties.max.const,
+            1
         );
         assert.equal(
             capabilityProperties.page_request_diagnostics.$ref,
@@ -1379,6 +1506,12 @@ describe('buildAgentCapabilities', () => {
             minimum: 1,
             maximum: 3,
             default: 2
+        });
+        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.n, {
+            type: 'integer',
+            minimum: 1,
+            maximum: 1,
+            default: 1
         });
         assert.equal(document.components.schemas.EditRequest.properties.partial_images.minimum, 0);
         assert.equal(document.components.schemas.EditRequest.properties.partial_images.maximum, 4);

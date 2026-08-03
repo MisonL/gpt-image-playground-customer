@@ -19,9 +19,13 @@ import {
     buildUserFacingApiErrorMessage,
     type ApiErrorNotice
 } from '@/lib/api-error-guidance';
-import { formatBatchPromptHistory, readBatchPromptLines } from '@/lib/batch-prompts';
+import { findBatchPromptOverLimitIndex, formatBatchPromptHistory, readBatchPromptLines } from '@/lib/batch-prompts';
 import { db, type ImageRecord } from '@/lib/db';
-import { hasReachedEditSourceImageLimit } from '@/lib/edit-source-limits';
+import {
+    formatEditSourceValidationFailure,
+    hasReachedEditSourceImageLimit,
+    validateEditSourceInput
+} from '@/lib/edit-source-limits';
 import {
     advanceGenerationBatchProgress,
     buildGenerationActivityItems,
@@ -60,6 +64,8 @@ import {
     buildCompletedHistoryEntry,
     buildFailedHistoryEntry,
     buildHistoryGenerationFormData,
+    isSameHistoryEntry,
+    normalizeHistoryEntries,
     readHistoryImageCountSelection,
     readHistorySizeSelection,
     resolveHistoryImageClientRequestId,
@@ -70,6 +76,7 @@ import {
     updateHistoryResultFeedback
 } from '@/lib/history-metadata';
 import { useI18n } from '@/lib/i18n';
+import { MAX_PROMPT_LENGTH } from '@/lib/image-request-limits';
 import {
     IMAGE_UPSTREAM_FORM_SERVER_DEFAULT,
     appendImageUpstreamOverrideFields,
@@ -81,6 +88,8 @@ import {
     type ImageUpstreamFormBackend
 } from '@/lib/image-upstream-form';
 import {
+    clampIntegerToRange,
+    getImageBackendCompatibility,
     IMAGE_UPSTREAM_PROFILES,
     summarizeImageUpstreamProfile,
     type ImageUpstreamProfile,
@@ -91,6 +100,7 @@ import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstre
 import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
 import { resolveMobilePrimaryDisabledReason } from '@/lib/mobile-primary-action-state';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
+import { resolveResultActionState } from '@/lib/result-action-state';
 import { resolveRuntimeHealthStatus, type RuntimeHealthStatus } from '@/lib/runtime-health-status';
 import { sha256Hex } from '@/lib/sha256';
 import { createImageShareFromBlob } from '@/lib/share-client';
@@ -236,7 +246,7 @@ function readStoredHistory(): HistoryMetadata[] {
     if (!storedHistory) return [];
     try {
         const parsedHistory: unknown = JSON.parse(storedHistory);
-        if (Array.isArray(parsedHistory)) return parsedHistory as HistoryMetadata[];
+        if (Array.isArray(parsedHistory)) return normalizeHistoryEntries(parsedHistory as HistoryMetadata[]);
         console.warn('localStorage 中发现无效历史记录数据。');
         window.localStorage.removeItem('openaiImageHistory');
     } catch (e) {
@@ -698,6 +708,7 @@ export default function HomePage() {
             : null;
     const retentionControlsEnabled = cleanupEnabled && permanentlySavedFilenames !== null;
     const defaultStreamingStrategy = runtimeCapabilities?.streaming?.defaultStrategy ?? 'auto';
+    const defaultImageBackend = runtimeCapabilities?.streaming?.defaultBackend;
     const activeUpstreamProfileSummary = summarizeImageUpstreamProfile({
         requestApiBaseUrl: apiSettings.baseUrl,
         serverProfileIds: runtimeCapabilities?.upstreamProfile
@@ -728,6 +739,14 @@ export default function HomePage() {
     });
     const streamingBatchEnabled = streamingBatchCapacity.enabled;
     const isPromptBatchMode = mode === 'generate' && workbenchMode === 'batch';
+    const activeBatchPrompts = React.useMemo(
+        () => (isPromptBatchMode ? readBatchPromptLines(genBatchPromptText) : []),
+        [genBatchPromptText, isPromptBatchMode]
+    );
+    const activeBatchPromptOverLimitIndex = React.useMemo(
+        () => findBatchPromptOverLimitIndex(activeBatchPrompts, MAX_PROMPT_LENGTH),
+        [activeBatchPrompts]
+    );
     const currentPrompt =
         mode === 'generate' && workbenchMode === 'batch'
             ? genBatchPromptText
@@ -736,6 +755,20 @@ export default function HomePage() {
               : editPrompt;
     const hasEditSourceImage = editImageFiles.length > 0;
     const maxEditSourceImages = activeUpstreamProfile.upload.maxImages;
+    const editSourceValidationFailure = React.useMemo(
+        () =>
+            validateEditSourceInput({
+                imageFiles: editImageFiles,
+                maskFile: editGeneratedMaskFile,
+                upstreamProfile: activeUpstreamProfile,
+                imageBackend: editImageBackend,
+                defaultImageBackend
+            }),
+        [activeUpstreamProfile, defaultImageBackend, editGeneratedMaskFile, editImageBackend, editImageFiles]
+    );
+    const editSourceValidationMessage = editSourceValidationFailure
+        ? formatEditSourceValidationFailure(editSourceValidationFailure, t)
+        : '';
     const usesPositiveIntegerCustomSize = activeUpstreamProfile.gptImage2.sizePolicy === 'positive-integer';
     const currentGenerateSizeValidation =
         genSize === 'custom'
@@ -770,7 +803,7 @@ export default function HomePage() {
     });
     const activeRequestedImageCount =
         mode === 'generate' && workbenchMode === 'batch'
-            ? readBatchPromptLines(genBatchPromptText).length
+            ? activeBatchPrompts.length
             : mode === 'generate'
               ? genN[0]
               : editN[0];
@@ -824,46 +857,54 @@ export default function HomePage() {
         let cancelled = false;
         queueMicrotask(() => {
             if (cancelled) return;
-            if (
-                partialImages < activeUpstreamProfile.partialImages.min ||
-                partialImages > activeUpstreamProfile.partialImages.max
-            ) {
-                setPartialImages(
-                    Math.min(
-                        activeUpstreamProfile.partialImages.max,
-                        Math.max(activeUpstreamProfile.partialImages.min, partialImages)
-                    ) as PartialImagesCount
-                );
+            const generationCompatibility = getImageBackendCompatibility(
+                activeUpstreamProfile,
+                'generate',
+                genImageBackend,
+                defaultImageBackend
+            );
+            const editCompatibility = getImageBackendCompatibility(
+                activeUpstreamProfile,
+                'edit',
+                editImageBackend,
+                defaultImageBackend
+            );
+            const generationCountRange = generationCompatibility.imageCountRange;
+            const editCountRange = editCompatibility.imageCountRange;
+            const activeCompatibility = usesEditControls ? editCompatibility : generationCompatibility;
+            const activePartialImagesRange = activeCompatibility.partialImagesRange;
+            if (!generationCountRange || !editCountRange || !activePartialImagesRange) return;
+            if (partialImages < activePartialImagesRange.min || partialImages > activePartialImagesRange.max) {
+                setPartialImages(clampIntegerToRange(partialImages, activePartialImagesRange) as PartialImagesCount);
             }
             if (genBackground === 'transparent' && !activeUpstreamProfile.gptImage2.allowTransparentBackground) {
                 setGenBackground('auto');
             }
             setGenN((current) =>
-                current[0] < activeUpstreamProfile.generateCount.min ||
-                current[0] > activeUpstreamProfile.generateCount.max
-                    ? [
-                          Math.min(
-                              activeUpstreamProfile.generateCount.max,
-                              Math.max(activeUpstreamProfile.generateCount.min, current[0])
-                          )
-                      ]
+                current[0] < generationCountRange.min || current[0] > generationCountRange.max
+                    ? [clampIntegerToRange(current[0], generationCountRange)]
                     : current
             );
             setEditN((current) =>
-                current[0] < activeUpstreamProfile.editCount.min || current[0] > activeUpstreamProfile.editCount.max
-                    ? [
-                          Math.min(
-                              activeUpstreamProfile.editCount.max,
-                              Math.max(activeUpstreamProfile.editCount.min, current[0])
-                          )
-                      ]
+                current[0] < editCountRange.min || current[0] > editCountRange.max
+                    ? [clampIntegerToRange(current[0], editCountRange)]
                     : current
             );
         });
         return () => {
             cancelled = true;
         };
-    }, [activeUpstreamProfile, editN, genBackground, genN, partialImages]);
+    }, [
+        activeUpstreamProfile,
+        defaultImageBackend,
+        editImageBackend,
+        editN,
+        genBackground,
+        genImageBackend,
+        genN,
+        partialImages,
+        usesEditControls
+    ]);
     const activeLogClientRequestIds = React.useMemo(() => {
         if (!latestImageBatch || latestImageBatch.length === 0) return [];
         if (typeof imageOutputView === 'number') {
@@ -902,14 +943,26 @@ export default function HomePage() {
         ]
     );
     const announcedGenerationActivity = selectAnnouncedGenerationActivity(generationActivityItems);
+    const mobileBackendCompatibility = getImageBackendCompatibility(
+        activeUpstreamProfile,
+        mode,
+        mode === 'generate' ? genImageBackend : editImageBackend,
+        defaultImageBackend
+    );
+    const mobileBackendCompatibilityMessage = mobileBackendCompatibility.compatible
+        ? ''
+        : mobileBackendCompatibility.errors.map((error) => error.message).join(' ');
     const mobilePrimaryDisabledReason = resolveMobilePrimaryDisabledReason({
         isLoading,
         isSendingToEdit,
         mode,
         isBatchMode: workbenchMode === 'batch',
         prompt: currentPrompt,
-        batchPromptCount: workbenchMode === 'batch' ? readBatchPromptLines(genBatchPromptText).length : 0,
+        batchPromptCount: activeBatchPrompts.length,
+        batchPromptOverLimitIndex: activeBatchPromptOverLimitIndex,
         hasEditSourceImage,
+        editSourceValidationMessage,
+        backendCompatibilityMessage: mobileBackendCompatibilityMessage,
         hasUnsavedMask: editDrawnPoints.length > 0 && !editGeneratedMaskFile && !editIsMaskSaved,
         imageBackend: mode === 'generate' ? genImageBackend : editImageBackend,
         responsesModel: mode === 'generate' ? genResponsesModel : editResponsesModel,
@@ -919,9 +972,17 @@ export default function HomePage() {
         t
     });
     const mobilePrimaryDisabled = isLoading || isSendingToEdit || Boolean(mobilePrimaryDisabledReason);
-    const currentResultPrompt = activeResultSource?.prompt.trim() || currentPrompt.trim();
-    const canCreateResultVariant = !isLoading && Boolean(latestImageBatch) && Boolean(currentResultPrompt);
-    const canReuseResultPrompt = Boolean(currentResultPrompt);
+    const { canCreateVariant: canCreateResultVariant, canReusePrompt: canReuseResultPrompt } = resolveResultActionState(
+        {
+            isBusy: isLoading || isSendingToEdit,
+            hasResultImages: Boolean(latestImageBatch?.length),
+            currentMode: mode,
+            currentPrompt,
+            activeResultSource: activeResultSource
+                ? { mode: activeResultSource.mode, prompt: activeResultSource.prompt }
+                : null
+        }
+    );
     const canPausePromptBatch = isLoading && isPromptBatchMode && Boolean(batchProgress);
 
     const handleBatchPromptTextChange = React.useCallback((nextText: React.SetStateAction<string>) => {
@@ -1541,6 +1602,18 @@ export default function HomePage() {
                     if (file) {
                         event.preventDefault();
 
+                        const validationFailure = validateEditSourceInput({
+                            imageFiles: [...editImageFiles, file],
+                            maskFile: editGeneratedMaskFile,
+                            upstreamProfile: activeUpstreamProfile,
+                            imageBackend: editImageBackend,
+                            defaultImageBackend
+                        });
+                        if (validationFailure) {
+                            alert(formatEditSourceValidationFailure(validationFailure, t));
+                            return;
+                        }
+
                         const previewUrl = URL.createObjectURL(file);
 
                         setEditImageFiles((prevFiles) => [...prevFiles, file]);
@@ -1557,7 +1630,17 @@ export default function HomePage() {
         return () => {
             window.removeEventListener('paste', handlePaste);
         };
-    }, [mode, editImageFiles.length, maxEditSourceImages, t, updateEditSourceImagePreviewUrls]);
+    }, [
+        activeUpstreamProfile,
+        defaultImageBackend,
+        editGeneratedMaskFile,
+        editImageBackend,
+        editImageFiles,
+        maxEditSourceImages,
+        mode,
+        t,
+        updateEditSourceImagePreviewUrls
+    ]);
 
     const handleSavePassword = async (password: string) => {
         if (!password.trim()) {
@@ -1920,7 +2003,7 @@ export default function HomePage() {
             };
             try {
                 result = await response.json();
-            } catch (error) {
+            } catch {
                 if (!response.ok) {
                     throw new ApiRequestError(getLocalizedImageRequestError(t, response.status), response.status);
                 }
@@ -2042,7 +2125,8 @@ export default function HomePage() {
             if (
                 shouldBlockExplicitResponsesRequest({
                     imageBackend: formData.image_backend,
-                    allowResponsesImageBackend: allowRuntimeResponsesImageBackend
+                    allowResponsesImageBackend: allowRuntimeResponsesImageBackend,
+                    defaultImageBackend: latestRuntimeCapabilities?.streaming?.defaultBackend
                 })
             ) {
                 throw new ApiRequestError(
@@ -2062,6 +2146,62 @@ export default function HomePage() {
                 })
             ) {
                 throw new ApiRequestError(t('upstream.responsesModelRequired'));
+            }
+            const runtimeUpstreamProfile = hasRequestApiOverride
+                ? summarizeImageUpstreamProfile({ requestApiBaseUrl: apiSettings.baseUrl }).activeConstraints
+                : latestRuntimeCapabilities?.upstreamProfile?.activeConstraints || activeUpstreamProfile;
+            const runtimeDefaultImageBackend = latestRuntimeCapabilities?.streaming?.defaultBackend;
+            const runtimeBackendCompatibility = getImageBackendCompatibility(
+                runtimeUpstreamProfile,
+                requestMode,
+                runtimeFormData.image_backend,
+                runtimeDefaultImageBackend
+            );
+            if (!runtimeBackendCompatibility.compatible) {
+                throw new ApiRequestError(runtimeBackendCompatibility.errors.map((error) => error.message).join(' '));
+            }
+            if (requestMode === 'edit') {
+                const editFormData = runtimeFormData as EditingFormData;
+                const validationFailure = validateEditSourceInput({
+                    imageFiles: editFormData.imageFiles,
+                    maskFile: editFormData.maskFile,
+                    upstreamProfile: runtimeUpstreamProfile,
+                    imageBackend: editFormData.image_backend,
+                    defaultImageBackend: runtimeDefaultImageBackend
+                });
+                if (validationFailure) {
+                    throw new ApiRequestError(formatEditSourceValidationFailure(validationFailure, t));
+                }
+            }
+            const runtimeCountRange = runtimeBackendCompatibility.imageCountRange;
+            if (!runtimeCountRange) {
+                throw new ApiRequestError('当前图片后端没有可用的图片数量约束。');
+            }
+            const runtimeImageCount = runtimeFormData.n;
+            if (runtimeImageCount < runtimeCountRange.min || runtimeImageCount > runtimeCountRange.max) {
+                throw new ApiRequestError(
+                    t('error.imageCountOutOfRange', {
+                        min: runtimeCountRange.min,
+                        max: runtimeCountRange.max
+                    })
+                );
+            }
+            if (requestStreamMode !== 'non_stream') {
+                const runtimePartialImagesRange = runtimeBackendCompatibility.partialImagesRange;
+                if (!runtimePartialImagesRange) {
+                    throw new ApiRequestError('当前图片后端没有可用的 partial_images 约束。');
+                }
+                if (
+                    requestPartialImages < runtimePartialImagesRange.min ||
+                    requestPartialImages > runtimePartialImagesRange.max
+                ) {
+                    throw new ApiRequestError(
+                        t('error.partialImagesOutOfRange', {
+                            min: runtimePartialImagesRange.min,
+                            max: runtimePartialImagesRange.max
+                        })
+                    );
+                }
             }
             const promptBatch =
                 requestMode === 'generate'
@@ -2328,6 +2468,11 @@ export default function HomePage() {
     }
 
     function handleMobilePrimaryAction() {
+        if (isLoading || isSendingToEdit) return;
+        if (mobilePrimaryDisabledReason) {
+            setError(createErrorNotice(mobilePrimaryDisabledReason));
+            return;
+        }
         if (mode === 'generate') {
             const batchPrompts = workbenchMode === 'batch' ? readBatchPromptLines(genBatchPromptText) : undefined;
             const formData: GenerationFormData = {
@@ -2489,6 +2634,7 @@ export default function HomePage() {
     );
 
     function handleCreateVariant() {
+        if (!canCreateResultVariant || isLoading || isSendingToEdit) return;
         if (activeResultSource) {
             const formData = buildHistoryGenerationFormData(
                 activeResultSource,
@@ -2502,6 +2648,7 @@ export default function HomePage() {
     }
 
     function handleReuseCurrentPrompt() {
+        if (!canReuseResultPrompt || isLoading || isSendingToEdit) return;
         if (activeResultSource) {
             const formData = buildHistoryGenerationFormData(
                 activeResultSource,
@@ -3091,20 +3238,20 @@ export default function HomePage() {
         (item: HistoryMetadata, value: ResultFeedbackValue) => {
             const updatedAt = Date.now();
             const currentFeedback =
-                history.find((historyItem) => historyItem.timestamp === item.timestamp)?.resultFeedback ??
+                history.find((historyItem) => isSameHistoryEntry(historyItem, item))?.resultFeedback ??
                 item.resultFeedback;
             const currentLocalNote = currentFeedback?.note;
 
             setHistory((current) =>
                 updateHistoryResultFeedback({
                     history: current,
-                    timestamp: item.timestamp,
+                    item,
                     value,
                     updatedAt
                 })
             );
             setActiveResultSource((current) =>
-                current?.timestamp === item.timestamp
+                current && isSameHistoryEntry(current, item)
                     ? {
                           ...current,
                           resultFeedback: {
@@ -3133,14 +3280,14 @@ export default function HomePage() {
             setHistory((current) =>
                 updateHistoryResultFeedback({
                     history: current,
-                    timestamp: item.timestamp,
+                    item,
                     value: resultFeedbackValue,
                     updatedAt,
                     note
                 })
             );
             setActiveResultSource((current) =>
-                current?.timestamp === item.timestamp
+                current && isSameHistoryEntry(current, item)
                     ? {
                           ...current,
                           resultFeedback: {
@@ -3168,22 +3315,21 @@ export default function HomePage() {
 
         if (window.confirm(confirmationMessage)) {
             const feedbackDeleteTargets = buildHistoryFeedbackDeleteTargets(history);
-            setHistory([]);
-            setLatestImageBatch(null);
-            setActiveResultSource(null);
-            setCompletedGenerationCount(null);
-            setImageOutputView('grid');
-            setError(null);
 
             try {
-                localStorage.removeItem('openaiImageHistory');
-
                 if (effectiveStorageModeClient === 'indexeddb') {
                     await db.images.clear();
                     blobUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
                     blobUrlCacheRef.current.clear();
                 }
+                localStorage.removeItem('openaiImageHistory');
                 scheduleResultFeedbackDeleteTargets(feedbackDeleteTargets);
+                setHistory([]);
+                setLatestImageBatch(null);
+                setActiveResultSource(null);
+                setCompletedGenerationCount(null);
+                setImageOutputView('grid');
+                setError(null);
             } catch (e) {
                 console.error('清空历史记录失败：', e);
                 setError(createErrorNotice(t('error.clearHistory')));
@@ -3390,7 +3536,7 @@ export default function HomePage() {
                 } catch {
                     throw new ApiRequestError(t('error.sendToEdit'));
                 }
-                mimeType = response.headers.get('Content-Type') || mimeType;
+                mimeType = response.headers.get('Content-Type')?.split(';', 1)[0]?.trim() || mimeType;
             }
 
             if (!blob) {
@@ -3398,6 +3544,15 @@ export default function HomePage() {
             }
 
             const newFile = new File([blob], filename, { type: mimeType });
+            const validationFailure = validateEditSourceInput({
+                imageFiles: [newFile],
+                upstreamProfile: activeUpstreamProfile,
+                imageBackend: editImageBackend,
+                defaultImageBackend
+            });
+            if (validationFailure) {
+                throw new ApiRequestError(formatEditSourceValidationFailure(validationFailure, t));
+            }
             const newPreviewUrl = URL.createObjectURL(blob);
 
             setEditImageFiles([newFile]);
@@ -3495,7 +3650,7 @@ export default function HomePage() {
             if (!item) return;
             setError(null);
 
-            const { images: imagesInEntry, timestamp } = item;
+            const { images: imagesInEntry } = item;
             const storageModeUsed = item.storageModeUsed ?? 'fs';
             const filenamesToDelete = imagesInEntry.map((img) => img.filename);
 
@@ -3569,9 +3724,9 @@ export default function HomePage() {
                     if (remainingImages.length !== imagesInEntry.length) {
                         setHistory((prevHistory) =>
                             remainingImages.length === 0
-                                ? prevHistory.filter((historyItem) => historyItem.timestamp !== timestamp)
+                                ? prevHistory.filter((historyItem) => !isSameHistoryEntry(historyItem, item))
                                 : prevHistory.map((historyItem) =>
-                                      historyItem.timestamp === timestamp
+                                      isSameHistoryEntry(historyItem, item)
                                           ? { ...historyItem, images: remainingImages }
                                           : historyItem
                                   )
@@ -3582,7 +3737,7 @@ export default function HomePage() {
                             return remainingBatch.length > 0 ? remainingBatch : null;
                         });
                         setActiveResultSource((current) =>
-                            current?.timestamp !== timestamp
+                            !current || !isSameHistoryEntry(current, item)
                                 ? current
                                 : remainingImages.length === 0
                                   ? null
@@ -3598,11 +3753,13 @@ export default function HomePage() {
                     return;
                 }
 
-                setHistory((prevHistory) => prevHistory.filter((h) => h.timestamp !== timestamp));
+                setHistory((prevHistory) =>
+                    prevHistory.filter((historyItem) => !isSameHistoryEntry(historyItem, item))
+                );
                 setLatestImageBatch((prev) =>
                     prev && prev.some((img) => filenamesToDelete.includes(img.filename)) ? null : prev
                 );
-                setActiveResultSource((current) => (current?.timestamp === timestamp ? null : current));
+                setActiveResultSource((current) => (current && isSameHistoryEntry(current, item) ? null : current));
                 scheduleResultFeedbackDeleteTargets(buildHistoryFeedbackDeleteTargets([item]));
             } catch (e: unknown) {
                 console.error('删除条目失败：', e);
@@ -3901,6 +4058,7 @@ export default function HomePage() {
                                         setBackground={setGenBackground}
                                         upstreamProfile={activeUpstreamProfile}
                                         upstreamProfileMixed={activeUpstreamProfileMixed}
+                                        defaultImageBackend={defaultImageBackend}
                                         moderation={genModeration}
                                         setModeration={setGenModeration}
                                         streamMode={streamMode}
@@ -3982,6 +4140,7 @@ export default function HomePage() {
                                         setEditCompression={setEditCompression}
                                         upstreamProfile={activeUpstreamProfile}
                                         upstreamProfileMixed={activeUpstreamProfileMixed}
+                                        defaultImageBackend={defaultImageBackend}
                                         editModeration={editModeration}
                                         setEditModeration={setEditModeration}
                                         editBrushSize={editBrushSize}
@@ -4065,6 +4224,9 @@ export default function HomePage() {
                                         openLogsSignal={openLogsSignal}
                                         logClientRequestIds={activeLogClientRequestIds}
                                         logFilenames={activeLogFilenames}
+                                        isLogScopeBatch={
+                                            imageOutputView === 'grid' && (latestImageBatch?.length ?? 0) > 1
+                                        }
                                     />
                                 </div>
                                 <WorkbenchProDock
@@ -4077,6 +4239,8 @@ export default function HomePage() {
                                     model={mode === 'generate' ? genModel : editModel}
                                     onModelChange={mode === 'generate' ? setGenModel : setEditModel}
                                     size={mode === 'generate' ? genSize : editSize}
+                                    customWidth={mode === 'generate' ? genCustomWidth : editCustomWidth}
+                                    customHeight={mode === 'generate' ? genCustomHeight : editCustomHeight}
                                     streamMode={streamMode}
                                     onStreamModeChange={setStreamMode}
                                     allowStreamingBatch={streamingBatchEnabled}

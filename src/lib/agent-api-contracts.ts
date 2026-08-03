@@ -9,7 +9,6 @@ import {
 } from './channel-request-mode';
 import { getChannelPoolSummary, parseChannelPoolConfig } from './channel-router';
 import {
-    MAX_IMAGE_COUNT,
     MAX_PROMPT_LENGTH,
     RequestValidationError,
     validateApiBaseUrl,
@@ -20,7 +19,13 @@ import {
     summarizeImageUpstreamProfile,
     summarizeUpstreamRequestHeaders,
     clampIntegerToRange,
+    getImageBackendCompatibility,
+    getImageCountRangeCompatibilityForBackend,
+    getImageCountRangeForBackend,
+    getPartialImagesRangeCompatibilityForBackend,
     getPartialImagesRangeForBackend,
+    RESPONSES_IMAGE_COUNT_RANGE,
+    RESPONSES_PARTIAL_IMAGES_RANGE,
     type ImageUpstreamProfile,
     type ImageUpstreamProfileId,
     type ImageUpstreamProfileSummary,
@@ -50,7 +55,7 @@ import {
 } from './size-utils';
 
 export const AGENT_API_VERSION = '1.0.0';
-export const AGENT_SCHEMA_VERSION = '2026-05-28';
+export const AGENT_SCHEMA_VERSION = '2026-07-29';
 export const AGENT_DEFAULT_SQLITE_PATH = 'generated-images/.agent-state/agent.sqlite';
 export const AGENT_DEFAULT_LEASE_MS = 10 * 60 * 1000;
 export const AGENT_DEFAULT_REQUEST_TTL_SECONDS = 24 * 60 * 60;
@@ -113,6 +118,7 @@ export type ImageBackendRuntimeRequirement = {
     enabled: boolean;
     required_env: string[];
     missing_env: string[];
+    incompatible_constraints?: string[];
 };
 
 export type AgentPageRequestDiagnosticsRetention = AppLogRetentionMetadata & {
@@ -277,6 +283,8 @@ export type AgentCapabilities = {
         max_images: number;
         generate_images: { min: number; max: number };
         edit_images: { min: number; max: number };
+        generate_images_by_backend: Record<ImageGenerationBackend, { min: number; max: number }>;
+        edit_images_by_backend: Record<ImageGenerationBackend, { min: number; max: number }>;
         upload_images: { max: number };
         max_upload_mb: number;
         max_total_upload_mb?: number;
@@ -657,13 +665,29 @@ function validateAgentImageUpstreamStrategy(input: {
     }
 }
 
+function readAgentImageBackendCompatibility(
+    profile: ImageUpstreamProfile,
+    operation: 'generate' | 'edit',
+    imageBackend: ImageGenerationBackend,
+    fields: FieldErrors
+): ReturnType<typeof getImageBackendCompatibility> {
+    const compatibility = getImageBackendCompatibility(profile, operation, imageBackend);
+    if (!compatibility.compatible) {
+        fields.image_backend = compatibility.errors.map((error) => error.message).join(' ');
+    }
+    return compatibility;
+}
+
 function readPartialImagesForBackend(
     body: Record<string, unknown>,
     imageBackend: ImageGenerationBackend,
     fields: FieldErrors,
-    profile: ImageUpstreamProfile
+    profile: ImageUpstreamProfile,
+    compatibility: ReturnType<typeof getImageBackendCompatibility>
 ): PartialImagesCount {
-    const limits = getPartialImagesRangeForBackend(profile, imageBackend);
+    const limits =
+        compatibility.partialImagesRange ??
+        (imageBackend === 'responses-image-generation' ? RESPONSES_PARTIAL_IMAGES_RANGE : profile.partialImages);
     const fallback = clampDefaultPartialImages(limits);
     return readIntegerField(body, 'partial_images', fallback, limits.min, limits.max, fields) as PartialImagesCount;
 }
@@ -784,7 +808,15 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const upstreamLimits = buildAgentUpstreamLimits(process.env);
     const model = readModel(objectBody, fields);
     const prompt = validatePrompt(objectBody.prompt, fields);
-    const n = readIntegerField(objectBody, 'n', 1, 1, MAX_IMAGE_COUNT, fields);
+    const imageBackend = readAgentImageBackend(objectBody, fields);
+    const backendCompatibility = readAgentImageBackendCompatibility(
+        upstreamLimits.profile,
+        'generate',
+        imageBackend,
+        fields
+    );
+    const imageCountRange = backendCompatibility.imageCountRange ?? RESPONSES_IMAGE_COUNT_RANGE;
+    const n = readIntegerField(objectBody, 'n', imageCountRange.min, imageCountRange.min, imageCountRange.max, fields);
     const forceRequest = readOptionalBooleanField(objectBody, 'force_request', fields);
     const size = readSize(objectBody, model, fields, '1024x1024', upstreamLimits.profile, {
         forceRequest: forceRequest === true
@@ -795,10 +827,15 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const background = readBackground(objectBody, fields);
     const moderation = readModeration(objectBody, fields);
     const responseMode = readResponseMode(objectBody, fields);
-    const imageBackend = readAgentImageBackend(objectBody, fields);
     const streamMode = readAgentStreamMode(objectBody, fields);
     const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
-    const partialImages = readPartialImagesForBackend(objectBody, imageBackend, fields, upstreamLimits.profile);
+    const partialImages = readPartialImagesForBackend(
+        objectBody,
+        imageBackend,
+        fields,
+        upstreamLimits.profile,
+        backendCompatibility
+    );
     const responsesModel = readAgentResponsesModel(objectBody, imageBackend, fields);
     const thinking = readAgentThinking(objectBody, fields);
     const promptOptimization = readOptionalBooleanField(objectBody, 'promptOptimization', fields);
@@ -973,9 +1010,11 @@ function readEnabledImageBackends(
 }
 
 function buildImageBackendRequirements(
-    env: Record<string, string | undefined>
+    env: Record<string, string | undefined>,
+    profile: ImageUpstreamProfile
 ): Record<ImageGenerationBackend, ImageBackendRuntimeRequirement> {
     const responsesMissingEnv = readResponsesImageBackendMissingEnv(env);
+    const incompatibleConstraints = readResponsesImageBackendIncompatibleConstraints(profile);
     return {
         'images-api': {
             supported: true,
@@ -985,11 +1024,26 @@ function buildImageBackendRequirements(
         },
         'responses-image-generation': {
             supported: true,
-            enabled: responsesMissingEnv.length === 0,
+            enabled: responsesMissingEnv.length === 0 && incompatibleConstraints.length === 0,
             required_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL'],
-            missing_env: responsesMissingEnv
+            missing_env: responsesMissingEnv,
+            ...(incompatibleConstraints.length > 0 ? { incompatible_constraints: incompatibleConstraints } : {})
         }
     };
+}
+
+function readResponsesImageBackendIncompatibleConstraints(profile: ImageUpstreamProfile): string[] {
+    const incompatible: string[] = [];
+    if (!getImageCountRangeCompatibilityForBackend(profile, 'generate', 'responses-image-generation').compatible) {
+        incompatible.push('generate_images');
+    }
+    if (!getImageCountRangeCompatibilityForBackend(profile, 'edit', 'responses-image-generation').compatible) {
+        incompatible.push('edit_images');
+    }
+    if (!getPartialImagesRangeCompatibilityForBackend(profile, 'responses-image-generation').compatible) {
+        incompatible.push('partial_images');
+    }
+    return incompatible;
 }
 
 function readResponsesImageBackendMissingEnv(env: Record<string, string | undefined>): string[] {
@@ -1014,10 +1068,17 @@ function readPositiveIntegerEnv(env: Record<string, string | undefined>, fieldNa
 }
 
 export function buildAgentCapabilities(env: Record<string, string | undefined>): AgentCapabilities {
-    const imageBackendRequirements = buildImageBackendRequirements(env);
-    const enabledImageBackends = readEnabledImageBackends(imageBackendRequirements);
     const upstreamLimits = buildAgentUpstreamLimits(env);
-    const partialImagesByBackend = buildAgentPartialImagesByBackend(upstreamLimits.profile);
+    const imageBackendRequirements = buildImageBackendRequirements(env, upstreamLimits.profile);
+    const enabledImageBackends = readEnabledImageBackends(imageBackendRequirements);
+    const responsesBackendEnabled = imageBackendRequirements['responses-image-generation'].enabled;
+    const generateImagesByBackend = buildAgentImageCountByBackend(
+        upstreamLimits.profile,
+        'generate',
+        responsesBackendEnabled
+    );
+    const editImagesByBackend = buildAgentImageCountByBackend(upstreamLimits.profile, 'edit', responsesBackendEnabled);
+    const partialImagesByBackend = buildAgentPartialImagesByBackend(upstreamLimits.profile, responsesBackendEnabled);
     const defaultPartialImages = clampDefaultPartialImages(partialImagesByBackend['images-api']);
     return {
         api_version: AGENT_API_VERSION,
@@ -1042,6 +1103,8 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             max_images: Math.min(upstreamLimits.profile.generateCount.max, upstreamLimits.profile.editCount.max),
             generate_images: upstreamLimits.profile.generateCount,
             edit_images: upstreamLimits.profile.editCount,
+            generate_images_by_backend: generateImagesByBackend,
+            edit_images_by_backend: editImagesByBackend,
             upload_images: { max: upstreamLimits.profile.upload.maxImages },
             max_upload_mb: upstreamLimits.profile.upload.maxSingleBytes / 1024 / 1024,
             ...(upstreamLimits.profile.upload.maxTotalBytes !== undefined
@@ -1362,10 +1425,26 @@ function clampDefaultPartialImages(limits: ImageUpstreamProfile['partialImages']
 }
 
 function buildAgentPartialImagesByBackend(
-    profile: ImageUpstreamProfile
+    profile: ImageUpstreamProfile,
+    responsesBackendEnabled: boolean
 ): Record<ImageGenerationBackend, { min: number; max: number }> {
     return {
         'images-api': getPartialImagesRangeForBackend(profile, 'images-api'),
-        'responses-image-generation': getPartialImagesRangeForBackend(profile, 'responses-image-generation')
+        'responses-image-generation': responsesBackendEnabled
+            ? getPartialImagesRangeForBackend(profile, 'responses-image-generation')
+            : { ...RESPONSES_PARTIAL_IMAGES_RANGE }
+    };
+}
+
+function buildAgentImageCountByBackend(
+    profile: ImageUpstreamProfile,
+    operation: 'generate' | 'edit',
+    responsesBackendEnabled: boolean
+): Record<ImageGenerationBackend, { min: number; max: number }> {
+    return {
+        'images-api': getImageCountRangeForBackend(profile, operation, 'images-api'),
+        'responses-image-generation': responsesBackendEnabled
+            ? getImageCountRangeForBackend(profile, operation, 'responses-image-generation')
+            : { ...RESPONSES_IMAGE_COUNT_RANGE }
     };
 }

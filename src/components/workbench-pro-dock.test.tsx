@@ -90,12 +90,14 @@ describe('WorkbenchProDock', () => {
         assert.match(html, /aria-pressed="true"[^>]*>省心模式/);
         assert.match(html, /输出格式/);
         assert.match(html, /gpt-image-2/);
+        assert.match(html, /分辨率[\s\S]*?>自动</);
+        assert.doesNotMatch(html, /1024 px/);
         assert.doesNotMatch(html, /pro-output-format-select/);
         assert.doesNotMatch(html, /水印/);
         assert.doesNotMatch(html, /EXIF/);
     });
 
-    it('uses the shared localized label for a custom resolution', () => {
+    it('shows the actual custom resolution in the workbench summary', () => {
         const html = renderToStaticMarkup(
             <I18nProvider>
                 <WorkbenchProDock
@@ -106,6 +108,8 @@ describe('WorkbenchProDock', () => {
                     model='gpt-image-2'
                     onModelChange={setModel}
                     size='custom'
+                    customWidth={1536}
+                    customHeight={1024}
                     streamMode='auto'
                     onStreamModeChange={setStreamMode}
                     allowStreamingBatch={false}
@@ -125,7 +129,8 @@ describe('WorkbenchProDock', () => {
             </I18nProvider>
         );
 
-        assert.match(html, /自定义/);
+        assert.match(html, /分辨率[\s\S]*?>1536x1024</);
+        assert.doesNotMatch(html, /分辨率[\s\S]*?>自定义</);
     });
 
     it('renders interactive professional groups without fake output switches', () => {
@@ -245,7 +250,7 @@ describe('WorkbenchProDock', () => {
         );
 
         assert.match(html, /关闭流式会减少长连接不稳定因素/);
-        assert.doesNotMatch(html, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.doesNotMatch(html, /当前自动策略会由服务端按渠道选择传输方式/);
     });
 
     it('disables the experimental Responses backend when runtime capabilities do not allow it', () => {
@@ -318,7 +323,7 @@ describe('WorkbenchProDock', () => {
 
         assert.match(html, /pro-parallel-batch-enabled/);
         assert.match(html, /并发批量/);
-        assert.match(html, /多张图或多条提示词会按当前渠道容量并发执行/);
+        assert.match(html, /多张图或多条提示词会按当前服务端配置的并发上限尝试执行/);
         assert.match(html, /aria-checked="true"/);
     });
 

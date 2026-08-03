@@ -1,5 +1,6 @@
 import { GenerationForm, resolveGenerationFooterPromptTarget } from './generation-form';
 import { I18nProvider } from '@/lib/i18n';
+import { MAX_PROMPT_LENGTH } from '@/lib/image-request-limits';
 import {
     IMAGE_UPSTREAM_PROFILES,
     type ImageUpstreamProfile,
@@ -62,6 +63,7 @@ type GenerationRenderOptions = {
     hasDefaultResponsesModel?: boolean;
     responsesModel?: string;
     imageBackend?: React.ComponentProps<typeof GenerationForm>['imageBackend'];
+    defaultImageBackend?: React.ComponentProps<typeof GenerationForm>['defaultImageBackend'];
     upstreamProfile?: ImageUpstreamProfile;
     upstreamProfileMixed?: boolean;
     isActive?: boolean;
@@ -70,6 +72,8 @@ type GenerationRenderOptions = {
     streamMode?: React.ComponentProps<typeof GenerationForm>['streamMode'];
     model?: React.ComponentProps<typeof GenerationForm>['model'];
     size?: React.ComponentProps<typeof GenerationForm>['size'];
+    customWidth?: number;
+    customHeight?: number;
     isLoading?: boolean;
     showLoadingState?: boolean;
 };
@@ -104,9 +108,9 @@ function createGenerationFormProps(options: GenerationRenderOptions = {}): React
         setN: noop,
         size: options.size ?? 'auto',
         setSize: noop,
-        customWidth: 1024,
+        customWidth: options.customWidth ?? 1024,
         setCustomWidth: noop,
-        customHeight: 1024,
+        customHeight: options.customHeight ?? 1024,
         setCustomHeight: noop,
         quality: 'high',
         setQuality: noop,
@@ -131,6 +135,7 @@ function createGenerationFormProps(options: GenerationRenderOptions = {}): React
         hasDefaultResponsesModel: options.hasDefaultResponsesModel ?? true,
         imageBackend: options.imageBackend ?? 'server-default',
         setImageBackend: noop,
+        defaultImageBackend: options.defaultImageBackend,
         streamingStrategy: options.streamingStrategy ?? 'server-default',
         defaultStreamingStrategy: options.defaultStreamingStrategy ?? 'auto',
         setStreamingStrategy: noop,
@@ -157,6 +162,14 @@ function renderGenerationForm(options: GenerationRenderOptions = {}) {
 }
 
 describe('GenerationForm submit footer', () => {
+    it('uses the server prompt limit in the visible counter and input constraint', () => {
+        const html = renderGenerationForm({ prompt: '用户真实提示词' });
+
+        assert.match(html, new RegExp(`maxLength="${MAX_PROMPT_LENGTH}"`));
+        assert.match(html, new RegExp(`\\/ ${MAX_PROMPT_LENGTH.toLocaleString('zh-CN')}`));
+        assert.doesNotMatch(html, /\/ 1000/);
+    });
+
     it('keeps the form disabled without showing generation copy for other busy work', () => {
         const html = renderGenerationForm({ isLoading: true, showLoadingState: false });
 
@@ -414,7 +427,10 @@ describe('GenerationForm advanced groups', () => {
         assert.match(html, /影响说明/);
         assert.match(html, /服务端默认会沿用当前部署配置/);
         assert.match(html, /当前服务端渠道包含不同上游模式/);
-        assert.match(html, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.match(
+            html,
+            /当前自动策略会由服务端按渠道选择传输方式，可能直接使用非流式；仅在实际选中流式且上游支持时使用流式。/
+        );
         assert.match(html, /费用主要由模型、尺寸、数量和预览图数量决定/);
     });
 
@@ -433,9 +449,9 @@ describe('GenerationForm advanced groups', () => {
         });
 
         assert.match(offHtml, /关闭流式会减少长连接不稳定因素/);
-        assert.doesNotMatch(offHtml, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.doesNotMatch(offHtml, /当前自动策略会由服务端按渠道选择传输方式/);
         assert.match(forceHtml, /强制 SSE 会跳过自动判断/);
-        assert.doesNotMatch(forceHtml, /自动或服务端默认会优先使用当前推荐的流式策略/);
+        assert.doesNotMatch(forceHtml, /当前自动策略会由服务端按渠道选择传输方式/);
     });
 
     it('disables the experimental Responses backend when runtime capabilities do not allow it', () => {
@@ -515,18 +531,50 @@ describe('GenerationForm advanced groups', () => {
         assert.doesNotMatch(readButtonById(outputHtml, 'bg-transparent'), /disabled=""/);
     });
 
-    it('intersects Matsca partial image options with the Responses backend contract', () => {
-        const html = renderGenerationForm({
+    it('intersects Matsca output and preview options with the Responses backend contract', () => {
+        const streamHtml = renderGenerationForm({
             defaultAdvancedOpen: true,
             defaultAdvancedTab: 'stream',
             imageBackend: 'responses-image-generation',
             upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
         });
+        const outputHtml = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'output',
+            imageBackend: 'responses-image-generation',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
 
-        assert.doesNotMatch(html, /partial-0/);
-        assert.match(html, /partial-1/);
-        assert.match(html, /partial-3/);
-        assert.doesNotMatch(html, /partial-4/);
+        assert.doesNotMatch(streamHtml, /partial-0/);
+        assert.match(streamHtml, /partial-1/);
+        assert.match(streamHtml, /partial-3/);
+        assert.doesNotMatch(streamHtml, /partial-4/);
+        assert.match(outputHtml, /n-1/);
+        assert.doesNotMatch(outputHtml, /id="n-2"/);
+    });
+
+    it('applies Responses limits to the server-default route when runtime selects that backend', () => {
+        const streamHtml = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'stream',
+            imageBackend: 'server-default',
+            defaultImageBackend: 'responses-image-generation',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+        const outputHtml = renderGenerationForm({
+            defaultAdvancedOpen: true,
+            defaultAdvancedTab: 'output',
+            imageBackend: 'server-default',
+            defaultImageBackend: 'responses-image-generation',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.doesNotMatch(streamHtml, /partial-0/);
+        assert.match(streamHtml, /partial-1/);
+        assert.match(streamHtml, /partial-3/);
+        assert.doesNotMatch(streamHtml, /partial-4/);
+        assert.match(outputHtml, /n-1/);
+        assert.doesNotMatch(outputHtml, /id="n-2"/);
     });
 
     it('renders profile-aware high resolution size presets', () => {
@@ -536,6 +584,18 @@ describe('GenerationForm advanced groups', () => {
         assert.match(openAiHtml, /id="size-wide-4k"/);
         assert.doesNotMatch(openAiHtml, /id="size-square-4k"/);
         assert.match(matscaHtml, /id="size-square-4k"/);
+    });
+
+    it('does not present unsafe custom dimensions as a valid exact pixel calculation', () => {
+        const html = renderGenerationForm({
+            size: 'custom',
+            customWidth: Number.MAX_SAFE_INTEGER + 1,
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES.matsca
+        });
+
+        assert.match(html, /请先输入可精确计算的正整数尺寸。/);
+        assert.match(html, /宽度和高度超出可精确处理的整数范围。/);
+        assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*生成图像[\s\S]*<\/button>/);
     });
 
     it('disables random inspiration when no saved prompt is available', () => {
@@ -557,6 +617,13 @@ describe('GenerationForm advanced groups', () => {
 });
 
 describe('GenerationForm batch mode', () => {
+    it('shows the per-line prompt limit for batch input', () => {
+        const html = renderGenerationForm({ currentMode: 'batch' });
+
+        assert.match(html, /每条提示词最多 32000 个字符。/);
+        assert.match(html, /aria-describedby="batch-prompt-length-hint"/);
+    });
+
     it('uses the visible batch prompt text for footer prompt actions', () => {
         assert.deepEqual(
             resolveGenerationFooterPromptTarget({
@@ -661,7 +728,7 @@ describe('GenerationForm batch mode', () => {
         });
 
         assert.match(html, /并发批量/);
-        assert.match(html, /多张图或多条提示词会按当前渠道容量并发执行/);
+        assert.match(html, /多张图或多条提示词会按当前服务端配置的并发上限尝试执行/);
         assert.match(html, /id="parallel-batch-enabled"/);
         assert.match(html, /aria-checked="true"/);
     });

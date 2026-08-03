@@ -1,13 +1,12 @@
 import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResultBase64 } from './image-payload';
-import { MAX_UPLOAD_BYTES, RequestValidationError } from './image-request-utils';
+import { MAX_RESPONSES_EDIT_INPUT_BYTES } from './image-request-limits';
+import { RequestValidationError } from './image-request-utils';
 import { asRecord } from './json-record';
 import { buildOpenAIImageRequestOptions } from './openai-image-transport';
 import type OpenAI from 'openai';
 
 type ImageUsage = OpenAI.Images.ImagesResponse['usage'];
 type OpenAiImageData = NonNullable<OpenAI.Images.ImagesResponse['data']>[number];
-const MAX_RESPONSES_EDIT_INPUT_BYTES = MAX_UPLOAD_BYTES * 2;
-
 type ResponsesCreateClient = {
     create(
         params: OpenAI.Responses.ResponseCreateParamsNonStreaming,

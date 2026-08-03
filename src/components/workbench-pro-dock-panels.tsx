@@ -44,11 +44,29 @@ function getStreamingStrategyLabel(strategy: ProPanelProps['streamingStrategy'],
     return t('upstream.serverDefault');
 }
 
-function formatResolution(size: SizePreset, model: GptImageModel, t: Translation): string {
+function formatResolution(
+    size: SizePreset,
+    model: GptImageModel,
+    customWidth: number | undefined,
+    customHeight: number | undefined,
+    t: Translation
+): string {
+    if (size === 'custom') {
+        if (
+            typeof customWidth === 'number' &&
+            typeof customHeight === 'number' &&
+            Number.isInteger(customWidth) &&
+            Number.isInteger(customHeight) &&
+            customWidth > 0 &&
+            customHeight > 0
+        ) {
+            return `${customWidth}x${customHeight}`;
+        }
+        return t('common.custom');
+    }
     const resolution = getPresetDimensions(size, model);
     if (resolution) return resolution;
-    if (size === 'custom') return t('common.custom');
-    return '1024 px';
+    return t('common.auto');
 }
 
 function ReadonlyField({ label, children }: { label: string; children: React.ReactNode }) {
@@ -64,6 +82,8 @@ function ReadonlyField({ label, children }: { label: string; children: React.Rea
 
 export function WorkbenchEasySummary({
     model,
+    customWidth,
+    customHeight,
     streamMode,
     outputFormat,
     size,
@@ -74,7 +94,7 @@ export function WorkbenchEasySummary({
     defaultStreamingStrategy
 }: ProPanelProps) {
     const { t } = useI18n();
-    const resolution = formatResolution(size, model, t);
+    const resolution = formatResolution(size, model, customWidth, customHeight, t);
     const effectiveStreamingStrategy =
         streamingStrategy === 'server-default' ? defaultStreamingStrategy : streamingStrategy;
     const parallelBatchVisible = resolveStreamingBatchToggleState({
@@ -293,7 +313,7 @@ export function WorkbenchProPanel({
     ...props
 }: ProPanelProps & { defaultTab: 'output' | 'model' | 'stream' | 'route' }) {
     const { t } = useI18n();
-    const resolution = formatResolution(props.size, props.model, t);
+    const resolution = formatResolution(props.size, props.model, props.customWidth, props.customHeight, t);
     const strategyLabel = getStreamingStrategyLabel(props.streamingStrategy, t);
 
     return (

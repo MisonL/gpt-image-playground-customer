@@ -268,7 +268,8 @@ GET /api/agent/capabilities
 - `defaults.streaming_strategy`：Agent generate 默认 `auto`。
 - `defaults.partial_images`：Agent generate 默认值会被当前 `limits.partial_images` 约束钳制，在 `stream_mode` 不为 `non_stream` 时使用；客户端发送前仍要按选中 backend 的 `limits.partial_images_by_backend` 复核。
 - `upstream_profile`：当前运行时的上游能力摘要，包含 `activeProfile`、`serverProfile`、`serverProfileMixed`、`requestProfile` 与三组约束对象。
-- `limits.generate_images` / `limits.edit_images` / `limits.upload_images`：当前运行时分别允许的生成张数、编辑输出张数和编辑源图数量范围。
+- `limits.generate_images` / `limits.edit_images` / `limits.upload_images`：当前运行时分别允许的默认生成张数、默认编辑输出张数和编辑源图数量范围。
+- `limits.generate_images_by_backend` / `limits.edit_images_by_backend`：按图片后端覆盖生成或页面 SSE 编辑的输出数量范围。请求带 `image_backend` 时必须优先读取对应操作的按后端范围；旧 capabilities 未提供该字段时才退回 `limits.generate_images` 或 `limits.edit_images`。`responses-image-generation` 当前两种操作都只允许 `n=1`。
 - `limits.partial_images`：当前运行时默认 profile 允许的 `partial_images` 范围。OpenAI-compatible 通常为 `1..3`，Matsca Images API 通常为 `0..4`；Agent 必须以 capabilities 返回值为准。
 - `limits.partial_images_by_backend`：按图片后端覆盖 `partial_images` 范围。选择 `responses-image-generation` 或兼容别名 `responses` 时必须优先使用该字段中的 `responses-image-generation` 范围，当前通常为 `1..3`。
 - `supported.image_backends`：机器可读的图片后端枚举。

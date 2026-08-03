@@ -92,6 +92,13 @@ function restoreClientDomGlobals(descriptors: Map<ClientDomGlobalName, PropertyD
     }
 }
 
+function installClientDomLayoutStyles(window: Window): void {
+    const style = window.document.createElement('style');
+    style.textContent =
+        '.relative { position: relative; } img[data-nimg="fill"] { width: 1px !important; height: 1px !important; }';
+    window.document.head.append(style);
+}
+
 function dispatchClientDomEvent(element: HTMLElement, event: unknown) {
     element.dispatchEvent(event as Event);
 }
@@ -99,6 +106,7 @@ function dispatchClientDomEvent(element: HTMLElement, event: unknown) {
 export async function renderInClientDom(node: ReactNode): Promise<ClientDomRenderer> {
     const window = new Window({ url: 'http://localhost' });
     const descriptors = setClientDomGlobals(window);
+    installClientDomLayoutStyles(window);
     const happyDomContainer = window.document.createElement('div');
     window.document.body.append(happyDomContainer);
     const container = happyDomContainer as unknown as HTMLDivElement;
