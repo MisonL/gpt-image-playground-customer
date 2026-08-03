@@ -517,7 +517,21 @@ export async function POST(request: NextRequest) {
         );
 
         assertResponsesImageBackendAllowed({ imageBackend, mode });
-        const backendCompatibility = getImageBackendCompatibility(upstreamProfile, mode, imageBackend);
+        const streamResolution = resolvePageStream({
+            streamMode,
+            imageBackend,
+            streamingStrategy,
+            operation: mode,
+            selectedCredential,
+            sourceId: createAvailabilitySourceId({
+                selectedCredential,
+                baseUrl: effectiveApiBaseUrl
+            }),
+            forceNonStream: channelSelection.forcedNonStream
+        });
+        const backendCompatibility = getImageBackendCompatibility(upstreamProfile, mode, imageBackend, undefined, {
+            validatePartialImages: streamResolution.streamEnabled
+        });
         if (!backendCompatibility.compatible) {
             throw new RequestValidationError(backendCompatibility.errors.map((error) => error.message).join(' '), 422);
         }
@@ -534,18 +548,6 @@ export async function POST(request: NextRequest) {
                 partialImagesRange.max
             )
         );
-        const streamResolution = resolvePageStream({
-            streamMode,
-            imageBackend,
-            streamingStrategy,
-            operation: mode,
-            selectedCredential,
-            sourceId: createAvailabilitySourceId({
-                selectedCredential,
-                baseUrl: effectiveApiBaseUrl
-            }),
-            forceNonStream: channelSelection.forcedNonStream
-        });
         appLogger.info('图片上游兼容策略。', {
             ...requestLogContext,
             imageBackend,

@@ -460,6 +460,55 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
         assert.equal(JSON.stringify(mixedBody).includes('sk-official'), false);
     });
 
+    it('keeps capabilities available when channel image count ranges do not intersect', async () => {
+        process.env.OPENAI_CHANNEL_1_ID = 'fixed-one';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'sk-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://one.example.com/v1';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed_one_provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { generate_count: { min: 1, max: 1 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'fixed-two';
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'sk-two';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = 'https://two.example.com/v1';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed_two_provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { generate_count: { min: 2, max: 2 } }
+        });
+        process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+        process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+        const { GET } = await import('./route');
+
+        const response = await GET();
+        const body = (await response.json()) as {
+            upstreamProfile: {
+                serverConstraintsMixed: boolean;
+                serverConstraintsByProfile: Array<{ generateCount: { min: number; max: number } }>;
+                activeConstraints: { generateCount: { min: number; max: number } };
+            };
+        };
+
+        assert.equal(response.status, 200);
+        assert.equal(body.upstreamProfile.serverConstraintsMixed, true);
+        assert.deepEqual(
+            body.upstreamProfile.serverConstraintsByProfile.map((profile) => profile.generateCount),
+            [
+                { min: 1, max: 1 },
+                { min: 2, max: 2 }
+            ]
+        );
+        assert.ok(
+            body.upstreamProfile.activeConstraints.generateCount.min <=
+                body.upstreamProfile.activeConstraints.generateCount.max
+        );
+    });
+
     it('rejects requiring recovery probes when the prober is disabled', async () => {
         process.env.OPENAI_CHANNEL_1_ID = 'official';
         process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://api.openai.com/v1';

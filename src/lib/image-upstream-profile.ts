@@ -30,6 +30,10 @@ export type ImageBackendCompatibility = {
     errors: ImageUpstreamRangeError[];
 };
 
+export type ImageBackendCompatibilityOptions = {
+    validatePartialImages?: boolean;
+};
+
 type ImageBackendSelection = ImageGenerationBackend | 'server-default';
 
 export const RESPONSES_IMAGE_COUNT_RANGE = { min: 1, max: 1 } as const;
@@ -70,6 +74,8 @@ export type ImageUpstreamProfileSummary = {
     activeProfile: ImageUpstreamProfileId;
     serverProfile: ImageUpstreamProfileId;
     serverProfileMixed: boolean;
+    serverConstraintsMixed: boolean;
+    serverConstraintsByProfile: ImageUpstreamProfile[];
     requestProfile: ImageUpstreamProfileId;
     activeConstraints: ImageUpstreamProfile;
     serverConstraints: ImageUpstreamProfile;
@@ -190,10 +196,14 @@ export function getImageBackendCompatibility(
     profile: Pick<ImageUpstreamProfile, 'generateCount' | 'editCount' | 'partialImages'>,
     operation: ImageRequestOperation,
     imageBackend: ImageBackendSelection,
-    defaultBackend?: ImageGenerationBackend | null
+    defaultBackend?: ImageGenerationBackend | null,
+    options: ImageBackendCompatibilityOptions = {}
 ): ImageBackendCompatibility {
     const imageCount = getImageCountRangeCompatibilityForBackend(profile, operation, imageBackend, defaultBackend);
-    const partialImages = getPartialImagesRangeCompatibilityForBackend(profile, imageBackend, defaultBackend);
+    const partialImages =
+        options.validatePartialImages === false
+            ? { compatible: true as const, range: profile.partialImages }
+            : getPartialImagesRangeCompatibilityForBackend(profile, imageBackend, defaultBackend);
     const errors = [
         ...(imageCount.compatible ? [] : [imageCount.error]),
         ...(partialImages.compatible ? [] : [partialImages.error])
@@ -244,6 +254,7 @@ export function summarizeImageUpstreamProfile(input: {
     const serverProfileIds = input.serverProfileIds ?? input.serverProfiles?.map((profile) => profile.id) ?? [];
     const serverProfiles = input.serverProfiles ?? serverProfileIds.map((id) => IMAGE_UPSTREAM_PROFILES[id]);
     const serverProfileMixed = hasMixedServerProfiles(serverProfiles);
+    const serverConstraintsMixed = hasDisjointServerConstraints(serverProfiles);
     const uniqueServerProfiles = Array.from(new Set(serverProfiles.map((profile) => profile.id)));
     const serverProfile =
         uniqueServerProfiles.length === 1 ? uniqueServerProfiles[0] : DEFAULT_IMAGE_UPSTREAM_PROFILE_ID;
@@ -253,6 +264,8 @@ export function summarizeImageUpstreamProfile(input: {
         activeProfile: input.requestApiBaseUrl?.trim() ? requestProfile : serverProfile,
         serverProfile,
         serverProfileMixed,
+        serverConstraintsMixed,
+        serverConstraintsByProfile: serverProfiles,
         requestProfile,
         activeConstraints,
         serverConstraints,
@@ -274,19 +287,20 @@ export function combineImageUpstreamProfiles(profiles: ImageUpstreamProfile[]): 
     const uniqueProfileIds = Array.from(new Set(profiles.map((profile) => profile.id)));
     const id = uniqueProfileIds.length === 1 ? uniqueProfileIds[0] : DEFAULT_IMAGE_UPSTREAM_PROFILE_ID;
     const maxTotalBytes = minDefined(profiles.map((profile) => profile.upload.maxTotalBytes));
+    const fallbackProfile = profiles[0] || IMAGE_UPSTREAM_PROFILES[DEFAULT_IMAGE_UPSTREAM_PROFILE_ID];
     return {
         id,
-        generateCount: intersectRanges(
+        generateCount: intersectRangesOrFallback(
             profiles.map((profile) => profile.generateCount),
-            '图片数量'
+            fallbackProfile.generateCount
         ),
-        editCount: intersectRanges(
+        editCount: intersectRangesOrFallback(
             profiles.map((profile) => profile.editCount),
-            '图片数量'
+            fallbackProfile.editCount
         ),
-        partialImages: intersectRanges(
+        partialImages: intersectRangesOrFallback(
             profiles.map((profile) => profile.partialImages),
-            'partial_images'
+            fallbackProfile.partialImages
         ),
         upload: {
             maxImages: Math.min(...profiles.map((profile) => profile.upload.maxImages)),
@@ -309,6 +323,12 @@ function intersectRanges(ranges: Array<{ min: number; max: number }>, rangeLabel
     return { min, max };
 }
 
+function intersectRangesOrFallback(ranges: Array<{ min: number; max: number }>, fallback: NumericRange): NumericRange {
+    const min = Math.max(...ranges.map((range) => range.min));
+    const max = Math.min(...ranges.map((range) => range.max));
+    return min <= max ? { min, max } : { ...fallback };
+}
+
 function normalizePositiveImageCountRange(range: NumericRange): NumericRange {
     const min = Math.max(1, range.min);
     if (min > range.max) throw new ImageUpstreamRangeError('图片数量', min, range.max);
@@ -326,6 +346,19 @@ function hasMixedServerProfiles(profiles: ImageUpstreamProfile[]): boolean {
     if (!firstProfile) return false;
     const firstSignature = imageUpstreamProfileSignature(firstProfile);
     return remainingProfiles.some((profile) => imageUpstreamProfileSignature(profile) !== firstSignature);
+}
+
+function hasDisjointServerConstraints(profiles: ImageUpstreamProfile[]): boolean {
+    if (profiles.length <= 1) return false;
+    return (
+        hasDisjointRanges(profiles.map((profile) => profile.generateCount)) ||
+        hasDisjointRanges(profiles.map((profile) => profile.editCount)) ||
+        hasDisjointRanges(profiles.map((profile) => profile.partialImages))
+    );
+}
+
+function hasDisjointRanges(ranges: Array<{ min: number; max: number }>): boolean {
+    return Math.max(...ranges.map((range) => range.min)) > Math.min(...ranges.map((range) => range.max));
 }
 
 function imageUpstreamProfileSignature(profile: ImageUpstreamProfile): string {

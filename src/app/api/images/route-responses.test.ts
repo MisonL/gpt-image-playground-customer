@@ -372,6 +372,94 @@ describe('POST /api/images streaming and Responses backends', { concurrency: fal
         }
     });
 
+    it('allows non-streaming Responses requests when only partial images are unsupported', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+        process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+        let upstreamBody = '';
+        const upstream = await startResponsesImageUpstream(async (body) => {
+            upstreamBody = body;
+            return {
+                output: [
+                    {
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: PNG_BASE64
+                    }
+                ]
+            };
+        });
+
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'no-previews';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'responses-non-stream,responses-sse';
+            process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'no_previews_provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { partial_images: { min: 0, max: 0 } }
+            });
+            const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+            resetServerChannelStateForTests();
+            const { POST } = await import('./route');
+
+            const response = await POST(
+                imageFormRequest({
+                    stream: true,
+                    streamMode: 'non_stream',
+                    imageBackend: 'responses-image-generation',
+                    partialImages: '0'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = (await response.json()) as { images?: Array<Record<string, unknown>> };
+            assert.equal(body.images?.[0]?.b64_json, PNG_BASE64);
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, false);
+            assert.equal('partial_images' in upstreamJson, false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('still rejects streaming Responses requests when the provider has no preview range', async () => {
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';
+        process.env.OPENAI_CHANNEL_RECOVERY_PROBE_ENABLED = 'false';
+        process.env.OPENAI_CHANNEL_REQUIRE_PROBE_FOR_RECOVERY = 'false';
+        process.env.OPENAI_CHANNEL_1_ID = 'no-previews-stream';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'http://127.0.0.1:1/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'responses-non-stream,responses-sse';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'no_previews_stream_provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { partial_images: { min: 0, max: 0 } }
+        });
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+        const { POST } = await import('./route');
+
+        const response = await POST(
+            imageFormRequest({
+                stream: true,
+                streamMode: 'stream',
+                imageBackend: 'responses-image-generation',
+                imageStreamingStrategy: 'responses-sse',
+                partialImages: '1'
+            })
+        );
+
+        assert.equal(response.status, 422);
+        const body = (await response.json()) as Record<string, unknown>;
+        assert.match(String(body.error), /partial_images范围没有可用交集/);
+    });
+
     it('uses the Responses API image backend only when the flag and request opt-in are both present', async () => {
         process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
         process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-4.1';

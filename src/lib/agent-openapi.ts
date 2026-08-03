@@ -563,6 +563,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'activeProfile',
                                 'serverProfile',
                                 'serverProfileMixed',
+                                'serverConstraintsMixed',
+                                'serverConstraintsByProfile',
                                 'requestProfile',
                                 'activeConstraints',
                                 'serverConstraints',
@@ -582,6 +584,14 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 serverProfileMixed: {
                                     type: 'boolean',
                                     const: capabilities.upstream_profile.serverProfileMixed
+                                },
+                                serverConstraintsMixed: {
+                                    type: 'boolean',
+                                    const: capabilities.upstream_profile.serverConstraintsMixed
+                                },
+                                serverConstraintsByProfile: {
+                                    type: 'array',
+                                    items: { $ref: '#/components/schemas/ImageUpstreamProfile' }
                                 },
                                 requestProfile: {
                                     type: 'string',
@@ -889,6 +899,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     required: ['id', 'generateCount', 'editCount', 'partialImages', 'upload', 'gptImage2'],
                     properties: {
                         id: { type: 'string', enum: ['openai-compatible', 'matsca'] },
+                        providerManifest: {
+                            type: 'object',
+                            additionalProperties: true
+                        },
                         generateCount: {
                             type: 'object',
                             required: ['min', 'max'],

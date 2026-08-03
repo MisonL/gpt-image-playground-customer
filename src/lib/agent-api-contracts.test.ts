@@ -991,6 +991,42 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.model_limits['gpt-image-2'].allow_transparent_background, false);
     });
 
+    it('keeps Agent capabilities valid when channel image count ranges do not intersect', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_CHANNEL_1_ID: 'fixed-one',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://one.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'fixed_one_provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { generate_count: { min: 1, max: 1 } }
+            }),
+            OPENAI_CHANNEL_2_ID: 'fixed-two',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://two.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'configured',
+            OPENAI_CHANNEL_2_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'fixed_two_provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { generate_count: { min: 2, max: 2 } }
+            })
+        });
+
+        assert.equal(capabilities.upstream_profile.serverConstraintsMixed, true);
+        assert.deepEqual(
+            capabilities.upstream_profile.serverConstraintsByProfile.map((profile) => profile.generateCount),
+            [
+                { min: 1, max: 1 },
+                { min: 2, max: 2 }
+            ]
+        );
+        assert.ok(
+            capabilities.upstream_profile.activeConstraints.generateCount.min <=
+                capabilities.upstream_profile.activeConstraints.generateCount.max
+        );
+    });
+
     it('exposes only the runtime-accepted bearer auth scheme when Agent token is configured', () => {
         assert.deepEqual(
             buildAgentAuthCapabilities({

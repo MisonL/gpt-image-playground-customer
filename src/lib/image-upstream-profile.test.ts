@@ -157,4 +157,23 @@ describe('summarizeImageUpstreamProfile', () => {
         assert.equal(summary.activeConstraints.upload.maxImages, 3);
         assert.equal(summary.activeConstraints.upload.maxSingleBytes, 10 * 1024 * 1024);
     });
+
+    it('keeps mixed server capabilities valid when a range has no common value', () => {
+        const fixedOne = {
+            ...IMAGE_UPSTREAM_PROFILES['openai-compatible'],
+            generateCount: { min: 1, max: 1 }
+        };
+        const fixedTwo = {
+            ...IMAGE_UPSTREAM_PROFILES['openai-compatible'],
+            generateCount: { min: 2, max: 2 }
+        };
+
+        const summary = summarizeImageUpstreamProfile({ serverProfiles: [fixedOne, fixedTwo] });
+
+        assert.equal(summary.serverProfileMixed, true);
+        assert.equal(summary.serverConstraintsMixed, true);
+        assert.deepEqual(summary.serverConstraintsByProfile, [fixedOne, fixedTwo]);
+        assert.ok(summary.serverConstraints.generateCount.min <= summary.serverConstraints.generateCount.max);
+        assert.deepEqual(summary.serverConstraints.generateCount, { min: 1, max: 1 });
+    });
 });
