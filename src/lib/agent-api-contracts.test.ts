@@ -779,7 +779,7 @@ describe('buildAgentCapabilities', () => {
         });
         assert.equal(capabilities.agent_streaming.page_sse.agent_usage, AGENT_PAGE_SSE_AGENT_USAGE);
         assert.deepEqual(capabilities.upstream_request_headers.default, {
-            user_agent_effective: 'visual-journal/2.2.0',
+            user_agent_effective: 'visual-journal/2.3.0',
             has_extra_headers: false,
             allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
             configured_header_names: []
@@ -949,7 +949,7 @@ describe('buildAgentCapabilities', () => {
                 request_modes: ['images-non-stream', 'images-sse'],
                 request_mode_priority: ['images-non-stream', 'images-sse'],
                 request_headers: {
-                    user_agent_effective: 'visual-journal/2.2.0',
+                    user_agent_effective: 'visual-journal/2.3.0',
                     has_extra_headers: false,
                     allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
                     configured_header_names: []

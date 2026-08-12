@@ -7,7 +7,7 @@ app_port: 4783
 
 # 图像手记 / Visual Journal
 
-![Version](https://img.shields.io/badge/version-2.2.0-blue)
+![Version](https://img.shields.io/badge/version-2.3.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Node](https://img.shields.io/badge/node-%3E%3D22.15.0-339933)
 

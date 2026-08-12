@@ -8,6 +8,27 @@
 
 暂无变更。
 
+## [2.3.0] - 2026-08-13
+
+### 新增
+
+- 完成响应式图片创作工作台，覆盖生成、编辑、批量任务、历史复用、分享、保留策略、移动端操作和中英文界面契约。
+- 扩展 Agent API、OpenAPI 和运行时能力声明，提供渠道 request mode、健康状态、按后端限制和诊断信息。
+- 为 Agent Skill 增加按后端能力校验、批量请求约束、Responses 路由和非计费诊断流程。
+
+### 变更
+
+- 图片渠道路由改为按实际 request mode、凭证健康状态、模型、尺寸、背景、上传和 mask 约束筛选候选渠道。
+- 支持混合渠道的离散图片数量范围和 `partial_images` 范围，能力接口、页面、Agent、OpenAPI 和 Skill 保持同一契约。
+- 明确 Responses 图片后端的非流式和 SSE 语义：非流式不发送未使用的 `partial_images`，流式仅接受有效预览范围。
+- 完成 Visual Journal 品牌、Hugging Face Space 部署文档和维护脚本迁移，并同步运行时 User-Agent 与状态输出。
+
+### 修复
+
+- 修复混合渠道范围不相交导致能力接口 500、合法请求误报 422/503、自动默认值选择错误和冷却渠道误选的问题。
+- 修复页面与 Agent 编辑路径遗漏源图数量、文件大小、总上传量、mask、背景和尺寸限制的问题。
+- 补齐版本、文案、路由、能力、上传边界和脚本参数的回归测试与文档漂移检查。
+
 ## [2.2.0] - 2026-07-28
 
 ### 新增
@@ -175,7 +196,8 @@
 - 支持基于 OpenAI 兼容 Images API 的本地图片生成和编辑流程。
 - 增加 Docker 部署支持和多平台启动脚本。
 
-[未发布]: https://github.com/MisonL/visual-journal/compare/v2.2.0...HEAD
+[未发布]: https://github.com/MisonL/visual-journal/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/MisonL/visual-journal/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/MisonL/visual-journal/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/MisonL/visual-journal/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/MisonL/visual-journal/compare/v1.4.0...v2.0.0

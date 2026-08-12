@@ -39,7 +39,7 @@ describe('downloadSameOriginImageAsBase64', () => {
 
         assert.equal(result, Buffer.from('png').toString('base64'));
         assert.equal(observedAuthorization, 'Bearer test-key');
-        assert.equal(observedUserAgent, 'visual-journal/2.2.0');
+        assert.equal(observedUserAgent, 'visual-journal/2.3.0');
         assert.equal(observedAppId, 'app-id');
         assert.equal(observedAppSecret, 'app-secret');
     });
@@ -69,7 +69,7 @@ describe('downloadSameOriginImageAsBase64', () => {
         });
 
         assert.equal(observedProxyAuthorization, null);
-        assert.equal(observedUserAgent, 'visual-journal/2.2.0');
+        assert.equal(observedUserAgent, 'visual-journal/2.3.0');
         assert.equal(observedAppId, 'app-id');
     });
 

@@ -8248,7 +8248,7 @@ describe('Agent skill script argument validation', () => {
                                         transport: 'agent_json',
                                         endpoint: '/api/agent/images/generate',
                                         request_headers: {
-                                            user_agent_effective: 'visual-journal/2.2.0',
+                                            user_agent_effective: 'visual-journal/2.3.0',
                                             has_extra_headers: false
                                         }
                                     }
@@ -8309,7 +8309,7 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.agent_requests[0].diagnostics.response.timing.elapsed_ms, 61234);
                 assert.equal(
                     body.agent_requests[0].diagnostics.response.execution.request_headers.user_agent_effective,
-                    'visual-journal/2.2.0'
+                    'visual-journal/2.3.0'
                 );
                 assert.equal(body.agent_requests[1].lookup.type, 'idempotency_key');
                 assert.equal(body.agent_requests[1].diagnostics.error.diagnostics.transport_error_kind, 'dns');
