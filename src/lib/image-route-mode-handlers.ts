@@ -136,7 +136,14 @@ function readImageCountForBackend(input: CommonModeInput, operation: 'generate' 
     if (!compatibility.compatible) {
         throw new RequestValidationError(compatibility.error.message, 422);
     }
-    return readCount(input.formData, 'n', compatibility.range.min, compatibility.range.min, compatibility.range.max);
+    return readCount(
+        input.formData,
+        'n',
+        compatibility.range.min,
+        compatibility.range.min,
+        compatibility.range.max,
+        compatibility.range
+    );
 }
 
 function readGenerateOptions(input: CommonModeInput): GenerateOptions {

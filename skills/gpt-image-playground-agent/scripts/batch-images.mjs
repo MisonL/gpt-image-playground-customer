@@ -1173,8 +1173,14 @@ async function postGenerateTask(task) {
         validateAgentGenerateRequestAgainstCapabilities(
             {
                 n: body.n,
-                partial_images: body.partial_images ?? taskCapabilities?.defaults?.partial_images,
-                image_backend: body.image_backend
+                ...(body.partial_images === undefined ? {} : { partial_images: body.partial_images }),
+                image_backend: body.image_backend,
+                stream_mode: body.stream_mode,
+                streaming_strategy: body.streaming_strategy,
+                model: body.model,
+                size: body.size,
+                background: body.background,
+                force_request: body.force_request
             },
             taskCapabilities
         )
@@ -1240,11 +1246,16 @@ async function postEditTask(task) {
         validateAgentEditRequestAgainstCapabilities(
             {
                 n: task.raw.n === undefined ? 1 : readConfiguredPositiveInteger(task.raw.n, `${task.id}.n`, 1),
-                partial_images: hasOwn(task.raw, 'partial_images')
-                    ? readPartialImages(task.raw.partial_images, `${task.id}.partial_images`)
-                    : taskCapabilities?.defaults?.partial_images,
+                ...(hasOwn(task.raw, 'partial_images')
+                    ? { partial_images: readPartialImages(task.raw.partial_images, `${task.id}.partial_images`) }
+                    : {}),
                 imageCount: imagePaths.length,
-                image_backend: task.raw.image_backend
+                image_backend: task.raw.image_backend,
+                stream_mode: task.raw.stream_mode,
+                streaming_strategy: task.raw.streaming_strategy,
+                model: task.raw.model,
+                size: task.raw.size,
+                force_request: readForceRequest(task.raw, task.id)
             },
             taskCapabilities
         )
@@ -1313,9 +1324,16 @@ function validatePageSseTaskAgainstCapabilities(task, taskCapabilities) {
             validateAgentEditRequestAgainstCapabilities(
                 {
                     n: task.raw.n === undefined ? 1 : readConfiguredPositiveInteger(task.raw.n, `${task.id}.n`, 1),
-                    partial_images: readTaskPartialImages(task, taskCapabilities),
+                    ...(hasOwn(task.raw, 'partial_images')
+                        ? { partial_images: readPartialImages(task.raw.partial_images, `${task.id}.partial_images`) }
+                        : {}),
                     imageCount: readEditImagePaths(task.raw, task.id).length,
-                    image_backend: readTaskImageBackend(task.raw)
+                    image_backend: readTaskImageBackend(task.raw),
+                    stream_mode: task.raw.stream_mode,
+                    streaming_strategy: task.raw.streaming_strategy,
+                    model: task.raw.model,
+                    size: task.raw.size,
+                    force_request: readForceRequest(task.raw, task.id)
                 },
                 taskCapabilities
             );
@@ -1324,19 +1342,20 @@ function validatePageSseTaskAgainstCapabilities(task, taskCapabilities) {
         validateAgentGenerateRequestAgainstCapabilities(
             {
                 n: task.raw.n === undefined ? 1 : readConfiguredPositiveInteger(task.raw.n, `${task.id}.n`, 1),
-                partial_images: readTaskPartialImages(task, taskCapabilities),
-                image_backend: readTaskImageBackend(task.raw)
+                ...(hasOwn(task.raw, 'partial_images')
+                    ? { partial_images: readPartialImages(task.raw.partial_images, `${task.id}.partial_images`) }
+                    : {}),
+                image_backend: readTaskImageBackend(task.raw),
+                stream_mode: task.raw.stream_mode,
+                streaming_strategy: task.raw.streaming_strategy,
+                model: task.raw.model,
+                size: task.raw.size,
+                background: task.raw.background,
+                force_request: readForceRequest(task.raw, task.id)
             },
             taskCapabilities
         );
     });
-}
-
-function readTaskPartialImages(task, taskCapabilities) {
-    if (hasOwn(task.raw, 'partial_images')) {
-        return readPartialImages(task.raw.partial_images, `${task.id}.partial_images`);
-    }
-    return taskCapabilities?.defaults?.partial_images;
 }
 
 function readTaskImageBackend(raw) {

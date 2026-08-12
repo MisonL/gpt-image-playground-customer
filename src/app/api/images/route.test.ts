@@ -164,6 +164,228 @@ describe('POST /api/images Images API streaming', { concurrency: false }, () => 
         }
     });
 
+    it('does not downgrade an unavailable page SSE channel to a non-streaming request', async () => {
+        const { POST } = await import('./route');
+        const { getServerChannelState } = await import('@/lib/server-channel-router');
+        let upstreamCalls = 0;
+        const upstream = await startStreamingImageUpstream(async () => {
+            upstreamCalls += 1;
+            return [{ data: { data: [{ b64_json: PNG_BASE64 }] } }];
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'sse-marked-unavailable';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-sse';
+
+        try {
+            const state = getServerChannelState();
+            state.streamingAvailability.markUnavailable({
+                channelId: 'sse-marked-unavailable',
+                imageBackend: 'images-api',
+                streamingStrategy: 'force-sse',
+                operation: 'generate',
+                reason: 'test_mark'
+            });
+
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'auto',
+                    imageStreamingStrategy: 'force-sse'
+                })
+            );
+
+            assert.equal(response.status, 503);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('routes automatic page SSE to a healthy channel when another SSE channel is marked unavailable', async () => {
+        const { POST } = await import('./route');
+        const { getServerChannelState } = await import('@/lib/server-channel-router');
+        let markedChannelCalls = 0;
+        let healthyChannelCalls = 0;
+        const markedChannel = await startStreamingImageUpstream(async () => {
+            markedChannelCalls += 1;
+            return [{ data: { data: [{ b64_json: PNG_BASE64 }] } }];
+        });
+        const healthyChannel = await startStreamingImageUpstream(async () => {
+            healthyChannelCalls += 1;
+            return [{ data: { data: [{ b64_json: PNG_BASE64 }] } }];
+        });
+        process.env.OPENAI_ROUTING_STRATEGY = 'round_robin';
+        process.env.OPENAI_CHANNEL_1_ID = 'marked-sse';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = markedChannel.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'marked-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_2_ID = 'healthy-sse';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = healthyChannel.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'healthy-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            const state = getServerChannelState();
+            state.streamingAvailability.markUnavailable({
+                channelId: 'marked-sse',
+                imageBackend: 'images-api',
+                streamingStrategy: 'force-sse',
+                operation: 'generate',
+                reason: 'test_mark'
+            });
+
+            const response = await POST(
+                imageFormRequest({
+                    streamMode: 'auto',
+                    imageStreamingStrategy: 'force-sse'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(markedChannelCalls, 0);
+            assert.equal(healthyChannelCalls, 1);
+            await response.arrayBuffer();
+        } finally {
+            await Promise.all([markedChannel.close(), healthyChannel.close()]);
+        }
+    });
+
+    it('routes mixed provider generate and edit counts to the eligible server channel', async () => {
+        const { POST } = await import('./route');
+        let firstCalls = 0;
+        let secondCalls = 0;
+        const first = await startImagesJsonUpstream(async (_body, _url, request) => {
+            if (request.method === 'POST') firstCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        const second = await startImagesJsonUpstream(async (_body, _url, request) => {
+            if (request.method === 'POST') secondCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'fixed-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = first.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'first-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed-one-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: {
+                generate_count: { min: 1, max: 1 },
+                edit_count: { min: 1, max: 1 }
+            }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'fixed-two';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = second.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'second-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed-two-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: {
+                generate_count: { min: 2, max: 2 },
+                edit_count: { min: 2, max: 2 }
+            }
+        });
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            const generate = await POST(
+                imageFormRequest({
+                    streamMode: 'non_stream',
+                    n: '2',
+                    clientRequestId: 'mixed-page-generate-two'
+                })
+            );
+            assert.equal(generate.status, 200);
+
+            const edit = await POST(
+                imageFormRequest({
+                    mode: 'edit',
+                    streamMode: 'non_stream',
+                    n: '2',
+                    clientRequestId: 'mixed-page-edit-two'
+                })
+            );
+            assert.equal(edit.status, 200);
+            assert.equal(firstCalls, 0);
+            assert.equal(secondCalls, 2);
+        } finally {
+            await Promise.all([first.close(), second.close()]);
+        }
+    });
+
+    it('routes automatic streaming to the mixed-channel credential that accepts partial_images', async () => {
+        const { POST } = await import('./route');
+        let firstCalls = 0;
+        let secondCalls = 0;
+        const first = await startStreamingImageUpstream(async () => {
+            firstCalls += 1;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        const second = await startStreamingImageUpstream(async () => {
+            secondCalls += 1;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        process.env.OPENAI_ROUTING_STRATEGY = 'round_robin';
+        process.env.OPENAI_CHANNEL_1_ID = 'stream-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = first.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'first-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'stream-one-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { partial_images: { min: 1, max: 1 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'stream-two';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = second.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'second-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'stream-two-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { partial_images: { min: 2, max: 2 } }
+        });
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    stream: true,
+                    streamMode: 'auto',
+                    imageStreamingStrategy: 'auto',
+                    partialImages: '2',
+                    clientRequestId: 'mixed-page-stream-partial-two'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            assert.equal(response.headers.get('content-type'), 'text/event-stream');
+            await readSseEvents(response);
+            assert.equal(firstCalls, 0);
+            assert.equal(secondCalls, 1);
+        } finally {
+            await Promise.all([first.close(), second.close()]);
+        }
+    });
+
     it('retries accepted async image tasks with the same upstream idempotency key', async () => {
         const { POST } = await import('./route');
         const observedIdempotencyKeys: Array<string | string[] | undefined> = [];

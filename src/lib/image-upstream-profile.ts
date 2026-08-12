@@ -16,7 +16,7 @@ export type ImageUpstreamProfileId = 'openai-compatible' | 'matsca';
 
 export type PartialImagesCount = 0 | 1 | 2 | 3 | 4;
 
-export type NumericRange = { min: number; max: number };
+export type NumericRange = { min: number; max: number; allowedValues?: readonly number[] };
 
 export type ImageRequestOperation = 'generate' | 'edit';
 
@@ -56,9 +56,9 @@ export class ImageUpstreamRangeError extends RangeError {
 export type ImageUpstreamProfile = {
     id: ImageUpstreamProfileId;
     providerManifest?: ImageProviderManifestSummary;
-    generateCount: { min: number; max: number };
-    editCount: { min: number; max: number };
-    partialImages: { min: number; max: number };
+    generateCount: NumericRange;
+    editCount: NumericRange;
+    partialImages: NumericRange;
     upload: {
         maxImages: number;
         maxSingleBytes: number;
@@ -117,6 +117,7 @@ export const IMAGE_UPSTREAM_PROFILES: Record<ImageUpstreamProfileId, ImageUpstre
 };
 
 export function buildIntegerRangeOptions(range: NumericRange): number[] {
+    if (range.allowedValues) return [...range.allowedValues];
     const values: number[] = [];
     for (let value = range.min; value <= range.max; value += 1) {
         values.push(value);
@@ -125,7 +126,23 @@ export function buildIntegerRangeOptions(range: NumericRange): number[] {
 }
 
 export function clampIntegerToRange(value: number, range: NumericRange): number {
-    return Math.min(range.max, Math.max(range.min, value));
+    if (!range.allowedValues?.length) return Math.min(range.max, Math.max(range.min, value));
+    return range.allowedValues.reduce((closest, candidate) => {
+        const candidateDistance = Math.abs(candidate - value);
+        const closestDistance = Math.abs(closest - value);
+        return candidateDistance < closestDistance || (candidateDistance === closestDistance && candidate < closest)
+            ? candidate
+            : closest;
+    });
+}
+
+export function isIntegerWithinRange(value: number, range: NumericRange): boolean {
+    return (
+        Number.isInteger(value) &&
+        value >= range.min &&
+        value <= range.max &&
+        (!range.allowedValues || range.allowedValues.includes(value))
+    );
 }
 
 export function resolveImageBackendSelection(
@@ -287,21 +304,11 @@ export function combineImageUpstreamProfiles(profiles: ImageUpstreamProfile[]): 
     const uniqueProfileIds = Array.from(new Set(profiles.map((profile) => profile.id)));
     const id = uniqueProfileIds.length === 1 ? uniqueProfileIds[0] : DEFAULT_IMAGE_UPSTREAM_PROFILE_ID;
     const maxTotalBytes = minDefined(profiles.map((profile) => profile.upload.maxTotalBytes));
-    const fallbackProfile = profiles[0] || IMAGE_UPSTREAM_PROFILES[DEFAULT_IMAGE_UPSTREAM_PROFILE_ID];
     return {
         id,
-        generateCount: intersectRangesOrFallback(
-            profiles.map((profile) => profile.generateCount),
-            fallbackProfile.generateCount
-        ),
-        editCount: intersectRangesOrFallback(
-            profiles.map((profile) => profile.editCount),
-            fallbackProfile.editCount
-        ),
-        partialImages: intersectRangesOrFallback(
-            profiles.map((profile) => profile.partialImages),
-            fallbackProfile.partialImages
-        ),
+        generateCount: intersectRangesOrUnion(profiles.map((profile) => profile.generateCount)),
+        editCount: intersectRangesOrUnion(profiles.map((profile) => profile.editCount)),
+        partialImages: intersectRangesOrUnion(profiles.map((profile) => profile.partialImages)),
         upload: {
             maxImages: Math.min(...profiles.map((profile) => profile.upload.maxImages)),
             maxSingleBytes: Math.min(...profiles.map((profile) => profile.upload.maxSingleBytes)),
@@ -316,23 +323,48 @@ export function combineImageUpstreamProfiles(profiles: ImageUpstreamProfile[]): 
     };
 }
 
-function intersectRanges(ranges: Array<{ min: number; max: number }>, rangeLabel: string): NumericRange {
+function intersectRanges(ranges: NumericRange[], rangeLabel: string): NumericRange {
     const min = Math.max(...ranges.map((range) => range.min));
     const max = Math.min(...ranges.map((range) => range.max));
     if (min > max) throw new ImageUpstreamRangeError(rangeLabel, min, max);
-    return { min, max };
+    const values = ranges.reduce<number[] | undefined>((intersection, range) => {
+        const rangeValues = buildIntegerRangeOptions(range).filter((value) => value >= min && value <= max);
+        if (intersection === undefined) return rangeValues;
+        return intersection.filter((value) => rangeValues.includes(value));
+    }, undefined);
+    if (!values?.length) throw new ImageUpstreamRangeError(rangeLabel, min, max);
+    return numericRangeFromValues(values);
 }
 
-function intersectRangesOrFallback(ranges: Array<{ min: number; max: number }>, fallback: NumericRange): NumericRange {
+function intersectRangesOrUnion(ranges: NumericRange[]): NumericRange {
     const min = Math.max(...ranges.map((range) => range.min));
     const max = Math.min(...ranges.map((range) => range.max));
-    return min <= max ? { min, max } : { ...fallback };
+    if (min <= max) {
+        const intersection = ranges.reduce<number[] | undefined>((values, range) => {
+            const rangeValues = buildIntegerRangeOptions(range).filter((value) => value >= min && value <= max);
+            return values === undefined ? rangeValues : values.filter((value) => rangeValues.includes(value));
+        }, undefined);
+        if (intersection?.length) return numericRangeFromValues(intersection);
+    }
+    return numericRangeFromValues(ranges.flatMap((range) => buildIntegerRangeOptions(range)));
 }
 
 function normalizePositiveImageCountRange(range: NumericRange): NumericRange {
-    const min = Math.max(1, range.min);
-    if (min > range.max) throw new ImageUpstreamRangeError('图片数量', min, range.max);
-    return { min, max: range.max };
+    const values = buildIntegerRangeOptions(range).filter((value) => value >= 1);
+    if (!values.length) {
+        const min = Math.max(1, range.min);
+        throw new ImageUpstreamRangeError('图片数量', min, range.max);
+    }
+    return numericRangeFromValues(values);
+}
+
+function numericRangeFromValues(values: number[]): NumericRange {
+    const normalized = Array.from(new Set(values.filter(Number.isInteger))).sort((left, right) => left - right);
+    if (!normalized.length) throw new ImageUpstreamRangeError('数值', 1, 0);
+    const min = normalized[0];
+    const max = normalized[normalized.length - 1];
+    if (normalized.length === max - min + 1) return { min, max };
+    return { min, max, allowedValues: normalized };
 }
 
 function minDefined(values: Array<number | undefined>): number | undefined {
@@ -358,7 +390,11 @@ function hasDisjointServerConstraints(profiles: ImageUpstreamProfile[]): boolean
 }
 
 function hasDisjointRanges(ranges: Array<{ min: number; max: number }>): boolean {
-    return Math.max(...ranges.map((range) => range.min)) > Math.min(...ranges.map((range) => range.max));
+    const intersection = ranges.reduce<number[] | undefined>((values, range) => {
+        const rangeValues = buildIntegerRangeOptions(range);
+        return values === undefined ? rangeValues : values.filter((value) => rangeValues.includes(value));
+    }, undefined);
+    return !intersection?.length;
 }
 
 function imageUpstreamProfileSignature(profile: ImageUpstreamProfile): string {

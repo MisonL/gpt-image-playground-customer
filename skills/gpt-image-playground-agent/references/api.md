@@ -69,7 +69,7 @@ npm run env:summary -- --file .env.local --container gpt-image-playground-custom
 - `--force-request`：生成意图字段，服务端在 Agent JSON、job 和页面 SSE 路径解释为 `force_request=true`，跳过本地 upstream profile 尺寸/背景限制，让真实上游接受或拒绝请求；鉴权、幂等键、费用确认、API URL 安全、渠道白名单、非 `gpt-image-2` 尺寸白名单、正整数尺寸语法、图片数量、`partial_images`、上传文件和 mask 完整性仍由本服务校验。
 - `--stream-mode`：可选，显式选择 `auto`、`stream` 或 `non_stream`。
 - `--streaming-strategy`：可选，显式选择 `off`、`auto`、`openai-sse`、`newapi-keepalive-sse`、`responses-sse` 或 `force-sse`。
-- `--partial-images`：可选，显式设置上游 SSE partial image 数量。generate 或页面 SSE 请求包含 `image_backend` 时优先按 capabilities 的 `limits.partial_images_by_backend[image_backend]` 校验；缺少 backend 专属范围时才使用 `limits.partial_images`。
+- `--partial-images`：可选，显式设置上游 SSE partial image 数量。generate 或页面 SSE 请求包含 `image_backend` 时优先按 capabilities 的 `limits.partial_images_by_backend[image_backend]` 校验；缺少 backend 专属范围时才使用 `limits.partial_images`。省略该参数时，脚本不会把 `defaults.partial_images` 写入请求，由服务端在确定健康且满足 `n`、背景、尺寸和 request mode 的最终渠道后计算默认值；非流式请求不会把该字段发送给上游。
 - `--share`：真实生图成功后，为每个 Agent artifact 调用 `POST /api/agent/artifacts/{id}/share` 创建用户可打开的分享链接，并在顶层 `shares`、`summary.share_urls` 和 `summary.direct_content_urls` 输出结果。
 - `--share-expires-minutes`：可选，设置分享有效期分钟数；省略时使用服务端默认值。
 - `--dimension-check`：读取响应 `b64_json` 或同 origin `absolute_content_url`/`content_url`/`absolute_path`/`path`，校验 PNG/JPEG/WebP 尺寸等于 `--size`；通过时 summary 写入实际尺寸，失败时写入 `error.code=dimension_check_failed`、`validation_failure_kind=generated_artifact_failed_dimension_check`、产物 URL、`expected_dimensions` 和 `actual_dimensions`。这个失败表示上游已生成但本地验收未通过，不等于上游请求失败。
@@ -244,6 +244,7 @@ GET /api/agent/capabilities
 - 页面 SSE 或 Responses 路径失败时，如果 `selected_channel_id`、`upstream_host` 为空，通常表示请求没有真正落到可执行渠道；先诊断结构化错误，再用新的 `Idempotency-Key` 显式改路由。
 - `supported.request_modes`：服务端支持的上游请求方式枚举，当前为 `images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`。该字段描述服务端能力全集，不代表每个管理员渠道都已真实 smoke 通过。
 - `upstream_request_headers.default`：默认上游请求头摘要，包含 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`。
+- 每个 `upstream_request_headers.channels[]` 还包含按渠道脱敏的 `constraints`，声明生成/编辑数量、按 backend 的数量与 `partial_images` 范围、编辑上传数量和大小、`gpt-image-2` 背景与尺寸策略；存在已初始化路由健康状态时提供 `healthy_request_modes`，表示当前至少有一个凭证健康的 request mode。数量范围可能带 `allowedValues`，表示不连续的离散可用值，不能按 min/max 中间的整数扩展。
 - `upstream_request_headers.channels`：每个服务端渠道的脱敏请求头摘要，包含该渠道有效 `request_modes` 和按白名单过滤后的 `request_mode_priority`。该字段不包含 API key、Authorization 值、Matsca app secret 值或任意 header value。
 - `upstream_request_headers.channels[].upstream_proxy`：该渠道的有效上游代理摘要。`OPENAI_CHANNEL_N_PROXY_URL` 优先于 `OPENAI_UPSTREAM_PROXY_URL`；摘要只返回 `configured` 和 `protocol`，不返回代理地址或端口。
 - `request_mode_controls`：管理员 request mode 白名单和优先级控制面，声明 `OPENAI_UPSTREAM_REQUEST_MODES`、`OPENAI_CHANNEL_N_REQUEST_MODES`、`OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`、`OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY`、默认低费用优先顺序、真实 smoke gate 和 `agent_client_policy=diagnostics_only`；Agent 客户端只能用于解释执行结果，不应据此自行选择上游请求方式。接入新渠道时，先用 `scripts/probe-upstream-image.mjs` 验证 `/models` 和 `/images/generations`，再用 `npm run smoke:image-upstream-real -- --allow-billable` 跑 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse` 之类的真实 smoke；也可用 `--case images-json`、`--case images-sse`、`--case responses-json`、`--case responses-sse` 按 request mode 筛选。脚本输出的 `request_modes.passed` 和顶层 `suggested_channel_config` 是写入 `OPENAI_CHANNEL_N_REQUEST_MODES` 的候选值；未通过、未实测、只返回远程 URL-only 或只返回 pending/poll_url 的 mode 不应写入。只有内联 `b64_json`、Responses `result` 或与 API Base URL 同源的 artifact URL 才算可被本服务消费。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，或 HTTP 200 但只返回文本 output、没有 `image_generation_call.result`/`url`，就把对应 `responses-*` mode 从白名单里删掉，只保留通过的模式。需要覆盖默认排序时，再把通过的 mode 按期望顺序写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY`。
@@ -266,7 +267,7 @@ GET /api/agent/capabilities
 - `defaults.image_backend`：Agent generate 默认 `images-api`。
 - `defaults.stream_mode`：Agent generate 默认 `auto`。auto 会先尝试内部上游 SSE；无法产出最终图时显式回退并暴露可观测标记。
 - `defaults.streaming_strategy`：Agent generate 默认 `auto`。
-- `defaults.partial_images`：Agent generate 默认值会被当前 `limits.partial_images` 约束钳制，在 `stream_mode` 不为 `non_stream` 时使用；客户端发送前仍要按选中 backend 的 `limits.partial_images_by_backend` 复核。
+- `defaults.partial_images`：兼容旧客户端的默认提示值。自动模式省略 `partial_images` 时，服务端会在确定健康且满足当前 `n`、背景、尺寸和 request mode 的最终渠道后重新计算；客户端不应把该字段强行写入请求。非流式请求会校验公开的 `0..4` 输入边界，但不会向上游发送该字段。
 - `upstream_profile`：当前运行时的上游能力摘要，包含 `activeProfile`、`serverProfile`、`serverProfileMixed`、`requestProfile` 与三组约束对象。
 - `limits.generate_images` / `limits.edit_images` / `limits.upload_images`：当前运行时分别允许的默认生成张数、默认编辑输出张数和编辑源图数量范围。
 - `limits.generate_images_by_backend` / `limits.edit_images_by_backend`：按图片后端覆盖生成或页面 SSE 编辑的输出数量范围。请求带 `image_backend` 时必须优先读取对应操作的按后端范围；旧 capabilities 未提供该字段时才退回 `limits.generate_images` 或 `limits.edit_images`。`responses-image-generation` 当前两种操作都只允许 `n=1`。

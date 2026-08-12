@@ -80,10 +80,15 @@ export type ChannelPoolSummary = {
 };
 
 export type ChannelRouter = {
-    select(options?: { affinityKey?: string; requestMode?: ChannelRequestMode }): ChannelCredential;
+    select(options?: {
+        affinityKey?: string;
+        requestMode?: ChannelRequestMode;
+        isEligible?: (credential: ChannelCredential, requestMode?: ChannelRequestMode) => boolean;
+    }): ChannelCredential;
     selectWithRequestModes(options: {
         affinityKey?: string;
         requestModes: readonly ChannelRequestMode[];
+        isEligible?: (credential: ChannelCredential, requestMode: ChannelRequestMode) => boolean;
     }): ChannelRequestModeSelection;
     reportFailure(credential: ChannelCredential, options?: ChannelFailureReportOptions): ChannelFailureReport;
     getRecoveryProbeCandidates(): ChannelRecoveryProbeCandidate[];
@@ -93,6 +98,26 @@ export type ChannelRouter = {
     getHealthSnapshot(): ChannelHealthSnapshot;
     getRequestModeHealthSummary(): ChannelRequestModeHealthSummary;
 };
+
+export function isChannelCredentialRequestModeHealthy(
+    router: Pick<ChannelRouter, 'getHealthSnapshot'> | undefined,
+    credential: Pick<ChannelCredential, 'channelId' | 'id'>,
+    requestMode: ChannelRequestMode
+): boolean {
+    if (!router) return true;
+    const channel = router
+        .getHealthSnapshot()
+        .channels.find((candidateChannel) => candidateChannel.channelId === credential.channelId);
+    const credentialHealth = channel?.credentials.find(
+        (candidateCredential) => candidateCredential.credentialId === credential.id
+    );
+    return (
+        credentialHealth?.requestModes.some(
+            (candidateRequestMode) =>
+                candidateRequestMode.mode === requestMode && candidateRequestMode.state === 'healthy'
+        ) === true
+    );
+}
 
 export type ChannelRequestModeSelection = {
     credential: ChannelCredential;
@@ -423,9 +448,18 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
         if (options.requireProbeForRecovery) probeRequiredCredentialIds.add(credential.id);
         return { cooldownApplied: true, cooldownUntil: unhealthyUntil, retryAfterMs: cooldownMs };
     };
-    const selectCredential = (selectOptions: { affinityKey?: string; requestMode?: ChannelRequestMode } = {}) => {
+    const selectCredential = (
+        selectOptions: {
+            affinityKey?: string;
+            requestMode?: ChannelRequestMode;
+            isEligible?: (credential: ChannelCredential, requestMode?: ChannelRequestMode) => boolean;
+        } = {}
+    ) => {
         const requestMode = selectOptions.requestMode;
-        const candidates = options.credentials.filter((credential) => isHealthyForRequestMode(credential, requestMode));
+        const isEligible = selectOptions.isEligible ?? (() => true);
+        const candidates = options.credentials.filter(
+            (credential) => isEligible(credential, requestMode) && isHealthyForRequestMode(credential, requestMode)
+        );
         if (candidates.length === 0) {
             throw new RequestValidationError(
                 requestMode
@@ -439,7 +473,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             const credential = selectRoundRobinHealthy(
                 options.credentials,
                 nextIndex,
-                (candidate) => isHealthyForRequestMode(candidate, requestMode),
+                (candidate) => isEligible(candidate, requestMode) && isHealthyForRequestMode(candidate, requestMode),
                 requestMode
             );
             nextIndex = credential.nextIndex;
@@ -455,7 +489,7 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
         const startIndex = stableHash(affinityKey) % options.credentials.length;
         for (let offset = 0; offset < options.credentials.length; offset += 1) {
             const credential = options.credentials[(startIndex + offset) % options.credentials.length];
-            if (isHealthyForRequestMode(credential, requestMode)) {
+            if (isEligible(credential, requestMode) && isHealthyForRequestMode(credential, requestMode)) {
                 return credential;
             }
         }
@@ -493,13 +527,17 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 throw new RequestValidationError('至少需要一个候选请求方式。', 500);
             }
             const affinityKey = selectOptions.affinityKey || 'default';
+            const isEligible = selectOptions.isEligible ?? (() => true);
             const configuredCandidates = options.credentials.filter((credential) =>
-                requestModes.some((mode) => channelSupportsRequestMode(credential, mode))
+                requestModes.some(
+                    (mode) => isEligible(credential, mode) && channelSupportsRequestMode(credential, mode)
+                )
             );
             const rankedConfiguredCandidates = getRankedRequestModeCandidates(
                 configuredCandidates,
                 requestModes,
-                options.requestModePriority
+                options.requestModePriority,
+                isEligible
             );
             const preferredRequestMode = rankedConfiguredCandidates[0]?.requestMode;
             const rankedHealthyCandidates = rankedConfiguredCandidates.filter((candidate) =>
@@ -848,7 +886,8 @@ function readCredentialRequestModeKey(value: string):
 function getRankedRequestModeCandidates(
     credentials: readonly ChannelCredential[],
     requestModes: readonly ChannelRequestMode[],
-    poolRequestModePriority?: readonly ChannelRequestMode[]
+    poolRequestModePriority?: readonly ChannelRequestMode[],
+    isEligible: (credential: ChannelCredential, requestMode: ChannelRequestMode) => boolean = () => true
 ): RankedRequestModeCandidate[] {
     const configuredRequestModes = credentials.flatMap((credential) => getEffectiveChannelRequestModes(credential));
     const poolPriority = orderChannelRequestModesByPriority({
@@ -874,14 +913,16 @@ function getRankedRequestModeCandidates(
             : poolRequestModePriority || credential.requestModePriority
               ? 1
               : 2;
-        return requestModePriority.map((requestMode) => ({
-            credential,
-            requestMode,
-            requestModePriority: rankPriority,
-            modeRank: rankPriority.indexOf(requestMode),
-            sourceRank,
-            credentialIndex
-        }));
+        return requestModePriority
+            .filter((requestMode) => isEligible(credential, requestMode))
+            .map((requestMode) => ({
+                credential,
+                requestMode,
+                requestModePriority: rankPriority,
+                modeRank: rankPriority.indexOf(requestMode),
+                sourceRank,
+                credentialIndex
+            }));
     });
 
     return rankedCandidates

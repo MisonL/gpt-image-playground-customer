@@ -1,6 +1,5 @@
 import { AGENT_ENDPOINTS } from '../skills/gpt-image-playground-agent/scripts/lib/agent-api-paths.mjs';
 import { enrichFailureWithAgentDiagnostics } from '../skills/gpt-image-playground-agent/scripts/lib/agent-diagnostics-summary.mjs';
-import { AGENT_ENDPOINTS as SERVER_AGENT_ENDPOINTS } from '../src/lib/agent-api-paths.mjs';
 import {
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
@@ -8,10 +7,21 @@ import {
     validateAgentEditRequestAgainstCapabilities,
     validateAgentGenerateRequestAgainstCapabilities
 } from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+import { AGENT_ENDPOINTS as SERVER_AGENT_ENDPOINTS } from '../src/lib/agent-api-paths.mjs';
 import { FIXTURE_IMAGE_BASE64 } from './local-image-upstream-fixture.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+    cpSync,
+    existsSync,
+    mkdirSync,
+    mkdtempSync,
+    readFileSync,
+    readdirSync,
+    rmSync,
+    statSync,
+    writeFileSync
+} from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -95,6 +105,48 @@ describe('Agent skill script argument validation', () => {
                 { n: 4, image_backend: 'responses-image-generation' },
                 legacyCapabilities
             )
+        );
+    });
+
+    it('uses the public partial image range for requests that resolve to non-stream mode', () => {
+        const capabilities = agentGenerateCapabilities({
+            upstream_request_headers: {
+                channels: [{ request_modes: ['images-non-stream'] }]
+            },
+            limits: {
+                ...agentGenerateCapabilities().limits,
+                partial_images_by_backend: {
+                    'images-api': { min: 1, max: 3 },
+                    'responses-image-generation': { min: 1, max: 3 }
+                }
+            }
+        });
+
+        assert.doesNotThrow(() =>
+            validateAgentGenerateRequestAgainstCapabilities(
+                { n: 1, partial_images: 0, image_backend: 'images-api', stream_mode: 'non_stream' },
+                capabilities
+            )
+        );
+        assert.doesNotThrow(() =>
+            validateAgentEditRequestAgainstCapabilities(
+                {
+                    n: 1,
+                    partial_images: 4,
+                    image_backend: 'images-api',
+                    stream_mode: 'auto',
+                    streaming_strategy: 'off'
+                },
+                capabilities
+            )
+        );
+        assert.throws(
+            () =>
+                validateAgentGenerateRequestAgainstCapabilities(
+                    { n: 1, partial_images: 4, image_backend: 'images-api', stream_mode: 'auto' },
+                    { ...capabilities, upstream_request_headers: { channels: [{ request_modes: ['images-sse'] }] } }
+                ),
+            /partial_images 必须在当前 capabilities 允许的 1 到 3 之间/
         );
     });
 
@@ -8674,10 +8726,7 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.snapshot.channels[0].channel_id, 'primary');
                 assert.deepEqual(
                     requests.map((item) => `${item.method} ${item.url}`),
-                    [
-                        'GET /playground/api/agent/capabilities',
-                        'GET /playground/api/agent/diagnostics/channel-health'
-                    ]
+                    ['GET /playground/api/agent/capabilities', 'GET /playground/api/agent/diagnostics/channel-health']
                 );
                 assert.equal(requests[0].authorization, 'Bearer channel-health-token');
                 assert.equal(requests[1].authorization, 'Bearer channel-health-token');

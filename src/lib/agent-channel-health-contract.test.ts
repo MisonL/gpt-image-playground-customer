@@ -46,7 +46,7 @@ describe('Agent channel health diagnostics contract', () => {
             document.components.schemas.AgentChannelHealthDiagnosticsResponse.properties.state_initialized.type,
             'boolean'
         );
-        assert.equal(document.components.schemas.AgentChannelHealthFailure.properties.message, undefined);
+        assert.equal(Object.hasOwn(document.components.schemas.AgentChannelHealthFailure.properties, 'message'), false);
         assert.deepEqual(document.components.schemas.AgentChannelHealthRequestMode.properties.mode.enum, [
             'images-non-stream',
             'images-sse',

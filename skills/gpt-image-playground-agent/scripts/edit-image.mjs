@@ -428,13 +428,13 @@ function validateUpstreamStreamingOptions(parsed) {
 function hasPageOnlyEditOptions(parsed) {
     return Boolean(
         parsed.formatSpecified ||
-            parsed.outputCompression !== undefined ||
-            parsed.moderation ||
-            parsed.imageBackend ||
-            parsed.responsesModel ||
-            parsed.thinking ||
-            parsed.promptOptimization !== undefined ||
-            parsed.forceWeb !== undefined
+        parsed.outputCompression !== undefined ||
+        parsed.moderation ||
+        parsed.imageBackend ||
+        parsed.responsesModel ||
+        parsed.thinking ||
+        parsed.promptOptimization !== undefined ||
+        parsed.forceWeb !== undefined
     );
 }
 
@@ -575,12 +575,16 @@ try {
     validateAgentEditRequestAgainstCapabilities(
         {
             n: 1,
-            partial_images:
-                options.partialImages !== undefined
-                    ? readPartialImages(options.partialImages, '--partial-images')
-                    : capabilities?.defaults?.partial_images,
+            ...(options.partialImages === undefined
+                ? {}
+                : { partial_images: readPartialImages(options.partialImages, '--partial-images') }),
             imageCount: 1,
-            image_backend: options.imageBackend
+            image_backend: options.imageBackend,
+            stream_mode: options.streamMode,
+            streaming_strategy: options.streamingStrategy,
+            model: options.model,
+            size: options.size,
+            force_request: options.forceRequest
         },
         capabilities
     );
@@ -640,11 +644,6 @@ function buildFormData() {
     if (options.streamingStrategy) formData.append('streaming_strategy', options.streamingStrategy);
     if (options.partialImages !== undefined) {
         formData.append('partial_images', String(readPartialImages(options.partialImages, '--partial-images')));
-    } else if (capabilities?.defaults?.partial_images !== undefined) {
-        formData.append(
-            'partial_images',
-            String(readPartialImages(capabilities.defaults.partial_images, 'capabilities.defaults.partial_images'))
-        );
     }
     if (options.forceRequest) formData.append('force_request', 'true');
     formData.append('image_0', new Blob([imageBuffer], { type: imageType }), path.basename(imagePath));
@@ -681,11 +680,6 @@ function buildPageSseFormData() {
     if (options.streamingStrategy) formData.append('image_streaming_strategy', options.streamingStrategy);
     if (options.partialImages !== undefined) {
         formData.append('partial_images', String(readPartialImages(options.partialImages, '--partial-images')));
-    } else if (capabilities?.defaults?.partial_images !== undefined) {
-        formData.append(
-            'partial_images',
-            String(readPartialImages(capabilities.defaults.partial_images, 'capabilities.defaults.partial_images'))
-        );
     }
     if (passwordHash) formData.append('passwordHash', passwordHash);
     formData.append('image_0', new Blob([imageBuffer], { type: imageType }), path.basename(imagePath));

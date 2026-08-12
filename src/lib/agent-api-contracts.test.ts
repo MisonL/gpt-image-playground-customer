@@ -107,12 +107,14 @@ describe('validateAgentGenerateRequest', () => {
         );
     });
 
-    it('rejects Responses backend partial image counts outside the backend contract', () => {
+    it('rejects Responses streaming partial image counts outside the backend contract', () => {
         assert.throws(
             () =>
                 validateAgentGenerateRequest({
                     prompt: 'draw a responses image',
                     image_backend: 'responses-image-generation',
+                    stream_mode: 'stream',
+                    streaming_strategy: 'responses-sse',
                     partial_images: 0
                 }),
             (error) => {
@@ -164,6 +166,8 @@ describe('validateAgentGenerateRequest', () => {
                     validateAgentGenerateRequest({
                         prompt: 'draw through matsca responses',
                         image_backend: 'responses-image-generation',
+                        stream_mode: 'stream',
+                        streaming_strategy: 'responses-sse',
                         partial_images: 4
                     }),
                 (error) => {
@@ -175,6 +179,207 @@ describe('validateAgentGenerateRequest', () => {
                 }
             );
         } finally {
+            restoreEnv(originalEnv);
+        }
+    });
+
+    it('accepts ignored Responses partial image counts for explicit non-stream requests', () => {
+        const originalEnv = { ...process.env };
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'responses-non-stream';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://responses.example.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'configured';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'responses-non-stream';
+            process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'responses-non-stream-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/responses' } } },
+                constraints: { partial_images: { min: 0, max: 0 } }
+            });
+
+            const request = validateAgentGenerateRequest({
+                prompt: 'draw through responses non-stream',
+                image_backend: 'responses-image-generation',
+                stream_mode: 'non_stream',
+                streaming_strategy: 'off',
+                partial_images: 0
+            });
+
+            assert.equal(request.partial_images, 0);
+        } finally {
+            restoreEnv(originalEnv);
+        }
+    });
+
+    it('validates Responses partial image counts for automatic requests without a non-stream channel', () => {
+        const originalEnv = { ...process.env };
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'responses-sse-only';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://responses.example.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'configured';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'responses-sse';
+            process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'responses-sse-only-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/responses' } } },
+                constraints: { partial_images: { min: 0, max: 0 } }
+            });
+
+            assert.throws(
+                () =>
+                    validateAgentGenerateRequest({
+                        prompt: 'draw through responses sse only',
+                        image_backend: 'responses-image-generation',
+                        stream_mode: 'auto',
+                        streaming_strategy: 'auto',
+                        partial_images: 0
+                    }),
+                (error) => {
+                    assert.ok(error instanceof RequestValidationError);
+                    assert.equal(error.status, 422);
+                    const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                    assert.match(details.fields.partial_images, /1 到 3/);
+                    return true;
+                }
+            );
+        } finally {
+            restoreEnv(originalEnv);
+        }
+    });
+
+    it('chooses an n-compatible SSE preview default for automatic mixed-channel requests', () => {
+        const originalEnv = { ...process.env };
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'non-stream-count-two';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://non-stream.example.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'non-stream-key';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+            process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'non-stream-count-two-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { generate_count: { min: 2, max: 2 } }
+            });
+            process.env.OPENAI_CHANNEL_2_ID = 'sse-count-one';
+            process.env.OPENAI_CHANNEL_2_BASE_URL = 'https://sse.example.com/v1';
+            process.env.OPENAI_CHANNEL_2_API_KEYS = 'sse-key';
+            process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+            process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'sse-count-one-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: {
+                    generate_count: { min: 1, max: 1 },
+                    partial_images: { min: 3, max: 3 }
+                }
+            });
+
+            const request = validateAgentGenerateRequest({
+                prompt: 'automatic mixed-channel preview default',
+                n: 1,
+                stream_mode: 'auto',
+                streaming_strategy: 'auto'
+            });
+
+            assert.equal(request.partial_images, 3);
+        } finally {
+            restoreEnv(originalEnv);
+        }
+    });
+
+    it('chooses an SSE preview default from the channel that accepts the requested background', () => {
+        const originalEnv = { ...process.env };
+        try {
+            process.env.OPENAI_CHANNEL_1_ID = 'openai-sse';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://openai.example.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'openai-key';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-sse';
+            process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'openai-sse-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { partial_images: { min: 1, max: 1 } }
+            });
+            process.env.OPENAI_CHANNEL_2_ID = 'matsca-sse';
+            process.env.OPENAI_CHANNEL_2_BASE_URL = 'https://matsca.example.com/v1';
+            process.env.OPENAI_CHANNEL_2_API_KEYS = 'matsca-key';
+            process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+            process.env.OPENAI_CHANNEL_2_UPSTREAM_PROFILE = 'matsca';
+            process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'matsca-sse-provider',
+                base_profile: 'matsca',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { partial_images: { min: 3, max: 3 } }
+            });
+
+            const request = validateAgentGenerateRequest({
+                prompt: 'automatic background-aware preview default',
+                n: 1,
+                background: 'transparent',
+                stream_mode: 'auto',
+                streaming_strategy: 'auto'
+            });
+
+            assert.equal(request.partial_images, 3);
+        } finally {
+            restoreEnv(originalEnv);
+        }
+    });
+
+    it('chooses a healthy SSE preview default when the non-stream channel is cooling down', async () => {
+        const originalEnv = { ...process.env };
+        let resetServerChannelStateForTests: (() => void) | undefined;
+        try {
+            process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED = 'true';
+            process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_MS = '60000';
+            process.env.OPENAI_CHANNEL_1_ID = 'cooling-non-stream';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://non-stream.example.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'non-stream-key';
+            process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+            process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'cooling-non-stream-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } }
+            });
+            process.env.OPENAI_CHANNEL_2_ID = 'healthy-sse';
+            process.env.OPENAI_CHANNEL_2_BASE_URL = 'https://sse.example.com/v1';
+            process.env.OPENAI_CHANNEL_2_API_KEYS = 'sse-key';
+            process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+            process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+                id: 'healthy-sse-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/images/generations' } } },
+                constraints: { partial_images: { min: 3, max: 3 } }
+            });
+
+            const serverChannelRouter = await import('./server-channel-router');
+            resetServerChannelStateForTests = serverChannelRouter.resetServerChannelStateForTests;
+            const state = serverChannelRouter.getServerChannelState();
+            const coolingCredential = state.config.credentials.find(
+                (credential) => credential.channelId === 'cooling-non-stream'
+            );
+            assert.ok(coolingCredential);
+            state.router?.reportFailure(coolingCredential, {
+                scope: 'channel',
+                requestMode: 'images-non-stream',
+                reason: {
+                    at: Date.now(),
+                    scope: 'channel',
+                    requestMode: 'images-non-stream',
+                    status: 503
+                }
+            });
+
+            const request = validateAgentGenerateRequest({
+                prompt: 'automatic request with a cooling non-stream channel',
+                n: 1,
+                stream_mode: 'auto',
+                streaming_strategy: 'auto'
+            });
+
+            assert.equal(request.partial_images, 3);
+        } finally {
+            resetServerChannelStateForTests?.();
             restoreEnv(originalEnv);
         }
     });
@@ -748,6 +953,25 @@ describe('buildAgentCapabilities', () => {
                     has_extra_headers: false,
                     allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
                     configured_header_names: []
+                },
+                constraints: {
+                    generate_images: { min: 1, max: 10 },
+                    edit_images: { min: 1, max: 10 },
+                    partial_images: { min: 1, max: 3 },
+                    generate_images_by_backend: {
+                        'images-api': { min: 1, max: 10 },
+                        'responses-image-generation': { min: 1, max: 1 }
+                    },
+                    edit_images_by_backend: {
+                        'images-api': { min: 1, max: 10 },
+                        'responses-image-generation': { min: 1, max: 1 }
+                    },
+                    partial_images_by_backend: {
+                        'images-api': { min: 1, max: 3 },
+                        'responses-image-generation': { min: 1, max: 3 }
+                    },
+                    upload_images: { max: 10, max_single_mb: 25 },
+                    gpt_image_2: { allow_transparent_background: false, size_policy: 'openai-compatible' }
                 }
             }
         ]);
@@ -898,7 +1122,7 @@ describe('buildAgentCapabilities', () => {
         assert.equal(capabilities.supported.image_backend_requirements['responses-image-generation'].enabled, false);
         assert.deepEqual(
             capabilities.supported.image_backend_requirements['responses-image-generation'].incompatible_constraints,
-            ['generate_images']
+            ['request_modes']
         );
     });
 
@@ -927,6 +1151,113 @@ describe('buildAgentCapabilities', () => {
             'images-api': { min: 0, max: 0 },
             'responses-image-generation': { min: 1, max: 3 }
         });
+    });
+
+    it('keeps Responses enabled for non-stream requests when only streaming partial images are incompatible', () => {
+        const capabilities = buildAgentCapabilities({
+            ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+            OPENAI_RESPONSES_API_MODEL: 'gpt-5.4',
+            OPENAI_CHANNEL_1_ID: 'responses-non-stream',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://responses.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-non-stream,responses-sse',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'responses-partial-zero-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/responses' } } },
+                constraints: { partial_images: { min: 0, max: 0 } }
+            })
+        });
+
+        const requirement = capabilities.supported.image_backend_requirements['responses-image-generation'];
+        assert.equal(requirement.enabled, true);
+        assert.equal('incompatible_constraints' in requirement, false);
+        assert.deepEqual(requirement.streaming_incompatible_constraints, ['partial_images']);
+        assert.deepEqual(capabilities.supported.enabled_image_backends, ['images-api', 'responses-image-generation']);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.enabled_image_backends, ['images-api']);
+        assert.deepEqual(capabilities.limits.partial_images_by_backend['responses-image-generation'], {
+            min: 1,
+            max: 3
+        });
+    });
+
+    it('does not advertise Responses streaming when no provider supports a preview count', () => {
+        const capabilities = buildAgentCapabilities({
+            ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+            OPENAI_RESPONSES_API_MODEL: 'gpt-5.4',
+            OPENAI_CHANNEL_1_ID: 'no-previews',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://no-previews.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-non-stream,responses-sse',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'no-previews-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/responses' } } },
+                constraints: { partial_images: { min: 0, max: 0 } }
+            }),
+            OPENAI_CHANNEL_2_ID: 'four-previews',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://four-previews.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'configured',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'responses-non-stream,responses-sse',
+            OPENAI_CHANNEL_2_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'four-previews-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/responses' } } },
+                constraints: { partial_images: { min: 4, max: 4 } }
+            })
+        });
+
+        const requirement = capabilities.supported.image_backend_requirements['responses-image-generation'];
+        assert.equal(requirement.enabled, true);
+        assert.deepEqual(requirement.streaming_incompatible_constraints, ['partial_images']);
+        assert.deepEqual(capabilities.supported.enabled_image_backends, ['images-api', 'responses-image-generation']);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.enabled_image_backends, ['images-api']);
+    });
+
+    it('does not combine count and preview support from different Responses credentials', () => {
+        const capabilities = buildAgentCapabilities({
+            ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+            OPENAI_RESPONSES_API_MODEL: 'gpt-5.4',
+            OPENAI_CHANNEL_1_ID: 'count-one-no-preview',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://count-one.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-non-stream,responses-sse',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'count-one-no-preview-provider',
+                base_profile: 'openai-compatible',
+                modes: {
+                    generate: { submit: { path: '/responses' } },
+                    edit: { submit: { path: '/responses' } }
+                },
+                constraints: {
+                    generate_count: { min: 1, max: 1 },
+                    edit_count: { min: 1, max: 1 },
+                    partial_images: { min: 0, max: 0 }
+                }
+            }),
+            OPENAI_CHANNEL_2_ID: 'count-two-preview',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://count-two.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'configured',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'responses-non-stream,responses-sse',
+            OPENAI_CHANNEL_2_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'count-two-preview-provider',
+                base_profile: 'openai-compatible',
+                modes: {
+                    generate: { submit: { path: '/responses' } },
+                    edit: { submit: { path: '/responses' } }
+                },
+                constraints: {
+                    generate_count: { min: 2, max: 2 },
+                    edit_count: { min: 2, max: 2 },
+                    partial_images: { min: 1, max: 1 }
+                }
+            })
+        });
+
+        const requirement = capabilities.supported.image_backend_requirements['responses-image-generation'];
+        assert.equal(requirement.enabled, true);
+        assert.deepEqual(requirement.streaming_incompatible_constraints, ['partial_images']);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.enabled_image_backends, ['images-api']);
     });
 
     it('reports mixed Agent limits when only one OpenAI-compatible channel has provider constraints', () => {
@@ -1027,6 +1358,38 @@ describe('buildAgentCapabilities', () => {
         );
     });
 
+    it('derives Responses image counts from a compatible channel profile', () => {
+        const capabilities = buildAgentCapabilities({
+            ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+            OPENAI_RESPONSES_API_MODEL: 'gpt-5.4',
+            OPENAI_CHANNEL_1_ID: 'fixed-two',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://two.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'two-key',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-non-stream',
+            OPENAI_CHANNEL_1_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'fixed-two-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/responses' } } },
+                constraints: { generate_count: { min: 2, max: 2 } }
+            }),
+            OPENAI_CHANNEL_2_ID: 'one-to-ten',
+            OPENAI_CHANNEL_2_BASE_URL: 'https://one-to-ten.example.com/v1',
+            OPENAI_CHANNEL_2_API_KEYS: 'one-to-ten-key',
+            OPENAI_CHANNEL_2_REQUEST_MODES: 'responses-non-stream',
+            OPENAI_CHANNEL_2_PROVIDER_MANIFEST: JSON.stringify({
+                id: 'one-to-ten-provider',
+                base_profile: 'openai-compatible',
+                modes: { generate: { submit: { path: '/responses' } } },
+                constraints: { generate_count: { min: 1, max: 10 } }
+            })
+        });
+
+        assert.deepEqual(capabilities.limits.generate_images_by_backend['responses-image-generation'], {
+            min: 1,
+            max: 1
+        });
+    });
+
     it('exposes only the runtime-accepted bearer auth scheme when Agent token is configured', () => {
         assert.deepEqual(
             buildAgentAuthCapabilities({
@@ -1061,6 +1424,24 @@ describe('buildAgentCapabilities', () => {
             required_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL'],
             missing_env: []
         });
+    });
+
+    it('does not enable Responses when configured channels expose only Images request modes', () => {
+        const capabilities = buildAgentCapabilities({
+            ENABLE_RESPONSES_IMAGE_BACKEND: 'true',
+            OPENAI_RESPONSES_API_MODEL: 'gpt-5.4',
+            OPENAI_CHANNEL_1_ID: 'images-only',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example.com/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream'
+        });
+
+        const requirement = capabilities.supported.image_backend_requirements['responses-image-generation'];
+        assert.equal(requirement.enabled, false);
+        assert.deepEqual(requirement.incompatible_constraints, ['request_modes']);
+        assert.deepEqual(requirement.streaming_incompatible_constraints, ['streaming_request_modes']);
+        assert.deepEqual(capabilities.supported.enabled_image_backends, ['images-api']);
+        assert.deepEqual(capabilities.agent_streaming.upstream_sse.enabled_image_backends, ['images-api']);
     });
 
     it('exposes page SSE form password auth separately from Agent bearer auth', () => {
@@ -1239,14 +1620,25 @@ describe('buildAgentCapabilities', () => {
         assert.equal(generateProperties.force_web.type, 'boolean');
         assert.equal(generateProperties.force_request.type, 'boolean');
         assert.deepEqual(generateProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
-        assert.deepEqual(generateProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
-        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.partial_images, {
+        assert.deepEqual(generateProperties.partial_images, { type: 'integer', minimum: 0, maximum: 4, default: 2 });
+        const responsesCondition = document.components.schemas.GenerateRequest.allOf[0];
+        assert.ok(responsesCondition?.then && 'allOf' in responsesCondition.then);
+        const responsesAllOf = responsesCondition.then.allOf;
+        assert.ok(Array.isArray(responsesAllOf) && responsesAllOf[1]?.then);
+        assert.deepEqual(responsesAllOf[0]?.then?.properties.partial_images, {
+            type: 'integer',
+            minimum: 0,
+            maximum: 4,
+            default: 2
+        });
+        assert.deepEqual(responsesAllOf[1].then.properties.partial_images, {
             type: 'integer',
             minimum: 1,
             maximum: 3,
             default: 2
         });
-        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.n, {
+        assert.ok(responsesCondition.then && 'properties' in responsesCondition.then);
+        assert.deepEqual(responsesCondition.then.properties.n, {
             type: 'integer',
             minimum: 1,
             maximum: 1,
@@ -1278,7 +1670,7 @@ describe('buildAgentCapabilities', () => {
         assert.ok(forceRequestProperty && typeof forceRequestProperty === 'object' && 'type' in forceRequestProperty);
         assert.equal(forceRequestProperty.type, 'boolean');
         assert.deepEqual(editProperties.n, { type: 'integer', minimum: 1, maximum: 10 });
-        assert.deepEqual(editProperties.partial_images, { type: 'integer', minimum: 1, maximum: 3, default: 2 });
+        assert.deepEqual(editProperties.partial_images, { type: 'integer', minimum: 0, maximum: 4, default: 2 });
         assert.deepEqual(document.components.schemas.EditRequest.required, ['prompt']);
         assert.match(document.components.schemas.EditRequest.description, /至少提供一个 image_0\.\.image_9/);
         assert.deepEqual(
@@ -1537,13 +1929,26 @@ describe('buildAgentCapabilities', () => {
         assert.equal(document.components.schemas.EditRequest.properties.n.maximum, 4);
         assert.equal(document.components.schemas.GenerateRequest.properties.partial_images.minimum, 0);
         assert.equal(document.components.schemas.GenerateRequest.properties.partial_images.maximum, 4);
-        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.partial_images, {
+        const matscaResponsesCondition = document.components.schemas.GenerateRequest.allOf[0];
+        assert.ok(matscaResponsesCondition?.then && 'allOf' in matscaResponsesCondition.then);
+        const matscaResponsesAllOf = matscaResponsesCondition.then.allOf;
+        assert.ok(
+            Array.isArray(matscaResponsesAllOf) && matscaResponsesAllOf[0]?.then && matscaResponsesAllOf[1]?.then
+        );
+        assert.deepEqual(matscaResponsesAllOf[0].then.properties.partial_images, {
+            type: 'integer',
+            minimum: 0,
+            maximum: 4,
+            default: 2
+        });
+        assert.deepEqual(matscaResponsesAllOf[1].then.properties.partial_images, {
             type: 'integer',
             minimum: 1,
             maximum: 3,
             default: 2
         });
-        assert.deepEqual(document.components.schemas.GenerateRequest.allOf[0].then.properties.n, {
+        assert.ok(matscaResponsesCondition.then && 'properties' in matscaResponsesCondition.then);
+        assert.deepEqual(matscaResponsesCondition.then.properties.n, {
             type: 'integer',
             minimum: 1,
             maximum: 1,

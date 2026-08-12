@@ -174,6 +174,25 @@ describe('summarizeImageUpstreamProfile', () => {
         assert.equal(summary.serverConstraintsMixed, true);
         assert.deepEqual(summary.serverConstraintsByProfile, [fixedOne, fixedTwo]);
         assert.ok(summary.serverConstraints.generateCount.min <= summary.serverConstraints.generateCount.max);
-        assert.deepEqual(summary.serverConstraints.generateCount, { min: 1, max: 1 });
+        assert.deepEqual(summary.serverConstraints.generateCount, { min: 1, max: 2 });
+    });
+
+    it('preserves gaps when mixed server count ranges are unioned', () => {
+        const fixedOne = {
+            ...IMAGE_UPSTREAM_PROFILES['openai-compatible'],
+            generateCount: { min: 1, max: 1 }
+        };
+        const fixedThree = {
+            ...IMAGE_UPSTREAM_PROFILES['openai-compatible'],
+            generateCount: { min: 3, max: 3 }
+        };
+
+        const summary = summarizeImageUpstreamProfile({ serverProfiles: [fixedOne, fixedThree] });
+
+        assert.deepEqual(summary.serverConstraints.generateCount, {
+            min: 1,
+            max: 3,
+            allowedValues: [1, 3]
+        });
     });
 });

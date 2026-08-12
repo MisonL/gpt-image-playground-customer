@@ -1,22 +1,32 @@
 import { appLogger } from '@/lib/app-logger';
 import type { ChannelCapacityLease } from '@/lib/channel-capacity-queue';
 import {
+    getEffectiveChannelRequestModes,
     isStreamingChannelRequestMode,
     resolveChannelRequestMode,
     type ChannelRequestMode
 } from '@/lib/channel-request-mode';
-import { type ChannelCredential, resolveEffectiveCredential } from '@/lib/channel-router';
+import {
+    isChannelCredentialRequestModeHealthy,
+    type ChannelCredential,
+    resolveEffectiveCredential
+} from '@/lib/channel-router';
 import {
     RequestValidationError,
     assertSafeApiOverride,
     readCount,
+    readBackground,
+    readImageFiles,
+    readMaskFile,
     readMode,
     readModel,
     readPlainHttpApiBaseUrlAllowlist,
     readRequiredText,
+    readSize,
     readStorageMode,
     validateApiBaseUrl
 } from '@/lib/image-request-utils';
+import type { ImageMode } from '@/lib/image-request-utils';
 import { handleEditImageMode, handleGenerateImageMode } from '@/lib/image-route-mode-handlers';
 import {
     assertResponsesImageBackendAllowed,
@@ -41,6 +51,7 @@ import {
 import {
     clampIntegerToRange,
     getImageBackendCompatibility,
+    isIntegerWithinRange,
     mergeUpstreamHeadersWithFixed,
     readImageUpstreamProfile,
     type PartialImagesCount
@@ -113,6 +124,201 @@ function readErrorCode(error: unknown): string | undefined {
 function toPartialImagesCount(value: number): PartialImagesCount {
     if (value === 0 || value === 1 || value === 2 || value === 3 || value === 4) return value;
     throw new RequestValidationError('partial_images 必须在 0 到 4 之间。');
+}
+
+function readOptionalPositiveCount(formData: FormData, field: string): number | undefined {
+    const value = formData.get(field);
+    if (value === null) return undefined;
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+        throw new RequestValidationError(`${field} 必须是整数。`);
+    }
+    const count = Number(value);
+    if (!Number.isSafeInteger(count) || count < 1) {
+        throw new RequestValidationError(`${field} 必须是正整数。`);
+    }
+    return count;
+}
+
+function readOptionalInteger(formData: FormData, field: string): number | undefined {
+    const value = formData.get(field);
+    if (value === null) return undefined;
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+        throw new RequestValidationError(`${field} 必须是整数。`);
+    }
+    const count = Number(value);
+    if (!Number.isSafeInteger(count)) {
+        throw new RequestValidationError(`${field} 必须是整数。`);
+    }
+    return count;
+}
+
+function readOptionalPartialImages(formData: FormData): number | undefined {
+    const value = readOptionalInteger(formData, 'partial_images');
+    return value === undefined ? undefined : toPartialImagesCount(value);
+}
+
+function isPageCredentialEligible(input: {
+    credential: ChannelCredential;
+    requestMode?: ChannelRequestMode;
+    mode: ImageMode;
+    imageBackend: ImageGenerationBackend;
+    formData: FormData;
+    model: ReturnType<typeof readModel>;
+    forceRequest: boolean;
+    streamMode: ImageStreamMode;
+    streamingStrategy: ImageStreamingStrategy;
+    requestedImageCount?: number;
+    requestedPartialImages?: number;
+}): boolean {
+    if (!input.requestMode) return true;
+    if (
+        input.streamMode === 'auto' &&
+        isStreamingChannelRequestMode(input.requestMode) &&
+        getServerChannelState().streamingAvailability.isUnavailable({
+            channelId: input.credential.channelId,
+            imageBackend: input.imageBackend,
+            streamingStrategy: input.streamingStrategy,
+            operation: input.mode
+        })
+    ) {
+        return false;
+    }
+    const upstreamProfile =
+        input.credential.providerProfile ||
+        readImageUpstreamProfile({
+            explicitProfile: input.credential.upstreamProfile,
+            channelId: input.credential.channelId,
+            baseUrl: input.credential.baseUrl
+        });
+    const validatePartialImages = isStreamingChannelRequestMode(input.requestMode);
+    const compatibility = getImageBackendCompatibility(upstreamProfile, input.mode, input.imageBackend, undefined, {
+        validatePartialImages
+    });
+    const imageCountRange = compatibility.imageCountRange;
+    if (!compatibility.compatible || !imageCountRange) return false;
+    if (input.requestedImageCount !== undefined && !isIntegerWithinRange(input.requestedImageCount, imageCountRange)) {
+        return false;
+    }
+    if (validatePartialImages) {
+        const partialImagesRange = compatibility.partialImagesRange;
+        if (
+            !partialImagesRange ||
+            (input.requestedPartialImages !== undefined &&
+                !isIntegerWithinRange(input.requestedPartialImages, partialImagesRange))
+        ) {
+            return false;
+        }
+    }
+    try {
+        if (input.mode === 'generate') {
+            readBackground(input.formData, input.model, upstreamProfile, { forceRequest: input.forceRequest });
+            readSize(input.formData, 'size', '1024x1024', input.model, upstreamProfile, {
+                forceRequest: input.forceRequest
+            });
+        } else {
+            readSize(input.formData, 'size', 'auto', input.model, upstreamProfile, {
+                forceRequest: input.forceRequest
+            });
+            readImageFiles(input.formData, upstreamProfile);
+            readMaskFile(input.formData, upstreamProfile);
+        }
+        return true;
+    } catch (error) {
+        if (error instanceof RequestValidationError) return false;
+        throw error;
+    }
+}
+
+function validatePageInputAgainstConfiguredProfiles(input: {
+    credentials: readonly ChannelCredential[];
+    formData: FormData;
+    mode: ImageMode;
+    imageBackend: ImageGenerationBackend;
+    model: ReturnType<typeof readModel>;
+    forceRequest: boolean;
+    requestedImageCount?: number;
+    requestedPartialImages?: number;
+    requestModes: readonly ChannelRequestMode[];
+}): void {
+    let firstValidationError: RequestValidationError | undefined;
+    let hasHealthyRequestMode = false;
+    const router = getServerChannelState().router;
+    for (const credential of input.credentials) {
+        const profile =
+            credential.providerProfile ||
+            readImageUpstreamProfile({
+                explicitProfile: credential.upstreamProfile,
+                channelId: credential.channelId,
+                baseUrl: credential.baseUrl
+            });
+        const requestModes = input.requestModes.filter((requestMode) =>
+            getEffectiveChannelRequestModes(credential).includes(requestMode)
+        );
+        if (requestModes.length === 0) continue;
+        for (const requestMode of requestModes) {
+            if (!isChannelCredentialRequestModeHealthy(router, credential, requestMode)) continue;
+            hasHealthyRequestMode = true;
+            try {
+                const validatePartialImages = isStreamingChannelRequestMode(requestMode);
+                const compatibility = getImageBackendCompatibility(profile, input.mode, input.imageBackend, undefined, {
+                    validatePartialImages
+                });
+                const imageCountRange = compatibility.imageCountRange;
+                if (!compatibility.compatible || !imageCountRange) {
+                    throw new RequestValidationError(
+                        compatibility.errors.map((error) => error.message).join(' ') ||
+                            '当前图片后端没有可用的图片数量约束。',
+                        422
+                    );
+                }
+                if (
+                    input.requestedImageCount !== undefined &&
+                    !isIntegerWithinRange(input.requestedImageCount, imageCountRange)
+                ) {
+                    throw new RequestValidationError(
+                        imageCountRange.allowedValues
+                            ? `n 必须是以下值之一：${imageCountRange.allowedValues.join(', ')}。`
+                            : `n 必须在 ${imageCountRange.min} 到 ${imageCountRange.max} 之间。`,
+                        422
+                    );
+                }
+                if (validatePartialImages) {
+                    const partialImagesRange = compatibility.partialImagesRange;
+                    if (
+                        !partialImagesRange ||
+                        (input.requestedPartialImages !== undefined &&
+                            !isIntegerWithinRange(input.requestedPartialImages, partialImagesRange))
+                    ) {
+                        throw new RequestValidationError(
+                            partialImagesRange
+                                ? partialImagesRange.allowedValues
+                                    ? `partial_images 必须是以下值之一：${partialImagesRange.allowedValues.join(', ')}。`
+                                    : `partial_images 必须在 ${partialImagesRange.min} 到 ${partialImagesRange.max} 之间。`
+                                : '当前图片后端没有可用的 partial_images 约束。',
+                            422
+                        );
+                    }
+                }
+                if (input.mode === 'generate') {
+                    readBackground(input.formData, input.model, profile, { forceRequest: input.forceRequest });
+                    readSize(input.formData, 'size', '1024x1024', input.model, profile, {
+                        forceRequest: input.forceRequest
+                    });
+                } else {
+                    readSize(input.formData, 'size', 'auto', input.model, profile, {
+                        forceRequest: input.forceRequest
+                    });
+                    readImageFiles(input.formData, profile);
+                    readMaskFile(input.formData, profile);
+                }
+                return;
+            } catch (error) {
+                if (!(error instanceof RequestValidationError)) throw error;
+                firstValidationError ??= error;
+            }
+        }
+    }
+    if (hasHealthyRequestMode && firstValidationError) throw firstValidationError;
 }
 
 function createAvailabilityKey(input: StreamResolutionInput): StreamingAvailabilityKey {
@@ -241,11 +447,13 @@ function selectPageServerCredential(input: {
     router: NonNullable<ReturnType<typeof getServerChannelState>['router']>;
     affinityKey: string;
     plan: ChannelRequestModePlan;
+    isEligible?: (credential: ChannelCredential, requestMode?: ChannelRequestMode) => boolean;
 }): PageChannelSelection {
     if (input.plan.candidates.length > 1) {
         const selection = input.router.selectWithRequestModes({
             affinityKey: input.affinityKey,
-            requestModes: input.plan.candidates
+            requestModes: input.plan.candidates,
+            isEligible: input.isEligible
         });
         return {
             selectedCredential: selection.credential,
@@ -258,7 +466,8 @@ function selectPageServerCredential(input: {
         return {
             selectedCredential: input.router.select({
                 affinityKey: input.affinityKey,
-                requestMode: input.plan.preferred
+                requestMode: input.plan.preferred,
+                isEligible: input.isEligible
             }),
             requestMode: input.plan.preferred,
             forcedNonStream: !isStreamingChannelRequestMode(input.plan.preferred),
@@ -271,7 +480,8 @@ function selectPageServerCredential(input: {
         return {
             selectedCredential: input.router.select({
                 affinityKey: input.affinityKey,
-                requestMode: input.plan.fallback
+                requestMode: input.plan.fallback,
+                isEligible: input.isEligible
             }),
             requestMode: input.plan.fallback,
             forcedNonStream: true,
@@ -410,7 +620,25 @@ export async function POST(request: NextRequest) {
         const streamMode = readImageStreamMode(formData, process.env);
         const imageBackend = readImageGenerationBackend(formData, process.env);
         const streamingStrategy = readImageStreamingStrategy(formData, process.env);
+        const mode = readMode(formData);
+        const model = readModel(formData);
+        const forceRequest = readBooleanAlias(formData, 'force_request', 'forceRequest') === true;
+        const requestedImageCount = readOptionalPositiveCount(formData, 'n');
+        const requestedPartialImages = readOptionalPartialImages(formData);
         const requestModePlan = resolvePageChannelRequestModePlan({ streamMode, imageBackend, streamingStrategy });
+        if (!requestApiKey && serverChannelRouter) {
+            validatePageInputAgainstConfiguredProfiles({
+                credentials: serverChannelState.config.credentials,
+                formData,
+                mode,
+                imageBackend,
+                model,
+                forceRequest,
+                requestedImageCount,
+                requestedPartialImages,
+                requestModes: requestModePlan.candidates
+            });
+        }
         const channelSelection =
             requestApiKey || !serverChannelRouter
                 ? {
@@ -422,7 +650,21 @@ export async function POST(request: NextRequest) {
                 : selectPageServerCredential({
                       router: serverChannelRouter,
                       affinityKey: readAffinityKey(request.headers),
-                      plan: requestModePlan
+                      plan: requestModePlan,
+                      isEligible: (credential, requestMode) =>
+                          isPageCredentialEligible({
+                              credential,
+                              requestMode,
+                              mode,
+                              imageBackend,
+                              formData,
+                              model,
+                              forceRequest,
+                              streamMode,
+                              streamingStrategy,
+                              requestedImageCount,
+                              requestedPartialImages
+                          })
                   });
         selectedServerCredential = channelSelection.selectedCredential;
         selectedServerRequestMode = channelSelection.requestMode;
@@ -504,10 +746,7 @@ export async function POST(request: NextRequest) {
             accessCookie = buildAccessCookie(appPassword, request.headers);
         }
 
-        const mode = readMode(formData);
         const prompt = readRequiredText(formData, 'prompt');
-        const model = readModel(formData);
-        const forceRequest = readBooleanAlias(formData, 'force_request', 'forceRequest') === true;
         const upstreamStartedAtMs = Date.now();
 
         appLogger.info(`开始处理图片请求。模式：${mode}，模型：${model}`, requestLogContext);
@@ -535,19 +774,24 @@ export async function POST(request: NextRequest) {
         if (!backendCompatibility.compatible) {
             throw new RequestValidationError(backendCompatibility.errors.map((error) => error.message).join(' '), 422);
         }
-        const partialImagesRange = backendCompatibility.partialImagesRange;
-        if (!partialImagesRange) {
-            throw new RequestValidationError('当前图片后端没有可用的 partial_images 约束。', 422);
-        }
-        const partialImagesCount = toPartialImagesCount(
-            readCount(
-                formData,
-                'partial_images',
-                clampIntegerToRange(2, partialImagesRange),
-                partialImagesRange.min,
-                partialImagesRange.max
-            )
-        );
+        const partialImagesCount = streamResolution.streamEnabled
+            ? (() => {
+                  const partialImagesRange = backendCompatibility.partialImagesRange;
+                  if (!partialImagesRange) {
+                      throw new RequestValidationError('当前图片后端没有可用的 partial_images 约束。', 422);
+                  }
+                  return toPartialImagesCount(
+                      readCount(
+                          formData,
+                          'partial_images',
+                          clampIntegerToRange(2, partialImagesRange),
+                          partialImagesRange.min,
+                          partialImagesRange.max,
+                          partialImagesRange
+                      )
+                  );
+              })()
+            : toPartialImagesCount(requestedPartialImages ?? 2);
         appLogger.info('图片上游兼容策略。', {
             ...requestLogContext,
             imageBackend,

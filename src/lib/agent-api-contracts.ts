@@ -4,6 +4,9 @@ import { readAppLogRetentionMetadata, type AppLogRetentionMetadata } from './app
 import {
     CHANNEL_REQUEST_MODES,
     CHANNEL_REQUEST_MODE_ADMIN_CONTROL,
+    getEffectiveChannelRequestModes,
+    isStreamingChannelRequestMode,
+    resolveChannelRequestMode,
     type ChannelRequestMode,
     type ChannelRequestModeDecision
 } from './channel-request-mode';
@@ -18,17 +21,21 @@ import {
 import {
     summarizeImageUpstreamProfile,
     summarizeUpstreamRequestHeaders,
+    buildIntegerRangeOptions,
     clampIntegerToRange,
     getImageBackendCompatibility,
     getImageCountRangeCompatibilityForBackend,
     getImageCountRangeForBackend,
     getPartialImagesRangeCompatibilityForBackend,
     getPartialImagesRangeForBackend,
+    isIntegerWithinRange,
+    readImageUpstreamProfile,
     RESPONSES_IMAGE_COUNT_RANGE,
     RESPONSES_PARTIAL_IMAGES_RANGE,
     type ImageUpstreamProfile,
     type ImageUpstreamProfileId,
     type ImageUpstreamProfileSummary,
+    type NumericRange,
     type PartialImagesCount,
     type UpstreamRequestHeaderSummary
 } from './image-upstream-profile';
@@ -43,6 +50,7 @@ import {
 } from './image-upstream-strategy';
 import { summarizeOpenAIImageTransport, type UpstreamProxySummary } from './openai-image-transport';
 import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
+import { getExistingServerChannelState } from './server-channel-router';
 import { readBooleanEnv } from './server-runtime';
 import {
     GPT_IMAGE_2_EDGE_MULTIPLE,
@@ -53,6 +61,8 @@ import {
     validateGptImage2Size,
     validatePositiveIntegerImageSize
 } from './size-utils';
+
+export type { NumericRange } from './image-upstream-profile';
 
 export const AGENT_API_VERSION = '1.0.0';
 export const AGENT_SCHEMA_VERSION = '2026-07-29';
@@ -113,12 +123,31 @@ export type AgentJobState = (typeof AGENT_JOB_STATES)[number];
 export type AgentRoutingTransport = 'agent_json' | 'agent_job_polling' | 'page_sse';
 export type AgentRoutingStrength = 'default' | 'recommended' | 'explicit';
 export type AgentOrchestrationPolicy = 'server_orchestrated_generate_v1';
+
+export type AgentChannelConstraints = {
+    generate_images: NumericRange;
+    edit_images: NumericRange;
+    partial_images: NumericRange;
+    generate_images_by_backend: Partial<Record<ImageGenerationBackend, NumericRange>>;
+    edit_images_by_backend: Partial<Record<ImageGenerationBackend, NumericRange>>;
+    partial_images_by_backend: Partial<Record<ImageGenerationBackend, NumericRange>>;
+    upload_images: {
+        max: number;
+        max_single_mb: number;
+        max_total_mb?: number;
+    };
+    gpt_image_2: {
+        allow_transparent_background: boolean;
+        size_policy: ImageUpstreamProfile['gptImage2']['sizePolicy'];
+    };
+};
 export type ImageBackendRuntimeRequirement = {
     supported: true;
     enabled: boolean;
     required_env: string[];
     missing_env: string[];
     incompatible_constraints?: string[];
+    streaming_incompatible_constraints?: string[];
 };
 
 export type AgentPageRequestDiagnosticsRetention = AppLogRetentionMetadata & {
@@ -254,6 +283,8 @@ export type AgentCapabilities = {
             request_modes: readonly ChannelRequestMode[];
             request_mode_priority: readonly ChannelRequestMode[];
             request_headers: UpstreamRequestHeaderSummary;
+            constraints: AgentChannelConstraints;
+            healthy_request_modes?: readonly ChannelRequestMode[];
         }>;
     };
     request_mode_controls: {
@@ -281,15 +312,15 @@ export type AgentCapabilities = {
     limits: {
         max_prompt_length: number;
         max_images: number;
-        generate_images: { min: number; max: number };
-        edit_images: { min: number; max: number };
-        generate_images_by_backend: Record<ImageGenerationBackend, { min: number; max: number }>;
-        edit_images_by_backend: Record<ImageGenerationBackend, { min: number; max: number }>;
+        generate_images: NumericRange;
+        edit_images: NumericRange;
+        generate_images_by_backend: Record<ImageGenerationBackend, NumericRange>;
+        edit_images_by_backend: Record<ImageGenerationBackend, NumericRange>;
         upload_images: { max: number };
         max_upload_mb: number;
         max_total_upload_mb?: number;
-        partial_images: { min: number; max: number };
-        partial_images_by_backend: Record<ImageGenerationBackend, { min: number; max: number }>;
+        partial_images: NumericRange;
+        partial_images_by_backend: Record<ImageGenerationBackend, NumericRange>;
         upstream_profile: ImageUpstreamProfileId;
         upstream_profile_mixed: boolean;
     };
@@ -508,14 +539,18 @@ function readIntegerField(
     fallback: number,
     min: number,
     max: number,
-    fields: FieldErrors
+    fields: FieldErrors,
+    range?: NumericRange
 ): number {
     const value = body[field];
     if (value === undefined || value === null || value === '') return fallback;
     const parsed =
         typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
-    if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-        fields[field] = `必须是 ${min} 到 ${max} 之间的整数`;
+    const effectiveRange = range ?? { min, max };
+    if (!isIntegerWithinRange(parsed, effectiveRange)) {
+        fields[field] = effectiveRange.allowedValues
+            ? `必须是以下整数之一：${effectiveRange.allowedValues.join(', ')}`
+            : `必须是 ${min} 到 ${max} 之间的整数`;
         return fallback;
     }
     return parsed;
@@ -652,7 +687,9 @@ function validateAgentImageUpstreamStrategy(input: {
     streamingStrategy: ImageStreamingStrategy;
     fields: FieldErrors;
 }) {
-    if (input.streamMode === 'non_stream') return;
+    if (input.streamMode === 'non_stream' || (input.streamMode === 'auto' && input.streamingStrategy === 'off')) {
+        return;
+    }
     try {
         resolveImageStreamEnabled({
             imageBackend: input.imageBackend,
@@ -669,13 +706,169 @@ function readAgentImageBackendCompatibility(
     profile: ImageUpstreamProfile,
     operation: 'generate' | 'edit',
     imageBackend: ImageGenerationBackend,
-    fields: FieldErrors
+    fields: FieldErrors,
+    options: { validatePartialImages?: boolean } = {}
 ): ReturnType<typeof getImageBackendCompatibility> {
-    const compatibility = getImageBackendCompatibility(profile, operation, imageBackend);
+    const compatibility = getImageBackendCompatibility(profile, operation, imageBackend, undefined, options);
     if (!compatibility.compatible) {
         fields.image_backend = compatibility.errors.map((error) => error.message).join(' ');
     }
     return compatibility;
+}
+
+function shouldValidateAgentPartialImages(input: {
+    imageBackend: ImageGenerationBackend;
+    streamMode: ImageStreamMode;
+    streamingStrategy: ImageStreamingStrategy;
+    hasNonStreamChannel: boolean;
+}): boolean {
+    if (input.streamMode === 'non_stream') return false;
+    if (input.streamMode === 'auto' && input.streamingStrategy === 'off') return false;
+    if (input.streamMode === 'auto' && input.streamingStrategy === 'auto') return !input.hasNonStreamChannel;
+    return true;
+}
+
+function hasConfiguredNonStreamChannel(imageBackend: ImageGenerationBackend): boolean {
+    const requestMode = imageBackend === 'responses-image-generation' ? 'responses-non-stream' : 'images-non-stream';
+    return getChannelPoolSummary(parseChannelPoolConfig(process.env)).channels.some((channel) =>
+        channel.requestModes.includes(requestMode)
+    );
+}
+
+type AgentGenerateCandidate = {
+    profile: ImageUpstreamProfile;
+    requestMode: ChannelRequestMode;
+    partialImagesRange: NumericRange;
+};
+
+function readHealthyCredentialRequestModes(): Map<string, ReadonlySet<ChannelRequestMode>> | undefined {
+    const router = getExistingServerChannelState()?.router;
+    if (!router) return undefined;
+    return new Map(
+        router
+            .getHealthSnapshot()
+            .channels.flatMap((channel) =>
+                channel.credentials.map((credential) => [
+                    credential.credentialId,
+                    new Set(
+                        credential.requestModes
+                            .filter((requestMode) => requestMode.state === 'healthy')
+                            .map((requestMode) => requestMode.mode)
+                    ) as ReadonlySet<ChannelRequestMode>
+                ])
+            )
+    );
+}
+
+function readAgentAutoGenerateCandidates(input: {
+    imageBackend: ImageGenerationBackend;
+    n: number;
+    model: GptImageModel;
+    size: string;
+    background: AgentBackground;
+    forceRequest: boolean;
+}): { nonStream: AgentGenerateCandidate[]; streaming: AgentGenerateCandidate[] } {
+    const serverState = getExistingServerChannelState();
+    const credentials = serverState?.config.credentials ?? parseChannelPoolConfig(process.env).credentials;
+    const healthyModesByCredential = readHealthyCredentialRequestModes();
+    const isAvailable = (credential: (typeof credentials)[number], requestMode: ChannelRequestMode) => {
+        if (!getEffectiveChannelRequestModes(credential).includes(requestMode)) return false;
+        if (
+            isStreamingChannelRequestMode(requestMode) &&
+            serverState?.streamingAvailability.isUnavailable({
+                channelId: credential.channelId,
+                imageBackend: input.imageBackend,
+                streamingStrategy: 'auto',
+                operation: 'generate'
+            })
+        ) {
+            return false;
+        }
+        return (
+            healthyModesByCredential === undefined ||
+            healthyModesByCredential.get(credential.id)?.has(requestMode) === true
+        );
+    };
+    const nonStreamRequestMode = resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: false });
+    const streamingRequestMode = resolveChannelRequestMode({ imageBackend: input.imageBackend, streamEnabled: true });
+    const candidates = (requestMode: ChannelRequestMode, validatePartialImages: boolean) =>
+        credentials.flatMap((credential) => {
+            if (!isAvailable(credential, requestMode)) return [];
+            const profile =
+                credential.providerProfile ||
+                readImageUpstreamProfile({
+                    explicitProfile: credential.upstreamProfile,
+                    channelId: credential.channelId,
+                    baseUrl: credential.baseUrl
+                });
+            const compatibility = getImageBackendCompatibility(profile, 'generate', input.imageBackend, undefined, {
+                validatePartialImages
+            });
+            const imageCountRange = compatibility.imageCountRange;
+            const partialImagesRange = compatibility.partialImagesRange;
+            if (!compatibility.compatible || !imageCountRange || !isIntegerWithinRange(input.n, imageCountRange)) {
+                return [];
+            }
+            if (!input.forceRequest) {
+                if (
+                    input.model === 'gpt-image-2' &&
+                    input.background === 'transparent' &&
+                    !profile.gptImage2.allowTransparentBackground
+                ) {
+                    return [];
+                }
+                if (input.model === 'gpt-image-2' && input.size !== 'auto') {
+                    const fields: FieldErrors = {};
+                    readSize({ size: input.size }, input.model, fields, '1024x1024', profile);
+                    if (fields.size) return [];
+                }
+            }
+            if (!partialImagesRange) return [];
+            return [{ profile, requestMode, partialImagesRange }];
+        });
+    return {
+        nonStream: candidates(nonStreamRequestMode, false),
+        streaming: candidates(streamingRequestMode, true)
+    };
+}
+
+function resolveAgentAutoPartialImagesDefault(input: {
+    body: Record<string, unknown>;
+    imageBackend: ImageGenerationBackend;
+    streamMode: ImageStreamMode;
+    streamingStrategy: ImageStreamingStrategy;
+    n: number;
+    model: GptImageModel;
+    size: string;
+    background: AgentBackground;
+    forceRequest: boolean;
+}): PartialImagesCount | undefined {
+    if (
+        input.streamMode !== 'auto' ||
+        input.streamingStrategy !== 'auto' ||
+        (input.body.partial_images !== undefined &&
+            input.body.partial_images !== null &&
+            input.body.partial_images !== '')
+    ) {
+        return undefined;
+    }
+
+    const candidates = readAgentAutoGenerateCandidates(input);
+    const nonStreamCandidates = candidates.nonStream;
+    if (nonStreamCandidates.length > 0) {
+        return clampIntegerToRange(
+            AGENT_DEFAULT_PARTIAL_IMAGES,
+            getAgentNonStreamPartialImagesRange()
+        ) as PartialImagesCount;
+    }
+
+    const streamingCandidates = candidates.streaming.map((candidate) => candidate.partialImagesRange);
+    if (streamingCandidates.length === 0) return undefined;
+
+    const defaultRange =
+        streamingCandidates.find((range) => isIntegerWithinRange(AGENT_DEFAULT_PARTIAL_IMAGES, range)) ??
+        streamingCandidates[0];
+    return clampIntegerToRange(AGENT_DEFAULT_PARTIAL_IMAGES, defaultRange) as PartialImagesCount;
 }
 
 function readPartialImagesForBackend(
@@ -683,13 +876,30 @@ function readPartialImagesForBackend(
     imageBackend: ImageGenerationBackend,
     fields: FieldErrors,
     profile: ImageUpstreamProfile,
-    compatibility: ReturnType<typeof getImageBackendCompatibility>
+    compatibility: ReturnType<typeof getImageBackendCompatibility>,
+    options: { validatePartialImages?: boolean; defaultValue?: PartialImagesCount; range?: NumericRange } = {}
 ): PartialImagesCount {
     const limits =
-        compatibility.partialImagesRange ??
-        (imageBackend === 'responses-image-generation' ? RESPONSES_PARTIAL_IMAGES_RANGE : profile.partialImages);
-    const fallback = clampDefaultPartialImages(limits);
-    return readIntegerField(body, 'partial_images', fallback, limits.min, limits.max, fields) as PartialImagesCount;
+        options.range ??
+        (options.validatePartialImages === false
+            ? getAgentNonStreamPartialImagesRange()
+            : (compatibility.partialImagesRange ??
+              (imageBackend === 'responses-image-generation'
+                  ? RESPONSES_PARTIAL_IMAGES_RANGE
+                  : profile.partialImages)));
+    const fallback =
+        options.defaultValue !== undefined
+            ? clampIntegerToRange(options.defaultValue, limits)
+            : clampDefaultPartialImages(limits);
+    return readIntegerField(
+        body,
+        'partial_images',
+        fallback,
+        limits.min,
+        limits.max,
+        fields,
+        limits
+    ) as PartialImagesCount;
 }
 
 function readQuality(body: Record<string, unknown>, fields: FieldErrors): AgentQuality {
@@ -708,6 +918,19 @@ function readBackground(body: Record<string, unknown>, fields: FieldErrors): Age
         return 'auto';
     }
     return value;
+}
+
+function validateAgentGenerateBackground(input: {
+    model: GptImageModel;
+    background: AgentBackground;
+    forceRequest?: boolean;
+    profile: ImageUpstreamProfile;
+    fields: FieldErrors;
+}): void {
+    if (input.forceRequest || input.model !== 'gpt-image-2' || input.background !== 'transparent') return;
+    if (!input.profile.gptImage2.allowTransparentBackground) {
+        input.fields.background = 'gpt-image-2 不支持 transparent 背景。';
+    }
 }
 
 function readModeration(body: Record<string, unknown>, fields: FieldErrors): AgentModeration {
@@ -809,16 +1032,33 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const model = readModel(objectBody, fields);
     const prompt = validatePrompt(objectBody.prompt, fields);
     const imageBackend = readAgentImageBackend(objectBody, fields);
-    const backendCompatibility = readAgentImageBackendCompatibility(
-        upstreamLimits.profile,
+    const streamMode = readAgentStreamMode(objectBody, fields);
+    const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
+    let validatePartialImages = shouldValidateAgentPartialImages({
+        imageBackend,
+        streamMode,
+        streamingStrategy,
+        hasNonStreamChannel: hasConfiguredNonStreamChannel(imageBackend)
+    });
+    let backendCompatibility = readAgentImageBackendCompatibility(
+        upstreamLimits.validationProfile,
         'generate',
         imageBackend,
-        fields
+        fields,
+        { validatePartialImages }
     );
     const imageCountRange = backendCompatibility.imageCountRange ?? RESPONSES_IMAGE_COUNT_RANGE;
-    const n = readIntegerField(objectBody, 'n', imageCountRange.min, imageCountRange.min, imageCountRange.max, fields);
+    const n = readIntegerField(
+        objectBody,
+        'n',
+        imageCountRange.min,
+        imageCountRange.min,
+        imageCountRange.max,
+        fields,
+        imageCountRange
+    );
     const forceRequest = readOptionalBooleanField(objectBody, 'force_request', fields);
-    const size = readSize(objectBody, model, fields, '1024x1024', upstreamLimits.profile, {
+    const size = readSize(objectBody, model, fields, '1024x1024', upstreamLimits.validationProfile, {
         forceRequest: forceRequest === true
     });
     const quality = readQuality(objectBody, fields);
@@ -827,19 +1067,72 @@ export function validateAgentGenerateRequest(body: unknown): AgentGenerateReques
     const background = readBackground(objectBody, fields);
     const moderation = readModeration(objectBody, fields);
     const responseMode = readResponseMode(objectBody, fields);
-    const streamMode = readAgentStreamMode(objectBody, fields);
-    const streamingStrategy = readAgentStreamingStrategy(objectBody, fields);
+    let automaticPartialImagesRange: NumericRange | undefined;
+    if (streamMode === 'auto' && streamingStrategy === 'auto') {
+        const candidates = readAgentAutoGenerateCandidates({
+            imageBackend,
+            n,
+            model,
+            size,
+            background,
+            forceRequest: forceRequest === true
+        });
+        validatePartialImages = candidates.nonStream.length === 0;
+        if (validatePartialImages && candidates.streaming.length > 0) {
+            automaticPartialImagesRange = unionRange(
+                candidates.streaming.map((candidate) => candidate.partialImagesRange),
+                false
+            );
+            backendCompatibility = readAgentImageBackendCompatibility(
+                upstreamLimits.validationProfile,
+                'generate',
+                imageBackend,
+                fields,
+                { validatePartialImages: true }
+            );
+        } else if (!validatePartialImages) {
+            backendCompatibility = readAgentImageBackendCompatibility(
+                upstreamLimits.validationProfile,
+                'generate',
+                imageBackend,
+                fields,
+                { validatePartialImages: false }
+            );
+        }
+    }
     const partialImages = readPartialImagesForBackend(
         objectBody,
         imageBackend,
         fields,
-        upstreamLimits.profile,
-        backendCompatibility
+        upstreamLimits.validationProfile,
+        backendCompatibility,
+        {
+            validatePartialImages,
+            defaultValue: resolveAgentAutoPartialImagesDefault({
+                body: objectBody,
+                imageBackend,
+                streamMode,
+                streamingStrategy,
+                n,
+                model,
+                size,
+                background,
+                forceRequest: forceRequest === true
+            }),
+            range: automaticPartialImagesRange
+        }
     );
     const responsesModel = readAgentResponsesModel(objectBody, imageBackend, fields);
     const thinking = readAgentThinking(objectBody, fields);
     const promptOptimization = readOptionalBooleanField(objectBody, 'promptOptimization', fields);
     const forceWeb = readOptionalBooleanField(objectBody, 'force_web', fields);
+    validateAgentGenerateBackground({
+        model,
+        background,
+        forceRequest: forceRequest === true,
+        profile: upstreamLimits.validationProfile,
+        fields
+    });
     validateAgentImageUpstreamStrategy({ imageBackend, streamMode, streamingStrategy, fields });
 
     if (Object.keys(fields).length > 0) {
@@ -1002,19 +1295,41 @@ export function buildPageRequestDiagnosticsNoMatchNote(input: {
 }
 
 function readEnabledImageBackends(
-    requirements: Record<ImageGenerationBackend, ImageBackendRuntimeRequirement>
+    requirements: Record<ImageGenerationBackend, ImageBackendRuntimeRequirement>,
+    mode: 'request' | 'streaming' = 'request'
 ): ImageGenerationBackend[] {
-    return requirements['responses-image-generation'].enabled
-        ? ['images-api', 'responses-image-generation']
-        : ['images-api'];
+    const responses = requirements['responses-image-generation'];
+    const responsesEnabled =
+        responses.enabled &&
+        (mode !== 'streaming' || (responses.streaming_incompatible_constraints?.length ?? 0) === 0);
+    return responsesEnabled ? ['images-api', 'responses-image-generation'] : ['images-api'];
 }
+
+type ImageBackendCapabilityChannel = {
+    effectiveProfile: ImageUpstreamProfile;
+    requestModes: readonly ChannelRequestMode[];
+};
 
 function buildImageBackendRequirements(
     env: Record<string, string | undefined>,
-    profile: ImageUpstreamProfile
+    profile: ImageUpstreamProfile,
+    profiles: ImageUpstreamProfile[] = [profile],
+    channels: readonly ImageBackendCapabilityChannel[] = []
 ): Record<ImageGenerationBackend, ImageBackendRuntimeRequirement> {
     const responsesMissingEnv = readResponsesImageBackendMissingEnv(env);
-    const incompatibleConstraints = readResponsesImageBackendIncompatibleConstraints(profile);
+    const eligibleProfiles = profiles.length > 0 ? profiles : [profile];
+    const incompatibleConstraints = readResponsesImageBackendIncompatibleConstraints(
+        profile,
+        false,
+        eligibleProfiles,
+        channels
+    );
+    const streamingIncompatibleConstraints = readResponsesImageBackendIncompatibleConstraints(
+        profile,
+        true,
+        eligibleProfiles,
+        channels
+    ).filter((constraint) => !incompatibleConstraints.includes(constraint));
     return {
         'images-api': {
             supported: true,
@@ -1027,21 +1342,60 @@ function buildImageBackendRequirements(
             enabled: responsesMissingEnv.length === 0 && incompatibleConstraints.length === 0,
             required_env: ['ENABLE_RESPONSES_IMAGE_BACKEND', 'OPENAI_RESPONSES_API_MODEL'],
             missing_env: responsesMissingEnv,
-            ...(incompatibleConstraints.length > 0 ? { incompatible_constraints: incompatibleConstraints } : {})
+            ...(incompatibleConstraints.length > 0 ? { incompatible_constraints: incompatibleConstraints } : {}),
+            ...(streamingIncompatibleConstraints.length > 0
+                ? { streaming_incompatible_constraints: streamingIncompatibleConstraints }
+                : {})
         }
     };
 }
 
-function readResponsesImageBackendIncompatibleConstraints(profile: ImageUpstreamProfile): string[] {
+function readResponsesImageBackendIncompatibleConstraints(
+    profile: ImageUpstreamProfile,
+    validatePartialImages: boolean,
+    profiles: ImageUpstreamProfile[] = [profile],
+    channels: readonly ImageBackendCapabilityChannel[] = []
+): string[] {
+    const hasConfiguredChannels = channels.length > 0;
+    const requestModes = validatePartialImages
+        ? (['responses-sse'] as const)
+        : (['responses-non-stream', 'responses-sse'] as const);
+    const modeChannels = channels.filter((channel) =>
+        requestModes.some((requestMode) => channel.requestModes.includes(requestMode))
+    );
+    if (hasConfiguredChannels && modeChannels.length === 0) {
+        return [validatePartialImages ? 'streaming_request_modes' : 'request_modes'];
+    }
+    const eligibleProfiles = hasConfiguredChannels
+        ? modeChannels.map((channel) => channel.effectiveProfile)
+        : profiles.length > 0
+          ? profiles
+          : [profile];
     const incompatible: string[] = [];
-    if (!getImageCountRangeCompatibilityForBackend(profile, 'generate', 'responses-image-generation').compatible) {
+    const supportsResponsesGenerate = (candidate: ImageUpstreamProfile) =>
+        getImageCountRangeCompatibilityForBackend(candidate, 'generate', 'responses-image-generation').compatible;
+    const supportsResponsesEdit = (candidate: ImageUpstreamProfile) =>
+        getImageCountRangeCompatibilityForBackend(candidate, 'edit', 'responses-image-generation').compatible;
+    const supportsResponsesPartialImages = (candidate: ImageUpstreamProfile) =>
+        getPartialImagesRangeCompatibilityForBackend(candidate, 'responses-image-generation').compatible;
+    const hasResponsesGenerate = eligibleProfiles.some((candidate) => supportsResponsesGenerate(candidate));
+    const hasResponsesEdit = eligibleProfiles.some((candidate) => supportsResponsesEdit(candidate));
+    if (!hasResponsesGenerate) {
         incompatible.push('generate_images');
     }
-    if (!getImageCountRangeCompatibilityForBackend(profile, 'edit', 'responses-image-generation').compatible) {
+    if (!hasResponsesEdit) {
         incompatible.push('edit_images');
     }
-    if (!getPartialImagesRangeCompatibilityForBackend(profile, 'responses-image-generation').compatible) {
-        incompatible.push('partial_images');
+    if (validatePartialImages && hasResponsesGenerate && hasResponsesEdit) {
+        const hasStreamingGenerate = eligibleProfiles.some(
+            (candidate) => supportsResponsesGenerate(candidate) && supportsResponsesPartialImages(candidate)
+        );
+        const hasStreamingEdit = eligibleProfiles.some(
+            (candidate) => supportsResponsesEdit(candidate) && supportsResponsesPartialImages(candidate)
+        );
+        if (!hasStreamingGenerate || !hasStreamingEdit) {
+            incompatible.push('partial_images');
+        }
     }
     return incompatible;
 }
@@ -1069,16 +1423,38 @@ function readPositiveIntegerEnv(env: Record<string, string | undefined>, fieldNa
 
 export function buildAgentCapabilities(env: Record<string, string | undefined>): AgentCapabilities {
     const upstreamLimits = buildAgentUpstreamLimits(env);
-    const imageBackendRequirements = buildImageBackendRequirements(env, upstreamLimits.profile);
+    const channelSummary = getChannelPoolSummary(parseChannelPoolConfig(env));
+    const normalizedGenerateImages = getImageCountRangeForBackend(upstreamLimits.profile, 'generate', 'images-api');
+    const normalizedEditImages = getImageCountRangeForBackend(upstreamLimits.profile, 'edit', 'images-api');
+    const imageBackendRequirements = buildImageBackendRequirements(
+        env,
+        upstreamLimits.profile,
+        upstreamLimits.summary.serverConstraintsByProfile,
+        channelSummary.channels
+    );
     const enabledImageBackends = readEnabledImageBackends(imageBackendRequirements);
+    const enabledStreamingImageBackends = readEnabledImageBackends(imageBackendRequirements, 'streaming');
     const responsesBackendEnabled = imageBackendRequirements['responses-image-generation'].enabled;
     const generateImagesByBackend = buildAgentImageCountByBackend(
         upstreamLimits.profile,
         'generate',
-        responsesBackendEnabled
+        responsesBackendEnabled,
+        upstreamLimits.summary.serverConstraintsByProfile,
+        channelSummary.channels
     );
-    const editImagesByBackend = buildAgentImageCountByBackend(upstreamLimits.profile, 'edit', responsesBackendEnabled);
-    const partialImagesByBackend = buildAgentPartialImagesByBackend(upstreamLimits.profile, responsesBackendEnabled);
+    const editImagesByBackend = buildAgentImageCountByBackend(
+        upstreamLimits.profile,
+        'edit',
+        responsesBackendEnabled,
+        upstreamLimits.summary.serverConstraintsByProfile,
+        channelSummary.channels
+    );
+    const partialImagesByBackend = buildAgentPartialImagesByBackend(
+        upstreamLimits.profile,
+        responsesBackendEnabled,
+        upstreamLimits.summary.serverConstraintsByProfile,
+        channelSummary.channels
+    );
     const defaultPartialImages = clampDefaultPartialImages(partialImagesByBackend['images-api']);
     return {
         api_version: AGENT_API_VERSION,
@@ -1100,9 +1476,9 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         },
         limits: {
             max_prompt_length: MAX_PROMPT_LENGTH,
-            max_images: Math.min(upstreamLimits.profile.generateCount.max, upstreamLimits.profile.editCount.max),
-            generate_images: upstreamLimits.profile.generateCount,
-            edit_images: upstreamLimits.profile.editCount,
+            max_images: Math.min(normalizedGenerateImages.max, normalizedEditImages.max),
+            generate_images: normalizedGenerateImages,
+            edit_images: normalizedEditImages,
             generate_images_by_backend: generateImagesByBackend,
             edit_images_by_backend: editImagesByBackend,
             upload_images: { max: upstreamLimits.profile.upload.maxImages },
@@ -1180,7 +1556,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
                     edit: AGENT_UPSTREAM_SSE_EDIT_REQUEST_FIELDS
                 },
                 image_backends: AGENT_IMAGE_BACKENDS,
-                enabled_image_backends: enabledImageBackends,
+                enabled_image_backends: enabledStreamingImageBackends,
                 streaming_strategies: AGENT_STREAMING_STRATEGIES,
                 stream_modes: AGENT_STREAM_MODES,
                 activation_strategies: AGENT_UPSTREAM_SSE_ACTIVATION_STRATEGIES,
@@ -1392,6 +1768,9 @@ function buildAgentUpstreamRequestHeadersCapabilities(
     env: Record<string, string | undefined>
 ): AgentCapabilities['upstream_request_headers'] {
     const channelSummary = getChannelPoolSummary(parseChannelPoolConfig(env));
+    const healthyModesByChannel = readHealthyRequestModesByChannel(
+        channelSummary.channels.map((channel) => channel.id)
+    );
     return {
         default: summarizeUpstreamRequestHeaders(undefined, env),
         channels: channelSummary.channels.map((channel) => ({
@@ -1399,19 +1778,96 @@ function buildAgentUpstreamRequestHeadersCapabilities(
             upstream_proxy: channel.upstreamProxy,
             request_modes: channel.requestModes,
             request_mode_priority: channel.requestModePriority,
-            request_headers: channel.requestHeaders
+            request_headers: channel.requestHeaders,
+            constraints: buildAgentChannelConstraints(channel.effectiveProfile),
+            ...(healthyModesByChannel?.has(channel.id)
+                ? { healthy_request_modes: healthyModesByChannel.get(channel.id) }
+                : {})
         }))
     };
 }
 
+function buildAgentChannelConstraints(profile: ImageUpstreamProfile): AgentChannelConstraints {
+    const generateImagesByBackend: AgentChannelConstraints['generate_images_by_backend'] = {
+        'images-api': getImageCountRangeForBackend(profile, 'generate', 'images-api')
+    };
+    const editImagesByBackend: AgentChannelConstraints['edit_images_by_backend'] = {
+        'images-api': getImageCountRangeForBackend(profile, 'edit', 'images-api')
+    };
+    const partialImagesByBackend: AgentChannelConstraints['partial_images_by_backend'] = {
+        'images-api': getPartialImagesRangeForBackend(profile, 'images-api')
+    };
+    const responseGenerate = getImageCountRangeCompatibilityForBackend(
+        profile,
+        'generate',
+        'responses-image-generation'
+    );
+    const responseEdit = getImageCountRangeCompatibilityForBackend(profile, 'edit', 'responses-image-generation');
+    const responsePartial = getPartialImagesRangeCompatibilityForBackend(profile, 'responses-image-generation');
+    if (responseGenerate.compatible) generateImagesByBackend['responses-image-generation'] = responseGenerate.range;
+    if (responseEdit.compatible) editImagesByBackend['responses-image-generation'] = responseEdit.range;
+    if (responsePartial.compatible) partialImagesByBackend['responses-image-generation'] = responsePartial.range;
+    return {
+        generate_images: getImageCountRangeForBackend(profile, 'generate', 'images-api'),
+        edit_images: getImageCountRangeForBackend(profile, 'edit', 'images-api'),
+        partial_images: getPartialImagesRangeForBackend(profile, 'images-api'),
+        generate_images_by_backend: generateImagesByBackend,
+        edit_images_by_backend: editImagesByBackend,
+        partial_images_by_backend: partialImagesByBackend,
+        upload_images: {
+            max: profile.upload.maxImages,
+            max_single_mb: profile.upload.maxSingleBytes / 1024 / 1024,
+            ...(profile.upload.maxTotalBytes === undefined
+                ? {}
+                : { max_total_mb: profile.upload.maxTotalBytes / 1024 / 1024 })
+        },
+        gpt_image_2: {
+            allow_transparent_background: profile.gptImage2.allowTransparentBackground,
+            size_policy: profile.gptImage2.sizePolicy
+        }
+    };
+}
+
+function readHealthyRequestModesByChannel(
+    channelIds: string[]
+): Map<string, readonly ChannelRequestMode[]> | undefined {
+    const state = getExistingServerChannelState();
+    if (!state) return undefined;
+    const router = state.router;
+    if (!router) return undefined;
+    const configuredIds = Array.from(
+        new Set(state.config.credentials.map((credential) => credential.channelId))
+    ).sort();
+    const expectedIds = Array.from(new Set(channelIds)).sort();
+    if (configuredIds.length !== expectedIds.length || configuredIds.some((id, index) => id !== expectedIds[index])) {
+        return undefined;
+    }
+    const healthy = new Map<string, readonly ChannelRequestMode[]>();
+    for (const channel of router.getHealthSnapshot().channels) {
+        const modes = Array.from(
+            new Set(
+                channel.credentials.flatMap((credential) =>
+                    credential.requestModes
+                        .filter((requestMode) => requestMode.state === 'healthy')
+                        .map((requestMode) => requestMode.mode)
+                )
+            )
+        );
+        healthy.set(channel.channelId, modes);
+    }
+    return healthy;
+}
+
 function buildAgentUpstreamLimits(env: Record<string, string | undefined>): {
     profile: ImageUpstreamProfile;
+    validationProfile: ImageUpstreamProfile;
     summary: ImageUpstreamProfileSummary;
 } {
     const serverProfiles = readServerProfiles(env);
     const summary = summarizeImageUpstreamProfile({ serverProfiles });
     return {
         profile: summary.activeConstraints,
+        validationProfile: buildAgentRequestValidationProfile(summary),
         summary
     };
 }
@@ -1420,31 +1876,123 @@ function readServerProfiles(env: Record<string, string | undefined>): ImageUpstr
     return getChannelPoolSummary(parseChannelPoolConfig(env)).channels.map((channel) => channel.effectiveProfile);
 }
 
+function buildAgentRequestValidationProfile(summary: ImageUpstreamProfileSummary): ImageUpstreamProfile {
+    const profiles = summary.serverConstraintsByProfile;
+    if (profiles.length <= 1 || (!summary.serverProfileMixed && !summary.serverConstraintsMixed)) {
+        return summary.activeConstraints;
+    }
+    return {
+        ...summary.activeConstraints,
+        generateCount: unionRange(
+            profiles.map((profile) => profile.generateCount),
+            true
+        ),
+        editCount: unionRange(
+            profiles.map((profile) => profile.editCount),
+            true
+        ),
+        partialImages: unionRange(
+            profiles.map((profile) => profile.partialImages),
+            false
+        ),
+        upload: {
+            maxImages: Math.max(...profiles.map((profile) => profile.upload.maxImages)),
+            maxSingleBytes: Math.max(...profiles.map((profile) => profile.upload.maxSingleBytes)),
+            ...(maxDefined(profiles.map((profile) => profile.upload.maxTotalBytes)) !== undefined
+                ? { maxTotalBytes: maxDefined(profiles.map((profile) => profile.upload.maxTotalBytes)) }
+                : {})
+        },
+        gptImage2: {
+            allowTransparentBackground: profiles.some((profile) => profile.gptImage2.allowTransparentBackground),
+            sizePolicy: profiles.some((profile) => profile.gptImage2.sizePolicy === 'positive-integer')
+                ? 'positive-integer'
+                : 'openai-compatible'
+        }
+    };
+}
+
+function unionRange(ranges: NumericRange[], positive: boolean): NumericRange {
+    const values = ranges
+        .flatMap((range) => buildIntegerRangeOptions(range))
+        .filter((value) => !positive || value >= 1);
+    return numericRangeFromValues(values);
+}
+
+function numericRangeFromValues(values: number[]): NumericRange {
+    const normalized = Array.from(new Set(values.filter(Number.isInteger))).sort((left, right) => left - right);
+    const min = normalized[0];
+    const max = normalized[normalized.length - 1];
+    if (min === undefined || max === undefined) return { min: 1, max: 0 };
+    return normalized.length === max - min + 1 ? { min, max } : { min, max, allowedValues: normalized };
+}
+
+function maxDefined(values: Array<number | undefined>): number | undefined {
+    const defined = values.filter((value): value is number => value !== undefined);
+    return defined.length > 0 ? Math.max(...defined) : undefined;
+}
+
 function clampDefaultPartialImages(limits: ImageUpstreamProfile['partialImages']): PartialImagesCount {
     return clampIntegerToRange(AGENT_DEFAULT_PARTIAL_IMAGES, limits) as PartialImagesCount;
 }
 
+export function getAgentNonStreamPartialImagesRange(): NumericRange {
+    return { min: 0, max: 4 };
+}
+
 function buildAgentPartialImagesByBackend(
     profile: ImageUpstreamProfile,
-    responsesBackendEnabled: boolean
-): Record<ImageGenerationBackend, { min: number; max: number }> {
+    responsesBackendEnabled: boolean,
+    profiles: ImageUpstreamProfile[] = [profile],
+    channels: readonly ImageBackendCapabilityChannel[] = []
+): Record<ImageGenerationBackend, NumericRange> {
+    const responseProfiles = getResponsesCapabilityProfiles(profiles, channels);
+    const responsesRanges = responseProfiles.flatMap((candidate) => {
+        const compatibility = getPartialImagesRangeCompatibilityForBackend(candidate, 'responses-image-generation');
+        return compatibility.compatible ? [compatibility.range] : [];
+    });
     return {
         'images-api': getPartialImagesRangeForBackend(profile, 'images-api'),
-        'responses-image-generation': responsesBackendEnabled
-            ? getPartialImagesRangeForBackend(profile, 'responses-image-generation')
-            : { ...RESPONSES_PARTIAL_IMAGES_RANGE }
+        'responses-image-generation':
+            responsesBackendEnabled && responsesRanges.length > 0
+                ? unionRange(responsesRanges, false)
+                : { ...RESPONSES_PARTIAL_IMAGES_RANGE }
     };
 }
 
 function buildAgentImageCountByBackend(
     profile: ImageUpstreamProfile,
     operation: 'generate' | 'edit',
-    responsesBackendEnabled: boolean
-): Record<ImageGenerationBackend, { min: number; max: number }> {
+    responsesBackendEnabled: boolean,
+    profiles: ImageUpstreamProfile[] = [profile],
+    channels: readonly ImageBackendCapabilityChannel[] = []
+): Record<ImageGenerationBackend, NumericRange> {
+    const responseProfiles = getResponsesCapabilityProfiles(profiles, channels);
+    const responsesRanges = responseProfiles.flatMap((candidate) => {
+        const compatibility = getImageCountRangeCompatibilityForBackend(
+            candidate,
+            operation,
+            'responses-image-generation'
+        );
+        return compatibility.compatible ? [compatibility.range] : [];
+    });
     return {
         'images-api': getImageCountRangeForBackend(profile, operation, 'images-api'),
-        'responses-image-generation': responsesBackendEnabled
-            ? getImageCountRangeForBackend(profile, operation, 'responses-image-generation')
-            : { ...RESPONSES_IMAGE_COUNT_RANGE }
+        'responses-image-generation':
+            responsesBackendEnabled && responsesRanges.length > 0
+                ? unionRange(responsesRanges, true)
+                : { ...RESPONSES_IMAGE_COUNT_RANGE }
     };
+}
+
+function getResponsesCapabilityProfiles(
+    profiles: ImageUpstreamProfile[],
+    channels: readonly ImageBackendCapabilityChannel[]
+): ImageUpstreamProfile[] {
+    if (channels.length === 0) return profiles.length > 0 ? profiles : [];
+    return channels
+        .filter(
+            (channel) =>
+                channel.requestModes.includes('responses-non-stream') || channel.requestModes.includes('responses-sse')
+        )
+        .map((channel) => channel.effectiveProfile);
 }

@@ -3,6 +3,7 @@ import {
     createChannelRouter,
     describeChannelFailure,
     getChannelPoolSummary,
+    isChannelCredentialRequestModeHealthy,
     isChannelFailure,
     isChannelRequestModeFailure,
     isCredentialFailure,
@@ -268,6 +269,25 @@ describe('parseChannelPoolConfig', () => {
                 }),
             /REQUEST_MODE_PRIORITY.*不在白名单/
         );
+    });
+});
+
+describe('request mode health helpers', () => {
+    it('tracks request-mode cooldown independently', () => {
+        const config = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'mixed',
+            OPENAI_CHANNEL_1_API_KEYS: 'configured',
+            OPENAI_CHANNEL_1_REQUEST_MODES: 'images-non-stream,images-sse'
+        });
+        const router = createChannelRouter({ ...config, now: () => 1000, failureCooldownMs: 100 });
+        const credential = config.credentials[0];
+        assert.ok(credential);
+
+        assert.equal(isChannelCredentialRequestModeHealthy(router, credential, 'images-non-stream'), true);
+        assert.equal(isChannelCredentialRequestModeHealthy(router, credential, 'images-sse'), true);
+        router.reportFailure(credential, { scope: 'channel', requestMode: 'images-non-stream' });
+        assert.equal(isChannelCredentialRequestModeHealthy(router, credential, 'images-non-stream'), false);
+        assert.equal(isChannelCredentialRequestModeHealthy(router, credential, 'images-sse'), true);
     });
 });
 

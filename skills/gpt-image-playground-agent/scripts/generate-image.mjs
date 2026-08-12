@@ -83,7 +83,6 @@ const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1' || process.argv.includes('--contract-check');
 let pageSseClientRequestIdMaxLength = DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH;
-let pageSsePartialImages = 2;
 let options;
 try {
     options = parseArgs(process.argv.slice(2));
@@ -191,8 +190,14 @@ try {
     validateAgentGenerateRequestAgainstCapabilities(
         {
             n: requestBody.n,
-            partial_images: requestBody.partial_images ?? capabilities?.defaults?.partial_images,
-            image_backend: requestBody.image_backend
+            ...(requestBody.partial_images === undefined ? {} : { partial_images: requestBody.partial_images }),
+            image_backend: requestBody.image_backend,
+            stream_mode: requestBody.stream_mode,
+            streaming_strategy: requestBody.streaming_strategy,
+            model: requestBody.model,
+            size: requestBody.size,
+            background: requestBody.background,
+            force_request: requestBody.force_request
         },
         capabilities
     );
@@ -692,10 +697,6 @@ function applyCapabilitiesRuntimeValues(capabilitiesValue) {
     if (Number.isSafeInteger(maxLength) && maxLength > 0) {
         pageSseClientRequestIdMaxLength = maxLength;
     }
-    const defaultPartialImages = capabilitiesValue?.defaults?.partial_images;
-    if (defaultPartialImages !== undefined) {
-        pageSsePartialImages = readPartialImages(defaultPartialImages, 'capabilities.defaults.partial_images');
-    }
 }
 
 async function runGenerateRequest(options = {}) {
@@ -836,7 +837,9 @@ function buildPageSseFormData() {
     formData.append('response_mode', requestBody.response_mode);
     formData.append('clientRequestId', idempotencyKey);
     if (requestBody.stream_mode) formData.append('stream_mode', requestBody.stream_mode);
-    formData.append('partial_images', String(requestBody.partial_images ?? pageSsePartialImages));
+    if (requestBody.partial_images !== undefined) {
+        formData.append('partial_images', String(requestBody.partial_images));
+    }
     if (requestBody.image_backend)
         formData.append('image_backend', normalizeImageBackendForPage(requestBody.image_backend));
     if (requestBody.responsesModel) formData.append('responsesModel', requestBody.responsesModel);
@@ -1649,7 +1652,7 @@ function supportsJobPolling(capabilitiesValue) {
 function supportsServerOrchestration(capabilitiesValue) {
     return Boolean(
         capabilitiesValue?.orchestration?.supported === true &&
-            capabilitiesValue.orchestration.transport_selection === 'server_owned'
+        capabilitiesValue.orchestration.transport_selection === 'server_owned'
     );
 }
 
@@ -1718,10 +1721,10 @@ function createPageSseHttpError(status, detail) {
 function isPageSseRequestRejected(error) {
     return Boolean(
         error &&
-            typeof error === 'object' &&
-            Number.isInteger(error.status) &&
-            error.status >= 400 &&
-            error.status < 500
+        typeof error === 'object' &&
+        Number.isInteger(error.status) &&
+        error.status >= 400 &&
+        error.status < 500
     );
 }
 

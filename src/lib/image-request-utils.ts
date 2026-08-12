@@ -1,5 +1,10 @@
 import { MAX_OPENAI_UPLOAD_BYTES, MAX_PROMPT_LENGTH } from './image-request-limits';
-import { IMAGE_UPSTREAM_PROFILES, type ImageUpstreamProfile } from './image-upstream-profile';
+import {
+    IMAGE_UPSTREAM_PROFILES,
+    isIntegerWithinRange,
+    type ImageUpstreamProfile,
+    type NumericRange
+} from './image-upstream-profile';
 import { validateGptImage2Size } from './size-utils';
 import { promisify } from 'node:util';
 import { inflate } from 'node:zlib';
@@ -102,15 +107,27 @@ export function readModel(formData: FormData): GptImageModel {
     return value;
 }
 
-export function readCount(formData: FormData, field: string, fallback: number, min: number, max: number): number {
+export function readCount(
+    formData: FormData,
+    field: string,
+    fallback: number,
+    min: number,
+    max: number,
+    range?: NumericRange
+): number {
     const rawValue = formData.get(field);
     if (rawValue === null) return fallback;
     if (typeof rawValue !== 'string' || !/^\d+$/.test(rawValue)) {
         throw new RequestValidationError(`${field} 必须是整数。`);
     }
     const value = Number(rawValue);
-    if (!Number.isInteger(value) || value < min || value > max) {
-        throw new RequestValidationError(`${field} 必须在 ${min} 到 ${max} 之间。`);
+    const effectiveRange = range ?? { min, max };
+    if (!isIntegerWithinRange(value, effectiveRange)) {
+        throw new RequestValidationError(
+            effectiveRange.allowedValues
+                ? `${field} 必须是以下值之一：${effectiveRange.allowedValues.join(', ')}。`
+                : `${field} 必须在 ${min} 到 ${max} 之间。`
+        );
     }
     return value;
 }

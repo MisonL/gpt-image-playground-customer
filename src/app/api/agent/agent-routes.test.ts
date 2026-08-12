@@ -165,6 +165,25 @@ describe('Agent route integration', () => {
                     has_extra_headers: true,
                     allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
                     configured_header_names: ['user-agent', 'x-app-id', 'x-app-secret', 'x-trace-token']
+                },
+                constraints: {
+                    generate_images: { min: 1, max: 4 },
+                    edit_images: { min: 1, max: 4 },
+                    partial_images: { min: 0, max: 4 },
+                    generate_images_by_backend: {
+                        'images-api': { min: 1, max: 4 },
+                        'responses-image-generation': { min: 1, max: 1 }
+                    },
+                    edit_images_by_backend: {
+                        'images-api': { min: 1, max: 4 },
+                        'responses-image-generation': { min: 1, max: 1 }
+                    },
+                    partial_images_by_backend: {
+                        'images-api': { min: 0, max: 4 },
+                        'responses-image-generation': { min: 1, max: 3 }
+                    },
+                    upload_images: { max: 8, max_single_mb: 10, max_total_mb: 80 },
+                    gpt_image_2: { allow_transparent_background: true, size_policy: 'positive-integer' }
                 }
             }
         ]);
@@ -220,6 +239,25 @@ describe('Agent route integration', () => {
                     has_extra_headers: false,
                     allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
                     configured_header_names: []
+                },
+                constraints: {
+                    generate_images: { min: 1, max: 10 },
+                    edit_images: { min: 1, max: 10 },
+                    partial_images: { min: 1, max: 3 },
+                    generate_images_by_backend: {
+                        'images-api': { min: 1, max: 10 },
+                        'responses-image-generation': { min: 1, max: 1 }
+                    },
+                    edit_images_by_backend: {
+                        'images-api': { min: 1, max: 10 },
+                        'responses-image-generation': { min: 1, max: 1 }
+                    },
+                    partial_images_by_backend: {
+                        'images-api': { min: 1, max: 3 },
+                        'responses-image-generation': { min: 1, max: 3 }
+                    },
+                    upload_images: { max: 10, max_single_mb: 25 },
+                    gpt_image_2: { allow_transparent_background: false, size_policy: 'openai-compatible' }
                 }
             }
         ]);
@@ -433,6 +471,25 @@ describe('Agent route integration', () => {
                     has_extra_headers: true,
                     allowed_header_names: ['user-agent', 'x-app-id', 'x-app-secret'],
                     configured_header_names: ['user-agent', 'x-app-id', 'x-app-secret', 'x-trace-token']
+                },
+                constraints: {
+                    generate_images: { min: 1, max: 4 },
+                    edit_images: { min: 1, max: 4 },
+                    partial_images: { min: 0, max: 4 },
+                    generate_images_by_backend: {
+                        'images-api': { min: 1, max: 4 },
+                        'responses-image-generation': { min: 1, max: 1 }
+                    },
+                    edit_images_by_backend: {
+                        'images-api': { min: 1, max: 4 },
+                        'responses-image-generation': { min: 1, max: 1 }
+                    },
+                    partial_images_by_backend: {
+                        'images-api': { min: 0, max: 4 },
+                        'responses-image-generation': { min: 1, max: 3 }
+                    },
+                    upload_images: { max: 8, max_single_mb: 10, max_total_mb: 80 },
+                    gpt_image_2: { allow_transparent_background: true, size_policy: 'positive-integer' }
                 }
             }
         ]);
@@ -670,6 +727,292 @@ describe('Agent route integration', () => {
         }
     });
 
+    it('routes mixed provider image counts to the channel that accepts the requested count', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let firstCalls = 0;
+        let secondCalls = 0;
+        const first = await startImageUpstream(() => {
+            firstCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        const second = await startImageUpstream(() => {
+            secondCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'fixed-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = first.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'first-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed-one-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { generate_count: { min: 1, max: 1 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'fixed-two';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = second.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'second-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed-two-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { generate_count: { min: 2, max: 2 } }
+        });
+
+        try {
+            const twoImageResponse = await generateImage(
+                agentJsonRequest('mixed-count-two-key', { prompt: 'mixed provider count two', n: 2 })
+            );
+            assert.equal(twoImageResponse.status, 200);
+            const twoImageBody = await twoImageResponse.json();
+            assert.equal(twoImageBody.execution.selected_channel_id, 'fixed-two');
+            assert.equal(firstCalls, 0);
+            assert.equal(secondCalls, 1);
+
+            const oneImageResponse = await generateImage(
+                agentJsonRequest('mixed-count-one-key', { prompt: 'mixed provider count one', n: 1 })
+            );
+            assert.equal(oneImageResponse.status, 200);
+            const oneImageBody = await oneImageResponse.json();
+            assert.equal(oneImageBody.execution.selected_channel_id, 'fixed-one');
+            assert.equal(firstCalls, 1);
+            assert.equal(secondCalls, 1);
+        } finally {
+            await Promise.all([first.close(), second.close()]);
+        }
+    });
+
+    it('fails explicitly when no mixed-channel provider accepts the requested count', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamCalls = 0;
+        const upstream = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        const backup = await startImageUpstream(() => {
+            upstreamCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'fixed-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'first-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed-one-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { generate_count: { min: 1, max: 1 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'fixed-three';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = backup.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'backup-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed-three-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { generate_count: { min: 3, max: 3 } }
+        });
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('mixed-count-no-provider-key', { prompt: 'mixed provider count gap', n: 2 })
+            );
+            assert.equal(response.status, 422);
+            const body = await response.json();
+            assert.equal(body.error.code, 'validation_error');
+            assert.match(body.error.details.fields.n, /以下整数之一：1, 3/);
+            assert.equal(upstreamCalls, 0);
+        } finally {
+            await Promise.all([upstream.close(), backup.close()]);
+        }
+    });
+
+    it('routes automatic streaming to the mixed-channel credential that accepts partial_images', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let firstCalls = 0;
+        let secondCalls = 0;
+        const first = await startStreamingImageUpstream(() => {
+            firstCalls += 1;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        const second = await startStreamingImageUpstream(() => {
+            secondCalls += 1;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        process.env.OPENAI_ROUTING_STRATEGY = 'round_robin';
+        process.env.OPENAI_CHANNEL_1_ID = 'stream-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = first.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'first-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'stream-one-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { partial_images: { min: 1, max: 1 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'stream-two';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = second.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'second-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'stream-two-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { partial_images: { min: 2, max: 2 } }
+        });
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('mixed-stream-partial-two-key', {
+                    prompt: 'mixed stream partial two',
+                    stream_mode: 'auto',
+                    streaming_strategy: 'auto',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.execution.selected_channel_id, 'stream-two');
+            assert.equal(firstCalls, 0);
+            assert.equal(secondCalls, 1);
+        } finally {
+            await Promise.all([first.close(), second.close()]);
+        }
+    });
+
+    it('skips an Agent SSE channel marked unavailable during automatic routing', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let markedCalls = 0;
+        let healthyCalls = 0;
+        const marked = await startStreamingImageUpstream(() => {
+            markedCalls += 1;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        const healthy = await startStreamingImageUpstream(() => {
+            healthyCalls += 1;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'marked-agent-sse';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = marked.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'marked-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_2_ID = 'healthy-agent-sse';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = healthy.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'healthy-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+        const { getServerChannelState, resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            getServerChannelState().streamingAvailability.markUnavailable({
+                channelId: 'marked-agent-sse',
+                imageBackend: 'images-api',
+                streamingStrategy: 'auto',
+                operation: 'generate',
+                reason: 'test_mark'
+            });
+            const response = await generateImage(
+                agentJsonRequest('agent-marked-sse-key', {
+                    prompt: 'skip marked Agent SSE channel',
+                    stream_mode: 'auto',
+                    streaming_strategy: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.execution.selected_channel_id, 'healthy-agent-sse');
+            assert.equal(markedCalls, 0);
+            assert.equal(healthyCalls, 1);
+        } finally {
+            await Promise.all([marked.close(), healthy.close()]);
+        }
+    });
+
+    it('chooses the n-compatible SSE channel when automatic partial_images is omitted', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let sseCalls = 0;
+        const sse = await startStreamingImageUpstream(() => {
+            sseCalls += 1;
+            return [
+                {
+                    event: 'image_generation.completed',
+                    data: { type: 'image_generation.completed', b64_json: PNG_BASE64 }
+                }
+            ];
+        });
+        process.env.OPENAI_ROUTING_STRATEGY = 'round_robin';
+        process.env.OPENAI_CHANNEL_1_ID = 'non-stream-count-two';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://non-stream.example.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'non-stream-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'non-stream-count-two-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { generate_count: { min: 2, max: 2 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'sse-count-one';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = sse.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'sse-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'sse-count-one-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: {
+                generate_count: { min: 1, max: 1 },
+                partial_images: { min: 3, max: 3 }
+            }
+        });
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('mixed-auto-omitted-partial-key', {
+                    prompt: 'mixed automatic request without an explicit preview count',
+                    n: 1,
+                    stream_mode: 'auto',
+                    streaming_strategy: 'auto'
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.execution.selected_channel_id, 'sse-count-one');
+            assert.equal(body.execution.channel_request_mode, 'images-sse');
+            assert.equal(sseCalls, 1);
+        } finally {
+            await sse.close();
+        }
+    });
+
     it('does not send upstream stream parameters when Agent streaming_strategy is off', async () => {
         const { generateImage } = await loadAgentRoutes();
         let upstreamBody = '';
@@ -692,6 +1035,46 @@ describe('Agent route integration', () => {
             const body = await response.json();
             assert.equal(body.execution.channel_request_mode, 'images-non-stream');
             assert.equal(body.execution.channel_request_mode_fallback_applied, false);
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            assert.equal(upstreamJson.stream, false);
+            assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('ignores Agent non-stream partial_images outside the provider preview range', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startImageUpstream((body) => {
+            upstreamBody = body;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'no-previews';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'test-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'no-previews-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/images/generations' } } },
+            constraints: { partial_images: { min: 0, max: 0 } }
+        });
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-non-stream-ignored-partial-key', {
+                    prompt: 'agent non-stream ignored partial images',
+                    stream_mode: 'auto',
+                    streaming_strategy: 'off',
+                    partial_images: 2
+                })
+            );
+
+            const responseBody = await response.json();
+            assert.equal(response.status, 200, JSON.stringify(responseBody));
             const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
             assert.equal(upstreamJson.stream, false);
             assert.equal(Object.hasOwn(upstreamJson, 'partial_images'), false);
@@ -1225,6 +1608,63 @@ describe('Agent route integration', () => {
         const body = await response.json();
         assert.equal(body.error.code, 'validation_error');
         assert.match(body.error.details.fields.partial_images, /1 到 3/);
+    });
+
+    it('accepts ignored partial_images on non-stream Responses requests with a zero provider range', async () => {
+        const { generateImage } = await loadAgentRoutes();
+        let upstreamBody = '';
+        const upstream = await startResponsesImageJsonUpstream(
+            200,
+            {
+                id: 'response-non-stream-partial-zero',
+                object: 'response',
+                status: 'completed',
+                output: [
+                    {
+                        id: 'image-non-stream-partial-zero',
+                        type: 'image_generation_call',
+                        status: 'completed',
+                        result: PNG_BASE64
+                    }
+                ]
+            },
+            (body) => {
+                upstreamBody = body;
+            }
+        );
+        process.env.ENABLE_RESPONSES_IMAGE_BACKEND = 'true';
+        process.env.OPENAI_RESPONSES_API_MODEL = 'gpt-5.4';
+        process.env.OPENAI_CHANNEL_1_ID = 'responses-non-stream';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'responses-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'responses-non-stream';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'responses-partial-zero-provider',
+            base_profile: 'openai-compatible',
+            modes: { generate: { submit: { path: '/responses' } } },
+            constraints: { partial_images: { min: 0, max: 0 } }
+        });
+
+        try {
+            const response = await generateImage(
+                agentJsonRequest('agent-responses-non-stream-partial-zero-key', {
+                    prompt: 'agent responses non-stream partial zero',
+                    image_backend: 'responses-image-generation',
+                    stream_mode: 'non_stream',
+                    streaming_strategy: 'off',
+                    partial_images: 2
+                })
+            );
+
+            assert.equal(response.status, 200);
+            const responseBody = await response.json();
+            assert.equal(responseBody.execution.channel_request_mode, 'responses-non-stream');
+            const upstreamJson = JSON.parse(upstreamBody) as Record<string, unknown>;
+            const tools = upstreamJson.tools as Array<Record<string, unknown>>;
+            assert.equal('partial_images' in tools[0], false);
+        } finally {
+            await upstream.close();
+        }
     });
 
     it('rejects Agent Images partial_images outside the selected OpenAI-compatible profile before calling upstream', async () => {
@@ -2311,6 +2751,152 @@ describe('Agent route integration', () => {
         assert.equal(upstreamCalls, 1);
 
         await upstream.close();
+    });
+
+    it('routes mixed provider edit counts to the channel that accepts the requested count', async () => {
+        const { editImage } = await loadAgentRoutes();
+        let firstCalls = 0;
+        let secondCalls = 0;
+        const first = await startImageUpstream(() => {
+            firstCalls += 1;
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
+        });
+        const second = await startImageUpstream(() => {
+            secondCalls += 1;
+            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'fixed-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = first.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'first-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed-one-edit-provider',
+            base_profile: 'openai-compatible',
+            modes: { edit: { submit: { path: '/images/edits', content_type: 'multipart/form-data' } } },
+            constraints: { edit_count: { min: 1, max: 1 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'fixed-two';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = second.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'second-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'fixed-two-edit-provider',
+            base_profile: 'openai-compatible',
+            modes: { edit: { submit: { path: '/images/edits', content_type: 'multipart/form-data' } } },
+            constraints: { edit_count: { min: 2, max: 2 } }
+        });
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            const response = await editImage(
+                agentEditRequest('mixed-agent-edit-two-key', 'mixed provider edit count two', {}, { n: '2' })
+            );
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.execution.selected_channel_id, 'fixed-two');
+            assert.equal(firstCalls, 0);
+            assert.equal(secondCalls, 1);
+        } finally {
+            await Promise.all([first.close(), second.close()]);
+        }
+    });
+
+    it('rejects mixed-channel Agent edit partial_images before channel selection', async () => {
+        const { editImage } = await loadAgentRoutes();
+        process.env.OPENAI_CHANNEL_1_ID = 'edit-partial-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://edit-one.example.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'edit-one-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'edit-partial-one-provider',
+            base_profile: 'openai-compatible',
+            modes: { edit: { submit: { path: '/images/edits' } } },
+            constraints: { partial_images: { min: 1, max: 1 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'edit-partial-three';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = 'https://edit-three.example.com/v1';
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'edit-three-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'edit-partial-three-provider',
+            base_profile: 'openai-compatible',
+            modes: { edit: { submit: { path: '/images/edits' } } },
+            constraints: { partial_images: { min: 3, max: 3 } }
+        });
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        const response = await editImage(
+            agentEditRequest(
+                'mixed-edit-partial-invalid-key',
+                'mixed edit partial invalid',
+                {},
+                {
+                    stream_mode: 'stream',
+                    streaming_strategy: 'force-sse',
+                    partial_images: '2'
+                }
+            )
+        );
+
+        assert.equal(response.status, 422);
+        const body = await response.json();
+        assert.equal(body.error.code, 'validation_error');
+        assert.match(body.error.details.fields.partial_images, /partial_images 必须在 1 到 1 之间/);
+    });
+
+    it('ignores cooled non-stream edit channels when validating partial_images', async () => {
+        const { editImage } = await loadAgentRoutes();
+        process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED = 'true';
+        process.env.OPENAI_CHANNEL_1_ID = 'cooled-edit-non-stream';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://cooled-edit.example.com/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'cooled-edit-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'cooled-edit-provider',
+            base_profile: 'openai-compatible',
+            modes: { edit: { submit: { path: '/images/edits' } } },
+            constraints: { partial_images: { min: 0, max: 0 } }
+        });
+        process.env.OPENAI_CHANNEL_2_ID = 'healthy-edit-sse';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = 'https://healthy-edit.example.com/v1';
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'healthy-edit-key';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-sse';
+        process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST = JSON.stringify({
+            id: 'healthy-edit-provider',
+            base_profile: 'openai-compatible',
+            modes: { edit: { submit: { path: '/images/edits' } } },
+            constraints: { partial_images: { min: 3, max: 3 } }
+        });
+        const { getServerChannelState, resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+        const state = getServerChannelState();
+        const cooledCredential = state.config.credentials.find(
+            (credential) => credential.channelId === 'cooled-edit-non-stream'
+        );
+        assert.ok(cooledCredential);
+        assert.ok(state.router);
+        state.router.reportFailure(cooledCredential, { scope: 'channel', requestMode: 'images-non-stream' });
+
+        const response = await editImage(
+            agentEditRequest(
+                'cooled-edit-partial-invalid-key',
+                'cooled edit partial invalid',
+                {},
+                {
+                    stream_mode: 'auto',
+                    streaming_strategy: 'auto',
+                    partial_images: '1'
+                }
+            )
+        );
+
+        assert.equal(response.status, 422);
+        const body = await response.json();
+        assert.equal(body.error.code, 'validation_error');
+        assert.match(body.error.details.fields.partial_images, /partial_images 必须在 3 到 3 之间/);
     });
 
     it('does not consume edit idempotency keys for local input validation failures', async () => {
@@ -4058,15 +4644,23 @@ async function startStreamingResponsesImageUpstream(
 
 async function startResponsesImageJsonUpstream(
     status: number,
-    body: unknown
+    body: unknown,
+    onRequestBody?: (body: string) => void
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
-    const server = http.createServer((request, response) => {
+    const server = http.createServer(async (request, response) => {
         if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
             response.writeHead(404, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({ error: { message: 'not found' } }));
             return;
         }
-        request.resume();
+        if (onRequestBody) {
+            const chunks: Buffer[] = [];
+            request.on('data', (chunk: Buffer) => chunks.push(chunk));
+            await new Promise<void>((resolve) => request.on('end', resolve));
+            onRequestBody(Buffer.concat(chunks).toString('utf8'));
+        } else {
+            request.resume();
+        }
         response.writeHead(status, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify(body));
     });

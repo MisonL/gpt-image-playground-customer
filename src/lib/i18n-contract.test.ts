@@ -218,7 +218,7 @@ function collectUserVisibleTextViolationsFromNode(file: ts.SourceFile, node: ts.
     if (ts.isJsxExpression(node) && node.expression && ts.isStringLiteralLike(node.expression)) {
         reportVisibleTextViolation(file, node, node.expression.text, violations);
     }
-    if (ts.isJsxAttribute(node) && userVisibleAttributeNames.has(node.name.text)) {
+    if (ts.isJsxAttribute(node) && ts.isIdentifier(node.name) && userVisibleAttributeNames.has(node.name.text)) {
         const value = getStaticJsxAttributeValue(node);
         if (value !== undefined) reportVisibleTextViolation(file, node, value, violations);
     }

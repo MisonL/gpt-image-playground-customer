@@ -36,6 +36,7 @@ import type { AgentErrorDiagnostics } from './api-error-response';
 import { appLogger } from './app-logger';
 import type { ChannelCapacityLease } from './channel-capacity-queue';
 import {
+    getEffectiveChannelRequestModes,
     isStreamingChannelRequestMode,
     type ChannelRequestMode,
     type ChannelRequestModeDecision
@@ -44,6 +45,7 @@ import {
     type ChannelCredential,
     type ChannelFailureReport,
     describeChannelFailure,
+    isChannelCredentialRequestModeHealthy,
     isChannelFailure,
     isChannelRequestModeFailure,
     isCredentialFailure,
@@ -78,6 +80,7 @@ import {
     clampIntegerToRange,
     getImageBackendCompatibility,
     getImageCountRangeCompatibilityForBackend,
+    isIntegerWithinRange,
     readImageUpstreamProfile,
     mergeUpstreamHeadersWithFixed,
     summarizeUpstreamRequestHeaders,
@@ -295,9 +298,14 @@ export async function agentBeginResultResponse(
 }
 
 export function prepareAgentGenerate(request: AgentGenerateRequest, headers: Headers): AgentGeneratePreparation {
-    const credentialContext = createOpenAiClient(headers, resolveAgentGenerateChannelRequestModePlan(request));
+    const credentialContext = createOpenAiClient(
+        headers,
+        resolveAgentGenerateChannelRequestModePlan(request),
+        (credential, requestMode) => isAgentGenerateCredentialEligible(request, credential, requestMode)
+    );
     validateAgentGenerateAgainstUpstreamProfile(request, credentialContext.upstreamProfile, {
-        forceRequest: request.force_request === true
+        forceRequest: request.force_request === true,
+        requestMode: credentialContext.channelRequestMode
     });
     return { credentialContext };
 }
@@ -322,8 +330,45 @@ export async function prepareAgentEdit(formData: FormData, headers: Headers): Pr
     const prompt = readRequiredText(formData, 'prompt');
     const model = readModel(formData);
     const forceRequest = readAgentEditForceRequest(formData);
+    const requestedImageCount = readOptionalPositiveCount(formData, 'n');
+    const requestedPartialImages = readAgentEditPartialImages(formData);
+    const streamMode = readAgentEditStreamMode(formData);
+    const streamingStrategy = readAgentEditStreamingStrategy(formData);
+    const requestModePlan = resolveAgentEditChannelRequestModePlan(formData);
     assertImageFilesPresent(formData);
-    const credentialContext = createOpenAiClient(headers, resolveAgentEditChannelRequestModePlan(formData));
+    validateAgentEditInputAgainstConfiguredProfiles({
+        formData,
+        model,
+        forceRequest,
+        requestedImageCount,
+        requestModes: requestModePlan.candidates,
+        streamingStrategy
+    });
+    validateAgentEditPartialImagesAgainstConfiguredChannels({
+        formData,
+        model,
+        forceRequest,
+        requestedImageCount,
+        requestedPartialImages,
+        requestModes: requestModePlan.candidates,
+        streamMode,
+        streamingStrategy
+    });
+    const credentialContext = createOpenAiClient(headers, requestModePlan, (credential, requestMode) =>
+        isAgentEditCredentialEligible(
+            {
+                formData,
+                model,
+                forceRequest,
+                requestedImageCount,
+                requestedPartialImages,
+                streamMode,
+                streamingStrategy
+            },
+            credential,
+            requestMode
+        )
+    );
     const editCountCompatibility = getImageCountRangeCompatibilityForBackend(
         credentialContext.upstreamProfile,
         'edit',
@@ -333,13 +378,17 @@ export async function prepareAgentEdit(formData: FormData, headers: Headers): Pr
         throw new RequestValidationError(editCountCompatibility.error.message, 422);
     }
     const editCountRange = editCountCompatibility.range;
-    const n = readCount(formData, 'n', editCountRange.min, editCountRange.min, editCountRange.max);
+    const n = readCount(formData, 'n', editCountRange.min, editCountRange.min, editCountRange.max, editCountRange);
     const size = readSize(formData, 'size', 'auto', model, credentialContext.upstreamProfile, {
         forceRequest
     }) as OpenAI.Images.ImageEditParams['size'];
     const quality = readEditQuality(formData) as OpenAI.Images.ImageEditParams['quality'];
     const responseMode = readAgentResponseModeFromForm(formData);
-    const streamRequest = readAgentEditStreamRequest(formData, credentialContext.upstreamProfile);
+    const streamRequest = readAgentEditStreamRequest(
+        formData,
+        credentialContext.upstreamProfile,
+        credentialContext.channelRequestMode
+    );
     const imageFiles = readImageFiles(formData, credentialContext.upstreamProfile);
     const maskFile = readMaskFile(formData, credentialContext.upstreamProfile);
     await assertMaskCompatibility(maskFile, imageFiles);
@@ -595,25 +644,33 @@ async function executeAgentGenerateUpstream(
 function validateAgentGenerateAgainstUpstreamProfile(
     request: AgentGenerateRequest,
     upstreamProfile: ImageUpstreamProfile,
-    options: { forceRequest?: boolean } = {}
+    options: { forceRequest?: boolean; requestMode?: ChannelRequestMode } = {}
 ): void {
-    const compatibility = getImageBackendCompatibility(upstreamProfile, 'generate', request.image_backend);
+    const nonStreamResponses = isNonStreamResponsesRequest(request, options.requestMode);
+    const compatibility = getImageBackendCompatibility(upstreamProfile, 'generate', request.image_backend, undefined, {
+        validatePartialImages: !nonStreamResponses
+    });
     if (!compatibility.compatible) {
         throw new RequestValidationError(compatibility.errors.map((error) => error.message).join(' '), 422);
     }
     const imageCountRange = compatibility.imageCountRange;
     const partialImagesRange = compatibility.partialImagesRange;
-    if (!imageCountRange || !partialImagesRange) {
+    if (!imageCountRange) {
         throw new RequestValidationError('当前图片后端没有可用的图片数量约束。', 422);
     }
-    if (request.n < imageCountRange.min || request.n > imageCountRange.max) {
+    if (!isIntegerWithinRange(request.n, imageCountRange)) {
         throw new RequestValidationError(`n 必须在 ${imageCountRange.min} 到 ${imageCountRange.max} 之间。`, 422);
     }
-    if (request.partial_images < partialImagesRange.min || request.partial_images > partialImagesRange.max) {
-        throw new RequestValidationError(
-            `partial_images 必须在 ${partialImagesRange.min} 到 ${partialImagesRange.max} 之间。`,
-            422
-        );
+    if (!nonStreamResponses) {
+        if (!partialImagesRange) {
+            throw new RequestValidationError('当前图片后端没有可用的 partial_images 约束。', 422);
+        }
+        if (!isIntegerWithinRange(request.partial_images, partialImagesRange)) {
+            throw new RequestValidationError(
+                `partial_images 必须在 ${partialImagesRange.min} 到 ${partialImagesRange.max} 之间。`,
+                422
+            );
+        }
     }
     if (options.forceRequest) return;
     if (
@@ -627,6 +684,278 @@ function validateAgentGenerateAgainstUpstreamProfile(
     const formData = new FormData();
     formData.set('size', request.size);
     readSize(formData, 'size', '1024x1024', request.model, upstreamProfile);
+}
+
+function isNonStreamResponsesRequest(request: AgentGenerateRequest, requestMode?: ChannelRequestMode): boolean {
+    if (requestMode) return !isStreamingChannelRequestMode(requestMode);
+    if (request.stream_mode === 'non_stream') return true;
+    return (
+        request.stream_mode === 'auto' &&
+        (request.streaming_strategy === 'auto' || request.streaming_strategy === 'off')
+    );
+}
+
+function isAgentGenerateCredentialEligible(
+    request: AgentGenerateRequest,
+    credential: ChannelCredential,
+    requestMode?: ChannelRequestMode
+): boolean {
+    const serverChannelState = getServerChannelState();
+    if (requestMode && !isChannelCredentialRequestModeHealthy(serverChannelState.router, credential, requestMode)) {
+        return false;
+    }
+    if (
+        requestMode &&
+        isStreamingChannelRequestMode(requestMode) &&
+        serverChannelState.streamingAvailability.isUnavailable({
+            channelId: credential.channelId,
+            imageBackend: request.image_backend,
+            streamingStrategy: request.streaming_strategy,
+            operation: 'generate'
+        })
+    ) {
+        return false;
+    }
+    const nonStreamResponses = isNonStreamResponsesRequest(request, requestMode);
+    const upstreamProfile =
+        credential.providerProfile ||
+        readImageUpstreamProfile({
+            explicitProfile: credential.upstreamProfile,
+            channelId: credential.channelId,
+            baseUrl: credential.baseUrl
+        });
+    const compatibility = getImageBackendCompatibility(upstreamProfile, 'generate', request.image_backend, undefined, {
+        validatePartialImages: !nonStreamResponses
+    });
+    const imageCountRange = compatibility.imageCountRange;
+    if (!compatibility.compatible || !imageCountRange) return false;
+    if (!isIntegerWithinRange(request.n, imageCountRange)) return false;
+    if (!nonStreamResponses) {
+        const partialImagesRange = compatibility.partialImagesRange;
+        if (!partialImagesRange || !isIntegerWithinRange(request.partial_images, partialImagesRange)) {
+            return false;
+        }
+    }
+    if (request.force_request === true) return true;
+    if (
+        request.model === 'gpt-image-2' &&
+        request.background === 'transparent' &&
+        !upstreamProfile.gptImage2.allowTransparentBackground
+    ) {
+        return false;
+    }
+    if (request.model !== 'gpt-image-2' || request.size === 'auto') return true;
+    try {
+        const formData = new FormData();
+        formData.set('size', request.size);
+        readSize(formData, 'size', '1024x1024', request.model, upstreamProfile);
+        return true;
+    } catch (error) {
+        if (error instanceof RequestValidationError) return false;
+        throw error;
+    }
+}
+
+function isAgentEditCredentialEligible(
+    input: {
+        formData: FormData;
+        model: GptImageModel;
+        forceRequest: boolean;
+        requestedImageCount?: number;
+        requestedPartialImages?: number;
+        streamMode: ImageStreamMode;
+        streamingStrategy: ImageStreamingStrategy;
+    },
+    credential: ChannelCredential,
+    requestMode?: ChannelRequestMode
+): boolean {
+    const serverChannelState = getServerChannelState();
+    if (requestMode && !isChannelCredentialRequestModeHealthy(serverChannelState.router, credential, requestMode)) {
+        return false;
+    }
+    if (
+        requestMode &&
+        isStreamingChannelRequestMode(requestMode) &&
+        serverChannelState.streamingAvailability.isUnavailable({
+            channelId: credential.channelId,
+            imageBackend: 'images-api',
+            streamingStrategy: input.streamingStrategy,
+            operation: 'edit'
+        })
+    ) {
+        return false;
+    }
+    const upstreamProfile =
+        credential.providerProfile ||
+        readImageUpstreamProfile({
+            explicitProfile: credential.upstreamProfile,
+            channelId: credential.channelId,
+            baseUrl: credential.baseUrl
+        });
+    const validatePartialImages = requestMode
+        ? isStreamingChannelRequestMode(requestMode)
+        : input.streamMode !== 'non_stream' && !(input.streamMode === 'auto' && input.streamingStrategy === 'off');
+    const compatibility = getImageBackendCompatibility(upstreamProfile, 'edit', 'images-api', undefined, {
+        validatePartialImages
+    });
+    const imageCountRange = compatibility.imageCountRange;
+    if (!compatibility.compatible || !imageCountRange) return false;
+    if (input.requestedImageCount !== undefined && !isIntegerWithinRange(input.requestedImageCount, imageCountRange)) {
+        return false;
+    }
+    if (validatePartialImages) {
+        const partialImagesRange = compatibility.partialImagesRange;
+        if (
+            !partialImagesRange ||
+            (input.requestedPartialImages !== undefined &&
+                !isIntegerWithinRange(input.requestedPartialImages, partialImagesRange))
+        ) {
+            return false;
+        }
+    }
+    try {
+        readImageFiles(input.formData, upstreamProfile);
+        readMaskFile(input.formData, upstreamProfile);
+        readSize(input.formData, 'size', 'auto', input.model, upstreamProfile, { forceRequest: input.forceRequest });
+        return true;
+    } catch (error) {
+        if (error instanceof RequestValidationError) return false;
+        throw error;
+    }
+}
+
+function validateAgentEditInputAgainstConfiguredProfiles(input: {
+    formData: FormData;
+    model: GptImageModel;
+    forceRequest: boolean;
+    requestedImageCount?: number;
+    requestModes: readonly ChannelRequestMode[];
+    streamingStrategy: ImageStreamingStrategy;
+}): void {
+    const serverChannelState = getServerChannelState();
+    const candidates =
+        serverChannelState.config.credentials.length > 0
+            ? serverChannelState.config.credentials.flatMap((credential) => {
+                  const requestModes = input.requestModes.filter((requestMode) => {
+                      if (!getEffectiveChannelRequestModes(credential).includes(requestMode)) return false;
+                      if (!isChannelCredentialRequestModeHealthy(serverChannelState.router, credential, requestMode)) {
+                          return false;
+                      }
+                      return !(
+                          isStreamingChannelRequestMode(requestMode) &&
+                          serverChannelState.streamingAvailability.isUnavailable({
+                              channelId: credential.channelId,
+                              imageBackend: 'images-api',
+                              streamingStrategy: input.streamingStrategy,
+                              operation: 'edit'
+                          })
+                      );
+                  });
+                  if (requestModes.length === 0) {
+                      return [];
+                  }
+                  const profile =
+                      credential.providerProfile ||
+                      readImageUpstreamProfile({
+                          explicitProfile: credential.upstreamProfile,
+                          channelId: credential.channelId,
+                          baseUrl: credential.baseUrl
+                      });
+                  return [profile];
+              })
+            : [readImageUpstreamProfile()];
+    if (candidates.length === 0) return;
+    let firstValidationError: RequestValidationError | undefined;
+    for (const profile of candidates) {
+        try {
+            const countCompatibility = getImageCountRangeCompatibilityForBackend(profile, 'edit', 'images-api');
+            if (!countCompatibility.compatible) {
+                throw new RequestValidationError(countCompatibility.error.message, 422);
+            }
+            const count = input.requestedImageCount;
+            if (count !== undefined && !isIntegerWithinRange(count, countCompatibility.range)) {
+                throw new RequestValidationError(
+                    countCompatibility.range.allowedValues
+                        ? `n 必须是以下值之一：${countCompatibility.range.allowedValues.join(', ')}。`
+                        : `n 必须在 ${countCompatibility.range.min} 到 ${countCompatibility.range.max} 之间。`,
+                    422
+                );
+            }
+            readSize(input.formData, 'size', 'auto', input.model, profile, { forceRequest: input.forceRequest });
+            readImageFiles(input.formData, profile);
+            readMaskFile(input.formData, profile);
+            return;
+        } catch (error) {
+            if (!(error instanceof RequestValidationError)) throw error;
+            firstValidationError ??= error;
+        }
+    }
+    if (firstValidationError) throw firstValidationError;
+}
+
+function validateAgentEditPartialImagesAgainstConfiguredChannels(input: {
+    formData: FormData;
+    model: GptImageModel;
+    forceRequest: boolean;
+    requestedImageCount?: number;
+    requestedPartialImages?: number;
+    requestModes: readonly ChannelRequestMode[];
+    streamMode: ImageStreamMode;
+    streamingStrategy: ImageStreamingStrategy;
+}): void {
+    if (input.requestedPartialImages === undefined) return;
+    const state = getServerChannelState();
+    if (new Set(state.config.credentials.map((credential) => credential.channelId)).size <= 1) return;
+
+    let hasEligibleNonStreamCandidate = false;
+    let hasEligibleStreamingCandidate = false;
+    let firstRangeError: RequestValidationError | undefined;
+    for (const credential of state.config.credentials) {
+        const requestModes = input.requestModes.filter((requestMode) =>
+            getEffectiveChannelRequestModes(credential).includes(requestMode)
+        );
+        for (const requestMode of requestModes) {
+            const eligibleWithoutPartialImages = isAgentEditCredentialEligible(
+                {
+                    formData: input.formData,
+                    model: input.model,
+                    forceRequest: input.forceRequest,
+                    requestedImageCount: input.requestedImageCount,
+                    requestedPartialImages: undefined,
+                    streamMode: input.streamMode,
+                    streamingStrategy: input.streamingStrategy
+                },
+                credential,
+                requestMode
+            );
+            if (!eligibleWithoutPartialImages) continue;
+            if (!isStreamingChannelRequestMode(requestMode)) {
+                hasEligibleNonStreamCandidate = true;
+                continue;
+            }
+            hasEligibleStreamingCandidate = true;
+            const profile =
+                credential.providerProfile ||
+                readImageUpstreamProfile({
+                    explicitProfile: credential.upstreamProfile,
+                    channelId: credential.channelId,
+                    baseUrl: credential.baseUrl
+                });
+            const compatibility = getImageBackendCompatibility(profile, 'edit', 'images-api', undefined, {
+                validatePartialImages: true
+            });
+            const partialImagesRange = compatibility.partialImagesRange;
+            if (partialImagesRange && isIntegerWithinRange(input.requestedPartialImages, partialImagesRange)) return;
+            if (partialImagesRange) {
+                const message = partialImagesRange.allowedValues
+                    ? `partial_images 必须是以下值之一：${partialImagesRange.allowedValues.join(', ')}。`
+                    : `partial_images 必须在 ${partialImagesRange.min} 到 ${partialImagesRange.max} 之间。`;
+                firstRangeError ??= new RequestValidationError(message, 422, { fields: { partial_images: message } });
+            }
+        }
+    }
+    if (hasEligibleNonStreamCandidate || !hasEligibleStreamingCandidate) return;
+    if (firstRangeError) throw firstRangeError;
 }
 
 async function executeAgentResponsesGenerate(
@@ -1077,12 +1406,20 @@ export async function hydrateAgentReplayResponse(
     };
 }
 
-function createOpenAiClient(headers: Headers, requestModePlan: AgentChannelRequestModePlan): CredentialContext {
-    const serverChannelRouter = getServerChannelState().router;
+function createOpenAiClient(
+    headers: Headers,
+    requestModePlan: AgentChannelRequestModePlan,
+    isCredentialEligible?: (credential: ChannelCredential, requestMode?: ChannelRequestMode) => boolean
+): CredentialContext {
+    const serverChannelState = getServerChannelState();
+    const serverChannelRouter = serverChannelState.router;
+    const hasMultipleServerChannels =
+        new Set(serverChannelState.config.credentials.map((credential) => credential.channelId)).size > 1;
     const selection = selectAgentChannelCredential({
         router: serverChannelRouter,
         headers,
-        requestModePlan
+        requestModePlan,
+        isCredentialEligible: hasMultipleServerChannels ? isCredentialEligible : undefined
     });
     const selectedCredential = selection.selectedCredential;
     const {
@@ -1391,7 +1728,11 @@ function readAgentResponseModeFromForm(formData: FormData): AgentResponseMode {
     throw new RequestValidationError('response_mode 必须是 path、base64 或 both。', 422);
 }
 
-function readAgentEditStreamRequest(formData: FormData, upstreamProfile: ImageUpstreamProfile): AgentEditStreamRequest {
+function readAgentEditStreamRequest(
+    formData: FormData,
+    upstreamProfile: ImageUpstreamProfile,
+    requestMode?: ChannelRequestMode
+): AgentEditStreamRequest {
     const streamMode = readAgentEditStreamMode(formData);
     const streamingStrategy = readAgentEditStreamingStrategy(formData);
     if (streamMode !== 'non_stream') {
@@ -1402,17 +1743,59 @@ function readAgentEditStreamRequest(formData: FormData, upstreamProfile: ImageUp
         });
     }
     const partialImagesRange = upstreamProfile.partialImages;
+    const requestedPartialImages = readAgentEditPartialImages(formData);
+    const shouldValidatePartialImages = requestMode
+        ? isStreamingChannelRequestMode(requestMode)
+        : streamMode !== 'non_stream';
     return {
         streamMode,
         streamingStrategy,
-        partialImages: readCount(
-            formData,
-            'partial_images',
-            clampIntegerToRange(2, partialImagesRange),
-            partialImagesRange.min,
-            partialImagesRange.max
-        ) as PartialImagesCount
+        partialImages: shouldValidatePartialImages
+            ? (readCount(
+                  formData,
+                  'partial_images',
+                  clampIntegerToRange(2, partialImagesRange),
+                  partialImagesRange.min,
+                  partialImagesRange.max,
+                  partialImagesRange
+              ) as PartialImagesCount)
+            : ((requestedPartialImages ?? clampIntegerToRange(2, partialImagesRange)) as PartialImagesCount)
     };
+}
+
+function readOptionalPositiveCount(formData: FormData, field: string): number | undefined {
+    const value = formData.get(field);
+    if (value === null) return undefined;
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+        throw new RequestValidationError(`${field} 必须是整数。`);
+    }
+    const count = Number(value);
+    if (!Number.isSafeInteger(count) || count < 1) {
+        throw new RequestValidationError(`${field} 必须是正整数。`);
+    }
+    return count;
+}
+
+function readOptionalInteger(formData: FormData, field: string): number | undefined {
+    const value = formData.get(field);
+    if (value === null) return undefined;
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+        throw new RequestValidationError(`${field} 必须是整数。`);
+    }
+    const count = Number(value);
+    if (!Number.isSafeInteger(count)) {
+        throw new RequestValidationError(`${field} 必须是整数。`);
+    }
+    return count;
+}
+
+function readAgentEditPartialImages(formData: FormData): number | undefined {
+    const value = readOptionalInteger(formData, 'partial_images');
+    if (value === undefined) return undefined;
+    if (value > 4) {
+        throw new RequestValidationError('partial_images 必须在 0 到 4 之间。', 422);
+    }
+    return value;
 }
 
 function readAgentEditStreamMode(formData: FormData): ImageStreamMode {

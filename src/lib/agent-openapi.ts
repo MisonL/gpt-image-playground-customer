@@ -17,7 +17,9 @@ import {
     type AgentRoutingStrength,
     type AgentRoutingTransport,
     buildAgentCapabilities,
-    readAgentPublicBaseUrl
+    getAgentNonStreamPartialImagesRange,
+    readAgentPublicBaseUrl,
+    type NumericRange
 } from './agent-api-contracts';
 import { AGENT_ENDPOINTS } from './agent-api-paths.mjs';
 import { CHANNEL_REQUEST_MODES } from './channel-request-mode';
@@ -47,9 +49,7 @@ function buildAgentOpenApiSecuritySchemes(schemes: readonly AgentAuthScheme[]) {
     return securitySchemes;
 }
 
-function buildImageBackendRangeSchema(
-    limits: Record<(typeof AGENT_IMAGE_BACKENDS)[number], { min: number; max: number }>
-) {
+function buildImageBackendRangeSchema(limits: Record<(typeof AGENT_IMAGE_BACKENDS)[number], NumericRange>) {
     return {
         type: 'object',
         required: [...AGENT_IMAGE_BACKENDS],
@@ -61,7 +61,16 @@ function buildImageBackendRangeSchema(
                     required: ['min', 'max'],
                     properties: {
                         min: { type: 'integer', const: limits[backend].min },
-                        max: { type: 'integer', const: limits[backend].max }
+                        max: { type: 'integer', const: limits[backend].max },
+                        ...(limits[backend].allowedValues
+                            ? {
+                                  allowedValues: {
+                                      type: 'array',
+                                      items: { type: 'integer' },
+                                      const: [...limits[backend].allowedValues]
+                                  }
+                              }
+                            : {})
                     },
                     additionalProperties: false
                 }
@@ -71,11 +80,74 @@ function buildImageBackendRangeSchema(
     };
 }
 
+function buildNumericRangeSchema() {
+    return {
+        type: 'object',
+        required: ['min', 'max'],
+        properties: {
+            min: { type: 'integer' },
+            max: { type: 'integer' },
+            allowedValues: { type: 'array', items: { type: 'integer' } }
+        },
+        additionalProperties: false
+    };
+}
+
+function buildNonStreamPartialImagesCondition(hasAutomaticNonStreamChannel: boolean) {
+    const defaultOrAutoStreamMode = {
+        anyOf: [
+            { not: { required: ['stream_mode'] } },
+            {
+                properties: { stream_mode: { const: 'auto' } },
+                required: ['stream_mode']
+            }
+        ]
+    };
+    const offStrategy = {
+        properties: { streaming_strategy: { enum: ['off'] } },
+        required: ['streaming_strategy']
+    };
+    const autoStrategy = {
+        anyOf: [
+            { not: { required: ['streaming_strategy'] } },
+            {
+                properties: { streaming_strategy: { enum: ['auto'] } },
+                required: ['streaming_strategy']
+            }
+        ]
+    };
+    return {
+        anyOf: [
+            {
+                properties: { stream_mode: { const: 'non_stream' } },
+                required: ['stream_mode']
+            },
+            { allOf: [defaultOrAutoStreamMode, offStrategy] },
+            ...(hasAutomaticNonStreamChannel ? [{ allOf: [defaultOrAutoStreamMode, autoStrategy] }] : [])
+        ]
+    };
+}
+
 export function buildAgentOpenApiDocument(env: Record<string, string | undefined>) {
     const capabilities = buildAgentCapabilities(env);
     const maxGenerateImageCount = capabilities.limits.generate_images.max;
     const maxEditImageCount = capabilities.limits.edit_images.max;
     const maxSourceImageCount = capabilities.limits.upload_images.max;
+    const nonStreamPartialImagesSchemaRange = getAgentNonStreamPartialImagesRange();
+    const configuredChannels = capabilities.upstream_request_headers.channels;
+    const assumeLegacyNonStreamChannel = configuredChannels.length === 0;
+    const hasImagesAutomaticNonStreamChannel =
+        assumeLegacyNonStreamChannel ||
+        configuredChannels.some((channel) => channel.request_modes.includes('images-non-stream'));
+    const hasResponsesAutomaticNonStreamChannel =
+        assumeLegacyNonStreamChannel ||
+        configuredChannels.some((channel) => channel.request_modes.includes('responses-non-stream'));
+    const responsesNonStreamPartialImagesCondition = buildNonStreamPartialImagesCondition(
+        hasResponsesAutomaticNonStreamChannel
+    );
+    const imagesNonStreamPartialImagesCondition = buildNonStreamPartialImagesCondition(
+        hasImagesAutomaticNonStreamChannel
+    );
     const supportedBackgrounds = capabilities.upstream_profile.activeConstraints.gptImage2.allowTransparentBackground
         ? AGENT_BACKGROUNDS
         : AGENT_BACKGROUNDS.filter((value) => value !== 'transparent');
@@ -533,7 +605,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                             'upstream_proxy',
                                             'request_modes',
                                             'request_mode_priority',
-                                            'request_headers'
+                                            'request_headers',
+                                            'constraints'
                                         ],
                                         properties: {
                                             id: { type: 'string' },
@@ -548,6 +621,11 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                             },
                                             request_headers: {
                                                 $ref: '#/components/schemas/UpstreamRequestHeaderSummary'
+                                            },
+                                            constraints: { $ref: '#/components/schemas/AgentChannelConstraints' },
+                                            healthy_request_modes: {
+                                                type: 'array',
+                                                items: { type: 'string', enum: CHANNEL_REQUEST_MODES }
                                             }
                                         },
                                         additionalProperties: false
@@ -625,7 +703,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 partial_images: {
                                     type: 'integer',
                                     minimum: capabilities.limits.partial_images.min,
-                                    maximum: capabilities.limits.partial_images.max
+                                    maximum: capabilities.limits.partial_images.max,
+                                    ...(capabilities.limits.partial_images.allowedValues
+                                        ? { enum: [...capabilities.limits.partial_images.allowedValues] }
+                                        : {})
                                 }
                             }
                         },
@@ -653,7 +734,16 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     required: ['min', 'max'],
                                     properties: {
                                         min: { type: 'integer', const: capabilities.limits.generate_images.min },
-                                        max: { type: 'integer', const: capabilities.limits.generate_images.max }
+                                        max: { type: 'integer', const: capabilities.limits.generate_images.max },
+                                        ...(capabilities.limits.generate_images.allowedValues
+                                            ? {
+                                                  allowedValues: {
+                                                      type: 'array',
+                                                      items: { type: 'integer' },
+                                                      const: [...capabilities.limits.generate_images.allowedValues]
+                                                  }
+                                              }
+                                            : {})
                                     },
                                     additionalProperties: false
                                 },
@@ -662,7 +752,16 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     required: ['min', 'max'],
                                     properties: {
                                         min: { type: 'integer', const: capabilities.limits.edit_images.min },
-                                        max: { type: 'integer', const: capabilities.limits.edit_images.max }
+                                        max: { type: 'integer', const: capabilities.limits.edit_images.max },
+                                        ...(capabilities.limits.edit_images.allowedValues
+                                            ? {
+                                                  allowedValues: {
+                                                      type: 'array',
+                                                      items: { type: 'integer' },
+                                                      const: [...capabilities.limits.edit_images.allowedValues]
+                                                  }
+                                              }
+                                            : {})
                                     },
                                     additionalProperties: false
                                 },
@@ -687,7 +786,16 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     required: ['min', 'max'],
                                     properties: {
                                         min: { type: 'integer', const: capabilities.limits.partial_images.min },
-                                        max: { type: 'integer', const: capabilities.limits.partial_images.max }
+                                        max: { type: 'integer', const: capabilities.limits.partial_images.max },
+                                        ...(capabilities.limits.partial_images.allowedValues
+                                            ? {
+                                                  allowedValues: {
+                                                      type: 'array',
+                                                      items: { type: 'integer' },
+                                                      const: [...capabilities.limits.partial_images.allowedValues]
+                                                  }
+                                              }
+                                            : {})
                                     },
                                     additionalProperties: false
                                 },
@@ -708,7 +816,21 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                                     type: 'integer',
                                                     const: capabilities.limits.partial_images_by_backend['images-api']
                                                         .max
-                                                }
+                                                },
+                                                ...(capabilities.limits.partial_images_by_backend['images-api']
+                                                    .allowedValues
+                                                    ? {
+                                                          allowedValues: {
+                                                              type: 'array',
+                                                              items: { type: 'integer' },
+                                                              const: [
+                                                                  ...capabilities.limits.partial_images_by_backend[
+                                                                      'images-api'
+                                                                  ].allowedValues
+                                                              ]
+                                                          }
+                                                      }
+                                                    : {})
                                             },
                                             additionalProperties: false
                                         },
@@ -727,7 +849,22 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                                     const: capabilities.limits.partial_images_by_backend[
                                                         'responses-image-generation'
                                                     ].max
-                                                }
+                                                },
+                                                ...(capabilities.limits.partial_images_by_backend[
+                                                    'responses-image-generation'
+                                                ].allowedValues
+                                                    ? {
+                                                          allowedValues: {
+                                                              type: 'array',
+                                                              items: { type: 'integer' },
+                                                              const: [
+                                                                  ...capabilities.limits.partial_images_by_backend[
+                                                                      'responses-image-generation'
+                                                                  ].allowedValues
+                                                              ]
+                                                          }
+                                                      }
+                                                    : {})
                                             },
                                             additionalProperties: false
                                         }
@@ -908,7 +1045,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             required: ['min', 'max'],
                             properties: {
                                 min: { type: 'integer', minimum: 1 },
-                                max: { type: 'integer', minimum: 1 }
+                                max: { type: 'integer', minimum: 1 },
+                                allowedValues: { type: 'array', items: { type: 'integer', minimum: 1 } }
                             },
                             additionalProperties: false
                         },
@@ -917,7 +1055,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             required: ['min', 'max'],
                             properties: {
                                 min: { type: 'integer', minimum: 1 },
-                                max: { type: 'integer', minimum: 1 }
+                                max: { type: 'integer', minimum: 1 },
+                                allowedValues: { type: 'array', items: { type: 'integer', minimum: 1 } }
                             },
                             additionalProperties: false
                         },
@@ -926,7 +1065,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             required: ['min', 'max'],
                             properties: {
                                 min: { type: 'integer', minimum: 0 },
-                                max: { type: 'integer', minimum: 0 }
+                                max: { type: 'integer', minimum: 0 },
+                                allowedValues: { type: 'array', items: { type: 'integer', minimum: 0 } }
                             },
                             additionalProperties: false
                         },
@@ -952,6 +1092,65 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     },
                     additionalProperties: false
                 },
+                AgentChannelConstraints: {
+                    type: 'object',
+                    required: [
+                        'generate_images',
+                        'edit_images',
+                        'partial_images',
+                        'generate_images_by_backend',
+                        'edit_images_by_backend',
+                        'partial_images_by_backend',
+                        'upload_images',
+                        'gpt_image_2'
+                    ],
+                    properties: {
+                        generate_images: buildNumericRangeSchema(),
+                        edit_images: buildNumericRangeSchema(),
+                        partial_images: buildNumericRangeSchema(),
+                        generate_images_by_backend: {
+                            type: 'object',
+                            properties: Object.fromEntries(
+                                AGENT_IMAGE_BACKENDS.map((backend) => [backend, buildNumericRangeSchema()])
+                            ),
+                            additionalProperties: false
+                        },
+                        edit_images_by_backend: {
+                            type: 'object',
+                            properties: Object.fromEntries(
+                                AGENT_IMAGE_BACKENDS.map((backend) => [backend, buildNumericRangeSchema()])
+                            ),
+                            additionalProperties: false
+                        },
+                        partial_images_by_backend: {
+                            type: 'object',
+                            properties: Object.fromEntries(
+                                AGENT_IMAGE_BACKENDS.map((backend) => [backend, buildNumericRangeSchema()])
+                            ),
+                            additionalProperties: false
+                        },
+                        upload_images: {
+                            type: 'object',
+                            required: ['max', 'max_single_mb'],
+                            properties: {
+                                max: { type: 'integer', minimum: 1 },
+                                max_single_mb: { type: 'number', minimum: 0 },
+                                max_total_mb: { type: 'number', minimum: 0 }
+                            },
+                            additionalProperties: false
+                        },
+                        gpt_image_2: {
+                            type: 'object',
+                            required: ['allow_transparent_background', 'size_policy'],
+                            properties: {
+                                allow_transparent_background: { type: 'boolean' },
+                                size_policy: { type: 'string', enum: ['openai-compatible', 'positive-integer'] }
+                            },
+                            additionalProperties: false
+                        }
+                    },
+                    additionalProperties: false
+                },
                 ImageBackendRequirement: {
                     type: 'object',
                     required: ['supported', 'enabled', 'required_env', 'missing_env'],
@@ -960,7 +1159,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         enabled: { type: 'boolean' },
                         required_env: { type: 'array', items: { type: 'string' } },
                         missing_env: { type: 'array', items: { type: 'string' } },
-                        incompatible_constraints: { type: 'array', items: { type: 'string' } }
+                        incompatible_constraints: { type: 'array', items: { type: 'string' } },
+                        streaming_incompatible_constraints: { type: 'array', items: { type: 'string' } }
                     },
                     additionalProperties: false
                 },
@@ -1504,21 +1704,68 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                         maximum:
                                             capabilities.limits.generate_images_by_backend['responses-image-generation']
                                                 .max,
+                                        ...(capabilities.limits.generate_images_by_backend['responses-image-generation']
+                                            .allowedValues
+                                            ? {
+                                                  enum: [
+                                                      ...capabilities.limits.generate_images_by_backend[
+                                                          'responses-image-generation'
+                                                      ].allowedValues
+                                                  ]
+                                              }
+                                            : {}),
                                         default:
                                             capabilities.limits.generate_images_by_backend['responses-image-generation']
                                                 .min
-                                    },
-                                    partial_images: {
-                                        type: 'integer',
-                                        minimum:
-                                            capabilities.limits.partial_images_by_backend['responses-image-generation']
-                                                .min,
-                                        maximum:
-                                            capabilities.limits.partial_images_by_backend['responses-image-generation']
-                                                .max,
-                                        default: capabilities.defaults.partial_images
                                     }
-                                }
+                                },
+                                allOf: [
+                                    {
+                                        if: responsesNonStreamPartialImagesCondition,
+                                        then: {
+                                            properties: {
+                                                partial_images: {
+                                                    type: 'integer',
+                                                    minimum: nonStreamPartialImagesSchemaRange.min,
+                                                    maximum: nonStreamPartialImagesSchemaRange.max,
+                                                    default: capabilities.defaults.partial_images
+                                                }
+                                            }
+                                        }
+                                    },
+                                    {
+                                        if: {
+                                            not: responsesNonStreamPartialImagesCondition
+                                        },
+                                        then: {
+                                            properties: {
+                                                partial_images: {
+                                                    type: 'integer',
+                                                    minimum:
+                                                        capabilities.limits.partial_images_by_backend[
+                                                            'responses-image-generation'
+                                                        ].min,
+                                                    maximum:
+                                                        capabilities.limits.partial_images_by_backend[
+                                                            'responses-image-generation'
+                                                        ].max,
+                                                    ...(capabilities.limits.partial_images_by_backend[
+                                                        'responses-image-generation'
+                                                    ].allowedValues
+                                                        ? {
+                                                              enum: [
+                                                                  ...capabilities.limits.partial_images_by_backend[
+                                                                      'responses-image-generation'
+                                                                  ].allowedValues
+                                                              ]
+                                                          }
+                                                        : {}),
+                                                    default: capabilities.defaults.partial_images
+                                                }
+                                            }
+                                        }
+                                    }
+                                ]
                             }
                         },
                         {
@@ -1535,6 +1782,34 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     background: { type: 'string', enum: supportedBackgrounds }
                                 }
                             }
+                        },
+                        {
+                            if: {
+                                allOf: [
+                                    {
+                                        not: {
+                                            properties: {
+                                                image_backend: { const: 'responses-image-generation' }
+                                            },
+                                            required: ['image_backend']
+                                        }
+                                    },
+                                    { not: imagesNonStreamPartialImagesCondition }
+                                ]
+                            },
+                            then: {
+                                properties: {
+                                    partial_images: {
+                                        type: 'integer',
+                                        minimum: capabilities.limits.partial_images.min,
+                                        maximum: capabilities.limits.partial_images.max,
+                                        ...(capabilities.limits.partial_images.allowedValues
+                                            ? { enum: [...capabilities.limits.partial_images.allowedValues] }
+                                            : {}),
+                                        default: capabilities.defaults.partial_images
+                                    }
+                                }
+                            }
                         }
                     ],
                     properties: {
@@ -1543,7 +1818,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         n: {
                             type: 'integer',
                             minimum: capabilities.limits.generate_images.min,
-                            maximum: maxGenerateImageCount
+                            maximum: maxGenerateImageCount,
+                            ...(capabilities.limits.generate_images.allowedValues
+                                ? { enum: [...capabilities.limits.generate_images.allowedValues] }
+                                : {})
                         },
                         size: { type: 'string' },
                         quality: { type: 'string', enum: AGENT_QUALITIES, default: 'high' },
@@ -1586,8 +1864,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         partial_images: {
                             type: 'integer',
-                            minimum: capabilities.limits.partial_images.min,
-                            maximum: capabilities.limits.partial_images.max,
+                            minimum: nonStreamPartialImagesSchemaRange.min,
+                            maximum: nonStreamPartialImagesSchemaRange.max,
                             default: capabilities.defaults.partial_images
                         }
                     }
@@ -1598,6 +1876,24 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     anyOf: Array.from({ length: maxSourceImageCount }, (_, index) => ({
                         required: [`image_${index}`]
                     })),
+                    allOf: [
+                        {
+                            if: { not: imagesNonStreamPartialImagesCondition },
+                            then: {
+                                properties: {
+                                    partial_images: {
+                                        type: 'integer',
+                                        minimum: capabilities.limits.partial_images.min,
+                                        maximum: capabilities.limits.partial_images.max,
+                                        ...(capabilities.limits.partial_images.allowedValues
+                                            ? { enum: [...capabilities.limits.partial_images.allowedValues] }
+                                            : {}),
+                                        default: capabilities.defaults.partial_images
+                                    }
+                                }
+                            }
+                        }
+                    ],
                     description: `Agent edit 返回最终 JSON。请求必须至少提供一个 image_0..image_${maxSourceImageCount - 1} 源图字段。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。`,
                     properties: {
                         prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
@@ -1605,7 +1901,10 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         n: {
                             type: 'integer',
                             minimum: capabilities.limits.edit_images.min,
-                            maximum: maxEditImageCount
+                            maximum: maxEditImageCount,
+                            ...(capabilities.limits.edit_images.allowedValues
+                                ? { enum: [...capabilities.limits.edit_images.allowedValues] }
+                                : {})
                         },
                         size: { type: 'string', default: 'auto' },
                         quality: { type: 'string', enum: AGENT_QUALITIES, default: 'auto' },
@@ -1623,8 +1922,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         partial_images: {
                             type: 'integer',
-                            minimum: capabilities.limits.partial_images.min,
-                            maximum: capabilities.limits.partial_images.max,
+                            minimum: nonStreamPartialImagesSchemaRange.min,
+                            maximum: nonStreamPartialImagesSchemaRange.max,
                             default: capabilities.defaults.partial_images
                         },
                         ...Object.fromEntries(

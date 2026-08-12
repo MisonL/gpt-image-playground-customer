@@ -11,7 +11,7 @@ let originalEnv: NodeJS.ProcessEnv;
 
 beforeEach(() => {
     originalEnv = { ...process.env };
-    process.env.NODE_ENV = 'test';
+    Object.assign(process.env, { NODE_ENV: 'test' });
     process.env.npm_lifecycle_event = 'test';
     process.env.AGENT_API_TOKEN = 'health-diagnostics-token';
     process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED = 'true';

@@ -60,12 +60,14 @@ export function selectAgentChannelCredential(input: {
     router: ReturnType<typeof getServerChannelState>['router'];
     headers: Headers;
     requestModePlan: AgentChannelRequestModePlan;
+    isCredentialEligible?: (credential: ChannelCredential, requestMode?: ChannelRequestMode) => boolean;
 }): AgentChannelSelection {
     if (input.requestModePlan.candidates.length > 1 && input.router) {
         try {
             const selection = input.router.selectWithRequestModes({
                 affinityKey: readAffinityKey(input.headers),
-                requestModes: input.requestModePlan.candidates
+                requestModes: input.requestModePlan.candidates,
+                isEligible: input.isCredentialEligible
             });
             return {
                 selectedCredential: selection.credential,
@@ -137,6 +139,7 @@ function selectAgentChannelForMode(
     input: {
         router: ReturnType<typeof getServerChannelState>['router'];
         headers: Headers;
+        isCredentialEligible?: (credential: ChannelCredential, requestMode?: ChannelRequestMode) => boolean;
     },
     requestMode: ChannelRequestMode,
     fallbackApplied: boolean
@@ -144,7 +147,8 @@ function selectAgentChannelForMode(
     return {
         selectedCredential: input.router?.select({
             affinityKey: readAffinityKey(input.headers),
-            requestMode
+            requestMode,
+            isEligible: input.isCredentialEligible
         }),
         requestMode,
         preferredRequestMode: requestMode,
