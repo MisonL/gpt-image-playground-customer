@@ -586,7 +586,11 @@ function validateTaskRoutingFields(raw, id, mode) {
             `${id} 图生图高级参数需要页面 SSE，不能同时设置 stream_mode=non_stream 或 streaming_strategy=off。`
         );
     }
-    if (mode === 'edit' && (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')) {
+    if (
+        mode === 'edit' &&
+        raw.transport !== 'agent_json' &&
+        (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')
+    ) {
         throw new Error(
             `${id} 默认 WebP edit 任务需要页面 SSE；若要使用 Agent JSON 固定输出，请拆成单张 edit 并显式使用 --agent。`
         );

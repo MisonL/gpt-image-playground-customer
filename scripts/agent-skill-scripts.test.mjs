@@ -7265,6 +7265,30 @@ describe('Agent skill script argument validation', () => {
             assert.equal(agentEditTransportBody.tasks[0].routing.transport, 'agent_json');
             assert.deepEqual(agentEditTransportBody.tasks[0].request.image_fields, ['image_0', 'image_1']);
 
+            const agentEditNonStreamInputPath = join(tempRoot, 'agent-edit-non-stream.jsonl');
+            writeFileSync(
+                agentEditNonStreamInputPath,
+                JSON.stringify({
+                    id: 'agent-edit-non-stream',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: '/tmp/source.png',
+                    stream_mode: 'non_stream',
+                    streaming_strategy: 'off',
+                    transport: 'agent_json'
+                })
+            );
+            const agentEditNonStreamResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                agentEditNonStreamInputPath
+            ]);
+            assert.equal(agentEditNonStreamResult.status, 0);
+            assert.equal(agentEditNonStreamResult.stderr.trim(), '');
+            const agentEditNonStreamBody = JSON.parse(agentEditNonStreamResult.stdout);
+            assert.equal(agentEditNonStreamBody.tasks[0].routing.transport, 'agent_json');
+            assert.equal(agentEditNonStreamBody.tasks[0].request.stream_mode, 'non_stream');
+            assert.equal(agentEditNonStreamBody.tasks[0].request.streaming_strategy, 'off');
+
             const agentEditPageSseConflictInputPath = join(tempRoot, 'agent-edit-page-sse-conflict.jsonl');
             writeFileSync(
                 agentEditPageSseConflictInputPath,
