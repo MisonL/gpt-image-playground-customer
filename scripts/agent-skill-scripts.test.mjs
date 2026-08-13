@@ -7215,7 +7215,7 @@ describe('Agent skill script argument validation', () => {
                 JSON.stringify({
                     id: 'unsupported-transport',
                     prompt: 'prompt',
-                    transport: 'agent_json'
+                    transport: 'unsupported'
                 })
             );
             const unsupportedTransportResult = runSkillScript('batch-images.mjs', [
@@ -7223,8 +7223,93 @@ describe('Agent skill script argument validation', () => {
                 unsupportedTransportInputPath
             ]);
             assert.equal(unsupportedTransportResult.status, 2);
-            assert.match(unsupportedTransportResult.stderr, /unsupported-transport\.transport 必须是 page_sse/);
+            assert.match(unsupportedTransportResult.stderr, /unsupported-transport\.transport 必须是 page_sse 或 agent_json/);
             assert.equal(unsupportedTransportResult.stdout.trim(), '');
+
+            const generateAgentTransportInputPath = join(tempRoot, 'generate-agent-transport.jsonl');
+            writeFileSync(
+                generateAgentTransportInputPath,
+                JSON.stringify({
+                    id: 'generate-agent-transport',
+                    prompt: 'prompt',
+                    transport: 'agent_json'
+                })
+            );
+            const generateAgentTransportResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                generateAgentTransportInputPath
+            ]);
+            assert.equal(generateAgentTransportResult.status, 2);
+            assert.match(generateAgentTransportResult.stderr, /generate-agent-transport\.transport=agent_json 仅适用于 edit 任务/);
+            assert.equal(generateAgentTransportResult.stdout.trim(), '');
+
+            const agentEditTransportInputPath = join(tempRoot, 'agent-edit-transport.jsonl');
+            writeFileSync(
+                agentEditTransportInputPath,
+                JSON.stringify({
+                    id: 'agent-edit-transport',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_paths: ['/tmp/source-a.png', '/tmp/source-b.png'],
+                    transport: 'agent_json'
+                })
+            );
+            const agentEditTransportResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                agentEditTransportInputPath
+            ]);
+            assert.equal(agentEditTransportResult.status, 0);
+            assert.equal(agentEditTransportResult.stderr.trim(), '');
+            const agentEditTransportBody = JSON.parse(agentEditTransportResult.stdout);
+            assert.equal(agentEditTransportBody.tasks[0].endpoint, '/api/agent/images/edit');
+            assert.equal(agentEditTransportBody.tasks[0].routing.transport, 'agent_json');
+            assert.deepEqual(agentEditTransportBody.tasks[0].request.image_fields, ['image_0', 'image_1']);
+
+            const agentEditPageSseConflictInputPath = join(tempRoot, 'agent-edit-page-sse-conflict.jsonl');
+            writeFileSync(
+                agentEditPageSseConflictInputPath,
+                JSON.stringify({
+                    id: 'agent-edit-page-sse-conflict',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: '/tmp/source.png',
+                    page_sse: true,
+                    transport: 'agent_json'
+                })
+            );
+            const agentEditPageSseConflictResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                agentEditPageSseConflictInputPath
+            ]);
+            assert.equal(agentEditPageSseConflictResult.status, 2);
+            assert.match(
+                agentEditPageSseConflictResult.stderr,
+                /agent-edit-page-sse-conflict\.transport=agent_json 不能同时设置 page_sse=true/
+            );
+            assert.equal(agentEditPageSseConflictResult.stdout.trim(), '');
+
+            const agentEditPageFieldInputPath = join(tempRoot, 'agent-edit-page-field.jsonl');
+            writeFileSync(
+                agentEditPageFieldInputPath,
+                JSON.stringify({
+                    id: 'agent-edit-page-field',
+                    mode: 'edit',
+                    prompt: 'prompt',
+                    image_path: '/tmp/source.png',
+                    output_format: 'png',
+                    transport: 'agent_json'
+                })
+            );
+            const agentEditPageFieldResult = runSkillScript('batch-images.mjs', [
+                '--input',
+                agentEditPageFieldInputPath
+            ]);
+            assert.equal(agentEditPageFieldResult.status, 2);
+            assert.match(
+                agentEditPageFieldResult.stderr,
+                /agent-edit-page-field\.transport=agent_json 不支持页面 SSE 高级字段：output_format/
+            );
+            assert.equal(agentEditPageFieldResult.stdout.trim(), '');
 
             const responsesModelNonStreamInputPath = join(tempRoot, 'responses-model-non-stream.jsonl');
             writeFileSync(

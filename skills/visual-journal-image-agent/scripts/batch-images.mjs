@@ -52,6 +52,7 @@ const BACKGROUNDS = new Set(['transparent', 'opaque', 'auto']);
 const MODERATIONS = new Set(['low', 'auto']);
 const RESPONSE_MODES = new Set(['path', 'base64', 'both']);
 const STREAM_MODES = new Set(['auto', 'stream', 'non_stream']);
+const BATCH_TRANSPORTS = new Set(['page_sse', 'agent_json']);
 const STREAMING_STRATEGIES = new Set([
     'off',
     'auto',
@@ -392,7 +393,7 @@ function validateEditImages(raw, id) {
 function validateTaskFields(raw, id, mode) {
     validateKnownTaskFields(raw, id);
     validateModeSpecificFields(raw, id, mode);
-    validateRoutingControlFields(raw, id);
+    validateRoutingControlFields(raw, id, mode);
     validateAmbiguousAliasFields(raw, id);
     if (hasOwn(raw, 'model')) normalizeEnumValue(raw.model, MODELS, `${id}.model`);
     if (raw.n !== undefined) readConfiguredPositiveInteger(raw.n, `${id}.n`, 1);
@@ -451,14 +452,30 @@ function modeSpecificFieldLabel(field) {
     return field === 'format' ? 'output_format' : field;
 }
 
-function validateRoutingControlFields(raw, id) {
+function validateRoutingControlFields(raw, id, mode) {
     for (const field of BOOLEAN_ROUTING_FIELDS) {
         if (hasOwn(raw, field) && typeof raw[field] !== 'boolean') {
             throw new Error(`${id}.${field} 必须是布尔值。`);
         }
     }
-    if (hasOwn(raw, 'transport') && raw.transport !== 'page_sse') {
-        throw new Error(`${id}.transport 必须是 page_sse。`);
+    if (hasOwn(raw, 'transport')) {
+        if (!BATCH_TRANSPORTS.has(raw.transport)) {
+            throw new Error(`${id}.transport 必须是 page_sse 或 agent_json。`);
+        }
+        if (raw.transport === 'agent_json' && mode !== 'edit') {
+            throw new Error(`${id}.transport=agent_json 仅适用于 edit 任务。`);
+        }
+        if (raw.transport === 'agent_json' && raw.page_sse === true) {
+            throw new Error(`${id}.transport=agent_json 不能同时设置 page_sse=true。`);
+        }
+        if (raw.transport === 'agent_json') {
+            const unsupportedFields = PAGE_ADVANCED_FIELDS.filter((field) => hasOwn(raw, field));
+            if (unsupportedFields.length > 0) {
+                throw new Error(
+                    `${id}.transport=agent_json 不支持页面 SSE 高级字段：${unsupportedFields.join(', ')}。`
+                );
+            }
+        }
     }
 }
 
@@ -1146,6 +1163,7 @@ function buildPageSseRequestPreview(task) {
 
 function shouldUsePageSseForTask(task) {
     const pageSseAllowed = isPageSseAllowedForTask(task);
+    if (task.raw.transport === 'agent_json') return false;
     if (task.raw.page_sse === true || task.raw.transport === 'page_sse') {
         if (!pageSseAllowed) {
             throw new Error(`${task.id} stream_mode=non_stream 或 streaming_strategy=off 时不能强制使用页面 SSE。`);
