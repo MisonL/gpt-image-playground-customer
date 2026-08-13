@@ -13,7 +13,7 @@ app_port: 4783
 
 图像手记（Visual Journal）是本地优先的 AI 图片创作工作台，支持 `gpt-image-2` 与 OpenAI 兼容图片接口。提供文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪、多渠道路由和 Agent API。
 
-对外产品名称、npm 包名和 Agent Skill 标识均为“图像手记 / Visual Journal”（`visual-journal`、`visual-journal-agent`）。HF Space 已使用 `visual-journal` 名称；为保持已有部署和自动化客户端兼容，Docker 服务、环境变量和 API 路径继续使用 `gpt-image-playground` 相关技术名称。
+对外产品名称、npm 包名和 Agent Skill 标识均为“图像手记 / Visual Journal”（`visual-journal`、`visual-journal-image-agent`）。HF Space 已使用 `visual-journal` 名称；为保持已有部署和自动化客户端兼容，Docker 服务、环境变量和 API 路径继续使用 `gpt-image-playground` 相关技术名称。
 
 <p align="center">
   <img src="./readme-images/interface.jpg" alt="图像手记主界面" width="900"/>
@@ -179,7 +179,7 @@ Agent API 是供自动化客户端调用的机器接口，不是自治 Agent 平
 ```bash
 npm run first-run -- --json --base-url http://localhost:4783
 
-node skills/visual-journal-agent/scripts/generate-image.mjs \
+node skills/visual-journal-image-agent/scripts/generate-image.mjs \
   --contract-check \
   --base-url http://localhost:4783 \
   "capability check"
@@ -189,8 +189,8 @@ node skills/visual-journal-agent/scripts/generate-image.mjs \
 
 新增 probe、diagnostics 或路由可观测能力时，先落 API / capabilities / OpenAPI 契约，再让 Skill 脚本做薄封装。完整参数、批量任务、编辑、分享、诊断、真实 smoke 和边界矩阵见：
 
-- [Agent Skill](./skills/visual-journal-agent/SKILL.md)
-- [Agent API 参考](./skills/visual-journal-agent/references/api.md)
+- [Agent Skill](./skills/visual-journal-image-agent/SKILL.md)
+- [Agent API 参考](./skills/visual-journal-image-agent/references/api.md)
 
 渠道健康快照只读取当前进程内存状态，不触发上游探测或图片生成，也不替代页面 `/api/runtime-capabilities`。
 
@@ -227,8 +227,8 @@ node skills/visual-journal-agent/scripts/generate-image.mjs \
 - [用户验证脚本](./docs/product/user-validation-script.md)
 - [图片 Provider Manifest](./docs/product/image-provider-manifest.md)
 - [Hugging Face Space 部署](./docs/deployment/huggingface-space-free.md)
-- [Agent Skill](./skills/visual-journal-agent/SKILL.md)
-- [Agent API 参考](./skills/visual-journal-agent/references/api.md)
+- [Agent Skill](./skills/visual-journal-image-agent/SKILL.md)
+- [Agent API 参考](./skills/visual-journal-image-agent/references/api.md)
 - [版本记录](./CHANGELOG.md)
 
 ## 技术栈

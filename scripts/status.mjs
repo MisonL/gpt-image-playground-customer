@@ -342,7 +342,7 @@ async function buildLocalStatus() {
         },
         agent: {
             capabilities: '/api/agent/capabilities',
-            skill: 'skills/visual-journal-agent/SKILL.md'
+            skill: 'skills/visual-journal-image-agent/SKILL.md'
         },
         image_upstream_real_smoke: {
             ...imageUpstreamRealSmoke,

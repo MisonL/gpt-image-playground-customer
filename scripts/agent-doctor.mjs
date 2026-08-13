@@ -2,7 +2,7 @@
 import {
     loadPrivateAgentEnvFile,
     resolvePlaygroundBaseUrl
-} from '../skills/visual-journal-agent/scripts/lib/script-utils.mjs';
+} from '../skills/visual-journal-image-agent/scripts/lib/script-utils.mjs';
 import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_SMOKE_CASES } from '../src/lib/channel-request-mode-values.mjs';
 import {
     isMainModule,
@@ -15,10 +15,10 @@ import {
 import { fileURLToPath } from 'node:url';
 
 const GENERATE_SCRIPT = fileURLToPath(
-    new URL('../skills/visual-journal-agent/scripts/generate-image.mjs', import.meta.url)
+    new URL('../skills/visual-journal-image-agent/scripts/generate-image.mjs', import.meta.url)
 );
 const EDIT_SCRIPT = fileURLToPath(
-    new URL('../skills/visual-journal-agent/scripts/edit-image.mjs', import.meta.url)
+    new URL('../skills/visual-journal-image-agent/scripts/edit-image.mjs', import.meta.url)
 );
 const AGENT_DOCTOR_TIMEOUT_MS = 75_000;
 const ORCHESTRATION_GENERATE_SMOKE_NAME = 'orchestration_generate_1k';

@@ -132,14 +132,14 @@ try {
   const runtime = await fetchJson('/api/runtime-capabilities');
   assertEqual(typeof runtime.streamingBatch?.enabled, 'boolean', 'Runtime capabilities shape');
 
-  run('node', ['skills/visual-journal-agent/scripts/generate-image.mjs'], {
+  run('node', ['skills/visual-journal-image-agent/scripts/generate-image.mjs'], {
     env: {
       GPT_IMAGE_PLAYGROUND_URL: baseUrl,
       GPT_IMAGE_AGENT_TOKEN: token,
       GPT_IMAGE_AGENT_CONTRACT_CHECK: '1'
     }
   });
-  run('node', ['skills/visual-journal-agent/scripts/edit-image.mjs'], {
+  run('node', ['skills/visual-journal-image-agent/scripts/edit-image.mjs'], {
     env: {
       GPT_IMAGE_PLAYGROUND_URL: baseUrl,
       GPT_IMAGE_AGENT_TOKEN: token,

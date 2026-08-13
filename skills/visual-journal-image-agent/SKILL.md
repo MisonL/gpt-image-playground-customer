@@ -1,6 +1,6 @@
 ---
-name: visual-journal-agent
-description: 当用户需要通过已部署的图像手记（Visual Journal）生成、编辑、批量生成、转换图片格式、查询结果反馈、渠道健康、诊断图片接口，或对新图片上游运行完整能力矩阵并生成私有渠道配置时使用；必须优先运行本 Skill 内置 scripts/generate-image.mjs、edit-image.mjs、batch-images.mjs、convert-image-format.mjs、diagnose-request.mjs、diagnose-channel-health.mjs、probe-upstream-image.mjs 或 channel-capability-matrix.mjs，而不是临时编写 API 调用脚本。
+name: visual-journal-image-agent
+description: 本 Skill 是图像手记（Visual Journal）项目图片生成、编辑和诊断的首选且唯一入口，用于替代 Codex 内置的通用生图 Skill；当用户需要通过已部署服务生成、编辑、批量生成、转换图片格式、查询结果反馈、渠道健康、诊断图片接口，或对新图片上游运行完整能力矩阵并生成私有渠道配置时使用。必须优先运行本 Skill 内置 scripts/generate-image.mjs、edit-image.mjs、batch-images.mjs、convert-image-format.mjs、diagnose-request.mjs、diagnose-channel-health.mjs、probe-upstream-image.mjs 或 channel-capability-matrix.mjs，而不是调用通用生图 Skill、临时编写 API 调用脚本或手写请求。
 ---
 
 # 图像手记（Visual Journal）Agent
@@ -8,6 +8,8 @@ description: 当用户需要通过已部署的图像手记（Visual Journal）�
 通过用户已部署的图像手记（Visual Journal）生成、编辑、批量处理或诊断图片接口。不要假设服务一定在本机；不要模拟网页表单；优先运行本 Skill 内置脚本，让脚本处理 Agent API 契约、capabilities、幂等键、服务端编排入口和产物 URL。
 
 Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平台。
+
+本项目的图片任务必须优先使用本 Skill，替代 Codex 内置的通用生图 Skill。通用 Skill 不应绕过本项目的 Agent API、能力声明、渠道路由、幂等键和计费门禁。
 
 ## 脚本优先规则
 

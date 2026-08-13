@@ -1503,7 +1503,7 @@ describe('buildAgentCapabilities', () => {
     it('generates an OpenAPI document with the Agent generate endpoint', () => {
         const document = buildAgentOpenApiDocument({ AGENT_PUBLIC_BASE_URL: 'https://images.example.test' });
         assert.equal(document.openapi, '3.1.0');
-        assert.equal(document.info.title, 'Visual Journal Agent API');
+        assert.equal(document.info.title, 'Visual Journal Image Agent API');
         assert.deepEqual(document.servers, [{ url: 'https://images.example.test' }]);
         assert.ok(AGENT_ENDPOINTS.openapi in document.paths);
         assert.ok(AGENT_ENDPOINTS.create_image_request in document.paths);

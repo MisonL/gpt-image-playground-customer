@@ -463,7 +463,7 @@ function isPrivateAgentEnvSearchBoundary(directory) {
 function isPlaygroundProjectRoot(directory) {
     return (
         existsSync(join(directory, 'package.json')) &&
-        existsSync(join(directory, 'skills/visual-journal-agent/SKILL.md'))
+        existsSync(join(directory, 'skills/visual-journal-image-agent/SKILL.md'))
     );
 }
 

@@ -197,7 +197,7 @@ OPENAI_CHANNEL_1_PROXY_URL=http://channel-proxy.internal:8080
 GPT_IMAGE_PLAYGROUND_URL=https://<user>-<space>.hf.space \
 GPT_IMAGE_AGENT_TOKEN=<agent-token> \
 GPT_IMAGE_AGENT_CONTRACT_CHECK=1 \
-node skills/visual-journal-agent/scripts/generate-image.mjs
+node skills/visual-journal-image-agent/scripts/generate-image.mjs
 ```
 
 真实文生图：
@@ -205,7 +205,7 @@ node skills/visual-journal-agent/scripts/generate-image.mjs
 ```bash
 GPT_IMAGE_PLAYGROUND_URL=https://<user>-<space>.hf.space \
 GPT_IMAGE_AGENT_TOKEN=<agent-token> \
-node skills/visual-journal-agent/scripts/generate-image.mjs \
+node skills/visual-journal-image-agent/scripts/generate-image.mjs \
   --allow-billable \
   "a product photo of a ceramic mug on a wooden table"
 ```

@@ -5,7 +5,7 @@ import {
     isDimensionCheckError,
     parseExpectedDimensions,
     sanitizeImageResponse
-} from '../skills/visual-journal-agent/scripts/lib/dimension-check.mjs';
+} from '../skills/visual-journal-image-agent/scripts/lib/dimension-check.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { test } from 'node:test';

@@ -1,12 +1,12 @@
-import { AGENT_ENDPOINTS } from '../skills/visual-journal-agent/scripts/lib/agent-api-paths.mjs';
-import { enrichFailureWithAgentDiagnostics } from '../skills/visual-journal-agent/scripts/lib/agent-diagnostics-summary.mjs';
+import { AGENT_ENDPOINTS } from '../skills/visual-journal-image-agent/scripts/lib/agent-api-paths.mjs';
+import { enrichFailureWithAgentDiagnostics } from '../skills/visual-journal-image-agent/scripts/lib/agent-diagnostics-summary.mjs';
 import {
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
     resolveSameOriginUrl,
     validateAgentEditRequestAgainstCapabilities,
     validateAgentGenerateRequestAgainstCapabilities
-} from '../skills/visual-journal-agent/scripts/lib/script-utils.mjs';
+} from '../skills/visual-journal-image-agent/scripts/lib/script-utils.mjs';
 import { AGENT_ENDPOINTS as SERVER_AGENT_ENDPOINTS } from '../src/lib/agent-api-paths.mjs';
 import { FIXTURE_IMAGE_BASE64 } from './local-image-upstream-fixture.mjs';
 import assert from 'node:assert/strict';
@@ -29,8 +29,8 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-const skillRoot = join(repoRoot, 'skills/visual-journal-agent');
-const skillScriptsRoot = join(repoRoot, 'skills/visual-journal-agent/scripts');
+const skillRoot = join(repoRoot, 'skills/visual-journal-image-agent');
+const skillScriptsRoot = join(repoRoot, 'skills/visual-journal-image-agent/scripts');
 const localUpstreamProbeTimeoutMs = '5000';
 
 function agentGenerateCapabilities(extra = {}) {
@@ -418,10 +418,10 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(boundedBody.verification_scope.service_base_url, 'http://localhost:4783');
 
                 const projectCopyRoot = join(parentRoot, 'project-copy');
-                mkdirSync(join(projectCopyRoot, 'skills/visual-journal-agent'), { recursive: true });
+                mkdirSync(join(projectCopyRoot, 'skills/visual-journal-image-agent'), { recursive: true });
                 mkdirSync(join(projectCopyRoot, 'nested'), { recursive: true });
                 writeFileSync(join(projectCopyRoot, 'package.json'), JSON.stringify({ name: 'visual-journal' }));
-                writeFileSync(join(projectCopyRoot, 'skills/visual-journal-agent/SKILL.md'), '# skill\n');
+                writeFileSync(join(projectCopyRoot, 'skills/visual-journal-image-agent/SKILL.md'), '# skill\n');
                 const projectBounded = runSkillScript(
                     'generate-image.mjs',
                     ['prompt'],
@@ -454,7 +454,7 @@ describe('Agent skill script argument validation', () => {
                     ['prompt'],
                     {},
                     {
-                        cwd: join(projectCopyRoot, 'skills/visual-journal-agent/scripts'),
+                        cwd: join(projectCopyRoot, 'skills/visual-journal-image-agent/scripts'),
                         loadPrivateAgentEnv: true,
                         createCwd: true
                     }
@@ -4708,6 +4708,7 @@ describe('Agent skill script argument validation', () => {
         assert.ok(frontmatter.description.length > 0);
         assert.ok(frontmatter.description.length <= 1024);
         assert.doesNotMatch(frontmatter.description, /[<>]/);
+        assert.match(frontmatter.description, /替代 Codex 内置的通用生图 Skill/);
     });
 
     it('tells agents to use bundled scripts instead of ad hoc API callers', () => {
@@ -4716,9 +4717,11 @@ describe('Agent skill script argument validation', () => {
         const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
 
         assert.match(skillText, /必须优先运行本 Skill 内置 scripts\/generate-image\.mjs/);
+        assert.match(skillText, /替代 Codex 内置的通用生图 Skill/);
         assert.match(skillText, /scripts\/channel-capability-matrix\.mjs/);
         assert.match(skillText, /不要临时编写 Node\/Python\/shell 脚本、curl 命令或手写 fetch\/FormData/);
         assert.match(openAiYaml, /先选择并运行内置脚本/);
+        assert.match(openAiYaml, /替代 Codex 内置的通用生图 Skill/);
         assert.match(openAiYaml, /不要临时编写 API 调用脚本/);
         assert.match(apiReference, /先使用这些内置脚本/);
         assert.match(apiReference, /scripts\/channel-capability-matrix\.mjs/);
@@ -4919,8 +4922,8 @@ describe('Agent skill script argument validation', () => {
     });
 
     it('runs from a copied standalone skill directory outside the repository', () => {
-        const tempRoot = mkdtempSync(join(tmpdir(), 'visual-journal-agent-'));
-        const copiedSkillRoot = join(tempRoot, 'visual-journal-agent');
+        const tempRoot = mkdtempSync(join(tmpdir(), 'visual-journal-image-agent-'));
+        const copiedSkillRoot = join(tempRoot, 'visual-journal-image-agent');
         try {
             cpSync(skillRoot, copiedSkillRoot, { recursive: true });
             writeFileSync(

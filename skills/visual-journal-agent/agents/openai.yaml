@@ -1,4 +1,0 @@
-interface:
-  display_name: "Visual Journal Agent API"
-  short_description: "用图像手记内置脚本生成图片、诊断服务并验证上游渠道能力矩阵"
-  default_prompt: "使用 $visual-journal-agent 先选择并运行内置脚本；新上游先运行能力矩阵，只有真实验证通过后才生成私有渠道配置，不要临时编写 API 调用脚本。"
