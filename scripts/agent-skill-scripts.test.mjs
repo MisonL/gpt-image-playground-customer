@@ -1,12 +1,12 @@
-import { AGENT_ENDPOINTS } from '../skills/gpt-image-playground-agent/scripts/lib/agent-api-paths.mjs';
-import { enrichFailureWithAgentDiagnostics } from '../skills/gpt-image-playground-agent/scripts/lib/agent-diagnostics-summary.mjs';
+import { AGENT_ENDPOINTS } from '../skills/visual-journal-agent/scripts/lib/agent-api-paths.mjs';
+import { enrichFailureWithAgentDiagnostics } from '../skills/visual-journal-agent/scripts/lib/agent-diagnostics-summary.mjs';
 import {
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
     resolveSameOriginUrl,
     validateAgentEditRequestAgainstCapabilities,
     validateAgentGenerateRequestAgainstCapabilities
-} from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+} from '../skills/visual-journal-agent/scripts/lib/script-utils.mjs';
 import { AGENT_ENDPOINTS as SERVER_AGENT_ENDPOINTS } from '../src/lib/agent-api-paths.mjs';
 import { FIXTURE_IMAGE_BASE64 } from './local-image-upstream-fixture.mjs';
 import assert from 'node:assert/strict';
@@ -29,8 +29,8 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-const skillRoot = join(repoRoot, 'skills/gpt-image-playground-agent');
-const skillScriptsRoot = join(repoRoot, 'skills/gpt-image-playground-agent/scripts');
+const skillRoot = join(repoRoot, 'skills/visual-journal-agent');
+const skillScriptsRoot = join(repoRoot, 'skills/visual-journal-agent/scripts');
 const localUpstreamProbeTimeoutMs = '5000';
 
 function agentGenerateCapabilities(extra = {}) {
@@ -418,10 +418,10 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(boundedBody.verification_scope.service_base_url, 'http://localhost:4783');
 
                 const projectCopyRoot = join(parentRoot, 'project-copy');
-                mkdirSync(join(projectCopyRoot, 'skills/gpt-image-playground-agent'), { recursive: true });
+                mkdirSync(join(projectCopyRoot, 'skills/visual-journal-agent'), { recursive: true });
                 mkdirSync(join(projectCopyRoot, 'nested'), { recursive: true });
-                writeFileSync(join(projectCopyRoot, 'package.json'), JSON.stringify({ name: 'gpt-image-playground' }));
-                writeFileSync(join(projectCopyRoot, 'skills/gpt-image-playground-agent/SKILL.md'), '# skill\n');
+                writeFileSync(join(projectCopyRoot, 'package.json'), JSON.stringify({ name: 'visual-journal' }));
+                writeFileSync(join(projectCopyRoot, 'skills/visual-journal-agent/SKILL.md'), '# skill\n');
                 const projectBounded = runSkillScript(
                     'generate-image.mjs',
                     ['prompt'],
@@ -454,7 +454,7 @@ describe('Agent skill script argument validation', () => {
                     ['prompt'],
                     {},
                     {
-                        cwd: join(projectCopyRoot, 'skills/gpt-image-playground-agent/scripts'),
+                        cwd: join(projectCopyRoot, 'skills/visual-journal-agent/scripts'),
                         loadPrivateAgentEnv: true,
                         createCwd: true
                     }
@@ -4919,8 +4919,8 @@ describe('Agent skill script argument validation', () => {
     });
 
     it('runs from a copied standalone skill directory outside the repository', () => {
-        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-playground-agent-'));
-        const copiedSkillRoot = join(tempRoot, 'gpt-image-playground-agent');
+        const tempRoot = mkdtempSync(join(tmpdir(), 'visual-journal-agent-'));
+        const copiedSkillRoot = join(tempRoot, 'visual-journal-agent');
         try {
             cpSync(skillRoot, copiedSkillRoot, { recursive: true });
             writeFileSync(

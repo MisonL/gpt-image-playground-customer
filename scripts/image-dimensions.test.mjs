@@ -1,4 +1,4 @@
-import { readImageDimensions } from '../skills/gpt-image-playground-agent/scripts/lib/image-dimensions.mjs';
+import { readImageDimensions } from '../skills/visual-journal-agent/scripts/lib/image-dimensions.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 

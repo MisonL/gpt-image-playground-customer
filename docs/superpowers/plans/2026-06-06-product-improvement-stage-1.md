@@ -586,8 +586,8 @@ If script files were not changed, omit them from `git add`.
 
 **Files:**
 - Modify: `README.md`
-- Modify: `skills/gpt-image-playground-agent/SKILL.md`
-- Modify: `skills/gpt-image-playground-agent/references/api.md`
+- Modify: `skills/visual-journal-agent/SKILL.md`
+- Modify: `skills/visual-journal-agent/references/api.md`
 - Modify: `docs/product/product-contract.md`
 
 - [x] **Step 1: Search overclaim wording**
@@ -635,7 +635,7 @@ Expected: wording exists and script lint passes.
 Run:
 
 ```bash
-git add README.md docs/product/product-contract.md skills/gpt-image-playground-agent/SKILL.md skills/gpt-image-playground-agent/references/api.md
+git add README.md docs/product/product-contract.md skills/visual-journal-agent/SKILL.md skills/visual-journal-agent/references/api.md
 git commit -m "docs: clarify agent api product boundary"
 ```
 

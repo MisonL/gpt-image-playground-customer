@@ -8,7 +8,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-const skillScriptsRoot = join(repoRoot, 'skills/gpt-image-playground-agent/scripts');
+const skillScriptsRoot = join(repoRoot, 'skills/visual-journal-agent/scripts');
 
 describe('Page form streaming defaults', () => {
     it('does not force stream=true for page generate JSON responses', async () => {

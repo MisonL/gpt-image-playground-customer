@@ -63,8 +63,14 @@ describe('product branding', () => {
 
     it('uses the formal product name in operational status while retaining the package identifier', () => {
         const status = readRepositoryText('scripts/status.mjs');
+        const packageJson = JSON.parse(readRepositoryText('package.json'));
+        const skill = readRepositoryText('skills/visual-journal-agent/SKILL.md');
+        const skillConfig = readRepositoryText('skills/visual-journal-agent/agents/openai.yaml');
 
         assert.equal(FORMAL_PRODUCT_NAME, '图像手记 / Visual Journal');
+        assert.equal(packageJson.name, 'visual-journal');
+        assert.match(skill, /^name: visual-journal-agent$/m);
+        assert.match(skillConfig, /\$visual-journal-agent/);
         assert.match(status, /product: FORMAL_PRODUCT_NAME,/);
         assert.match(status, /package_name: packageJson\.name,/);
     });

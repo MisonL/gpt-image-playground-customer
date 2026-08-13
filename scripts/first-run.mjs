@@ -2,7 +2,7 @@
 import {
     loadPrivateAgentEnvFile,
     resolvePlaygroundBaseUrl
-} from '../skills/gpt-image-playground-agent/scripts/lib/script-utils.mjs';
+} from '../skills/visual-journal-agent/scripts/lib/script-utils.mjs';
 import { isMainModule, printJson, redactBaseUrl } from './command-center-utils.mjs';
 import { inspectDependencyInstallation, LOCAL_DEPENDENCY_INSTALL_COMMAND } from './dependency-installation.mjs';
 import { summarizeEnvFile } from './env-summary.mjs';

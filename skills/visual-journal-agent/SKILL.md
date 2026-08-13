@@ -1,5 +1,5 @@
 ---
-name: gpt-image-playground-agent
+name: visual-journal-agent
 description: 当用户需要通过已部署的图像手记（Visual Journal）生成、编辑、批量生成、转换图片格式、查询结果反馈、渠道健康、诊断图片接口，或对新图片上游运行完整能力矩阵并生成私有渠道配置时使用；必须优先运行本 Skill 内置 scripts/generate-image.mjs、edit-image.mjs、batch-images.mjs、convert-image-format.mjs、diagnose-request.mjs、diagnose-channel-health.mjs、probe-upstream-image.mjs 或 channel-capability-matrix.mjs，而不是临时编写 API 调用脚本。
 ---
 

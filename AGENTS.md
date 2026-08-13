@@ -19,7 +19,7 @@
 - Agent API 位于 `src/app/api/agent/`。
 - 图片请求校验位于 `src/lib/image-request-utils.ts`。
 - 多渠道路由位于 `src/lib/channel-router.ts` 和 `src/lib/server-channel-router.ts`。
-- 仓库自带 agent skill：`skills/gpt-image-playground-agent/SKILL.md`。
+- 仓库自带 agent skill：`skills/visual-journal-agent/SKILL.md`。
 
 ## 3. 任务工作流
 
@@ -162,7 +162,7 @@ git diff --check
 ## 8. 仓库内文档与技能
 
 - 开始任务前，先检查仓库内是否已有相关文档或 skill 可复用。
-- 当前已知技能入口是 `skills/gpt-image-playground-agent/SKILL.md`，命中 Agent API 调用场景时必须先阅读。
+- 当前已知技能入口是 `skills/visual-journal-agent/SKILL.md`，命中 Agent API 调用场景时必须先阅读。
 - 阶段性计划当前位于 `docs/superpowers/plans/`；它们只用于补充上下文，不替代代码事实和用户当前任务。
 
 ## 9. 历史踩坑记录

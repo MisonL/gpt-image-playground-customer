@@ -14,10 +14,10 @@ import {
 import {
     buildChannelEnvConfig,
     buildRedactedChannelEnvPreview
-} from '../skills/gpt-image-playground-agent/scripts/lib/channel-capability-matrix.mjs';
+} from '../skills/visual-journal-agent/scripts/lib/channel-capability-matrix.mjs';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
-const matrixScript = join(repoRoot, 'skills/gpt-image-playground-agent/scripts/channel-capability-matrix.mjs');
+const matrixScript = join(repoRoot, 'skills/visual-journal-agent/scripts/channel-capability-matrix.mjs');
 const testApiKey = 'test-upstream-token';
 const testResponsesModel = 'gpt-5.4';
 
