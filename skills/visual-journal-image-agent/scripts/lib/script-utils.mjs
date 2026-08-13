@@ -324,6 +324,20 @@ function assertNumberWithinCapabilities(value, limits, fieldName) {
     }
 }
 
+function isIntegerWithinCapabilityRange(value, limits) {
+    if (!Number.isSafeInteger(value) || !limits) return false;
+    const allowedValues = Array.isArray(limits.allowedValues)
+        ? limits.allowedValues
+        : Array.isArray(limits.allowed_values)
+          ? limits.allowed_values
+          : undefined;
+    if (allowedValues && !allowedValues.includes(value)) return false;
+    const min = limits.min;
+    const max = limits.max;
+    if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) return true;
+    return value >= min && value <= max;
+}
+
 function assertMaxCountWithinCapabilities(value, max, fieldName) {
     if (value === undefined || value === null || !Number.isSafeInteger(max)) return;
     if (value > max) {
