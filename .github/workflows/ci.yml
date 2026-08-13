@@ -66,9 +66,10 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ -n "$BASE_SHA" && "$BASE_SHA" != "0000000000000000000000000000000000000000" ]]; then
+          if [[ -n "$BASE_SHA" && "$BASE_SHA" != "0000000000000000000000000000000000000000" ]] && git cat-file --quiet --verify "${BASE_SHA}^{commit}"; then
             git diff --check "$BASE_SHA" "$HEAD_SHA"
           else
+            # 历史重写后 push 事件的旧基准提交可能已不可达，此时检查当前提交。
             git show --check --format= "$HEAD_SHA"
           fi
 
