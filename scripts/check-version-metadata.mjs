@@ -21,7 +21,7 @@ function escapeRegExp(value) {
 }
 
 function readReadmeBadgeVersion(readme) {
-    const match = readme.match(/!\[Version\]\(https:\/\/img\.shields\.io\/badge\/version-(.+?)-blue\)/);
+    const match = readme.match(/!\[(?:Version|版本)\]\(https:\/\/img\.shields\.io\/badge\/version-(.+?)-blue\)/);
     return match?.[1];
 }
 

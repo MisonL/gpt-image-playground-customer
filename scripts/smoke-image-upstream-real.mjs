@@ -57,6 +57,15 @@ const CASES = [
 ];
 const SERVER_CHANNEL_CASES = [
     {
+        id: 'server-channel-agent-images-json',
+        aliases: ['images-json', 'images-non-stream'],
+        prefix: 'IMAGE_REAL_SMOKE_SERVER',
+        requestMode: 'images-non-stream',
+        stream: false,
+        serverChannel: true,
+        endpoint: 'agent-generate'
+    },
+    {
         id: 'server-channel-images-json',
         aliases: ['images-json', 'images-non-stream'],
         prefix: 'IMAGE_REAL_SMOKE_SERVER',
@@ -451,8 +460,46 @@ async function runCase(loadRouteHandlersForBillable, testCase, preflight = {}) {
 }
 
 async function runBillableCaseAfterLoadingHandlers(loadRouteHandlersForBillable, testCase, target, startedAt, signal) {
+    if (target.serverChannel && env('IMAGE_REAL_SMOKE_SERVER_TRANSPORT') !== 'in-process') {
+        return runBillableHttpCase(testCase, target, startedAt, signal);
+    }
     const routeHandlers = await loadRouteHandlersForBillable(testCase);
     return runBillableCase(routeHandlers, testCase, target, startedAt, signal);
+}
+
+async function runBillableHttpCase(testCase, target, startedAt, signal) {
+    const outputFilesBefore = snapshotRealSmokeOutputFiles();
+    if (testCase.endpoint === 'agent-generate' && testCase.backend === 'responses-image-generation') {
+        process.env.OPENAI_RESPONSES_API_MODEL = target.responsesModel;
+    }
+    try {
+        const request =
+            testCase.endpoint === 'agent-generate'
+                ? agentGenerateRequest(testCase, target, signal)
+                : imageRequest(testCase, target, signal);
+        const response = await fetch(request);
+        const summary =
+            testCase.endpoint === 'agent-generate'
+                ? await summarizeAgentResponse(response)
+                : await summarizeResponse(response);
+        if (testCase.endpoint === 'agent-generate') {
+            await deleteHttpAgentArtifacts(target, summary.artifact_ids);
+        }
+        return {
+            id: testCase.id,
+            request_mode: testCase.requestMode,
+            ok: isSuccessfulBillableSmokeResponse(response, summary),
+            status: response.status,
+            elapsed_ms: Date.now() - startedAt,
+            server_channel: true,
+            upstream_host: summary.upstream_host || readHost(target.baseUrl),
+            ...(summary.selected_channel_id ? { selected_channel_id: summary.selected_channel_id } : {}),
+            ...(summary.channel_request_mode ? { channel_request_mode: summary.channel_request_mode } : {}),
+            ...summary
+        };
+    } finally {
+        removeNewRealSmokeOutputFiles(outputFilesBefore);
+    }
 }
 
 async function runBillableCase(routeHandlers, testCase, target, startedAt, signal) {
@@ -530,6 +577,10 @@ function readTarget(testCase) {
             requiresResponsesModel,
             baseUrl: serverBaseUrl?.value,
             baseUrlKey: serverBaseUrl?.key,
+            serviceBaseUrl:
+                env(`${basePrefix}_SERVICE_BASE_URL`) ||
+                env('GPT_IMAGE_PLAYGROUND_URL') ||
+                'http://127.0.0.1:4783',
             hasServerCredential: Boolean(env('OPENAI_API_KEY') || readFirstConfiguredServerApiKeys()),
             model: env(`${basePrefix}_MODEL`) || 'gpt-image-2',
             responsesModel: env(`${basePrefix}_RESPONSES_MODEL`) || env('OPENAI_RESPONSES_API_MODEL'),
@@ -765,11 +816,13 @@ function imageRequest(testCase, target, signal) {
         formData.append('stream', 'true');
         formData.append('partial_images', '2');
     }
-    return new Request('http://localhost/api/images', { method: 'POST', body: formData, signal });
+    const serviceBaseUrl = target.serverChannel ? target.serviceBaseUrl : 'http://localhost';
+    return new Request(`${serviceBaseUrl}/api/images`, { method: 'POST', body: formData, signal });
 }
 
 function agentGenerateRequest(testCase, target, signal) {
-    return new Request('http://localhost/api/agent/images/generate', {
+    const serviceBaseUrl = target.serverChannel ? target.serviceBaseUrl : 'http://localhost';
+    return new Request(`${serviceBaseUrl}/api/agent/images/generate`, {
         method: 'POST',
         headers: buildAgentRequestHeaders(testCase),
         body: JSON.stringify({
@@ -857,13 +910,41 @@ function summarizeJson(text, contentType) {
 async function summarizeAgentResponse(response) {
     const contentType = response.headers.get('content-type') || '';
     const body = safeJson(await response.text());
+    const execution = body?.execution;
     return {
         content_type: contentType || undefined,
         image_count: Array.isArray(body?.images) ? body.images.length : 0,
+        artifact_ids: Array.isArray(body?.images)
+            ? body.images.map((image) => image?.id).filter((id) => typeof id === 'string')
+            : [],
         first_content_url: typeof body?.images?.[0]?.content_url === 'string' ? body.images[0].content_url : undefined,
         has_inline_base64: Boolean(body?.images?.[0]?.b64_json),
+        ...(typeof execution?.selected_channel_id === 'string'
+            ? { selected_channel_id: execution.selected_channel_id }
+            : {}),
+        ...(typeof execution?.upstream_host === 'string' ? { upstream_host: execution.upstream_host } : {}),
+        ...(typeof execution?.channel_request_mode === 'string'
+            ? {
+                  channel_request_mode: execution.channel_request_mode,
+                  selected_request_mode: execution.channel_request_mode
+              }
+            : {}),
         ...(body?.error ? { error: String(body.error.message || body.error) } : {})
     };
+}
+
+async function deleteHttpAgentArtifacts(target, artifactIds) {
+    if (!target.serverChannel || !Array.isArray(artifactIds) || artifactIds.length === 0) return;
+    const headers = readAgentAuthHeaders();
+    for (const artifactId of artifactIds) {
+        const response = await fetch(
+            `${target.serviceBaseUrl}/api/agent/artifacts/${encodeURIComponent(artifactId)}`,
+            { method: 'DELETE', headers }
+        );
+        if (!response.ok && response.status !== 404) {
+            throw new Error(`清理 Docker smoke 产物失败：HTTP ${response.status}。`);
+        }
+    }
 }
 
 function readFirstB64Length(images) {
@@ -924,7 +1005,7 @@ function printUsage() {
 
 可选 --case：all、original-images-json、gaoren-images-sse、sub2api-images-sse、sub2api-responses-json、gpt2image-responses-sse、matsca-images-sse。
 也可直接用 request mode 别名 images-json、images-sse、responses-json、responses-sse；同一个 request mode 可能命中多个 case。
-添加 --include-server-channel 后还可运行：server-channel-images-json、server-channel-images-sse、server-channel-responses-sse、server-channel-responses-json、server-channel-agent-images-sse、server-channel-agent-responses-sse。
+添加 --include-server-channel 后还可运行：server-channel-agent-images-json、server-channel-agent-images-sse、server-channel-images-json、server-channel-images-sse、server-channel-responses-sse、server-channel-responses-json、server-channel-agent-responses-sse、server-channel-agent-responses-json。服务端渠道用例会通过 HTTP 访问 IMAGE_REAL_SMOKE_SERVER_SERVICE_BASE_URL、GPT_IMAGE_PLAYGROUND_URL 或默认的 http://127.0.0.1:4783。
 默认只检查配置并跳过真实生图；必须加 --allow-billable 才会调用 /api/images 或 /api/agent/images/generate。
 可用 --env-file 指向独立真实上游凭据文件；shell 环境变量优先级高于 --env-file，--env-file 优先级高于 .env.local。
 可用 --env-file-if-exists 在凭据文件存在时加载，不存在时继续输出结构化 readiness 报告。

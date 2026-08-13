@@ -1,24 +1,23 @@
-# Image Provider Manifest
+# 图片上游清单
 
-Provider manifest is a server-side configuration contract for image upstream diagnostics and capability constraints.
-It is not a browser-side plugin system and it does not execute arbitrary request templates.
+图片上游清单是服务端用于上游诊断和能力约束的配置契约，不是浏览器插件系统，也不会执行任意请求模板。
 
-## Scope
+## 适用范围
 
-- The server reads `OPENAI_CHANNEL_N_PROVIDER_MANIFEST` for a numbered channel.
-- The manifest is validated during channel config parsing.
-- The manifest can narrow request constraints such as `n`, `partial_images`, upload limits, and `gpt-image-2` size policy.
-- `/api/runtime-capabilities` exposes only a sanitized summary: provider id, mode type, request content type, response format, and whether async polling is declared.
-- API keys and extra headers are never included in runtime capability responses.
-- Upload constraints are capped globally: `max_images` cannot exceed 10, `max_single_bytes` cannot exceed 25 MiB, and `max_total_bytes` cannot exceed 100 MiB.
+- 服务端按编号渠道读取 `OPENAI_CHANNEL_N_PROVIDER_MANIFEST`。
+- 解析渠道配置时会校验清单。
+- 清单可以收窄 `n`、`partial_images`、上传限制和 `gpt-image-2` 尺寸策略等请求约束。
+- `/api/runtime-capabilities` 只暴露脱敏摘要：上游标识、方式类型、请求内容类型、响应格式和是否声明异步轮询。
+- 运行时能力响应绝不包含 API 密钥或额外请求头。
+- 上传限制受全局上限约束：`max_images` 不超过 10，`max_single_bytes` 不超过 25 MiB，`max_total_bytes` 不超过 100 MiB。
 
-## Minimal Example
+## 最小示例
 
 ```json
 {
   "schema_version": 1,
   "id": "custom_async",
-  "name": "Custom Async Provider",
+  "name": "自定义异步上游",
   "base_profile": "openai-compatible",
   "modes": {
     "generate": {
@@ -59,21 +58,20 @@ It is not a browser-side plugin system and it does not execute arbitrary request
 }
 ```
 
-## Failure Fixtures To Keep Covered
+## 必须覆盖的失败场景
 
-- Invalid JSON fails during config parsing.
-- Unsupported `schema_version` fails explicitly.
-- Manifest `id` must be stable and lower-case.
-- Submit path must be a relative API path beginning with `/`.
-- Submit method only supports `POST`.
-- Submit content type only supports `application/json` or `multipart/form-data`.
-- Poll method only supports `GET` or `POST`.
-- `base_profile` must match the channel upstream profile.
-- Range constraints reject `min > max`.
-- Upload constraints reject values above the global caps.
-- Runtime capabilities must not include API keys, app secrets, or raw extra headers.
+- 非法 JSON 必须在配置解析时失败。
+- 不支持的 `schema_version` 必须显式失败。
+- 清单 `id` 必须稳定且全为小写。
+- 提交路径必须是以 `/` 开头的相对 API 路径。
+- 提交方法只支持 `POST`。
+- 提交内容类型只支持 `application/json` 或 `multipart/form-data`。
+- 轮询方法只支持 `GET` 或 `POST`。
+- `base_profile` 必须与渠道上游配置匹配。
+- 范围约束必须拒绝 `min > max`。
+- 上传约束必须拒绝超过全局上限的值。
+- 运行时能力不得包含 API 密钥、应用密钥或原始额外请求头。
 
-## Current Boundary
+## 当前边界
 
-The app still sends image requests through the existing OpenAI-compatible Images API and Responses backend paths.
-Manifest support currently provides validated constraints and diagnostics so new upstream modes can be introduced without silent fallback or hidden browser-side behavior.
+应用仍通过现有 OpenAI 兼容 Images API 和 Responses 后端路径发送图片请求。清单目前提供经过校验的约束和诊断，使新上游方式能够在没有静默降级或隐藏浏览器行为的前提下接入。

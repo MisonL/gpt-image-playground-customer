@@ -5,41 +5,41 @@ description: 本 Skill 是图像手记（Visual Journal）项目图片生成、�
 
 # 图像手记（Visual Journal）Agent
 
-通过用户已部署的图像手记（Visual Journal）生成、编辑、批量处理或诊断图片接口。不要假设服务一定在本机；不要模拟网页表单；优先运行本 Skill 内置脚本，让脚本处理 Agent API 契约、capabilities、幂等键、服务端编排入口和产物 URL。
+通过用户已部署的图像手记（Visual Journal）生成、编辑、批量处理或诊断图片接口。不要假设服务一定在本机；不要模拟网页表单；优先运行本技能内置脚本，让脚本处理 Agent API 契约、能力声明、幂等键、服务端编排入口和产物 URL。
 
 Agent API 是给自动化客户端使用的机器接口，不是自治 Agent 平台。
 
-本项目的图片任务必须优先使用本 Skill，替代 Codex 内置的通用生图 Skill。通用 Skill 不应绕过本项目的 Agent API、能力声明、渠道路由、幂等键和计费门禁。
+本项目的图片任务必须优先使用本技能，替代 Codex 内置的通用生图技能。通用技能不应绕过本项目的 Agent API、能力声明、渠道路由、幂等键和计费门禁。
 
 ## 脚本优先规则
 
 - 生成单张或少量图片：优先运行 `scripts/generate-image.mjs`。
 - 编辑图片：优先运行 `scripts/edit-image.mjs`。
-- 批量 generate/edit：优先运行 `scripts/batch-images.mjs`，用 JSONL 输入和 append-only manifest 管理续跑。
+- 批量生成或编辑：优先运行 `scripts/batch-images.mjs`，用 JSONL 输入和追加写入清单管理续跑。
 - 转换本地图片格式：优先运行 `scripts/convert-image-format.mjs`。
 - 查询页面请求的结果反馈或日志诊断摘要：优先运行 `scripts/diagnose-request.mjs`。
 - 查询当前实例内存中的渠道、凭证和请求方式健康状态：优先运行 `scripts/diagnose-channel-health.mjs`。它只读调用 Agent API，不触发上游探测或图片生成，也不能证明真实上游可用。
-- 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。接入新上游渠道时，先确认 `/models` 和 `/images/generations` 能通，再用 `npm run smoke:image-upstream-real -- --allow-billable` 逐个验证 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。脚本也接受 request mode 别名 `images-json`、`images-sse`、`responses-json`、`responses-sse`，方便按通道能力筛选 case。只有内联 `b64_json`、Responses `result` 或与 API Base URL 同源的 artifact URL 才算可被本服务消费；远程 URL-only 结果不能写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果某一路径先返回 `object=image.task,status=pending`，说明该请求方式不是直接完成结果；应先确认同一业务键能否在同一渠道下重试拿到最终图片，再把可用的 `request_modes` 写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，或 HTTP 200 但只返回文本 output、没有 `image_generation_call.result`/`url`，就把对应 `responses-*` mode 从 `OPENAI_CHANNEL_N_REQUEST_MODES` 移除。服务端未配置 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 时按费用更少优先选择：`images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`；只有真实 smoke 证明需要改变顺序时，管理员才写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 或全局 `OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`。
-- 对新上游完成固定四模式验证并准备可直接使用的私有配置：运行 `scripts/channel-capability-matrix.mjs`。只有用户明确允许计费时才传 `--allow-billable`；需要输出配置时再显式传 `--write-env-file <private-path>`。它固定串行验证 Images/Responses 的非流式和 SSE 模式，仅在 `/models` 通过、矩阵完整、至少一个方式返回可消费最终图且凭证有效时写入。生成文件只保留实际通过的 `OPENAI_CHANNEL_N_REQUEST_MODES`，显式设置匹配实测能力的 `IMAGE_GENERATION_BACKEND` 和 `IMAGE_STREAMING_STRATEGY=auto`；若没有任何 Images API 模式通过，则默认使用 `responses-image-generation`。Responses 模式通过时会同时启用 Responses 后端并写入实测顶层模型；远程明文 HTTP 目标会写入精确的 `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS`，使生成配置符合服务端安全门禁。输出文件是权限 `0600` 的独立私有 env 配置，默认拒绝覆盖和符号链接；脚本不合并或自动改写现有 `.env.local`，不会重启服务或部署。
-- 不要临时编写 Node/Python/shell 脚本、curl 命令或手写 fetch/FormData 来重复实现这些脚本已经覆盖的 API 调用。
-- 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下 ad hoc 调用脚本。
-- 先用 dry-run、`--check-remote` 或 `--contract-check` 检查请求、路由、鉴权和服务声明的默认编排入口；只有用户明确允许真实计费时才加 `--allow-billable`。
-- 真实调用成功或失败后，优先读取脚本输出的 `summary`。它是面向 Agent 的机器摘要，包含 `billable`、请求 ID、幂等键、产物 URL、耗时、耗时拆分、路由、渠道、上游 host、脱敏请求头、重试和下一步动作；Agent JSON 失败时脚本会按幂等键做一次只读 Agent state 诊断补采样，补充 `agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status`、`request_id`、渠道和上游 host。不要再先手查 SQLite、Docker logs 或上游后台。
-- 新增 probe、diagnostics、路由健康或请求旅程能力时，先在服务端定义机器 API 契约，并通过 `GET /api/agent/capabilities`、`GET /api/agent/openapi.json` 或明确的 `/api/agent/diagnostics/*` 端点声明；Skill 脚本只做薄封装，不能复制页面 API、运行态 API 和 Agent API 的边界判断。
+- 诊断上游图片接口：优先运行 `scripts/probe-upstream-image.mjs`。接入新上游渠道时，先确认 `/models` 和 `/images/generations` 能通，再用 `npm run smoke:image-upstream-real -- --allow-billable` 逐个验证 `original-images-json`、`sub2api-images-sse`、`sub2api-responses-json`、`gpt2image-responses-sse`。脚本也接受请求方式别名 `images-json`、`images-sse`、`responses-json`、`responses-sse`，方便按渠道能力筛选用例。只有内联 `b64_json`、Responses `result` 或与 API 基础地址同源的产物 URL 才算可被本服务消费；仅有远程 URL 的结果不能写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果某路径先返回 `object=image.task,status=pending`，说明该请求方式不是直接完成结果；应先确认同一业务键能否在同一渠道下重试拿到最终图片，再把可用的 `request_modes` 写入 `OPENAI_CHANNEL_N_REQUEST_MODES`。如果 `/v1/responses` 返回 `403 Image generation is not enabled for this group`，或 HTTP 200 但只返回文本 output、没有 `image_generation_call.result`/`url`，就把对应 `responses-*` 请求方式从 `OPENAI_CHANNEL_N_REQUEST_MODES` 移除。服务端未配置 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 时按费用更少优先选择：`images-non-stream`、`images-sse`、`responses-non-stream`、`responses-sse`；只有真实冒烟验证证明需要改变顺序时，管理员才写入 `OPENAI_CHANNEL_N_REQUEST_MODE_PRIORITY` 或全局 `OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY`。
+- 对新上游完成固定四种方式验证并准备可直接使用的私有配置：运行 `scripts/channel-capability-matrix.mjs`。只有用户明确允许计费时才传 `--allow-billable`；需要输出配置时再显式传 `--write-env-file <私有路径>`。它固定串行验证 Images/Responses 的非流式和 SSE 方式，仅在 `/models` 通过、矩阵完整、至少一种方式返回可消费最终图且凭证有效时写入。生成文件只保留实际通过的 `OPENAI_CHANNEL_N_REQUEST_MODES`，显式设置匹配实测能力的 `IMAGE_GENERATION_BACKEND` 和 `IMAGE_STREAMING_STRATEGY=auto`；若没有任何 Images API 方式通过，则默认使用 `responses-image-generation`。Responses 方式通过时会同时启用 Responses 后端并写入实测顶层模型；远程明文 HTTP 目标会写入精确的 `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS`，使生成配置符合服务端安全门禁。输出文件权限为 `0600` 的独立私有 env 配置，默认拒绝覆盖和符号链接；脚本不合并或自动改写现有 `.env.local`，不会重启服务或部署。
+- 不要临时编写脚本、curl 命令或手写 fetch/FormData 来重复实现这些脚本已经覆盖的 API 调用。
+- 只有在内置脚本缺少用户明确需要的能力时，才修改或扩展 `scripts/` 内的预置脚本，并同步补测试；不要在仓库外留下临时调用脚本。
+- 先用预演、`--check-remote` 或 `--contract-check` 检查请求、路由、鉴权和服务声明的默认编排入口；只有用户明确允许真实计费时才加 `--allow-billable`。
+- 真实调用成功或失败后，优先读取脚本输出的 `summary`。它是面向 Agent 的机器摘要，包含 `billable`、请求 ID、幂等键、产物 URL、耗时、耗时拆分、路由、渠道、上游主机、脱敏请求头、重试和下一步动作；Agent JSON 失败时脚本会按幂等键做一次只读 Agent 状态诊断补采样，补充 `agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status`、`request_id`、渠道和上游主机。不要先手查 SQLite、Docker 日志或上游后台。
+- 新增探针、诊断、路由健康或请求旅程能力时，先在服务端定义机器 API 契约，并通过 `GET /api/agent/capabilities`、`GET /api/agent/openapi.json` 或明确的 `/api/agent/diagnostics/*` 端点声明；Skill 脚本只做薄封装，不能复制页面 API、运行时 API 和 Agent API 的边界判断。
 
 ## 产品边界
 
 Agent API 只作为自动化客户端接口，不作为首战场景或用户验证的主证明。首阶段产品判断以页面工作台上的真实发布任务、结果下载、继续编辑、复用和最近生成里的结果反馈为准。
 
-结果反馈由页面工作台通过 `/api/feedback` 写入和清理，Agent 客户端通过 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback` 只读查询。日志查看的原始流仍是 WebUI/page API `/api/logs`，不接受 Agent token；Agent 客户端通过 `/api/agent/diagnostics/page-requests/{id}` 或 `/api/agent/diagnostics/page-requests` 查询脱敏日志摘要。诊断摘要来自本地 bounded app log，capabilities 的 `page_request_diagnostics.retention` 和诊断响应的 `diagnostics_retention` 声明当前窗口；`matched_log_count=0` 时响应会带 `diagnostics_note`，不等同于请求未发生。Agent JSON、Agent edit 和 job 的请求状态属于 Agent state，可通过 `/api/agent/diagnostics/requests/{request_id}` 或 `/api/agent/diagnostics/requests?idempotency_key=...` 只读查询，返回状态、时间线、artifact 摘要、成功响应 timing/execution、失败错误、状态后端和保留边界。灵感相册和历史复用属于页面工作台和浏览器本地体验，不作为 Agent capabilities 或机器 API 承诺。Agent artifact 原始下载 URL 仍需要 Agent 鉴权；需要给用户浏览器访问时，使用 `POST /api/agent/artifacts/{id}/share` 或生成脚本 `--share` 显式创建分享链接。分享链接使用 `/share/{token}` 和 `/api/shares/{token}/content` 的随机 token/访问码模型，不把 Agent token 放进 URL。
+结果反馈由页面工作台通过 `/api/feedback` 写入和清理，Agent 客户端通过 `/api/agent/page-requests/{id}/feedback` 或 `/api/agent/page-requests/feedback` 只读查询。日志查看的原始流仍是页面 API `/api/logs`，不接受 Agent token；Agent 客户端通过 `/api/agent/diagnostics/page-requests/{id}` 或 `/api/agent/diagnostics/page-requests` 查询脱敏日志摘要。诊断摘要来自本地有界应用日志，capabilities 的 `page_request_diagnostics.retention` 和诊断响应的 `diagnostics_retention` 声明当前窗口；`matched_log_count=0` 时响应会带 `diagnostics_note`，不等同于请求未发生。Agent JSON、Agent 编辑和 job 的请求状态属于 Agent 状态，可通过 `/api/agent/diagnostics/requests/{request_id}` 或 `/api/agent/diagnostics/requests?idempotency_key=...` 只读查询，返回状态、时间线、产物摘要、成功响应 timing/execution、失败错误、状态后端和保留边界。灵感相册和历史复用属于页面工作台和浏览器本地体验，不作为 Agent capabilities 或机器 API 承诺。Agent 产物原始下载 URL 仍需要 Agent 鉴权；需要给用户浏览器访问时，使用 `POST /api/agent/artifacts/{id}/share` 或生成脚本 `--share` 显式创建分享链接。分享链接使用 `/share/{token}` 和 `/api/shares/{token}/content` 的随机 token/访问码模型，不把 Agent token 放进 URL。
 
-渠道健康诊断使用 `GET /api/agent/diagnostics/channel-health` 和 Agent 鉴权。它只读当前服务进程已初始化的 `channel-router` 内存快照，不创建第二套状态，也不会为了读取而初始化路由或启动恢复探测，因此不触发上游探测或图片生成，也不能证明真实上游可用。响应中的 `state_initialized=false` 表示当前进程尚无可读取的路由状态，`channels` 为空，不代表未配置渠道；`healthy` 表示至少有一个有效 request mode 可用，`cooldown` 表示冷却状态，`probe_pending` 表示恢复探测门禁仍未解除；`probe_pending` 可以与 `cooldown_until` 同时出现。该 Agent 诊断不替代页面 `/api/runtime-capabilities`，后者仍是页面运行态和并发配置的摘要。
+渠道健康诊断使用 `GET /api/agent/diagnostics/channel-health` 和 Agent 鉴权。它只读当前服务进程已初始化的 `channel-router` 内存快照，不创建第二套状态，也不会为了读取而初始化路由或启动恢复探测，因此不触发上游探测或图片生成，也不能证明真实上游可用。响应中的 `state_initialized=false` 表示当前进程尚无可读取的路由状态，`channels` 为空，不代表未配置渠道；`healthy` 表示至少有一个有效请求方式可用，`cooldown` 表示冷却状态，`probe_pending` 表示恢复探测门禁仍未解除；`probe_pending` 可以与 `cooldown_until` 同时出现。该 Agent 诊断不替代页面 `/api/runtime-capabilities`，后者仍是页面运行时和并发配置的摘要。
 
 ## 路由规则
 
-- 先读取 `GET /api/agent/capabilities` 的 `orchestration` 与 `routing_rules`。普通文生图默认提交业务意图到 `orchestration.endpoint`，当前为 `POST /api/agent/image-requests`；服务端负责选择内部执行路径、上游策略和 job polling。Agent 客户端不要按尺寸、远端 HTTPS 或流式策略自行选择 `/api/images`、`/api/agent/images/generate` 或 job endpoint。
+- 先读取 `GET /api/agent/capabilities` 的 `orchestration` 与 `routing_rules`。普通文生图默认提交业务意图到 `orchestration.endpoint`，当前为 `POST /api/agent/image-requests`；服务端负责选择内部执行路径、上游策略和任务轮询。Agent 客户端不要按尺寸、远端 HTTPS 或流式策略自行选择 `/api/images`、`/api/agent/images/generate` 或任务端点。
 - `capabilities.supported.request_modes`、`capabilities.upstream_request_headers.channels[].request_modes`、`capabilities.upstream_request_headers.channels[].request_mode_priority` 和 `capabilities.request_mode_controls` 是服务端管理员配置的渠道请求方式白名单、优先级与诊断控制面；Agent 客户端不要据此绕过 `orchestration.endpoint` 自行挑选 Images、Responses、SSE 或非流式路径。
-- `providerManifests[].manifest.executionSupport=declared_only` 表示 manifest 声明了 async-poll，但当前执行器不会自动轮询 provider `poll` 配置。遇到 pending/poll_url 时按结构化诊断处理，不要把它当成可用同步 request mode。
+- `providerManifests[].manifest.executionSupport=declared_only` 表示清单声明了异步轮询，但当前执行器不会自动轮询 provider `poll` 配置。遇到 pending/poll_url 时按结构化诊断处理，不要把它当成可用同步请求方式。
 
 执行决策表：
 
@@ -52,9 +52,9 @@ Agent API 只作为自动化客户端接口，不作为首战场景或用户验�
 
 - 默认 WebP edit 使用页面端 `POST /api/images` form-data SSE 路径，因为 Agent edit 不接收输出格式字段。需要 Responses image_generation edit 时也必须使用页面 SSE，不要用 `--agent`。显式 `--agent` 才使用 `/api/agent/images/edit` Agent multipart 最终 JSON，输出格式固定为 Agent WebP 契约；如果页面流式不可用或失败，先诊断结构化错误，再用新的 `Idempotency-Key` 显式决定是否用 Agent edit 对照。Agent edit 只是对照路径，不保证与页面 SSE 的像素尺寸完全一致；尺寸敏感任务必须用 `--dimension-check` 或下载后校验。
 - `capabilities` 里声明的 `page_sse_supported=true`、`agent_streaming.upstream_sse.supported=true` 只表示路径被声明支持，不表示当前渠道每次实测都能成功；如果页面 SSE、Responses 路径或服务端编排入口返回 `503`、断流，或 `summary` 里 `selected_channel_id`、`upstream_host` 为空，先诊断结构化错误，再用新的 `Idempotency-Key` 显式选择诊断路径，不自动回退。
-- 复杂 UI 批量出图优先使用页面端 `POST /api/images` SSE 和 `scripts/batch-images.mjs`；不要手动并行启动多个单张脚本，因为这会绕过 manifest、`--resume`、`capacity_feedback` 和尺寸门禁。需要并发时显式设置 `--concurrency N` 或页面“并发批量”开关，并记录切换原因、失败清单和续跑锚点。
+- 复杂 UI 批量出图优先使用页面端 `POST /api/images` SSE 和 `scripts/batch-images.mjs`；不要手动并行启动多个单张脚本，因为这会绕过清单、`--resume`、`capacity_feedback` 和尺寸门禁。需要并发时显式设置 `--concurrency N` 或页面“并发批量”开关，并记录切换原因、失败清单和续跑锚点。
 - 真实批量并发前先看 `GET /api/runtime-capabilities` 的 `channelQueue.capacityPerCredential` 和 `streamingBatch.recommendedConcurrency`。如果服务端建议并发为 `1`，或返回 `channel_capacity_queue_aborted` / `retry_after_seconds`，同一渠道任务保持 `--concurrency 1`，不要用多个 shell 进程绕过限流。
-- 复杂 UI、长 prompt、高质量图生图遇到 5 分钟级超时、连接中断或上游 503 时，不要把失败归因到提示词质量；先读 `summary` 和诊断，再用新 key 显式尝试压缩 prompt 或改为 `quality=medium` 的对照请求，并记录这是稳定性取舍。
+- 复杂 UI、长提示词、高质量图生图遇到 5 分钟级超时、连接中断或上游 503 时，不要把失败归因到提示词质量；先读 `summary` 和诊断，再用新 key 显式尝试压缩提示词或改为 `quality=medium` 的对照请求，并记录这是稳定性取舍。
 - 长图恢复或需要续跑锚点的生产请求优先使用页面端 `POST /api/images` SSE，保留局部进度和缺最终图诊断。
 - 普通单次文生图默认使用 `POST /api/agent/image-requests`。`--agent`、`--job`、`--page-sse` 是显式诊断或兼容开关：`--agent` 直连 `/api/agent/images/generate`，`--job` 直连 `/api/agent/jobs/images/generate`，`--page-sse` 直连页面端 `/api/images` SSE。不要把这些显式开关当成默认自动路由。
 - 单张文生图使用 `--responses-model`/`--gpt-model`、`--thinking`、`--prompt-optimization` 或 `--force-web` 时仍提交到服务端编排入口，由服务端选择 Responses image_generation、Images API、SSE 或非流式执行方式。`--responses-model` 覆盖本次请求的 Responses 顶层模型；未传时使用服务端 `OPENAI_RESPONSES_API_MODEL`。该字段只影响本项目 `responses-image-generation` 路径，不改变兼容上游自身 Images API 桥接层内部选择的模型。`--responses-model` 必须同时设置 `--image-backend responses-image-generation` 或兼容别名 `responses`；显式 `--page-sse` 才直连页面端 `/api/images` SSE 做诊断。
@@ -76,12 +76,12 @@ Agent API 只作为自动化客户端接口，不作为首战场景或用户验�
 12. 不要把页面端 `POST /api/images` 当成普通 Agent JSON 路径。它是页面表单和 SSE 路径，capabilities 会以 `agent_streaming.page_sse` 单独声明；generate 只在显式 `--page-sse` 或页面工作台诊断时使用它，默认 WebP edit、Responses edit、长图恢复或需要原始 SSE 日志的 edit 仍可使用页面 SSE。
 13. 读取 `agent_jobs` 只用于理解服务端编排结果和显式 `--job` 诊断路径。普通 generate 不再由 Agent 客户端根据本地/远端或尺寸选择 Agent JSON、page SSE 或 job。
 14. 处理失败时读取结构化 `error.code`、`error.retryable`、`error.diagnostics` 和 `Retry-After`。仅当 `retryable=true` 时等待后重试。页面 SSE 返回 `503`、断流，或 `summary` 里的 `selected_channel_id`、`upstream_host` 为空时，先按结构化失败诊断，再用新 key 显式换路径，不要把它当成已自动回退成功。
-15. 返回结果时优先给出 `summary`、`content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。需要用户直接在浏览器打开图片时添加 `--share`，并返回 `summary.share_urls` 和 `summary.direct_content_urls`；其中 `share_urls` 是分享页入口，公开分享可直接打开 `direct_content_urls`，设置访问码时优先给用户 `share_urls`，二者都不是需要 Bearer token 的 artifact `content_url`。回答“4K 非流式花了多久”时优先读 `summary.elapsed_ms`，服务端返回 timing 时也读 `summary.server_elapsed_ms`。
+15. 返回结果时优先给出 `summary`、`content_url`、`metadata_url`、`absolute_content_url`、`absolute_metadata_url`、产物 ID、尺寸、格式和是否命中幂等缓存。需要用户直接在浏览器打开图片时添加 `--share`，并返回 `summary.share_urls` 和 `summary.direct_content_urls`；其中 `share_urls` 是分享页入口，公开分享可直接打开 `direct_content_urls`，设置访问码时优先给用户 `share_urls`，二者都不是需要 Bearer token 的产物 `content_url`。回答“4K 非流式花了多久”时优先读 `summary.elapsed_ms`，服务端返回 timing 时也读 `summary.server_elapsed_ms`。
 16. 需要查询页面请求后的人工反馈或日志摘要时，使用页面 SSE 的 `clientRequestId` 或脚本复用的 `Idempotency-Key` 调用 `scripts/diagnose-request.mjs --client-request-id ...`；不要直接调用 `/api/logs`。需要查询 Agent state 请求状态时，使用 `scripts/diagnose-request.mjs --agent-request-id ...` 或 `--idempotency-key ...`。
 
 ## 鉴权
 
-Agent JSON、Agent edit、job 和 artifact 端点的鉴权以 `auth.schemes` 为准。如果服务端配置了 `AGENT_API_TOKEN`，发送：
+Agent JSON、Agent 编辑、任务和产物端点的鉴权以 `auth.schemes` 为准。如果服务端配置了 `AGENT_API_TOKEN`，发送：
 
 ```text
 Authorization: Bearer <token>
@@ -103,7 +103,7 @@ Authorization: Bearer <token>
 - 不要把 `error.message` 当成唯一判断依据；稳定分支以 `error.code` 和 HTTP 状态为准。
 - 不要在没有 `Idempotency-Key` 的情况下调用生成或编辑接口。
 - 不要对同一个已进入终态 `failed` 的 `Idempotency-Key` 继续重试。终态失败回放会返回 `retryable=false`；需要重新尝试时，先确认失败原因，再创建新的业务操作和新的 `Idempotency-Key`。
-- 不要把 `agent_streaming.page_sse.supported=true` 解读为 `/api/agent/images/generate` 会对客户端返回 SSE；Agent generate/edit 对外仍是最终 JSON。`agent_streaming.upstream_sse` 仅表示服务端内部可消费上游 SSE 并保存最终 artifact。
+- 不要把 `agent_streaming.page_sse.supported=true` 解读为 `/api/agent/images/generate` 会对客户端返回 SSE；Agent 生成和编辑对外仍是最终 JSON。`agent_streaming.upstream_sse` 仅表示服务端内部可消费上游 SSE 并保存最终产物。
 - 不要直接调用 job endpoints，除非 capabilities 明确返回 `agent_jobs.supported=true` 且 `mode=job_polling`，并且本次是显式 `--job` 诊断或兼容场景。默认 generate 使用 `orchestration.endpoint`。
 - 不要把一次高分辨率、高质量长耗时失败归纳为全局不可用。优先查看 `error.diagnostics.upstream_status`、`upstream_event_type`、`partial_image_count`、`transport_error`、`selected_channel_id`、`channel_cooldown_scope`、`error.diagnostics.cooldown_target.request_mode` 和 `retry_after_seconds`。
 - 不要在 `error.retryable=false` 时依据历史 `retry_after_seconds` 继续重试同一个 key；终态失败需要新业务操作和新 key。
@@ -111,9 +111,9 @@ Authorization: Bearer <token>
 
 - 需要只读查看当前实例的渠道健康状态时，使用 `scripts/diagnose-channel-health.mjs --base-url ...`。脚本先从 capabilities 读取并交叉校验端点声明，再调用同源 Agent 端点；不猜测路径，不调用页面 `/api/runtime-capabilities`，不触发真实上游探测或图片生成。
 
-## Job Polling
+## 任务轮询
 
-默认 generate 不直接调用 job endpoint；服务端编排入口会在内部使用 job polling 并返回 `job.result_url`。当 `agent_jobs.supported=true` 且需要显式诊断或兼容旧流程时，job 路径可使用：
+默认生成不直接调用任务端点；服务端编排入口会在内部使用任务轮询并返回 `job.result_url`。当 `agent_jobs.supported=true` 且需要显式诊断或兼容旧流程时，任务路径可使用：
 
 1. `POST /api/agent/jobs/images/generate` 创建 job，仍必须提供 `Idempotency-Key`。
 2. `GET /api/agent/jobs/{id}` 轮询状态。
@@ -121,21 +121,21 @@ Authorization: Bearer <token>
 
 `GET /result` 在 job 运行中会返回 `request_in_progress` 和 `Retry-After`；不存在返回 `job_not_found`；过期返回 `job_expired`。同一业务操作重试创建 job 时复用原 `Idempotency-Key`，服务会返回同一个 job。
 
-当前 job polling 是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在 job 结束前重启，客户端应按状态和错误码继续轮询或重新提交同一业务意图与同一 `Idempotency-Key`，避免重复业务操作。若 job 已进入 `failed` 终态，`GET /result` 和状态摘要都会返回 `retryable=false`，并保留 `code`、`message`、`upstream_status` 和 `diagnostics` 用于定位原因，但同一个 key 不会触发新执行。需要重新尝试时，先确认失败原因，再以新的业务操作和新的 `Idempotency-Key` 创建 job。
+当前任务轮询是同一服务实例内的后台任务，结果和错误写入 Agent 状态后端；它不是跨实例持久队列。若服务进程在任务结束前重启，客户端应按状态和错误码继续轮询或重新提交同一业务意图与同一 `Idempotency-Key`，避免重复业务操作。若任务已进入 `failed` 终态，`GET /result` 和状态摘要都会返回 `retryable=false`，并保留 `code`、`message`、`upstream_status` 和 `diagnostics` 用于定位原因，但同一个 key 不会触发新执行。需要重新尝试时，先确认失败原因，再以新的业务操作和新的 `Idempotency-Key` 创建任务。
 
 ## 可用脚本
 
 以下脚本都位于当前 Skill 目录的 `scripts/` 下。不要硬编码本机安装路径；由运行环境按当前 `SKILL.md` 所在目录解析脚本路径。
 
-- `scripts/generate-image.mjs`：文生图调用。默认 dry-run，不消耗额度；真实执行默认提交到服务端编排入口，必须添加 `--allow-billable` 才会真实生图。固定尺寸任务可添加 `--dimension-check`，从内联图片或同源 artifact URL 读取 PNG/JPEG/WebP 尺寸并把上游尺寸偏差判为结构化验收失败。需要浏览器可直接打开的用户外链时添加 `--share`，可选 `--share-expires-minutes`；私密分享访问码从 `GPT_IMAGE_SHARE_ACCESS_CODE` 读取，不放进命令行参数。
-- `scripts/edit-image.mjs`：multipart 编辑调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实编辑。固定尺寸任务可添加 `--dimension-check`，脚本会从内联图片或同源 artifact URL 读取 PNG/JPEG/WebP 尺寸，并把上游尺寸偏差判为结构化验收失败。
-- `scripts/batch-images.mjs`：JSONL 批量 generate/edit 调用。默认 dry-run，不消耗额度；必须添加 `--allow-billable` 才会真实执行，支持 append-only manifest、`--resume`、`--ordered-prefix`、`--dimension-check`、`--max-attempts`、`--concurrency` 和顺序执行下的 `--max-consecutive-failures`。`--concurrency` 默认 `1`，大于 `1` 时并发执行并按输入顺序输出结果。
+- `scripts/generate-image.mjs`：文生图调用。默认预演（dry-run），不消耗额度；真实执行默认提交到服务端编排入口，必须添加 `--allow-billable` 才会真实生图。固定尺寸任务可添加 `--dimension-check`，从内联图片或同源产物 URL 读取 PNG/JPEG/WebP 尺寸并把上游尺寸偏差判为结构化验收失败。需要浏览器可直接打开的用户外链时添加 `--share`，可选 `--share-expires-minutes`；私密分享访问码从 `GPT_IMAGE_SHARE_ACCESS_CODE` 读取，不放进命令行参数。
+- `scripts/edit-image.mjs`：multipart 编辑调用。默认预演（dry-run），不消耗额度；必须添加 `--allow-billable` 才会真实编辑。固定尺寸任务可添加 `--dimension-check`，脚本会从内联图片或同源产物 URL 读取 PNG/JPEG/WebP 尺寸，并把上游尺寸偏差判为结构化验收失败。
+- `scripts/batch-images.mjs`：JSONL 批量生成或编辑调用。默认预演（dry-run），不消耗额度；必须添加 `--allow-billable` 才会真实执行，支持仅追加清单、`--resume`、`--ordered-prefix`、`--dimension-check`、`--max-attempts`、`--concurrency` 和顺序执行下的 `--max-consecutive-failures`。`--concurrency` 默认 `1`，大于 `1` 时并发执行并按输入顺序输出结果。
 - `scripts/convert-image-format.mjs`：本地 PNG/JPEG/WebP 互转。默认输出 WebP，质量 `100`；JPEG 会把透明背景铺成白色，PNG/WebP 保留透明。
-- `scripts/diagnose-request.mjs`：按一个或多个页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent state 请求诊断；支持读取批量 manifest 和 `--base-url`，不触发生图计费。
-- `scripts/probe-upstream-image.mjs`：直接探测上游图片接口连通性。默认只检查 DNS、TLS 和 `/models`，必须添加 `--allow-billable` 才会真实调用 `/images/generations`。需要人工验收画质时，可在只选择单个 request mode 的真实探测中添加 `--save-first-image <path>`，脚本只保存首个可消费最终图并输出尺寸和字节数，不打印图片 base64。遇到本机 DNS fake-IP 故障时，可显式传 `--connect-ip <IPv4-or-IPv6>` 仅覆盖这次探针的连接地址，原 URL 域名仍用于 Host 和 TLS SNI/证书校验。
+- `scripts/diagnose-request.mjs`：按一个或多个页面 `clientRequestId` 只读查询结果反馈和脱敏日志诊断摘要，也可按 Agent `request_id` 或 `idempotency_key` 查询 Agent 状态请求诊断；支持读取批量清单和 `--base-url`，不触发生图计费。
+- `scripts/probe-upstream-image.mjs`：直接探测上游图片接口连通性。默认只检查 DNS、TLS 和 `/models`，必须添加 `--allow-billable` 才会真实调用 `/images/generations`。需要人工验收画质时，可在只选择单个请求方式的真实探测中添加 `--save-first-image <path>`，脚本只保存首个可消费最终图并输出尺寸和字节数，不打印图片 base64。遇到本机 DNS fake-IP 故障时，可显式传 `--connect-ip <IPv4-or-IPv6>` 仅覆盖这次探针的连接地址，原 URL 域名仍用于 Host 和 TLS SNI/证书校验。
 
-生成、编辑和批量脚本的 dry-run 输出会包含 `verification_scope.mode=local_planning_only`，表示只验证了本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或 manifest 写入。生成 dry-run 添加 `--check-remote` 后会只读查询 `/api/agent/capabilities` 和 `/api/runtime-capabilities`，输出 `verification_scope.mode=remote_contract_and_local_planning`，仍不会发送真实生图请求。生成 dry-run 默认 `routing_guidance.transport=server_orchestrated`，表示真实请求只提交业务意图到服务端编排入口；显式 `--agent`、`--job`、`--page-sse` 才会显示对应诊断路径。单张生成、单张编辑和批量任务都支持 `--dimension-check`；批量 dry-run 还会包含 `guardrails`，提示真实执行要复用同一个 `--ordered-prefix`，固定尺寸任务是否建议加 `--dimension-check`。真实执行输出会包含 `summary`；成功摘要含 `ok=true`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`share_urls`、`direct_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host` 和脱敏 `request_headers`。失败摘要含 `transport`、`endpoint`、`route_mode`、`channel_request_mode`、`route_decision`、`selected_channel_id`、`upstream_host`、`transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`；失败摘要的渠道与路由字段优先读取 `error.diagnostics`，没有对应诊断字段时才回退到响应里的 `execution`。尺寸门禁失败时还会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls`、`image_dimensions` 和服务端 `execution` 选路字段，便于人工审查。
-所有生成、编辑、批量和探针脚本在 dry-run 或真实请求前都会校验尺寸参数。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI-compatible 上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量页面 SSE 和上游探针默认请求 `output_format=webp`、`output_compression=100`；普通 Agent edit 不接收输出格式字段，服务端按固定 WebP 契约提交并保存。管理员确认需要让真实上游决定尺寸或透明背景支持时，显式添加 `--force-request`，脚本会发送 `force_request=true` 并跳过本服务本地 upstream profile 尺寸/背景限制；鉴权、幂等键、`--allow-billable`、API URL 安全、渠道 request mode 白名单、非 `gpt-image-2` 尺寸白名单、正整数尺寸语法、图片数量、`partial_images`、文件大小和 mask 完整性校验仍然生效。
+生成、编辑和批量脚本的预演输出会包含 `verification_scope.mode=local_planning_only`，表示只验证了本地请求构造、参数归一化和静态路由规划；它不会读取远端 capabilities，不会验证远端鉴权、渠道容量或清单写入。生成预演添加 `--check-remote` 后会只读查询 `/api/agent/capabilities` 和 `/api/runtime-capabilities`，输出 `verification_scope.mode=remote_contract_and_local_planning`，仍不会发送真实生图请求。生成预演默认 `routing_guidance.transport=server_orchestrated`，表示真实请求只提交业务意图到服务端编排入口；显式 `--agent`、`--job`、`--page-sse` 才会显示对应诊断路径。单张生成、单张编辑和批量任务都支持 `--dimension-check`；批量预演还会包含 `guardrails`，提示真实执行要复用同一个 `--ordered-prefix`，固定尺寸任务是否建议加 `--dimension-check`。真实执行输出会包含 `summary`；成功摘要含 `ok=true`、`billable`、`request_id`、`idempotency_key`、`artifact_ids`、`content_urls`、`absolute_content_urls`、`share_urls`、`direct_content_urls`、`image_dimensions`、`actual_dimensions`、`cached`、`elapsed_ms`、`server_elapsed_ms`、`elapsed_source`、`elapsed_breakdown`、`transport`、`endpoint`、`route_mode`、`image_backend`、`stream_mode`、`streaming_strategy`、`channel_request_mode`、`channel_request_mode_fallback_applied`、`route_decision`、`selected_channel_id`、`upstream_host` 和脱敏 `request_headers`。失败摘要含 `transport`、`endpoint`、`route_mode`、`channel_request_mode`、`route_decision`、`selected_channel_id`、`upstream_host`、`transport_error_kind`、`retry_after_ms`、`cooldown_until`、`cooldown_target`、`retryable`、`dimension_check_failed`、`expected_dimensions`、`actual_dimensions`、`agent_diagnostics_checked`、`agent_diagnostics_found`、`agent_diagnostics_unavailable_reason`、`agent_diagnostics_http_status` 和 `next_action`；失败摘要的渠道与路由字段优先读取 `error.diagnostics`，没有对应诊断字段时才回退到响应里的 `execution`。尺寸门禁失败时还会保留已生成产物的 `artifact_ids`、`content_urls`、`absolute_content_urls`、`image_dimensions` 和服务端 `execution` 选路字段，便于人工审查。
+所有生成、编辑、批量和探针脚本在预演或真实请求前都会校验尺寸参数。`gpt-image-2` 支持 `auto` 或任意正整数 `WIDTHxHEIGHT`；默认 OpenAI 兼容上游的更严格尺寸边界由服务端 profile 或真实上游显式报错。非 `gpt-image-2` 模型只接受 `auto`、`1024x1024`、`1536x1024` 或 `1024x1536`。生成、页面编辑、批量页面 SSE 和上游探针默认请求 `output_format=webp`、`output_compression=100`；普通 Agent 编辑不接收输出格式字段，服务端按固定 WebP 契约提交并保存。管理员确认需要让真实上游决定尺寸或透明背景支持时，显式添加 `--force-request`，脚本会发送 `force_request=true` 并跳过本服务本地 upstream profile 尺寸/背景限制；鉴权、幂等键、`--allow-billable`、API URL 安全、渠道请求方式白名单、非 `gpt-image-2` 尺寸白名单、正整数尺寸语法、图片数量、`partial_images`、文件大小和 mask 完整性校验仍然生效。
 
 capabilities 的 `upstream_request_headers.channels[]` 是逐渠道约束契约：`constraints` 声明数量、`partial_images`、编辑上传、背景和尺寸策略，`healthy_request_modes`（存在时）只列出当前健康凭证支持的 request mode。范围可能包含 `allowedValues`，客户端不能把离散值扩展成连续 min/max。省略 `partial_images` 时不要写入 `defaults.partial_images`，由服务端按最终健康且满足请求约束的渠道计算默认值；非流式请求仅校验公共 `0..4` 边界，不向上游发送该字段。
 
@@ -144,10 +144,10 @@ capabilities 的 `upstream_request_headers.channels[]` 是逐渠道约束契约�
 - `npm run first-run`：首次配置就绪检查，只读、非计费、不写 env 文件；默认输出中文摘要，加 `-- --json` 输出机器可读 JSON；用于确认 Node、依赖、服务地址、Agent capabilities、当前进程鉴权和下一步动作。
 - `npm run status`：只读查看 git、Space 目标、Agent API、Skill 入口和独立真实图片上游 smoke 配置摘要；会自动读取 `.env.real-smoke.local`，不输出 URL 或 API Key。
 - `npm run doctor`：统一诊断本机与 HF Space 配置，不写 Secret。
-- `npm run verify`：运行提交前基线；需要真实 PostgreSQL gate 时加 `-- --postgres`。
+- `npm run verify`：运行提交前基线；需要真实 PostgreSQL 门禁时加 `-- --postgres`。
 - `npm run deploy:local`：重建本地 Docker 服务并探测真实 HTTP 端点；加 `-- --memory` 会断言 memory/indexeddb overlay 生效，加 `-- --postgres` 会断言 postgres/fs overlay 生效。PostgreSQL 模式要求在运行环境或 Compose `.env` 中提供 `GPT_IMAGE_POSTGRES_PASSWORD`。
 - `npm run deploy:space`：部署干净 git HEAD 到固定 Space，并做只读公网验证。
-- `npm run agent:doctor`：执行非计费分层诊断，覆盖 capabilities、Agent contract、runtime backend、state backend 和 Responses/GPT2Image readiness；支持 `-- --base-url <url>`；真实 1K/2K smoke 必须显式加 `-- --allow-billable`。
+- `npm run agent:doctor`：执行非计费分层诊断，覆盖 capabilities、Agent 契约、运行时后端、状态后端和 Responses/GPT2Image 就绪状态；支持 `-- --base-url <url>`；真实 1K/2K 冒烟验证必须显式加 `-- --allow-billable`。
 
 首次配置和诊断输出字段速查：
 
@@ -162,7 +162,7 @@ capabilities 的 `upstream_request_headers.channels[]` 是逐渠道约束契约�
 | `page_sse_real_smoke_status`                                                                 | `first-run --json`                                                                         | 结构化说明 `first-run` 未执行真实 `/api/images` smoke；`state=not_run` 且 `billable=false` 表示它只是只读就绪检查。                                                                                                                                                                                             |
 | `responses_image_backend_real_smoke_status`                                                  | `first-run --json`                                                                         | 结构化说明 `first-run` 未执行真实 Responses image_generation smoke；不要把声明支持当作实测通过。                                                                                                                                                                                                                |
 | `summary.page_sse_real_smoke`                                                                | `agent:doctor`                                                                             | Page SSE 真实 smoke 的兼容聚合状态；任一 Page SSE smoke 失败为 `failed`，任一通过且无失败为 `passed`，全部跳过为 `skipped`；精确判断优先看 `summary.real_smoke_checks`。                                                                                                                                        |
-| `summary.orchestration_generate_smoke`                                                       | `agent:doctor`                                                                             | `--allow-billable` 时默认 generate 主链 `/api/agent/image-requests` 的真实 smoke 状态；这是普通 generate 在 server-owned orchestration 下的主编排口径。                                                                                                                                                         |
+| `summary.orchestration_generate_smoke`                                                       | `agent:doctor`                                                                             | `--allow-billable` 时默认生成主链 `/api/agent/image-requests` 的真实冒烟状态；这是普通生成在服务端编排下的主编排口径。                                                                                                                                                         |
 | `summary.agent_generate_smoke`                                                               | `agent:doctor`                                                                             | `--allow-billable` 时显式 `--agent` 的 Agent JSON 文生图 smoke 状态；用于诊断直连 Agent JSON，不代表默认主链。                                                                                                                                                                                                  |
 | `summary.responses_page_sse_generate_smoke`                                                  | `agent:doctor`                                                                             | `--allow-billable` 时对 `responses-image-generation` + page SSE + `responses-sse` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。                                                                                                                                                                       |
 | `summary.responses_agent_generate_smoke`                                                     | `agent:doctor`                                                                             | `--allow-billable` 时对 `responses-image-generation` + Agent JSON + `responses-non-stream` 这条文生图路径的真实 smoke 状态；非计费时为 `skipped`。                                                                                                                                                              |
@@ -176,13 +176,13 @@ capabilities 的 `upstream_request_headers.channels[]` 是逐渠道约束契约�
 生成脚本常用参数：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --size 2048x2048 --quality high --response-mode path --idempotency-key stable-operation-key "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --size 2048x2048 --quality high --response-mode path --idempotency-key stable-operation-key "一张陶瓷杯的产品照片"
 ```
 
 常用 preset 可先 dry-run 展开真实参数，不触发计费：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 1k-smoke-agent "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 1k-smoke-agent "一张陶瓷杯的产品照片"
 node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 4k-agent-nonstream "a cinematic landscape"
 node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 4k-page-sse "a cinematic landscape"
 node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --preset 4k-upstream-sse-newapi "a cinematic landscape"
@@ -191,19 +191,19 @@ node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.
 启用 Agent 内部上游 SSE 时，必须显式传策略字段；脚本仍只输出最终 JSON：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --image-backend images-api --stream-mode auto --streaming-strategy newapi-keepalive-sse --partial-images 2 --size 3840x2160 --quality high "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --image-backend images-api --stream-mode auto --streaming-strategy newapi-keepalive-sse --partial-images 2 --size 3840x2160 --quality high "一张陶瓷杯的产品照片"
 ```
 
 真实生图必须显式开启：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --timeout-ms 420000 --size 2048x2048 "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --timeout-ms 420000 --size 2048x2048 "一张陶瓷杯的产品照片"
 ```
 
 创建浏览器可直接打开的分享链接：
 
 ```text
-node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --share --share-expires-minutes 1440 --size 2048x2048 "a product photo of a ceramic mug"
+node "<skill-root>/scripts/generate-image.mjs" --base-url https://your-space.hf.space --allow-billable --share --share-expires-minutes 1440 --size 2048x2048 "一张陶瓷杯的产品照片"
 ```
 
 本地格式转换不触发生图计费：
@@ -213,15 +213,15 @@ node "<skill-root>/scripts/convert-image-format.mjs" --format webp --quality 100
 node "<skill-root>/scripts/convert-image-format.mjs" --format png --output ./source.png ./source.webp --overwrite
 ```
 
-生成脚本默认把文生图业务意图提交到服务端编排入口 `/api/agent/image-requests`；服务端内部决定使用 Agent JSON、内部上游 SSE、job polling 或其他可观测路径。脚本不再根据 `max_edge>2048`、公网 HTTPS、页面高级字段或 `streaming_strategy=off` 自行切换默认端点。单张 generate 支持 `--responses-model`/`--gpt-model`、`--thinking`、`--prompt-optimization`、`--force-web` 和 `--force-request`；这些字段会作为生成意图提交到服务端编排入口，由服务端选择 Responses image_generation、Images API、SSE 或非流式执行方式。`--agent`、`--job`、`--page-sse` 是显式诊断或兼容开关，使用时必须记录原因，并用新的 `Idempotency-Key` 避免混淆业务操作。默认 WebP edit 走页面 SSE；显式 `--agent` 才走 Agent multipart 最终 JSON，输出格式固定为 Agent WebP 契约。Responses image_generation edit 属于页面 SSE 路径：可显式传 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`；如果运行时已显式配置 `IMAGE_GENERATION_BACKEND=responses-image-generation` 或兼容别名 `responses`，且 `IMAGE_STREAMING_STRATEGY=responses-sse`，也可以依赖服务端默认值。Docker compose 本身不设置这两个默认值，未配置 `.env.local` 时仍是 `images-api` 和 `auto`。不要为 Responses edit 加 `--agent`。默认 WebP edit 与非流式策略冲突时脚本前置拒绝，除非显式添加 `--agent` 做 Agent JSON 对照。页面高级 edit 字段与非流式策略冲突时脚本同样前置拒绝。上游流式字段优先读取 `agent_streaming.upstream_sse.request_fields_by_mode`：generate 支持 `--image-backend`、`--stream-mode`、`--streaming-strategy`、`--partial-images`；Agent edit 只支持 `--stream-mode`、`--streaming-strategy`、`--partial-images`。页面 SSE edit 可发送 `image_backend` 和表单字段 `image_streaming_strategy`；CLI 参数是 `--streaming-strategy`，batch JSONL 字段是 `streaming_strategy`。
+生成脚本默认把文生图业务意图提交到服务端编排入口 `/api/agent/image-requests`；服务端内部决定使用 Agent JSON、内部上游 SSE、任务轮询或其他可观测路径。脚本不再根据 `max_edge>2048`、公网 HTTPS、页面高级字段或 `streaming_strategy=off` 自行切换默认端点。单张生成支持 `--responses-model`/`--gpt-model`、`--thinking`、`--prompt-optimization`、`--force-web` 和 `--force-request`；这些字段会作为生成意图提交到服务端编排入口，由服务端选择 Responses image_generation、Images API、SSE 或非流式执行方式。`--agent`、`--job`、`--page-sse` 是显式诊断或兼容开关，使用时必须记录原因，并用新的 `Idempotency-Key` 避免混淆业务操作。默认 WebP 编辑走页面 SSE；显式 `--agent` 才走 Agent multipart 最终 JSON，输出格式固定为 Agent WebP 契约。Responses image_generation 编辑属于页面 SSE 路径：可显式传 `--page-sse --image-backend responses-image-generation --streaming-strategy responses-sse`；如果运行时已显式配置 `IMAGE_GENERATION_BACKEND=responses-image-generation` 或兼容别名 `responses`，且 `IMAGE_STREAMING_STRATEGY=responses-sse`，也可以依赖服务端默认值。Docker compose 本身不设置这两个默认值，未配置 `.env.local` 时仍是 `images-api` 和 `auto`。不要为 Responses 编辑加 `--agent`。默认 WebP 编辑与非流式策略冲突时脚本前置拒绝，除非显式添加 `--agent` 做 Agent JSON 对照。页面高级编辑字段与非流式策略冲突时脚本同样前置拒绝。上游流式字段优先读取 `agent_streaming.upstream_sse.request_fields_by_mode`：生成支持 `--image-backend`、`--stream-mode`、`--streaming-strategy`、`--partial-images`；Agent 编辑只支持 `--stream-mode`、`--streaming-strategy`、`--partial-images`。页面 SSE 编辑可发送 `image_backend` 和表单字段 `image_streaming_strategy`；CLI 参数是 `--streaming-strategy`，batch JSONL 字段是 `streaming_strategy`。
 
 generate 或页面 SSE 请求包含 `image_backend` 时，`n` 必须先按操作读取 `limits.generate_images_by_backend[image_backend]` 或 `limits.edit_images_by_backend[image_backend]`；capabilities 缺少按后端字段时才退回 `limits.generate_images` 或 `limits.edit_images`。`responses-image-generation` 当前生成和页面 SSE 编辑都只允许 `n=1`。`partial_images` 必须先按 `limits.partial_images_by_backend[image_backend]` 校验；capabilities 没有该字段时才退回 `limits.partial_images`。Agent edit 不接受 `image_backend`，其内部上游流式字段按默认 Images API/profile 范围校验；Responses backend edit 需要页面 SSE。不要把 Matsca `limits.partial_images=0..4` 误套到 `responses-image-generation`，Responses backend 当前使用自己的 `1..3` 范围。
 
 批量脚本 JSONL 每行是一个 generate 或 edit 任务。示例：
 
 ```jsonl
-{"id":"hero-01","mode":"generate","prompt":"a product photo of a ceramic mug","size":"1024x1024","response_mode":"path"}
-{"id":"edit-01","mode":"edit","prompt":"replace the background","image_path":"./source.png","size":"1024x1024","response_mode":"path"}
+{"id":"hero-01","mode":"generate","prompt":"一张陶瓷杯的产品照片","size":"1024x1024","response_mode":"path"}
+{"id":"edit-01","mode":"edit","prompt":"替换背景","image_path":"./source.png","size":"1024x1024","response_mode":"path"}
 ```
 
 默认 dry-run 只解析 JSONL、生成稳定幂等键并输出计划，不请求服务：

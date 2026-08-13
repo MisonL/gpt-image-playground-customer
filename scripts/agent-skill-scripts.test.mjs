@@ -4719,13 +4719,13 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /必须优先运行本 Skill 内置 scripts\/generate-image\.mjs/);
         assert.match(skillText, /替代 Codex 内置的通用生图 Skill/);
         assert.match(skillText, /scripts\/channel-capability-matrix\.mjs/);
-        assert.match(skillText, /不要临时编写 Node\/Python\/shell 脚本、curl 命令或手写 fetch\/FormData/);
+        assert.match(skillText, /不要临时编写脚本、curl 命令或手写 fetch\/FormData/);
         assert.match(openAiYaml, /先选择并运行内置脚本/);
         assert.match(openAiYaml, /替代 Codex 内置的通用生图 Skill/);
         assert.match(openAiYaml, /不要临时编写 API 调用脚本/);
         assert.match(apiReference, /先使用这些内置脚本/);
         assert.match(apiReference, /scripts\/channel-capability-matrix\.mjs/);
-        assert.match(apiReference, /不要临时编写 Node\/Python\/shell 脚本、curl 命令或手写 fetch\/FormData/);
+        assert.match(apiReference, /不要临时编写 Node、Python 或 shell 脚本、curl 命令或手写 fetch\/FormData/);
     });
 
     it('documents backend-specific image output and preview limits in dedicated Agent docs', () => {
@@ -4740,7 +4740,7 @@ describe('Agent skill script argument validation', () => {
             skillText,
             /Agent edit 不接受 `image_backend`，其内部上游流式字段按默认 Images API\/profile 范围校验/
         );
-        assert.match(skillText, /Responses image_generation edit 属于页面 SSE 路径/);
+        assert.match(skillText, /Responses image_generation 编辑属于页面 SSE 路径/);
         assert.match(
             skillText,
             /Docker compose 本身不设置这两个默认值，未配置 `\.env\.local` 时仍是 `images-api` 和 `auto`/
@@ -4824,7 +4824,7 @@ describe('Agent skill script argument validation', () => {
         assert.match(skillText, /channelQueue\.capacityPerCredential/);
         assert.match(skillText, /输出格式固定为 Agent WebP 契约/);
         assert.match(skillText, /Agent edit 只是对照路径，不保证与页面 SSE 的像素尺寸完全一致/);
-        assert.match(skillText, /复杂 UI、长 prompt、高质量图生图遇到 5 分钟级超时/);
+        assert.match(skillText, /复杂 UI、长提示词、高质量图生图遇到 5 分钟级超时/);
         assert.match(skillText, /Codex 会话日志会持久保存命令输出/);
         assert.match(skillText, /npm run env:summary/);
         assert.match(skillText, /verification_scope\.mode=local_planning_only/);
@@ -4907,16 +4907,16 @@ describe('Agent skill script argument validation', () => {
 
         assert.match(
             readmeText,
-            /新增 probe、diagnostics 或路由可观测能力时，先落 API \/ capabilities \/ OpenAPI 契约/
+            /新增探针、诊断或路由可观测能力时，先落 API、能力声明和 OpenAPI 契约/
         );
         assert.match(readmeText, /Skill 脚本做薄封装/);
-        assert.match(skillText, /新增 probe、diagnostics、路由健康或请求旅程能力时/);
+        assert.match(skillText, /新增探针、诊断、路由健康或请求旅程能力时/);
         assert.match(skillText, /GET \/api\/agent\/capabilities/);
         assert.match(skillText, /GET \/api\/agent\/openapi\.json/);
         assert.match(skillText, /\/api\/agent\/diagnostics\/\*/);
         assert.match(skillText, /Skill 脚本只做薄封装/);
-        assert.match(skillText, /不能复制页面 API、运行态 API 和 Agent API 的边界判断/);
-        assert.match(apiReference, /新增 probe、diagnostics 或健康摘要时/);
+        assert.match(skillText, /不能复制页面 API、运行时 API 和 Agent API 的边界判断/);
+        assert.match(apiReference, /新增探针、诊断或健康摘要时/);
         assert.match(apiReference, /capabilities、OpenAPI 或明确的 Agent 只读端点/);
         assert.match(apiReference, /不要让脚本自己拼 page API、runtime API 和 Agent API 的边界逻辑/);
     });

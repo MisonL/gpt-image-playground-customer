@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -121,7 +122,7 @@ describe('image upstream real smoke script', () => {
     });
 
     it('loads independent real upstream targets from an explicit env file without leaking API keys', () => {
-        const envFilePath = join(repoRoot, 'generated-images/.real-smoke-test.env');
+        const envFilePath = uniqueSmokeEnvPath('real-smoke-test');
         try {
             writeEnvFile(
                 envFilePath,
@@ -144,7 +145,7 @@ describe('image upstream real smoke script', () => {
     });
 
     it('keeps shell environment values ahead of explicit env file values', () => {
-        const envFilePath = join(repoRoot, 'generated-images/.real-smoke-test.env');
+        const envFilePath = uniqueSmokeEnvPath('real-smoke-test');
         try {
             writeEnvFile(
                 envFilePath,
@@ -571,6 +572,7 @@ describe('image upstream real smoke script', () => {
                         OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
                         OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
                         OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
+                        IMAGE_REAL_SMOKE_SERVER_TRANSPORT: 'in-process',
                         AGENT_API_TOKEN: 'secret-agent-token'
                     },
                     { signal: t.signal }
@@ -581,6 +583,9 @@ describe('image upstream real smoke script', () => {
                 const report = JSON.parse(result.stdout);
                 assert.equal(report.results[0].status, 200);
                 assert.equal(report.results[0].image_count, 1);
+                assert.equal(report.results[0].selected_channel_id, 'channel-1');
+                assert.equal(report.results[0].upstream_host, new URL(upstream.baseUrl).host);
+                assert.equal(report.results[0].channel_request_mode, 'images-sse');
                 assert.deepEqual(upstream.calls, ['/v1/images/generations']);
             } finally {
                 await upstream.close();
@@ -600,6 +605,7 @@ describe('image upstream real smoke script', () => {
                         OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
                         OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
                         OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
+                        IMAGE_REAL_SMOKE_SERVER_TRANSPORT: 'in-process',
                         APP_PASSWORD: 'page-access-code'
                     },
                     { signal: t.signal }
@@ -610,6 +616,9 @@ describe('image upstream real smoke script', () => {
                 const report = JSON.parse(result.stdout);
                 assert.equal(report.results[0].status, 200);
                 assert.equal(report.results[0].image_count, 1);
+                assert.equal(report.results[0].selected_channel_id, 'channel-1');
+                assert.equal(report.results[0].upstream_host, new URL(upstream.baseUrl).host);
+                assert.equal(report.results[0].channel_request_mode, 'images-sse');
                 assert.deepEqual(upstream.calls, ['/v1/images/generations']);
             } finally {
                 await upstream.close();
@@ -630,7 +639,8 @@ describe('image upstream real smoke script', () => {
                     {
                         OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
                         OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
-                        OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse'
+                        OPENAI_CHANNEL_1_REQUEST_MODES: 'images-sse',
+                        IMAGE_REAL_SMOKE_SERVER_TRANSPORT: 'in-process'
                     },
                     { signal: t.signal }
                 );
@@ -641,6 +651,9 @@ describe('image upstream real smoke script', () => {
                 assert.equal(report.ok, true);
                 assert.equal(report.final_gate_satisfied, false);
                 assert.equal(report.results[0].image_count, 1);
+                assert.equal(report.results[0].selected_channel_id, 'channel-1');
+                assert.equal(report.results[0].upstream_host, new URL(upstream.baseUrl).host);
+                assert.equal(report.results[0].channel_request_mode, 'images-sse');
                 after = listRealSmokeFiles();
                 assert.deepEqual(diffFiles(before, after), []);
             } finally {
@@ -664,6 +677,7 @@ describe('image upstream real smoke script', () => {
                         OPENAI_CHANNEL_1_BASE_URL: upstream.baseUrl,
                         OPENAI_CHANNEL_1_API_KEYS: 'secret-server-channel-key',
                         OPENAI_CHANNEL_1_REQUEST_MODES: 'responses-non-stream',
+                        IMAGE_REAL_SMOKE_SERVER_TRANSPORT: 'in-process',
                         IMAGE_REAL_SMOKE_SERVER_RESPONSES_MODEL: 'gpt-5.4'
                     },
                     { signal: t.signal }
@@ -809,7 +823,7 @@ describe('image upstream real smoke script', () => {
     });
 
     it('lets the npm smoke script pass --env-file through to the smoke script', () => {
-        const missingEnvFilePath = join(repoRoot, 'generated-images/.missing-real-smoke.env');
+        const missingEnvFilePath = uniqueSmokeEnvPath('missing-real-smoke');
         rmSync(missingEnvFilePath, { force: true });
 
         const result = spawnSync('npm', ['run', 'smoke:image-upstream-real', '--', '--env-file', missingEnvFilePath], {
@@ -825,7 +839,7 @@ describe('image upstream real smoke script', () => {
     });
 
     it('lets the npm final gate report readiness when the optional env file is absent', () => {
-        const missingEnvFilePath = join(repoRoot, 'generated-images/.missing-real-smoke.env');
+        const missingEnvFilePath = uniqueSmokeEnvPath('missing-real-smoke');
         rmSync(missingEnvFilePath, { force: true });
 
         const result = spawnSync(
@@ -1004,6 +1018,10 @@ function writeEnvFile(filepath, content) {
     rmSync(filepath, { force: true });
     mkdirSync(dirname(filepath), { recursive: true });
     writeFileSync(filepath, `${content}\n`, 'utf8');
+}
+
+function uniqueSmokeEnvPath(prefix) {
+    return join(repoRoot, 'generated-images', `.${prefix}-${process.pid}-${crypto.randomUUID()}.env`);
 }
 
 function buildScriptEnv(env = {}) {

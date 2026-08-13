@@ -1,8 +1,8 @@
-# Changelog
+# 变更记录
 
 本文件记录项目的重要变更。
 
-本项目参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 格式维护变更记录，并使用语义化版本管理正式发布版本。
+本项目参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 规范维护变更记录，并使用语义化版本管理正式发布版本。
 
 ## [未发布]
 
@@ -13,12 +13,12 @@
 ### 新增
 
 - 完成响应式图片创作工作台，覆盖生成、编辑、批量任务、历史复用、分享、保留策略、移动端操作和中英文界面契约。
-- 扩展 Agent API、OpenAPI 和运行时能力声明，提供渠道 request mode、健康状态、按后端限制和诊断信息。
-- 为 Agent Skill 增加按后端能力校验、批量请求约束、Responses 路由和非计费诊断流程。
+- 扩展 Agent API、OpenAPI 和运行时能力声明，提供渠道请求方式、健康状态、按后端限制和诊断信息。
+- 为 Agent 技能增加按后端能力校验、批量请求约束、Responses 路由和非计费诊断流程。
 
 ### 变更
 
-- 图片渠道路由改为按实际 request mode、凭证健康状态、模型、尺寸、背景、上传和 mask 约束筛选候选渠道。
+- 图片渠道路由改为按实际请求方式、凭证健康状态、模型、尺寸、背景、上传和遮罩约束筛选候选渠道。
 - 支持混合渠道的离散图片数量范围和 `partial_images` 范围，能力接口、页面、Agent、OpenAPI 和 Skill 保持同一契约。
 - 明确 Responses 图片后端的非流式和 SSE 语义：非流式不发送未使用的 `partial_images`，流式仅接受有效预览范围。
 - 完成 Visual Journal 品牌、Hugging Face Space 部署文档和维护脚本迁移，并同步运行时 User-Agent 与状态输出。
@@ -51,8 +51,8 @@
 - 独立启动脚本显式加载 Next.js 运行时环境，测试和版本检查脚本改为支持显式测试文件与 runner 参数。
 - 工作台、历史面板和移动端抽屉的可滚动区域与操作可达性按短视口约束收敛。
 - 渠道失败冷却默认关闭；需要自动临时移出失败渠道时，必须显式设置 `OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED=true`。
-- WebUI 图片清理启用后默认保留 30 天，并在启动时及之后每 6 小时执行；仍由 Agent 状态库登记的 artifact 不会被提前删除。
-- 手动删除 WebUI 图片会同步清理永久保存标记；永久保存不改变 Agent artifact 的生命周期或手动删除语义。
+- WebUI 图片清理启用后默认保留 30 天，并在启动时及之后每 6 小时执行；仍由 Agent 状态库登记的产物不会被提前删除。
+- 手动删除 WebUI 图片会同步清理永久保存标记；永久保存不改变 Agent 产物的生命周期或手动删除语义。
 
 ### 修复
 
@@ -62,23 +62,23 @@
 - 修正移动端运行时状态加载引起的首屏布局位移，并增加键盘跳到主要内容入口。
 - 清理本地临时图片日志并将 `tmp` 目录加入忽略规则，避免运行产物进入版本库。
 - 修正图片输出目录在进程启动时被冻结的问题，避免运行目录变化时测试或后台任务读写错误的图片目录。
-- 规范化清理目录和 Agent artifact 的真实路径，避免 macOS 路径别名导致仍在保留期内的 Agent 图片被误删。
-- 补充 Images JSON、Images SSE、Responses JSON 和 Responses SSE 四种 Agent 请求方式的 artifact 清理生命周期回归测试。
+- 规范化清理目录和 Agent 产物的真实路径，避免 macOS 路径别名导致仍在保留期内的 Agent 图片被误删。
+- 补充 Images JSON、Images SSE、Responses JSON 和 Responses SSE 四种 Agent 请求方式的产物清理生命周期回归测试。
 
 ## [2.1.0] - 2026-06-14
 
 ### 新增
 
 - 增加渠道凭证并发队列，超出单凭证容量的请求会按队列等待，并通过运行态能力接口暴露队列容量、等待上限和当前队列状态。
-- Agent skill 脚本支持默认 WebP 高质量输出、图像格式转换、Responses image_generation edit 的页面 SSE 路由，以及批量脚本按运行态容量限制有效并发。
+- Agent 技能脚本支持默认 WebP 高质量输出、图像格式转换、Responses image_generation edit 的页面 SSE 路由，以及批量脚本按运行态容量限制有效并发。
 - 增加 Matsca upstream profile，支持 Matsca 直连渠道的尺寸、`partial_images`、透明背景和上传限制口径。
 
 ### 变更
 
 - 图片默认输出格式调整为 WebP，默认压缩质量为 `100`；需要无损归档或透明边缘复核时可显式选择 PNG。
 - 渠道失败冷却默认时间调整为 `30000ms`，并增加 `OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED` 以允许关闭渠道或凭证冷却。
-- 页面端 `/api/images` 的 generate 和 edit 都支持 `IMAGE_GENERATION_BACKEND` 与 `IMAGE_STREAMING_STRATEGY` 运行时默认值，Responses edit 仍明确走页面 SSE 路径。
-- README、`.env.example` 和 Agent skill 文档补齐渠道队列、默认后端、默认流式策略、WebP 输出和 Responses edit 路由说明，避免把 Docker compose 误解为默认 Responses 后端。
+- 页面端 `/api/images` 的生成和编辑都支持 `IMAGE_GENERATION_BACKEND` 与 `IMAGE_STREAMING_STRATEGY` 运行时默认值，Responses 编辑仍明确走页面 SSE 路径。
+- README、`.env.example` 和 Agent 技能文档补齐渠道队列、默认后端、默认流式策略、WebP 输出和 Responses 编辑路由说明，避免把 Docker Compose 误解为默认 Responses 后端。
 
 ### 修复
 
@@ -92,7 +92,7 @@
 
 - WebUI 增加 `图像手记` 工作台的显式批量模式：多条提示词逐行形成独立任务，批量进度、暂停、失败项复用和批次历史保持可追溯。
 - WebUI 在省心模式和专业模式中展示“并发批量”状态；只有用户手动启用且当前流式策略、任务数量和渠道容量满足条件时，才会把多图或多提示词拆成并发流式任务。
-- Agent skill 批量脚本支持 `--concurrency N` 并发执行、append-only manifest、续跑、尺寸校验、失败重试和页面 SSE 原始事件留档。
+- Agent 技能批量脚本支持 `--concurrency N` 并发执行、追加写入清单、续跑、尺寸校验、失败重试和页面 SSE 原始事件留档。
 - 增加 `npm run version:check`，校验 `package.json`、`package-lock.json`、README 版本徽章和 `CHANGELOG.md` 版本链接一致。
 
 ### 变更
@@ -110,16 +110,16 @@
 - 增加上游图片流事件适配层，兼容官方 OpenAI Images 流式事件和 OtokAPI `image.generation.*` 事件。
 - 增加 `/api/images` 流式路由契约测试，覆盖兼容上游 SSE 到前端稳定事件的映射、多图结果、缺图错误和上游断流。
 - 增加受 `ENABLE_RESPONSES_IMAGE_BACKEND` 保护的实验 Responses API 图片后端，显式请求 `imageBackend=responses` 且配置独立 Responses 顶层模型时读取 `image_generation_call.result`。
-- Agent capabilities 和 OpenAPI 增加机器可读 `routing_rules`、页面 SSE metadata、运行态启用后端和 job polling 语义，辅助脚本支持 `--page-sse`、`--agent`、`--job` 显式路由。
+- Agent capabilities 和 OpenAPI 增加机器可读 `routing_rules`、页面 SSE 元数据、运行态启用后端和任务轮询语义，辅助脚本支持 `--page-sse`、`--agent`、`--job` 显式路由。
 
 ### 变更
 
 - 图片生成默认质量从 `auto` 调整为 `high`，前端、Agent API 默认值和 OpenAPI 描述保持一致。
 - 页面默认不发送流式请求；用户显式开启流式预览后，单图流式失败会显式展示原始错误和建议，不再自动改用非流式请求。
-- 抽取服务端流式图片响应处理，生成和编辑共用同一套 SSE 输出、图片保存、provider dialect 诊断和扣费解析逻辑。
+- 抽取服务端流式图片响应处理，生成和编辑共用同一套 SSE 输出、图片保存、上游协议方言诊断和扣费解析逻辑。
 - 运行时能力接口增加实验 Responses API 图片后端开关状态，默认关闭且不影响现有 Images API 路径。
 - Agent API、图片接口、脚本和文档中的用户可见错误文案统一为中文。
-- Agent skill 文档改为先定位服务地址，再按 `/api/agent/*` 契约调用，避免默认假设服务只在 `localhost:4783`。
+- Agent 技能文档改为先定位服务地址，再按 `/api/agent/*` 契约调用，避免默认假设服务只在 `localhost:4783`。
 
 ### 修复
 
@@ -133,20 +133,20 @@
 - 增加运行时并发流式批处理能力与 `OPENAI_MAX_STREAMS_PER_CREDENTIAL`，支持在流式模式下把 `n>1` 拆成多个 `n=1` 任务并发执行。
 - 增加前端流式批处理执行链路，支持并发调度、SSE 完成事件聚合、预览图索引映射、用量合并和部分失败提示。
 - 生成和编辑表单在服务端允许批处理时支持 `n>1` 开启流式预览，并补充中英文提示文案。
-- 增加服务端 credential/channel 失败冷却机制，支持按渠道覆盖冷却窗口。
-- 运行时能力接口增加健康 credential/channel 数量和最近失败摘要，用于前端刷新并发窗口。
+- 增加服务端凭证和渠道失败冷却机制，支持按渠道覆盖冷却窗口。
+- 运行时能力接口增加健康凭证和渠道数量及最近失败摘要，用于前端刷新并发窗口。
 - 增加流式批处理、运行时环境读取、渠道健康状态和失败分类的单元测试。
 
 ### 变更
 
 - 前端提交图片请求前会刷新运行时能力，并按用户自填 API Key 或服务端渠道池选择不同并发窗口。
 - 图片请求构造、流式响应处理和访问码重试参数改为可复用流程，批处理和单请求共用同一套错误处理。
-- README 与 `.env.example` 补充流式批处理、单 credential 并发上限和渠道失败冷却配置说明。
+- README 与 `.env.example` 补充流式批处理、单凭证并发上限和渠道失败冷却配置说明。
 - ESLint 配置显式绑定 Next.js 根目录，TypeScript 配置排除 `dist` 构建产物。
 
 ### 修复
 
-- 修正 `sticky` 路由下流式批处理推荐并发被渠道数量放大的问题，避免同一 affinity key 下突破单 credential 并发上限。
+- 修正 `sticky` 路由下流式批处理推荐并发被渠道数量放大的问题，避免同一亲和键下突破单个凭证的并发上限。
 - 修正服务端渠道池全部冷却时前端仍可能按旧推荐并发继续批处理的问题。
 - 修正 OpenAI SDK 将连接错误放在嵌套 `cause` 中时未触发 channel 冷却的问题。
 - 兼容上游错误中的 `requestID` 和 `requestId` 字段，并确保公开能力接口不返回上游错误消息。

@@ -533,7 +533,11 @@ describe('SqliteAgentStateStore', () => {
         const requestJson = { prompt: 'purge directory artifact' };
         const requestHash = hashAgentPayload(requestJson);
         const artifactBaseName = `purge-directory-artifact-${crypto.randomUUID()}`;
-        const artifactParentPath = path.join(process.cwd(), 'generated-images', '.sqlite-purge-dir-test');
+        const artifactParentPath = path.join(
+            process.cwd(),
+            'generated-images',
+            `.sqlite-purge-dir-test-${crypto.randomUUID()}`
+        );
         const artifactPath = path.join(artifactParentPath, artifactBaseName);
         await mkdir(artifactPath, { recursive: true });
         const begin = await store.beginRequest({
@@ -666,7 +670,7 @@ describe('SqliteAgentStateStore', () => {
         const artifactPath = path.join(
             process.cwd(),
             'generated-images',
-            '.sqlite-purge-test',
+            `.sqlite-purge-test-${crypto.randomUUID()}`,
             `${crypto.randomUUID()}.png`
         );
         await mkdir(path.dirname(artifactPath), { recursive: true });

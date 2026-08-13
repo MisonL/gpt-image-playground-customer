@@ -1,171 +1,36 @@
-# AGENTS.md - 仓库执行约束
+# 仓库贡献指南
 
-## 1. 核心原则
+## 项目结构
 
-- 全程使用中文沟通，结论必须基于代码、测试、构建、运行结果或 git 证据。
-- 禁止为“先跑通”添加静默降级、隐藏回退、伪造成功路径或吞没异常后继续。
-- 先保证行为等价和真实失败可见，再做性能、体验或结构优化。
-- 每次只处理一个明确任务，先确认边界，再修改，再做最小充分验证。
-- 不顺手修正无关问题；发现范围外问题时单独记录，不混入当前任务。
-- 代码、注释、日志字符串和 Markdown 不使用 Emoji 或装饰性 Unicode 符号。
+图像手记是基于 Next.js 16 和 React 19 的本地优先图片创作工作台。`src/app/` 包含应用路由页面、共享页和路由处理器；主工作台为 `src/app/page.tsx`，图片接口位于 `src/app/api/images/route.ts`，智能体接口位于 `src/app/api/agent/`。将可复用的领域逻辑放在 `src/lib/`，将界面组件放在 `src/components/`，基础界面组件位于 `src/components/ui/`。`scripts/` 存放构建、部署和诊断脚本，`database/` 保存 SQLite/Postgres 数据库模式，`docs/` 保存产品、部署和审查资料。
 
-## 2. 项目事实
+## 开发、构建与验证
 
-- 项目是 Next.js 16 + React 19 的本地图片服务，默认端口 `4783`。
-- 包管理工具是 `npm`，锁文件是 `package-lock.json`。
-- Node 版本要求是 `>=22.15.0`。
-- 主要页面入口是 `src/app/page.tsx`。
-- 图片 API 入口是 `src/app/api/images/route.ts`。
-- Agent API 位于 `src/app/api/agent/`。
-- 图片请求校验位于 `src/lib/image-request-utils.ts`。
-- 多渠道路由位于 `src/lib/channel-router.ts` 和 `src/lib/server-channel-router.ts`。
-- 仓库自带 agent skill：`skills/visual-journal-image-agent/SKILL.md`。
-
-## 3. 任务工作流
-
-### 3.1 任务来源
-
-- 当前仓库没有独立的 `tasks.md`、`issues.csv` 或等价任务跟踪文件。
-- 在未新增任务文件前，以用户当前回合明确指定的单一任务为唯一任务来源。
-- 若后续新增任务跟踪文件，任务优先级切换为：任务文件状态 > git 提交证据 > 当前代码事实。
-
-### 3.2 原子任务循环
-
-- 每次只处理一个原子任务，流程固定为：读取上下文 -> 锁定范围 -> 实现或审计 -> 验证 -> 自审 -> 结束任务。
-- 修改前先确认影响文件和验证方式。
-- 修改后只在当前任务边界内收敛，不并行推进其他需求。
-
-### 3.3 自审要求
-
-- 对照用户给出的验收标准逐条确认。
-- 运行最小相关验证，并记录命令与结果。
-- 用 `git diff --name-only` 和 `git diff --check` 确认没有范围外改动和明显格式问题。
-- 所有验证通过后，才可以声明完成。
-
-### 3.4 Code Review 模式
-
-- 当任务标题或用户指令包含 `[Code Review]` 时，默认进入审计模式，不直接修改业务代码，除非用户明确要求修复。
-- 审计依据依次为：目标 diff、`AGENTS.md`、任务验收标准、相关测试和构建结果。
-- 当前仓库没有 `docs/review_checklist.md`；如需输出审计报告，放在 `docs/reviews/CR-{ID}.md`，目录不存在时按需创建。
-
-## 4. 质量红线
-
-### 4.1 开发边界
-
-- 禁止为迎合测试或截图而硬编码业务结果。
-- 只修改完成当前任务所必需的文件。
-- 不保留无用兼容分支、死代码或无法解释的兜底逻辑。
-- 外部输入失败必须显式报错，不能静默改写后继续。
-
-### 4.2 工程基线
-
-- 遵循 SOLID、DRY、关注点分离和 YAGNI。
-- 命名清晰，抽象务实，只在不直观处补简洁注释。
-- 核心逻辑优先放在 `src/lib/`，UI 组件保持展示职责清晰。
-- 能通过纯函数或依赖注入表达的逻辑，不要直接绑死到全局状态或具体实现。
-
-### 4.3 安全基线
-
-- 严禁在源码、文档示例、测试快照里写入真实 API Key、token 或密码。
-- 自定义 API URL 和自定义 API Key 必须成对出现，避免服务端密钥被转发到未知地址。
-- 所有用户输入、上传文件、URL、文件名、尺寸、格式和上游响应都要在边界处校验。
-- 仅当密钥被写入仓库文件时，才视为泄漏事故；会话内临时调试输入不算源码泄漏。
-
-## 5. 测试与验证
-
-### 5.1 测试布局
-
-- 当前仓库测试采用同目录 `node:test` 方案，命名为 `*.test.ts`。
-- 测试文件主要位于 `src/lib/**/*.test.ts`、`src/app/api/**/*.test.ts`、`src/components/**/*.test.tsx` 和 `scripts/**/*.test.mjs`。
-- 新增测试优先沿用现有同目录模式，不额外引入第二套测试目录约定。
-
-### 5.2 验证基线
-
-- 提交前最小基线是：
+使用 Node.js `>=22.15.0`、npm 和提交的 `package-lock.json`。首次安装运行 `npm ci --strict-allow-scripts`；运行 `npm run dev` 在 `http://localhost:4783` 启动 Turbopack 开发服务。常用命令如下：
 
 ```bash
-npm run install-scripts:check
-npm run npm-install-policy:check
-npm run dependencies:check
-npm test
-npm run lint
-npm run format:check
-npm run lint:scripts
-npm run build
-git diff --check
+npm test                              # 全部单元与契约测试
+npm test -- src/lib/image-service.test.ts  # 定向测试
+npm run lint                          # ESLint 检查 src/
+npm run format:check                  # Prettier 检查
+npm run build                         # 生产构建
+npm run verify                        # 提交前完整基线
 ```
 
-- 若只改动局部模块，先跑最小相关测试；准备收尾时再跑上述全量基线。
-- 不能用“看起来没问题”代替自动化验证；不能把单项通过误报为整体通过。
+需要连接真实 Postgres 时，使用 `npm run verify -- --postgres` 并提供测试数据库。`npm run start` 必须在构建后使用，不要直接运行 `.next/standalone/server.js`。
 
-### 5.3 数据与契约校验
+## 架构与变更边界
 
-- 处理 JSON、multipart、流式响应、数据库记录或 Agent API 合同时，必须明确字段含义、类型和分支语义。
-- 若逻辑依赖真实 Postgres 行为、类型转换或驱动序列化，至少补充离线契约测试；若未连真实库，必须明确说明“仅覆盖语义，未覆盖真实数据库行为”。
-- 不能把 `npm test` 全绿直接表述为线上、Docker 或真实上游接口已通过。
+页面工作台、页面 SSE 接口和智能体 JSON 接口是不同的调用边界；不要因为某一路径可用就推断其他路径或真实上游也已通过。路由、流式传输、幂等键、产物分享和状态后端的行为应由服务端契约决定，客户端脚本只做薄封装。实现变更时先定位受影响的路由处理器、`src/lib/` 领域逻辑和对应测试，再做最小修改；不要为了让测试通过加入静默回退、伪造上游响应或吞掉错误。
 
-## 6. 环境与运行
+## 代码与测试规范
 
-### 6.1 本地开发
+使用 TypeScript 严格模式和 `@/` 路径别名。保持现有四空格缩进、单引号、分号和 120 列宽；执行 `npm run format` 处理格式和导入排序。组件使用 PascalCase 导出，文件使用 kebab-case。测试与被测模块同目录放置：`*.test.ts`、`*.test.tsx` 或 `scripts/*.test.mjs`；使用 `node:test` 与 `tsx`，覆盖成功、边界和失败分支。修改接口、流式响应、路由或状态模式时，同步更新契约测试。仓库面向人的 Markdown、技能说明和环境变量样例注释统一使用中文；命令、路径、接口字段和协议值保持原样。
 
-```bash
-npm run install-scripts:check
-npm run npm-install-policy:check
-npm ci --strict-allow-scripts
-npm run dependencies:check
-npm run dev
-```
+## 智能体、配置与安全
 
-- 本地默认访问地址是 `http://localhost:4783`。
-- `npm run dev` 使用 Turbopack，并固定端口 `4783`。
+复制 `.env.example` 为本地配置，绝不提交 `.env*`、真实密钥、`generated-images/` 或 `artifacts/`。自定义上游地址必须与自定义 API 密钥成对使用。涉及图片生成、编辑、批量处理或渠道诊断时，先阅读 `skills/visual-journal-image-agent/SKILL.md`，复用其中脚本以及智能体能力声明和 OpenAPI 契约；任何真实上游计费调用都必须显式传入 `--allow-billable`。
 
-### 6.2 Standalone 验证
+## 提交与合并请求
 
-```bash
-npm run build
-WEBUI_IMAGE_AUTO_CLEANUP_ENABLED=false \
-IMAGE_OUTPUT_DIR=generated-images/.ui-audit \
-AGENT_SQLITE_PATH=generated-images/.ui-audit/.agent-state/agent.sqlite \
-PORT=4784 HOSTNAME=127.0.0.1 npm run start
-```
-
-- standalone 必须通过 `npm run start` 或 `node scripts/start-standalone.mjs` 启动；该脚本会复制 `public/` 和 `.next/static/`。直接执行 `.next/standalone/server.js` 会导致静态资源 404 和空白页面。
-- 若本机 `.env.local` 启用了图片自动清理，做只读 UI 验证前必须显式关闭清理，并使用独立的图片目录和 Agent SQLite 路径。环境变量优先于 env 文件。
-
-### 6.3 Docker 验证
-
-```bash
-docker compose up -d --build
-```
-
-- 需要容器验证时，以最新代码重建后再做页面或接口检查。
-- 不能只看容器启动成功就声称验证完成，必须补至少一项真实访问或真实请求证据。
-
-### 6.4 常用检查
-
-```bash
-npm test
-npm run lint
-npm run format:check
-npm run lint:scripts
-npm run build
-git diff --check
-```
-
-## 7. 提交与文件卫生
-
-- 每个原子任务单独提交，提交信息应直接说明本次改动。
-- 提交前确认 `git diff --name-only` 只包含任务范围内文件。
-- 默认不提交临时产物、日志、缓存、截图、生成图片、个人配置或本地数据库文件，除非任务明确要求。
-- 修改 README、CHANGELOG、版本号或发布产物定义时，必须同时核对 `package.json`、`package-lock.json` 和相关文档口径。
-
-## 8. 仓库内文档与技能
-
-- 开始任务前，先检查仓库内是否已有相关文档或 skill 可复用。
-- 当前已知技能入口是 `skills/visual-journal-image-agent/SKILL.md`，命中 Agent API 调用场景时必须先阅读。
-- 阶段性计划当前位于 `docs/superpowers/plans/`；它们只用于补充上下文，不替代代码事实和用户当前任务。
-
-## 9. 历史踩坑记录
-
-- 重要踩坑应记录现象、根因、修复方式和相关文件或提交。
-- 当前仓库若需要新增长期审计或复盘文档，统一放在 `docs/reviews/`。
+近期提交使用约定式提交格式；示例中的提交文本保留仓库实际历史用语：`fix(images): validate payload`、`refactor(skill): rename agent`、`docs: clarify deployment`。一个提交只处理一个可验证任务。合并请求说明应列出改动范围、验证命令及结果；界面改动附桌面和移动端截图，配置或数据库模式改动说明迁移和部署影响。提交前运行 `git diff --check`，避免混入无关生成物或格式改动。

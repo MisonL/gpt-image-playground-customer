@@ -7,9 +7,9 @@ app_port: 4783
 
 # 图像手记 / Visual Journal
 
-![Version](https://img.shields.io/badge/version-2.3.0-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Node](https://img.shields.io/badge/node-%3E%3D22.15.0-339933)
+![版本](https://img.shields.io/badge/version-2.3.0-blue)
+![许可证](https://img.shields.io/badge/license-MIT-green)
+![Node.js](https://img.shields.io/badge/node-%3E%3D22.15.0-339933)
 
 图像手记（Visual Journal）是本地优先的 AI 图片创作工作台，支持 `gpt-image-2` 与 OpenAI 兼容图片接口。提供文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪、多渠道路由和 Agent API。
 
@@ -32,7 +32,7 @@ npm run first-run
 npm run deploy:local
 ```
 
-打开 [http://localhost:4783](http://localhost:4783)，在页面右上角的 `API 设置` 中填写 API Key 和兼容接口地址即可使用。
+打开 [http://localhost:4783](http://localhost:4783)，在页面右上角的 `API 设置` 中填写 API 密钥和兼容接口地址即可使用。
 
 也可以复制环境变量模板，配置服务端默认上游：
 
@@ -61,11 +61,11 @@ Windows、macOS 和 Linux 也可分别使用 `start-windows.bat`、`start-macos.
 
 - 图片创作：文生图、图生图、遮罩编辑、单图和多图输出。
 - 输出控制：尺寸、质量、格式、压缩率、透明背景和流式策略。
-- 批量生产：多提示词任务、并发控制、失败续跑和 manifest 记录。
+- 批量生产：多提示词任务、并发控制、失败续跑和清单记录。
 - 工作台体验：灵感相册、历史复用、继续编辑、变体、下载、分享和反馈。
-- 费用与诊断：耗时、token、估算费用、实际扣费和脱敏日志摘要。
-- 上游路由：单 key、多渠道、多 key、渠道队列、失败冷却和代理支持。
-- 自动化接口：幂等请求、异步 job、产物追踪、分享和请求诊断。
+- 费用与诊断：耗时、令牌用量、估算费用、实际扣费和脱敏日志摘要。
+- 上游路由：单密钥、多渠道、多密钥、渠道队列、失败冷却和代理支持。
+- 自动化接口：幂等请求、异步任务、产物追踪、分享和请求诊断。
 - 存储选择：文件系统、IndexedDB、SQLite、PostgreSQL 和内存状态。
 
 ## 界面预览
@@ -85,7 +85,7 @@ Windows、macOS 和 Linux 也可分别使用 `start-windows.bat`、`start-macos.
 | 多渠道     | `OPENAI_CHANNEL_N_*`                                             | 配置多个渠道、多个 key、请求方式白名单和渠道级覆盖。             |
 | 上游代理   | `OPENAI_UPSTREAM_PROXY_URL`、`OPENAI_CHANNEL_N_PROXY_URL`        | 仅代理服务端到图片上游的 HTTP(S) 请求。                          |
 | 页面访问码 | `APP_PASSWORD`                                                   | 设置后，页面生图和受保护图片需要访问码。公网部署建议开启。       |
-| Agent 鉴权 | `AGENT_API_TOKEN`                                                | 设置后，`/api/agent/*` 需要 Bearer token。                       |
+| Agent 鉴权 | `AGENT_API_TOKEN`                                                | 设置后，`/api/agent/*` 需要 Bearer 令牌。                        |
 | Agent 状态 | `AGENT_STATE_BACKEND`                                            | 支持 `memory`、`sqlite` 和 `postgres`；Compose 默认使用 SQLite。 |
 | 图片存储   | `NEXT_PUBLIC_IMAGE_STORAGE_MODE`                                 | 支持 `fs` 和 `indexeddb`；Compose 默认使用文件系统。             |
 | 图片清理   | `WEBUI_IMAGE_AUTO_CLEANUP_ENABLED`、`WEBUI_IMAGE_RETENTION_DAYS` | 默认关闭；启用后默认保留 30 天。                                 |
@@ -112,14 +112,14 @@ OPENAI_CHANNEL_2_API_KEYS=your-backup-key
 OPENAI_CHANNEL_2_REQUEST_MODES=images-non-stream
 ```
 
-请求方式白名单只能填写已通过真实上游 smoke、且结果能被本服务消费的模式。未配置时默认只允许 `images-non-stream`；显式流式或 Responses 请求失败时不会静默降级。
+请求方式白名单只能填写已通过真实上游冒烟验证、且结果能被本服务消费的模式。未配置时默认只允许 `images-non-stream`；显式流式或 Responses 请求失败时不会静默降级。
 
 代理 URL 仅支持无认证、无路径的 `http://` 或 `https://` 根地址，不支持 SOCKS。代理只影响服务端出站请求，不改变浏览器到本服务的连接。
 
 安全要求：
 
-- 自定义 API URL 必须和自定义 API Key 成对配置，避免服务端密钥被发送到未知地址。
-- 不要把真实 API Key、访问码、token 或数据库密码提交到仓库。
+- 自定义 API URL 必须和自定义 API 密钥成对配置，避免服务端密钥被发送到未知地址。
+- 不要把真实 API 密钥、访问码、令牌或数据库密码提交到仓库。
 - 非回环地址部署必须同时设置 `APP_PASSWORD`，否则容器会拒绝启动。
 
 ## 部署
@@ -129,16 +129,16 @@ OPENAI_CHANNEL_2_REQUEST_MODES=images-non-stream
 | 模式       | 命令                                 | 适用场景                    |
 | ---------- | ------------------------------------ | --------------------------- |
 | SQLite     | `npm run deploy:local`               | 本地单实例和长期运行。      |
-| Memory     | `npm run deploy:local -- --memory`   | 临时演示或模拟 Space 环境。 |
+| 内存       | `npm run deploy:local -- --memory`   | 临时演示或模拟 Space 环境。 |
 | PostgreSQL | `npm run deploy:local -- --postgres` | 集中状态库或多实例部署。    |
 
-部署脚本会拒绝脏工作区，并核对 Docker 健康状态、真实 HTTP 端点和镜像 revision。Compose 默认只发布到 `127.0.0.1:4783`；需要局域网访问时先设置 `APP_PASSWORD`，再执行：
+部署脚本会拒绝脏工作区，并核对 Docker 健康状态、真实 HTTP 端点和镜像版本。Compose 默认只发布到 `127.0.0.1:4783`；需要局域网访问时先设置 `APP_PASSWORD`，再执行：
 
 ```bash
 GIP_BIND_HOST=0.0.0.0 npm run deploy:local
 ```
 
-文件系统图片保存在 `generated-images/`。若 `.env.local` 将 `WEBUI_IMAGE_AUTO_CLEANUP_ENABLED` 设为 `1`、`true`、`yes` 或 `on`，部署脚本会先拒绝运行，避免服务启动后立即清理历史图片；确认可以执行时显式添加 `--allow-image-auto-cleanup`。自动清理、永久保留和 Agent artifact 生命周期配置见 [.env.example](./.env.example)。
+文件系统图片保存在 `generated-images/`。若 `.env.local` 将 `WEBUI_IMAGE_AUTO_CLEANUP_ENABLED` 设为 `1`、`true`、`yes` 或 `on`，部署脚本会先拒绝运行，避免服务启动后立即清理历史图片；确认可以执行时显式添加 `--allow-image-auto-cleanup`。自动清理、永久保留和 Agent 产物生命周期配置见 [.env.example](./.env.example)。
 
 ### Hugging Face Space
 
@@ -148,7 +148,7 @@ GIP_BIND_HOST=0.0.0.0 npm run deploy:local
 
 [![在 Hugging Face 复制此 Space](https://huggingface.co/datasets/huggingface/badges/resolve/main/duplicate-this-space-md.svg)](https://huggingface.co/new-space?duplicate=misonL%2Fvisual-journal)
 
-登录 Hugging Face 后，创建页会预填本 Space 作为复制来源。请在创建页选择 Private；复制不会带出本服务的 API Key、访问码或 Agent token。创建后必须在新 Space 的 Settings 中配置 `APP_PASSWORD`、`AGENT_API_TOKEN` 和自己的上游凭证；Docker Space 的创建资格仍受 Hugging Face 当前账户政策约束。
+登录 Hugging Face 后，创建页会预填本 Space 作为复制来源。请在创建页选择 Private；复制不会带出本服务的 API 密钥、访问码或 Agent 令牌。创建后必须在新 Space 的 Settings 中配置 `APP_PASSWORD`、`AGENT_API_TOKEN` 和自己的上游凭证；Docker Space 的创建资格仍受 Hugging Face 当前账户政策约束。
 
 #### 维护本项目固定 Space
 
@@ -163,7 +163,7 @@ npm run deploy:space
 
 ## Agent API
 
-Agent API 是供自动化客户端调用的机器接口，不是自治 Agent 平台。客户端应先读取 capabilities，再向服务端提交业务意图，由服务端决定渠道和请求方式。
+Agent API 是供自动化客户端调用的机器接口，不是自治 Agent 平台。客户端应先读取能力声明，再向服务端提交业务意图，由服务端决定渠道和请求方式。
 
 | 接口                                        | 用途                             |
 | ------------------------------------------- | -------------------------------- |
@@ -185,9 +185,9 @@ node skills/visual-journal-image-agent/scripts/generate-image.mjs \
   "capability check"
 ```
 
-仓库内置脚本默认 dry-run，不触发真实生图。只有用户明确允许计费后，才添加 `--allow-billable`。
+仓库内置脚本默认执行预演（dry-run），不触发真实生图。只有用户明确允许计费后，才添加 `--allow-billable`。
 
-新增 probe、diagnostics 或路由可观测能力时，先落 API / capabilities / OpenAPI 契约，再让 Skill 脚本做薄封装。完整参数、批量任务、编辑、分享、诊断、真实 smoke 和边界矩阵见：
+新增探针、诊断或路由可观测能力时，先落 API、能力声明和 OpenAPI 契约，再让 Skill 脚本做薄封装。完整参数、批量任务、编辑、分享、诊断、真实冒烟验证和边界矩阵见：
 
 - [Agent Skill](./skills/visual-journal-image-agent/SKILL.md)
 - [Agent API 参考](./skills/visual-journal-image-agent/references/api.md)
@@ -198,7 +198,7 @@ node skills/visual-journal-image-agent/scripts/generate-image.mjs \
 
 | 命令                                 | 用途                                                |
 | ------------------------------------ | --------------------------------------------------- |
-| `npm run status`                     | 只读查看 Git、Node、部署目标和真实 smoke 配置状态。 |
+| `npm run status`                     | 只读查看 Git、Node、部署目标和真实冒烟验证配置状态。 |
 | `npm run doctor`                     | 运行本机和部署诊断。                                |
 | `npm run env:summary`                | 安全汇总环境变量来源，不输出密钥值。                |
 | `npm run agent:doctor`               | 执行非计费 Agent 分层诊断。                         |
@@ -207,9 +207,9 @@ node skills/visual-journal-image-agent/scripts/generate-image.mjs \
 | `npm run format:check`               | 检查 TypeScript 和 TSX 格式。                       |
 | `npm run build`                      | 执行生产构建。                                      |
 | `npm run verify`                     | 运行提交前完整基线。                                |
-| `npm run smoke:image-upstream-local` | 运行本地非计费上游兼容 final gate。                 |
+| `npm run smoke:image-upstream-local` | 运行本地非计费上游兼容最终门禁。                    |
 
-真实上游 smoke 必须显式传入 `--allow-billable`。`npm run status` 和默认诊断只检查配置与合同，不会产生图片费用。
+真实上游冒烟验证必须显式传入 `--allow-billable`。`npm run status` 和默认诊断只检查配置与合同，不会产生图片费用。
 
 ## 常见问题
 
@@ -218,14 +218,14 @@ node skills/visual-journal-image-agent/scripts/generate-image.mjs \
 | 未检测到 Node.js | 安装 Node.js >=22.15.0。                                           |
 | 依赖安装失败     | 依次运行安装策略检查、`npm ci --strict-allow-scripts` 和依赖核对。 |
 | API 返回 HTML    | API URL 填成了网页地址；应填写 OpenAI 兼容 `/v1` 根地址。          |
-| 提示需要 API Key | 在 `.env.local` 或页面 `API 设置` 中配置。                         |
+| 提示需要 API 密钥 | 在 `.env.local` 或页面 `API 设置` 中配置。                        |
 | 端口被占用       | 检查占用 `4783` 的旧进程或旧容器。                                 |
 
 ## 项目文档
 
 - [产品边界](./docs/product/product-contract.md)
 - [用户验证脚本](./docs/product/user-validation-script.md)
-- [图片 Provider Manifest](./docs/product/image-provider-manifest.md)
+- [图片上游清单](./docs/product/image-provider-manifest.md)
 - [Hugging Face Space 部署](./docs/deployment/huggingface-space-free.md)
 - [Agent Skill](./skills/visual-journal-image-agent/SKILL.md)
 - [Agent API 参考](./skills/visual-journal-image-agent/references/api.md)
