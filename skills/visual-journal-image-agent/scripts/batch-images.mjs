@@ -592,7 +592,7 @@ function validateTaskRoutingFields(raw, id, mode) {
         (raw.stream_mode === 'non_stream' || raw.streaming_strategy === 'off')
     ) {
         throw new Error(
-            `${id} 默认 WebP edit 任务需要页面 SSE；若要使用 Agent JSON 固定输出，请拆成单张 edit 并显式使用 --agent。`
+            `${id} 默认 WebP edit 任务需要页面 SSE；若要使用 Agent JSON 固定输出，请在该 JSONL 任务中显式设置 transport=agent_json。`
         );
     }
 }

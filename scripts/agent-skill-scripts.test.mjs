@@ -108,6 +108,26 @@ describe('Agent skill script argument validation', () => {
         );
     });
 
+    it('enforces one-sided capability ranges when a legacy service omits one bound', () => {
+        const capabilities = {
+            limits: {
+                generate_images: { min: 2 },
+                edit_images: { max: 3 }
+            }
+        };
+
+        assert.throws(
+            () => validateAgentGenerateRequestAgainstCapabilities({ n: 1 }, capabilities),
+            /不能小于当前 capabilities 允许的最小值 2/
+        );
+        assert.doesNotThrow(() => validateAgentGenerateRequestAgainstCapabilities({ n: 2 }, capabilities));
+        assert.throws(
+            () => validateAgentEditRequestAgainstCapabilities({ n: 4 }, capabilities),
+            /不能大于当前 capabilities 允许的最大值 3/
+        );
+        assert.doesNotThrow(() => validateAgentEditRequestAgainstCapabilities({ n: 3 }, capabilities));
+    });
+
     it('uses the public partial image range for requests that resolve to non-stream mode', () => {
         const capabilities = agentGenerateCapabilities({
             upstream_request_headers: {

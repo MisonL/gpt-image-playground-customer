@@ -318,9 +318,16 @@ function assertNumberWithinCapabilities(value, limits, fieldName) {
     }
     const min = limits.min;
     const max = limits.max;
-    if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) return;
-    if (value < min || value > max) {
+    const hasMin = Number.isSafeInteger(min);
+    const hasMax = Number.isSafeInteger(max);
+    if (hasMin && hasMax && (value < min || value > max)) {
         throw new Error(`${fieldName} 必须在当前 capabilities 允许的 ${min} 到 ${max} 之间。`);
+    }
+    if (hasMin && value < min) {
+        throw new Error(`${fieldName} 不能小于当前 capabilities 允许的最小值 ${min}。`);
+    }
+    if (hasMax && value > max) {
+        throw new Error(`${fieldName} 不能大于当前 capabilities 允许的最大值 ${max}。`);
     }
 }
 
@@ -334,8 +341,9 @@ function isIntegerWithinCapabilityRange(value, limits) {
     if (allowedValues && !allowedValues.includes(value)) return false;
     const min = limits.min;
     const max = limits.max;
-    if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) return true;
-    return value >= min && value <= max;
+    if (Number.isSafeInteger(min) && value < min) return false;
+    if (Number.isSafeInteger(max) && value > max) return false;
+    return true;
 }
 
 function assertMaxCountWithinCapabilities(value, max, fieldName) {
