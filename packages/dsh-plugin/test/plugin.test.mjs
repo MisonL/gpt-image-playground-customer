@@ -68,9 +68,12 @@ test('allows billable requests when the service has no auth configured', async (
         callCount += 1;
         requestHeaders = new Headers(init?.headers);
         if (callCount === 1) {
-            return new Response(JSON.stringify({ job: { id: 'job-auth', result_url: '/api/agent/jobs/job-auth/result' } }), {
-                status: 202
-            });
+            return new Response(
+                JSON.stringify({ job: { id: 'job-auth', result_url: '/api/agent/jobs/job-auth/result' } }),
+                {
+                    status: 202
+                }
+            );
         }
         return new Response(JSON.stringify({ request_id: 'request-auth', images: [] }), { status: 200 });
     };
@@ -99,10 +102,9 @@ test('polls an orchestrated job until the final image response is ready', async 
     globalThis.fetch = async (input, init) => {
         calls.push({ url: String(input), method: init?.method ?? 'GET' });
         if (calls.length === 1) {
-            return new Response(
-                JSON.stringify({ job: { id: 'job-1', retry_after_seconds: 0, result_url: '' } }),
-                { status: 202 }
-            );
+            return new Response(JSON.stringify({ job: { id: 'job-1', retry_after_seconds: 0, result_url: '' } }), {
+                status: 202
+            });
         }
         if (calls.length === 2) {
             return new Response(
@@ -122,12 +124,18 @@ test('polls an orchestrated job until the final image response is ready', async 
         assert.equal(result.billable, true);
         assert.equal(result.job_id, 'job-1');
         assert.equal(result.response.request_id, 'request-1');
-        assert.deepEqual(calls.map((call) => call.method), ['POST', 'GET', 'GET']);
-        assert.deepEqual(calls.map((call) => call.url), [
-            'http://localhost:4783/api/agent/image-requests',
-            'http://localhost:4783/api/agent/jobs/job-1/result',
-            'http://localhost:4783/api/agent/jobs/job-1/result'
-        ]);
+        assert.deepEqual(
+            calls.map((call) => call.method),
+            ['POST', 'GET', 'GET']
+        );
+        assert.deepEqual(
+            calls.map((call) => call.url),
+            [
+                'http://localhost:4783/api/agent/image-requests',
+                'http://localhost:4783/api/agent/jobs/job-1/result',
+                'http://localhost:4783/api/agent/jobs/job-1/result'
+            ]
+        );
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -142,10 +150,7 @@ test('rejects a job result URL on another origin before sending credentials', ()
 
 test('normalizes configured base URLs and rejects malformed idempotency keys', () => {
     assert.equal(internals.resolveBaseUrl('http://localhost:4783///'), 'http://localhost:4783');
-    assert.throws(
-        () => internals.requireIdempotencyKey('valid\nkey'),
-        /idempotency_key 不能包含控制字符/
-    );
+    assert.throws(() => internals.requireIdempotencyKey('valid\nkey'), /idempotency_key 不能包含控制字符/);
 });
 
 test('rejects an accepted response that has neither a job nor a final response', async () => {
