@@ -2,7 +2,7 @@ import { apply, internals } from '../lib/index.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-function registerTools() {
+function registerTools(timeoutMs = 1000) {
     const tools = new Map();
     apply(
         {
@@ -13,7 +13,7 @@ function registerTools() {
                 }
             }
         },
-        { baseUrl: 'http://localhost:4783', timeoutMs: 1000 }
+        { baseUrl: 'http://localhost:4783', timeoutMs }
     );
     return tools;
 }
@@ -63,16 +63,23 @@ test('allows billable requests when the service has no auth configured', async (
     let requestHeaders;
     delete process.env.GPT_IMAGE_AGENT_TOKEN;
     delete process.env.GPT_IMAGE_APP_PASSWORD_HASH;
+    let callCount = 0;
     globalThis.fetch = async (_input, init) => {
+        callCount += 1;
         requestHeaders = new Headers(init?.headers);
-        return new Response(JSON.stringify({ accepted: true }), { status: 202 });
+        if (callCount === 1) {
+            return new Response(JSON.stringify({ job: { id: 'job-auth', result_url: '/api/agent/jobs/job-auth/result' } }), {
+                status: 202
+            });
+        }
+        return new Response(JSON.stringify({ request_id: 'request-auth', images: [] }), { status: 200 });
     };
     try {
         const result = await generate.execute(
             { prompt: 'test prompt', allow_billable: true, idempotency_key: 'test-key' },
             { signal: new AbortController().signal }
         );
-        assert.equal(result.response.accepted, true);
+        assert.equal(result.response.request_id, 'request-auth');
         assert.equal(requestHeaders.has('authorization'), false);
         assert.equal(requestHeaders.has('x-app-password-hash'), false);
     } finally {
@@ -81,6 +88,81 @@ test('allows billable requests when the service has no auth configured', async (
         else process.env.GPT_IMAGE_AGENT_TOKEN = originalToken;
         if (originalPasswordHash === undefined) delete process.env.GPT_IMAGE_APP_PASSWORD_HASH;
         else process.env.GPT_IMAGE_APP_PASSWORD_HASH = originalPasswordHash;
+    }
+});
+
+test('polls an orchestrated job until the final image response is ready', async () => {
+    const tools = registerTools(3000);
+    const generate = tools.get('visual_journal_generate');
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (input, init) => {
+        calls.push({ url: String(input), method: init?.method ?? 'GET' });
+        if (calls.length === 1) {
+            return new Response(
+                JSON.stringify({ job: { id: 'job-1', retry_after_seconds: 0, result_url: '' } }),
+                { status: 202 }
+            );
+        }
+        if (calls.length === 2) {
+            return new Response(
+                JSON.stringify({ error: { code: 'request_in_progress', retryable: true, message: 'running' } }),
+                { status: 409, headers: { 'Retry-After': '0' } }
+            );
+        }
+        return new Response(JSON.stringify({ request_id: 'request-1', images: [{ url: '/artifacts/1' }] }), {
+            status: 200
+        });
+    };
+    try {
+        const result = await generate.execute(
+            { prompt: 'test prompt', allow_billable: true, idempotency_key: 'test-key' },
+            { signal: new AbortController().signal }
+        );
+        assert.equal(result.billable, true);
+        assert.equal(result.job_id, 'job-1');
+        assert.equal(result.response.request_id, 'request-1');
+        assert.deepEqual(calls.map((call) => call.method), ['POST', 'GET', 'GET']);
+        assert.deepEqual(calls.map((call) => call.url), [
+            'http://localhost:4783/api/agent/image-requests',
+            'http://localhost:4783/api/agent/jobs/job-1/result',
+            'http://localhost:4783/api/agent/jobs/job-1/result'
+        ]);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test('rejects a job result URL on another origin before sending credentials', () => {
+    assert.throws(
+        () => internals.resolveSameOriginUrl('http://localhost:4783', 'https://attacker.example/result'),
+        /不同 origin/
+    );
+});
+
+test('normalizes configured base URLs and rejects malformed idempotency keys', () => {
+    assert.equal(internals.resolveBaseUrl('http://localhost:4783///'), 'http://localhost:4783');
+    assert.throws(
+        () => internals.requireIdempotencyKey('valid\nkey'),
+        /idempotency_key 不能包含控制字符/
+    );
+});
+
+test('rejects an accepted response that has neither a job nor a final response', async () => {
+    const tools = registerTools();
+    const generate = tools.get('visual_journal_generate');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ accepted: true }), { status: 202 });
+    try {
+        await assert.rejects(
+            generate.execute(
+                { prompt: 'test prompt', allow_billable: true, idempotency_key: 'test-key' },
+                { signal: new AbortController().signal }
+            ),
+            /创建 job 的响应缺少 job/
+        );
+    } finally {
+        globalThis.fetch = originalFetch;
     }
 });
 
@@ -93,7 +175,7 @@ test('tool arguments cannot redirect requests away from the configured service',
     process.env.GPT_IMAGE_AGENT_TOKEN = 'test-token';
     globalThis.fetch = async (input) => {
         urls.push(String(input));
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        return new Response(JSON.stringify({ request_id: 'request-redirect-guard', images: [] }), { status: 200 });
     };
     try {
         await generate.execute(

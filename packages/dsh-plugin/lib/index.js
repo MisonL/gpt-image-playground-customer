@@ -6,7 +6,8 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 const AGENT_ENDPOINTS = Object.freeze({
     capabilities: '/api/agent/capabilities',
     generate: '/api/agent/image-requests',
-    diagnostics: '/api/agent/diagnostics/requests'
+    diagnostics: '/api/agent/diagnostics/requests',
+    jobResult: (jobId) => `/api/agent/jobs/${encodeURIComponent(jobId)}/result`
 });
 
 export const name = 'visual-journal-dsh-plugin';
@@ -70,6 +71,7 @@ function registerCapabilitiesTool(ctx, configuredBaseUrl, timeoutMs) {
                 return requestJson({
                     baseUrl: resolveBaseUrl(configuredBaseUrl),
                     path: AGENT_ENDPOINTS.capabilities,
+                    timeoutMs,
                     signal: exec.signal,
                     headers: authHeaders()
                 });
@@ -106,10 +108,12 @@ function registerGenerateTool(ctx, configuredBaseUrl, timeoutMs) {
                     };
                 }
                 const idempotencyKey = requireIdempotencyKey(args.idempotency_key);
-                return requestJson({
+                const deadline = Date.now() + timeoutMs;
+                const created = await requestJson({
                     baseUrl,
                     path: AGENT_ENDPOINTS.generate,
                     method: 'POST',
+                    timeoutMs,
                     signal: exec.signal,
                     headers: {
                         ...authHeaders(),
@@ -118,6 +122,19 @@ function registerGenerateTool(ctx, configuredBaseUrl, timeoutMs) {
                     },
                     body: request,
                     metadata: { idempotency_key: idempotencyKey, billable: true }
+                });
+                if (!created.response?.job) {
+                    if (created.response?.request_id || created.response?.images) return created;
+                    throw new Error('Visual Journal 创建 job 的响应缺少 job。');
+                }
+                const remainingTimeoutMs = deadline - Date.now();
+                if (remainingTimeoutMs <= 0) throw new Error('等待 Visual Journal job 结果超时。');
+                return pollJobResult({
+                    baseUrl,
+                    job: created.response.job,
+                    idempotencyKey,
+                    timeoutMs: remainingTimeoutMs,
+                    signal: exec.signal
                 });
             }
         })
@@ -139,6 +156,7 @@ function registerDiagnosticsTool(ctx, configuredBaseUrl, timeoutMs) {
                 return requestJson({
                     baseUrl,
                     path: `${AGENT_ENDPOINTS.diagnostics}?${lookup.type}=${encodeURIComponent(lookup.value)}`,
+                    timeoutMs,
                     signal: exec.signal,
                     headers: authHeaders()
                 });
@@ -185,6 +203,7 @@ function requireIdempotencyKey(value) {
     const normalized = normalizeNonEmpty(value);
     if (!normalized) throw new Error('allow_billable=true 时必须提供 idempotency_key。');
     if (normalized.length > 200) throw new Error('idempotency_key 长度不能超过 200 个字符。');
+    if (/[\u0000-\u001f\u007f]/.test(normalized)) throw new Error('idempotency_key 不能包含控制字符。');
     return normalized;
 }
 
@@ -199,7 +218,7 @@ function resolveBaseUrl(configured) {
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
         throw new Error('base_url 必须是无凭据、无查询参数、无片段的 http/https URL。');
     }
-    return url.toString().replace(/\/$/, '');
+    return url.toString().replace(/\/+$/, '');
 }
 
 function authHeaders() {
@@ -211,12 +230,33 @@ function authHeaders() {
 }
 
 async function requestJson(options) {
+    const { response, result, text } = await fetchJson(options);
+    if (!response.ok) {
+        const message = result?.error?.message ?? result?.message ?? (text.trim() || `HTTP ${response.status}`);
+        throw new Error(`Visual Journal 请求失败，状态码 ${response.status}：${message}`);
+    }
+    return {
+        ok: true,
+        billable: options.metadata?.billable === true,
+        service_base_url: options.baseUrl,
+        endpoint: options.path.split('?')[0],
+        ...(options.metadata ?? {}),
+        response: result
+    };
+}
+
+async function fetchJson(options) {
     const controller = new AbortController();
     const abort = () => controller.abort(options.signal?.reason);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     if (options.signal?.aborted) controller.abort(options.signal.reason);
     else options.signal?.addEventListener('abort', abort, { once: true });
     try {
-        const response = await fetch(`${options.baseUrl}${options.path}`, {
+        const response = await fetch(options.url ?? `${options.baseUrl}${options.path}`, {
             method: options.method ?? 'GET',
             headers: options.headers,
             ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
@@ -230,27 +270,105 @@ async function requestJson(options) {
         } catch {
             throw new Error(`Visual Journal 返回了非 JSON 响应，状态码 ${response.status}。`);
         }
-        if (!response.ok) {
-            const message = result?.error?.message ?? result?.message ?? (text.trim() || `HTTP ${response.status}`);
-            throw new Error(`Visual Journal 请求失败，状态码 ${response.status}：${message}`);
-        }
-        return {
-            ok: true,
-            billable: options.metadata?.billable === true,
-            service_base_url: options.baseUrl,
-            endpoint: options.path.split('?')[0],
-            ...(options.metadata ?? {}),
-            response: result
-        };
+        return { response, result, text };
+    } catch (error) {
+        if (timedOut) throw new Error(`Visual Journal 请求超时（${options.timeoutMs ?? DEFAULT_TIMEOUT_MS} 毫秒）。`);
+        throw error;
     } finally {
+        clearTimeout(timeout);
         options.signal?.removeEventListener('abort', abort);
     }
+}
+
+async function pollJobResult({ baseUrl, job, idempotencyKey, timeoutMs, signal }) {
+    if (!job || typeof job.id !== 'string' || !job.id.trim()) {
+        throw new Error('创建 job 的响应缺少有效 job.id。');
+    }
+    const fallbackResultUrl = `${baseUrl}${AGENT_ENDPOINTS.jobResult(job.id)}`;
+    const resultUrl = resolveSameOriginUrl(baseUrl, job.result_url || fallbackResultUrl);
+    const deadline = Date.now() + timeoutMs;
+    let retryAfterSeconds = readRetryAfterSeconds(job.retry_after_seconds, 1);
+    let lastResult;
+
+    while (Date.now() < deadline) {
+        const remainingMs = deadline - Date.now();
+        const { response, result, text } = await fetchJson({
+            url: resultUrl,
+            signal,
+            timeoutMs: Math.max(1, remainingMs),
+            headers: authHeaders()
+        });
+        if (response.ok) {
+            return {
+                ok: true,
+                billable: true,
+                service_base_url: baseUrl,
+                endpoint: AGENT_ENDPOINTS.jobResult(job.id),
+                idempotency_key: idempotencyKey,
+                job_id: job.id,
+                response: result
+            };
+        }
+        lastResult = result;
+        if (result?.error?.code !== 'request_in_progress' || result?.error?.retryable !== true) {
+            const message = result?.error?.message ?? result?.message ?? (text.trim() || `HTTP ${response.status}`);
+            throw new Error(`Visual Journal job 结果失败，状态码 ${response.status}：${message}`);
+        }
+        retryAfterSeconds = readRetryAfterSeconds(
+            response.headers.get('retry-after') ?? result.retry_after ?? result.error.retry_after_seconds,
+            retryAfterSeconds
+        );
+        await sleepWithSignal(Math.min(retryAfterSeconds * 1000, Math.max(1, deadline - Date.now())), signal);
+    }
+
+    const message = lastResult?.error?.message ?? '等待 Visual Journal job 结果超时。';
+    throw new Error(`等待 Visual Journal job 结果超时：${message}`);
+}
+
+function readRetryAfterSeconds(value, fallback) {
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+    return Math.min(30, parsed);
+}
+
+function sleepWithSignal(milliseconds, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(signal.reason ?? new Error('请求已取消。'));
+            return;
+        }
+        let settled = false;
+        const timer = setTimeout(() => {
+            settled = true;
+            signal?.removeEventListener('abort', abort);
+            resolve();
+        }, milliseconds);
+        const abort = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', abort);
+            reject(signal.reason ?? new Error('请求已取消。'));
+        };
+        signal?.addEventListener('abort', abort, { once: true });
+    });
+}
+
+function resolveSameOriginUrl(baseUrl, value) {
+    const base = new URL(baseUrl);
+    const resolved = new URL(value, `${baseUrl}/`);
+    if (resolved.origin !== base.origin || resolved.username || resolved.password) {
+        throw new Error('job.result_url 指向不同 origin，拒绝携带鉴权头访问。');
+    }
+    return resolved.toString();
 }
 
 export const internals = Object.freeze({
     AGENT_ENDPOINTS,
     buildGenerateRequest,
+    pollJobResult,
     resolveBaseUrl,
     resolveDiagnosticLookup,
-    requireIdempotencyKey
+    requireIdempotencyKey,
+    resolveSameOriginUrl
 });
