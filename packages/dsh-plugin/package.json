@@ -1,0 +1,36 @@
+{
+    "name": "@visual-journal/dsh-plugin",
+    "version": "0.1.0",
+    "description": "DSH bundle for the Visual Journal Agent API",
+    "type": "module",
+    "main": "./lib/index.js",
+    "exports": {
+        ".": "./lib/index.js",
+        "./cordis.patch.yml": "./cordis.patch.yml",
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "lib",
+        "cordis.patch.yml",
+        "README.md",
+        "test"
+    ],
+    "engines": {
+        "node": ">=22.15.0"
+    },
+    "dsh": {
+        "bundle": {
+            "patch": "./cordis.patch.yml"
+        }
+    },
+    "dependencies": {
+        "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+        "@deepseek-ai/schemastery": "^3.18.1"
+    },
+    "peerDependencies": {
+        "@deepseek-ai/cordis": "^4.0.1"
+    },
+    "scripts": {
+        "test": "node --test test/*.test.mjs"
+    }
+}

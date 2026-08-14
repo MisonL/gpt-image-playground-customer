@@ -145,6 +145,15 @@
 }
 
 @layer utilities {
+    .workbench-header {
+        min-height: 3.5rem;
+    }
+
+    .workbench-header__brand,
+    .workbench-header__tools {
+        min-height: 2.25rem;
+    }
+
     .studio-paper {
         background: var(--background);
     }
@@ -214,9 +223,46 @@
 
     .workbench-panel {
         background: var(--card);
+        border-color: color-mix(in oklab, var(--border) 84%, transparent);
         box-shadow:
             0 1px 2px rgb(15 23 42 / 4%),
-            0 8px 22px rgb(15 23 42 / 5%);
+            0 12px 28px rgb(15 23 42 / 5%);
+    }
+
+    .dark .workbench-panel {
+        box-shadow:
+            0 1px 2px rgb(0 0 0 / 18%),
+            0 12px 28px rgb(0 0 0 / 16%);
+    }
+
+    .workbench-panel-header {
+        background: color-mix(in oklab, var(--card) 94%, var(--background));
+    }
+
+    [data-slot='workbench-status-strip'] {
+        border-radius: 0.5rem;
+    }
+
+    @media (min-width: 640px) {
+        [data-slot='workbench-status-strip'] {
+            gap: 0.25rem;
+            border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+            background: color-mix(in oklab, var(--card) 88%, var(--background));
+            padding: 0.25rem;
+            box-shadow: 0 2px 10px rgb(15 23 42 / 4%);
+        }
+    }
+
+    .workbench-empty-state {
+        border-style: dashed;
+        border-color: color-mix(in oklab, var(--border) 82%, transparent);
+        background: color-mix(in oklab, var(--muted) 48%, var(--card));
+    }
+
+    .workbench-empty-state__icon {
+        box-shadow:
+            0 1px 2px rgb(15 23 42 / 5%),
+            0 5px 12px rgb(15 23 42 / 5%);
     }
 
     .photo-paper {
@@ -245,10 +291,13 @@
     @media (min-width: 1160px) {
         .workbench-layout {
             min-height: 0;
+            align-items: stretch;
+            grid-template-rows: minmax(0, 1fr);
             grid-template-columns: minmax(320px, 340px) minmax(0, 1fr) minmax(220px, 244px);
         }
 
         .workbench-history-column {
+            height: 100%;
             min-height: 0;
             grid-column: span 1 / span 1;
         }

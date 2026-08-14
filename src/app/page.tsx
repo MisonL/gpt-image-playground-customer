@@ -3919,12 +3919,12 @@ export default function HomePage() {
                             onClick={closeMobileCreationDrawer}
                         />
                     )}
-                    <div className='mx-auto flex min-h-screen w-full max-w-[1880px] min-w-0 flex-col px-4 py-3 lg:px-6 lg:py-5 xl:h-full xl:min-h-0'>
+                    <div className='workbench-shell mx-auto flex min-h-screen w-full max-w-[1880px] min-w-0 flex-col px-4 py-3 lg:px-6 lg:py-5 xl:h-full xl:min-h-0'>
                         <header
                             aria-hidden={isMobileCreationDrawerOpen}
                             inert={isMobileCreationDrawerOpen}
-                            className='border-border/80 mb-4 flex shrink-0 flex-col gap-3 border-b pb-4 xl:flex-row xl:items-center xl:justify-between'>
-                            <div className='flex min-w-0 items-center gap-3'>
+                            className='workbench-header border-border/80 mb-4 flex shrink-0 flex-col gap-3 border-b pb-4 xl:flex-row xl:items-center xl:justify-between'>
+                            <div className='workbench-header__brand flex min-w-0 items-center gap-3'>
                                 <div className='flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1'>
                                     <h1 className='editorial-title shrink-0 text-2xl font-semibold tracking-normal sm:text-3xl'>
                                         {t('app.studioTitle')}
@@ -3942,7 +3942,7 @@ export default function HomePage() {
                                     <Settings2 className='h-4 w-4' />
                                 </Button>
                             </div>
-                            <div className='flex min-w-0 flex-wrap items-center gap-2 sm:justify-end sm:gap-4'>
+                            <div className='workbench-header__tools flex min-w-0 flex-wrap items-center gap-2 sm:justify-end sm:gap-4'>
                                 <WorkbenchStatusStrip
                                     model={activeWorkbenchModel}
                                     routeLabel={activeRouteLabel}
@@ -3969,7 +3969,7 @@ export default function HomePage() {
                         <div
                             id='workbench-content'
                             tabIndex={-1}
-                            className='workbench-layout grid flex-1 grid-cols-1 gap-4 focus:outline-none lg:grid-cols-[minmax(360px,420px)_minmax(0,1fr)]'>
+                            className='workbench-layout grid min-h-0 flex-1 grid-cols-1 gap-4 focus:outline-none lg:grid-cols-[minmax(360px,420px)_minmax(0,1fr)]'>
                             <section
                                 id='mobile-creation-sheet'
                                 aria-label={t('app.creationControls')}
@@ -4279,7 +4279,7 @@ export default function HomePage() {
                                 aria-hidden={isMobileCreationDrawerOpen}
                                 inert={isMobileCreationDrawerOpen}
                                 className={cn(
-                                    'workbench-history-column order-3 min-h-[17.5rem] min-w-0 lg:col-span-2',
+                                    'workbench-history-column order-3 min-h-[17.5rem] min-w-0 lg:col-span-2 xl:h-full',
                                     shouldExpandOutputStage && 'workbench-history-column--contained'
                                 )}>
                                 <HistoryPanel

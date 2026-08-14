@@ -1,0 +1,6 @@
+# Visual Journal Agent tools for a DSH profile.
+- insert:
+      - id: visual-journal-dsh-plugin
+        name: '@visual-journal/dsh-plugin'
+        config:
+            baseUrl: !!js process.env.GPT_IMAGE_PLAYGROUND_URL ?? 'http://localhost:4783'

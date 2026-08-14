@@ -517,7 +517,7 @@ export function ImageOutput({
                 'workbench-panel text-card-foreground border-border flex min-h-[300px] w-full flex-col overflow-hidden rounded-lg border',
                 isGenerateEmptyState ? 'h-fit xl:h-full' : 'h-full'
             )}>
-            <div className='border-border/70 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3'>
+            <div className='workbench-panel-header border-border/70 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3'>
                 <h2 className='editorial-title text-xl font-semibold'>{t('output.previewTitle')}</h2>
                 <div className='text-muted-foreground ui-stat flex flex-wrap items-center gap-3 text-xs'>
                     <span className='inline-flex items-center gap-1.5'>
@@ -694,8 +694,8 @@ export function ImageOutput({
                         </div>
                     ) : (
                         <div className='relative mx-auto flex w-full max-w-[30rem] flex-col items-center justify-center gap-3 px-6 py-7 text-center'>
-                            <div className='border-border/70 bg-background/70 text-muted-foreground flex h-11 w-11 items-center justify-center rounded-md border shadow-sm'>
-                                <ImageIcon className='h-5 w-5' />
+                            <div className='workbench-empty-state__icon border-border/70 bg-background/70 text-muted-foreground flex h-11 w-11 items-center justify-center rounded-md border shadow-sm'>
+                                <ImageIcon className='h-5 w-5' aria-hidden='true' />
                             </div>
                             <div className='space-y-2'>
                                 <h3 className='editorial-title text-lg font-semibold'>
@@ -711,9 +711,9 @@ export function ImageOutput({
                         </div>
                     )
                 ) : (
-                    <div className='relative mx-auto flex w-full max-w-[30rem] flex-col items-center justify-center gap-3 px-6 py-7 text-center'>
-                        <div className='border-border/70 bg-background/70 text-muted-foreground flex h-11 w-11 items-center justify-center rounded-md border shadow-sm'>
-                            <ImageIcon className='h-5 w-5' />
+                    <div className='workbench-empty-state relative mx-auto flex w-full max-w-[30rem] flex-col items-center justify-center gap-3 px-6 py-7 text-center'>
+                        <div className='workbench-empty-state__icon border-border/70 bg-background/70 text-muted-foreground flex h-11 w-11 items-center justify-center rounded-md border shadow-sm'>
+                            <ImageIcon className='h-5 w-5' aria-hidden='true' />
                         </div>
                         <div className='space-y-2'>
                             <h3 className='editorial-title text-lg font-semibold'>{t('output.emptyTitle')}</h3>

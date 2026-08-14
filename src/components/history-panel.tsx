@@ -452,7 +452,7 @@ function HistoryPanelImpl({
             className={cn(
                 'workbench-panel text-card-foreground border-border flex h-auto min-h-[17.5rem] w-full flex-col gap-0 overflow-hidden rounded-lg border py-0 xl:h-full xl:min-h-0'
             )}>
-            <CardHeader className='border-border/70 flex flex-col gap-2 border-b px-4 pt-3 !pb-3'>
+            <CardHeader className='workbench-panel-header border-border/70 flex flex-col gap-2 border-b px-4 pt-3 !pb-3'>
                 {estimatedImages > 0 ? (
                     <div className='flex items-center justify-end gap-3'>
                         <Dialog open={isTotalCostDialogOpen} onOpenChange={setIsTotalCostDialogOpen}>
@@ -594,8 +594,8 @@ function HistoryPanelImpl({
                             inspirations.length === 0 && 'xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:space-y-0'
                         )}>
                         {inspirations.length === 0 ? (
-                            <div className='text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm xl:my-auto'>
-                                <WandSparkles className='h-5 w-5 opacity-70' />
+                            <div className='workbench-empty-state text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm xl:my-auto'>
+                                <WandSparkles className='h-5 w-5 opacity-70' aria-hidden='true' />
                                 <p>{t('history.inspirationEmpty')}</p>
                             </div>
                         ) : (
@@ -692,7 +692,7 @@ function HistoryPanelImpl({
                 ) : history.length === 0 ? (
                     <div
                         className={cn(
-                            'text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-1 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm'
+                            'workbench-empty-state text-muted-foreground border-border/70 bg-muted/20 flex min-h-28 flex-1 flex-col items-center justify-center gap-2 rounded-md border px-4 text-center text-sm'
                         )}>
                         <FileImage className='h-5 w-5 opacity-70' aria-hidden='true' />
                         <p>{t('history.empty')}</p>

@@ -93,11 +93,15 @@ export function WorkbenchStatusStrip({
 
     return (
         <div
+            data-slot='workbench-status-strip'
+            aria-live='polite'
             className={cn(
                 'text-muted-foreground ui-stat relative flex w-full min-w-0 flex-wrap items-center gap-1.5 text-xs sm:w-auto sm:text-sm',
                 className
             )}>
-            <span className='border-border bg-card inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.5 whitespace-nowrap sm:min-h-7 sm:gap-2 sm:px-2.5 sm:py-1'>
+            <span
+                data-slot='status-chip'
+                className='border-border bg-card inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.5 whitespace-nowrap sm:min-h-7 sm:gap-2 sm:px-2.5 sm:py-1'>
                 <RuntimeStatusIcon
                     className={cn(
                         'h-3.5 w-3.5',
@@ -110,6 +114,7 @@ export function WorkbenchStatusStrip({
             {hasRequestModeDetails ? (
                 <details className='group static max-w-full shrink-0 sm:relative sm:basis-auto'>
                     <summary
+                        data-slot='status-chip'
                         aria-label={t('app.requestModeHealth')}
                         title={t('app.requestModeHealth')}
                         className={cn(
@@ -180,20 +185,28 @@ export function WorkbenchStatusStrip({
                     </span>
                 </span>
             )}
-            <span className='border-border bg-card inline-flex min-h-6 max-w-[11rem] min-w-0 items-center gap-2 rounded-md border px-2 py-0.5 sm:min-h-7 sm:max-w-none sm:px-2.5 sm:py-1'>
+            <span
+                data-slot='status-chip'
+                className='border-border bg-card inline-flex min-h-6 max-w-[11rem] min-w-0 items-center gap-2 rounded-md border px-2 py-0.5 sm:min-h-7 sm:max-w-none sm:px-2.5 sm:py-1'>
                 <span className='truncate'>{model}</span>
                 <span className='bg-border hidden h-3 w-px shrink-0 sm:block' aria-hidden='true' />
                 <span className='text-muted-foreground hidden truncate sm:inline'>{routeLabel}</span>
             </span>
-            <span className='hidden min-h-6 items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-sky-700 sm:inline-flex sm:min-h-7 sm:px-2.5 sm:py-1 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300'>
+            <span
+                data-slot='status-chip'
+                className='hidden min-h-6 items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-sky-700 sm:inline-flex sm:min-h-7 sm:px-2.5 sm:py-1 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300'>
                 {streamStatus}
             </span>
             {parallelBatchEnabled && (
-                <span className='hidden min-h-6 items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700 sm:inline-flex sm:min-h-7 sm:px-2.5 sm:py-1 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'>
+                <span
+                    data-slot='status-chip'
+                    className='hidden min-h-6 items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700 sm:inline-flex sm:min-h-7 sm:px-2.5 sm:py-1 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'>
                     {t('streaming.parallelBatchEnabled')}
                 </span>
             )}
-            <span className='border-primary/20 bg-primary/10 text-primary inline-flex min-h-6 shrink-0 items-center rounded-md border px-2 py-0.5 whitespace-nowrap sm:min-h-7 sm:px-2.5 sm:py-1'>
+            <span
+                data-slot='status-chip'
+                className='border-primary/20 bg-primary/10 text-primary inline-flex min-h-6 shrink-0 items-center rounded-md border px-2 py-0.5 whitespace-nowrap sm:min-h-7 sm:px-2.5 sm:py-1'>
                 {requestSummaryLabel}
             </span>
         </div>

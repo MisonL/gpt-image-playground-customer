@@ -1,0 +1,257 @@
+import { defineTool } from '@deepseek-ai/dsh-tools';
+import z from '@deepseek-ai/schemastery';
+
+const DEFAULT_BASE_URL = 'http://localhost:4783';
+const DEFAULT_TIMEOUT_MS = 60_000;
+const AGENT_ENDPOINTS = Object.freeze({
+    capabilities: '/api/agent/capabilities',
+    generate: '/api/agent/image-requests',
+    diagnostics: '/api/agent/diagnostics/requests'
+});
+
+export const name = 'visual-journal-dsh-plugin';
+export const inject = ['tools'];
+export const Config = z.object({
+    baseUrl: z.string().default(DEFAULT_BASE_URL),
+    timeoutMs: z.number().min(1).default(DEFAULT_TIMEOUT_MS)
+});
+
+const JSON_OUTPUT = {
+    schema: { type: 'json' },
+    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+};
+
+const generateParameters = {
+    prompt: { type: 'string', required: true, description: 'Image generation prompt.' },
+    model: { type: 'string', description: 'Image model.' },
+    size: { type: 'string', description: 'Requested image size.' },
+    quality: { type: 'string', description: 'Image quality.' },
+    n: { type: 'integer', description: 'Number of images.' },
+    output_format: { type: 'string', description: 'Output format.' },
+    response_mode: { type: 'string', description: 'Response mode.' },
+    background: { type: 'string', description: 'Background mode.' },
+    moderation: { type: 'string', description: 'Moderation mode.' },
+    image_backend: { type: 'string', description: 'Image backend.' },
+    stream_mode: { type: 'string', description: 'Streaming mode.' },
+    streaming_strategy: { type: 'string', description: 'Streaming strategy.' },
+    partial_images: { type: 'integer', description: 'Partial image count.' },
+    responsesModel: { type: 'string', description: 'Responses image model.' },
+    thinking: { type: 'string', description: 'Reasoning level.' },
+    promptOptimization: { type: 'boolean', description: 'Enable prompt optimization.' },
+    force_web: { type: 'boolean', description: 'Force web search.' },
+    force_request: { type: 'boolean', description: 'Force request despite compatibility checks.' },
+    allow_billable: { type: 'boolean', description: 'Explicitly allow a billable request.' },
+    idempotency_key: { type: 'string', description: 'Stable key for a billable operation.' },
+    base_url: { type: 'string', description: 'Override the Visual Journal service base URL.' }
+};
+
+const diagnosticsParameters = {
+    request_id: { type: 'string', description: 'Agent request_id to inspect.' },
+    idempotency_key: { type: 'string', description: 'Idempotency-Key to inspect.' },
+    base_url: { type: 'string', description: 'Override the Visual Journal service base URL.' }
+};
+
+export function apply(ctx, config) {
+    const timeoutMs = config?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    registerCapabilitiesTool(ctx, config?.baseUrl, timeoutMs);
+    registerGenerateTool(ctx, config?.baseUrl, timeoutMs);
+    registerDiagnosticsTool(ctx, config?.baseUrl, timeoutMs);
+}
+
+function registerCapabilitiesTool(ctx, configuredBaseUrl, timeoutMs) {
+    ctx.tools.register(
+        defineTool({
+            name: 'visual_journal_capabilities',
+            description: 'Read the Visual Journal Agent API capabilities and limits without generating an image.',
+            parameters: {},
+            output: JSON_OUTPUT,
+            timeoutMs,
+            isConcurrencySafe: () => true,
+            async execute(_args, exec) {
+                return requestJson({
+                    baseUrl: resolveBaseUrl(configuredBaseUrl),
+                    path: AGENT_ENDPOINTS.capabilities,
+                    signal: exec.signal,
+                    headers: authHeaders()
+                });
+            }
+        })
+    );
+}
+
+function registerGenerateTool(ctx, configuredBaseUrl, timeoutMs) {
+    ctx.tools.register(
+        defineTool({
+            name: 'visual_journal_generate',
+            description:
+                'Plan a Visual Journal image generation request. It is a dry-run by default; set allow_billable=true and provide idempotency_key to submit a real request.',
+            parameters: generateParameters,
+            output: JSON_OUTPUT,
+            timeoutMs,
+            async execute(args, exec) {
+                const baseUrl = resolveBaseUrl(args.base_url ?? configuredBaseUrl);
+                const request = buildGenerateRequest(args);
+                if (args.allow_billable !== true) {
+                    return {
+                        ok: true,
+                        billable: false,
+                        dry_run: true,
+                        service_base_url: baseUrl,
+                        endpoint: AGENT_ENDPOINTS.generate,
+                        request,
+                        idempotency_key: args.idempotency_key ?? null,
+                        guardrails: {
+                            billable_request_sent: false,
+                            requires: ['allow_billable=true', 'idempotency_key']
+                        }
+                    };
+                }
+                const idempotencyKey = requireIdempotencyKey(args.idempotency_key);
+                return requestJson({
+                    baseUrl,
+                    path: AGENT_ENDPOINTS.generate,
+                    method: 'POST',
+                    signal: exec.signal,
+                    headers: {
+                        ...authHeaders(true),
+                        'Content-Type': 'application/json',
+                        'Idempotency-Key': idempotencyKey
+                    },
+                    body: request,
+                    metadata: { idempotency_key: idempotencyKey, billable: true }
+                });
+            }
+        })
+    );
+}
+
+function registerDiagnosticsTool(ctx, configuredBaseUrl, timeoutMs) {
+    ctx.tools.register(
+        defineTool({
+            name: 'visual_journal_diagnose',
+            description: 'Read a stored Visual Journal Agent request diagnostic by request_id or idempotency_key.',
+            parameters: diagnosticsParameters,
+            output: JSON_OUTPUT,
+            timeoutMs,
+            isConcurrencySafe: () => true,
+            async execute(args, exec) {
+                const lookup = resolveDiagnosticLookup(args);
+                const baseUrl = resolveBaseUrl(args.base_url ?? configuredBaseUrl);
+                return requestJson({
+                    baseUrl,
+                    path: `${AGENT_ENDPOINTS.diagnostics}?${lookup.type}=${encodeURIComponent(lookup.value)}`,
+                    signal: exec.signal,
+                    headers: authHeaders(true)
+                });
+            }
+        })
+    );
+}
+
+function buildGenerateRequest(args) {
+    const request = { prompt: args.prompt };
+    const fields = [
+        'model',
+        'size',
+        'quality',
+        'n',
+        'output_format',
+        'response_mode',
+        'background',
+        'moderation',
+        'image_backend',
+        'stream_mode',
+        'streaming_strategy',
+        'partial_images',
+        'responsesModel',
+        'thinking',
+        'promptOptimization',
+        'force_web',
+        'force_request'
+    ];
+    for (const field of fields) if (args[field] !== undefined) request[field] = args[field];
+    return request;
+}
+
+function resolveDiagnosticLookup(args) {
+    const requestId = normalizeNonEmpty(args.request_id);
+    const idempotencyKey = normalizeNonEmpty(args.idempotency_key);
+    if (requestId && idempotencyKey) throw new Error('request_id 和 idempotency_key 只能提供一个。');
+    if (!requestId && !idempotencyKey) throw new Error('必须提供 request_id 或 idempotency_key。');
+    return requestId ? { type: 'request_id', value: requestId } : { type: 'idempotency_key', value: idempotencyKey };
+}
+
+function requireIdempotencyKey(value) {
+    const normalized = normalizeNonEmpty(value);
+    if (!normalized) throw new Error('allow_billable=true 时必须提供 idempotency_key。');
+    if (normalized.length > 200) throw new Error('idempotency_key 长度不能超过 200 个字符。');
+    return normalized;
+}
+
+function normalizeNonEmpty(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function resolveBaseUrl(configured) {
+    const raw =
+        normalizeNonEmpty(configured) || normalizeNonEmpty(process.env.GPT_IMAGE_PLAYGROUND_URL) || DEFAULT_BASE_URL;
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+        throw new Error('base_url 必须是无凭据、无查询参数、无片段的 http/https URL。');
+    }
+    return url.toString().replace(/\/$/, '');
+}
+
+function authHeaders(required = false) {
+    const token = normalizeNonEmpty(process.env.GPT_IMAGE_AGENT_TOKEN);
+    if (token) return { Authorization: `Bearer ${token}` };
+    const passwordHash = normalizeNonEmpty(process.env.GPT_IMAGE_APP_PASSWORD_HASH);
+    if (passwordHash) return { 'X-App-Password-Hash': passwordHash };
+    if (required) throw new Error('Agent 请求需要 GPT_IMAGE_AGENT_TOKEN 或 GPT_IMAGE_APP_PASSWORD_HASH。');
+    return {};
+}
+
+async function requestJson(options) {
+    const controller = new AbortController();
+    const abort = () => controller.abort(options.signal?.reason);
+    if (options.signal?.aborted) controller.abort(options.signal.reason);
+    else options.signal?.addEventListener('abort', abort, { once: true });
+    try {
+        const response = await fetch(`${options.baseUrl}${options.path}`, {
+            method: options.method ?? 'GET',
+            headers: options.headers,
+            ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+            redirect: 'error',
+            signal: controller.signal
+        });
+        const text = await response.text();
+        let result;
+        try {
+            result = text ? JSON.parse(text) : null;
+        } catch {
+            throw new Error(`Visual Journal 返回了非 JSON 响应，状态码 ${response.status}。`);
+        }
+        if (!response.ok) {
+            const message = result?.error?.message ?? result?.message ?? (text.trim() || `HTTP ${response.status}`);
+            throw new Error(`Visual Journal 请求失败，状态码 ${response.status}：${message}`);
+        }
+        return {
+            ok: true,
+            billable: options.metadata?.billable === true,
+            service_base_url: options.baseUrl,
+            endpoint: options.path.split('?')[0],
+            ...(options.metadata ?? {}),
+            response: result
+        };
+    } finally {
+        options.signal?.removeEventListener('abort', abort);
+    }
+}
+
+export const internals = Object.freeze({
+    AGENT_ENDPOINTS,
+    buildGenerateRequest,
+    resolveBaseUrl,
+    resolveDiagnosticLookup,
+    requireIdempotencyKey
+});

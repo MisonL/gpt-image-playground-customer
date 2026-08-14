@@ -279,6 +279,7 @@ describe('page state regressions', () => {
 
     it('keeps the mobile drawer backdrop presentational while preserving pointer dismissal', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+        const styles = await readFile(new URL('./globals.css', import.meta.url), 'utf8');
 
         assert.match(source, /\{isMobileCreationDrawerOpen && \(\s*<div\s+aria-hidden='true'/);
         assert.match(
@@ -286,6 +287,7 @@ describe('page state regressions', () => {
             /className='bg-foreground\/25 fixed inset-0 z-40 lg:hidden'\s*onClick=\{closeMobileCreationDrawer\}/
         );
         assert.doesNotMatch(source, /<button\s+type='button'\s+aria-hidden='true'\s+tabIndex=\{-1\}/);
+        assert.doesNotMatch(styles, /\.workbench-shell\s*\{[\s\S]*?isolation\s*:/);
     });
 
     it('keeps focus inside the mobile drawer and its portalled controls', async () => {
@@ -432,7 +434,7 @@ describe('page state regressions', () => {
         assert.match(source, /mode === 'edit' && Boolean\(editSourceImagePreviewUrls\[0\]\)/);
         assert.match(source, /xl:h-dvh xl:pb-0/);
         assert.match(source, /xl:h-full xl:min-h-0/);
-        assert.match(source, /className='workbench-layout grid flex-1 grid-cols-1 gap-4/);
+        assert.match(source, /className='workbench-layout grid min-h-0 flex-1 grid-cols-1 gap-4/);
         assert.match(source, /workbench-history-column order-3 min-h-\[17\.5rem\] min-w-0 lg:col-span-2/);
         assert.match(source, /workbench-history-column--contained/);
         assert.doesNotMatch(source, /min-\[1160px\]/);
