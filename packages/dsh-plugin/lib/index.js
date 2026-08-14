@@ -28,6 +28,7 @@ const generateParameters = {
     quality: { type: 'string', description: 'Image quality.' },
     n: { type: 'integer', description: 'Number of images.' },
     output_format: { type: 'string', description: 'Output format.' },
+    output_compression: { type: 'integer', description: 'Output compression for lossy formats.' },
     response_mode: { type: 'string', description: 'Response mode.' },
     background: { type: 'string', description: 'Background mode.' },
     moderation: { type: 'string', description: 'Moderation mode.' },
@@ -41,14 +42,12 @@ const generateParameters = {
     force_web: { type: 'boolean', description: 'Force web search.' },
     force_request: { type: 'boolean', description: 'Force request despite compatibility checks.' },
     allow_billable: { type: 'boolean', description: 'Explicitly allow a billable request.' },
-    idempotency_key: { type: 'string', description: 'Stable key for a billable operation.' },
-    base_url: { type: 'string', description: 'Override the Visual Journal service base URL.' }
+    idempotency_key: { type: 'string', description: 'Stable key for a billable operation.' }
 };
 
 const diagnosticsParameters = {
     request_id: { type: 'string', description: 'Agent request_id to inspect.' },
-    idempotency_key: { type: 'string', description: 'Idempotency-Key to inspect.' },
-    base_url: { type: 'string', description: 'Override the Visual Journal service base URL.' }
+    idempotency_key: { type: 'string', description: 'Idempotency-Key to inspect.' }
 };
 
 export function apply(ctx, config) {
@@ -89,7 +88,7 @@ function registerGenerateTool(ctx, configuredBaseUrl, timeoutMs) {
             output: JSON_OUTPUT,
             timeoutMs,
             async execute(args, exec) {
-                const baseUrl = resolveBaseUrl(args.base_url ?? configuredBaseUrl);
+                const baseUrl = resolveBaseUrl(configuredBaseUrl);
                 const request = buildGenerateRequest(args);
                 if (args.allow_billable !== true) {
                     return {
@@ -113,7 +112,7 @@ function registerGenerateTool(ctx, configuredBaseUrl, timeoutMs) {
                     method: 'POST',
                     signal: exec.signal,
                     headers: {
-                        ...authHeaders(true),
+                        ...authHeaders(),
                         'Content-Type': 'application/json',
                         'Idempotency-Key': idempotencyKey
                     },
@@ -136,12 +135,12 @@ function registerDiagnosticsTool(ctx, configuredBaseUrl, timeoutMs) {
             isConcurrencySafe: () => true,
             async execute(args, exec) {
                 const lookup = resolveDiagnosticLookup(args);
-                const baseUrl = resolveBaseUrl(args.base_url ?? configuredBaseUrl);
+                const baseUrl = resolveBaseUrl(configuredBaseUrl);
                 return requestJson({
                     baseUrl,
                     path: `${AGENT_ENDPOINTS.diagnostics}?${lookup.type}=${encodeURIComponent(lookup.value)}`,
                     signal: exec.signal,
-                    headers: authHeaders(true)
+                    headers: authHeaders()
                 });
             }
         })
@@ -156,6 +155,7 @@ function buildGenerateRequest(args) {
         'quality',
         'n',
         'output_format',
+        'output_compression',
         'response_mode',
         'background',
         'moderation',
@@ -202,12 +202,11 @@ function resolveBaseUrl(configured) {
     return url.toString().replace(/\/$/, '');
 }
 
-function authHeaders(required = false) {
+function authHeaders() {
     const token = normalizeNonEmpty(process.env.GPT_IMAGE_AGENT_TOKEN);
     if (token) return { Authorization: `Bearer ${token}` };
     const passwordHash = normalizeNonEmpty(process.env.GPT_IMAGE_APP_PASSWORD_HASH);
     if (passwordHash) return { 'X-App-Password-Hash': passwordHash };
-    if (required) throw new Error('Agent 请求需要 GPT_IMAGE_AGENT_TOKEN 或 GPT_IMAGE_APP_PASSWORD_HASH。');
     return {};
 }
 
