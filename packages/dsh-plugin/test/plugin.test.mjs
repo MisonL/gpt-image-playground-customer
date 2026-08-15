@@ -2,8 +2,10 @@ import { apply, internals } from '../lib/index.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-function registerTools(timeoutMs = 1000) {
+function registerTools(timeoutMs = 1000, baseUrl = 'http://localhost:4783') {
     const tools = new Map();
+    const config = { baseUrl };
+    if (timeoutMs !== null) config.timeoutMs = timeoutMs;
     apply(
         {
             tools: {
@@ -13,10 +15,16 @@ function registerTools(timeoutMs = 1000) {
                 }
             }
         },
-        { baseUrl: 'http://localhost:4783', timeoutMs }
+        config
     );
     return tools;
 }
+
+test('uses the server job lifetime as the default tool timeout', () => {
+    const tools = registerTools(null);
+    assert.equal(internals.DEFAULT_TIMEOUT_MS, 900_000);
+    assert.equal(tools.get('visual_journal_generate').timeoutMs, 900_000);
+});
 
 test('registers the three Visual Journal tools with strict billable guardrails', () => {
     const tools = registerTools();
@@ -141,6 +149,65 @@ test('polls an orchestrated job until the final image response is ready', async 
     }
 });
 
+test('keeps the deployment path prefix when polling a root-relative job URL', async () => {
+    const tools = registerTools(3000, 'https://host.example/playground');
+    const generate = tools.get('visual_journal_generate');
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (input, init) => {
+        calls.push({ url: String(input), method: init?.method ?? 'GET' });
+        if (calls.length === 1) {
+            return new Response(JSON.stringify({ job: { id: 'job-prefix', result_url: '/api/agent/jobs/job-prefix/result' } }), {
+                status: 202
+            });
+        }
+        return new Response(JSON.stringify({ request_id: 'request-prefix', images: [] }), { status: 200 });
+    };
+    try {
+        const result = await generate.execute(
+            { prompt: 'test prompt', allow_billable: true, idempotency_key: 'prefix-key' },
+            { signal: new AbortController().signal }
+        );
+        assert.equal(result.response.request_id, 'request-prefix');
+        assert.deepEqual(calls.map((call) => call.url), [
+            'https://host.example/playground/api/agent/image-requests',
+            'https://host.example/playground/api/agent/jobs/job-prefix/result'
+        ]);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test('uses one deadline across job creation and result polling', async () => {
+    const tools = registerTools(30);
+    const generate = tools.get('visual_journal_generate');
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    globalThis.fetch = async (_input, init) => {
+        callCount += 1;
+        if (callCount === 1) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return new Response(JSON.stringify({ job: { id: 'job-deadline', result_url: '' } }), { status: 202 });
+        }
+        return new Response(
+            JSON.stringify({ error: { code: 'request_in_progress', retryable: true, message: 'running' } }),
+            { status: 409 }
+        );
+    };
+    try {
+        await assert.rejects(
+            generate.execute(
+                { prompt: 'test prompt', allow_billable: true, idempotency_key: 'deadline-key' },
+                { signal: new AbortController().signal }
+            ),
+            /超时/
+        );
+        assert.equal(callCount, 2);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
 test('rejects a job result URL on another origin before sending credentials', () => {
     assert.throws(
         () => internals.resolveSameOriginUrl('http://localhost:4783', 'https://attacker.example/result'),
@@ -216,4 +283,36 @@ test('diagnostics requires exactly one lookup key', () => {
         type: 'idempotency_key',
         value: 'key-1'
     });
+});
+
+test('diagnostics reports a missing request without converting the service contract into an error', async () => {
+    const tools = registerTools();
+    const diagnose = tools.get('visual_journal_diagnose');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ found: false }), { status: 404 });
+    try {
+        for (const args of [{ idempotency_key: 'missing-key' }, { request_id: 'missing-request' }]) {
+            const result = await diagnose.execute(args, { signal: new AbortController().signal });
+            assert.equal(result.ok, true);
+            assert.equal(result.billable, false);
+            assert.deepEqual(result.response, { found: false });
+        }
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test('non-diagnostic requests still reject a 404 found-false response', async () => {
+    const tools = registerTools();
+    const capabilities = tools.get('visual_journal_capabilities');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ found: false }), { status: 404 });
+    try {
+        await assert.rejects(
+            capabilities.execute({}, { signal: new AbortController().signal }),
+            /请求失败，状态码 404/
+        );
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
 });

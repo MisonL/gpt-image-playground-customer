@@ -2,7 +2,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import z from '@deepseek-ai/schemastery';
 
 const DEFAULT_BASE_URL = 'http://localhost:4783';
-const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_TIMEOUT_MS = 900_000;
 const AGENT_ENDPOINTS = Object.freeze({
     capabilities: '/api/agent/capabilities',
     generate: '/api/agent/image-requests',
@@ -109,11 +109,13 @@ function registerGenerateTool(ctx, configuredBaseUrl, timeoutMs) {
                 }
                 const idempotencyKey = requireIdempotencyKey(args.idempotency_key);
                 const deadline = Date.now() + timeoutMs;
+                const createTimeoutMs = deadline - Date.now();
+                if (createTimeoutMs <= 0) throw new Error('Visual Journal 创建请求超时。');
                 const created = await requestJson({
                     baseUrl,
                     path: AGENT_ENDPOINTS.generate,
                     method: 'POST',
-                    timeoutMs,
+                    timeoutMs: createTimeoutMs,
                     signal: exec.signal,
                     headers: {
                         ...authHeaders(),
@@ -158,7 +160,8 @@ function registerDiagnosticsTool(ctx, configuredBaseUrl, timeoutMs) {
                     path: `${AGENT_ENDPOINTS.diagnostics}?${lookup.type}=${encodeURIComponent(lookup.value)}`,
                     timeoutMs,
                     signal: exec.signal,
-                    headers: authHeaders()
+                    headers: authHeaders(),
+                    allowMissingDiagnostic: true
                 });
             }
         })
@@ -232,6 +235,16 @@ function authHeaders() {
 async function requestJson(options) {
     const { response, result, text } = await fetchJson(options);
     if (!response.ok) {
+        if (options.allowMissingDiagnostic === true && response.status === 404 && result?.found === false) {
+            return {
+                ok: true,
+                billable: options.metadata?.billable === true,
+                service_base_url: options.baseUrl,
+                endpoint: options.path.split('?')[0],
+                ...(options.metadata ?? {}),
+                response: result
+            };
+        }
         const message = result?.error?.message ?? result?.message ?? (text.trim() || `HTTP ${response.status}`);
         throw new Error(`Visual Journal 请求失败，状态码 ${response.status}：${message}`);
     }
@@ -356,7 +369,14 @@ function sleepWithSignal(milliseconds, signal) {
 
 function resolveSameOriginUrl(baseUrl, value) {
     const base = new URL(baseUrl);
-    const resolved = new URL(value, `${baseUrl}/`);
+    const isRootRelative = typeof value === 'string' && value.startsWith('/') && !value.startsWith('//');
+    const resolved = new URL(value, isRootRelative ? base.origin : `${baseUrl}/`);
+    if (isRootRelative && base.pathname !== '/') {
+        const prefix = base.pathname.replace(/\/+$/, '');
+        if (resolved.pathname !== prefix && !resolved.pathname.startsWith(`${prefix}/`)) {
+            resolved.pathname = `${prefix}${resolved.pathname}`;
+        }
+    }
     if (resolved.origin !== base.origin || resolved.username || resolved.password) {
         throw new Error('job.result_url 指向不同 origin，拒绝携带鉴权头访问。');
     }
@@ -365,6 +385,7 @@ function resolveSameOriginUrl(baseUrl, value) {
 
 export const internals = Object.freeze({
     AGENT_ENDPOINTS,
+    DEFAULT_TIMEOUT_MS,
     buildGenerateRequest,
     pollJobResult,
     resolveBaseUrl,
