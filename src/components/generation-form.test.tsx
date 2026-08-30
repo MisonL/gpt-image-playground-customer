@@ -7,6 +7,7 @@ import {
     type PartialImagesCount
 } from '@/lib/image-upstream-profile';
 import type { ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
+import { validatePositiveIntegerImageSize } from '@/lib/size-utils';
 import { renderInClientDom } from '@/test-utils/react-dom';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -209,6 +210,27 @@ describe('GenerationForm submit footer', () => {
         assert.match(html, /literary-scrollbar min-h-0 flex-1 space-y-2\.5 overflow-y-auto p-4 pb-4/);
         assert.match(html, /border-border bg-card flex shrink-0 border-t p-3/);
         assert.doesNotMatch(html, /lg:max-h-\[calc\(100%-9\.75rem\)\]/);
+    });
+});
+
+describe('GenerationForm custom model sizing', () => {
+    it('uses positive-integer input constraints for custom provider models', () => {
+        const html = renderGenerationForm({
+            model: 'custom-image-model',
+            size: 'custom'
+        });
+
+        assert.match(html, /id="custom-width"[^>]*min="1"/);
+        assert.match(html, /id="custom-width"[^>]*step="1"/);
+        assert.doesNotMatch(html, /id="custom-width"[^>]*max="3840"/);
+        assert.match(html, /id="custom-height"[^>]*min="1"/);
+        assert.match(html, /id="custom-height"[^>]*step="1"/);
+        assert.doesNotMatch(html, /id="custom-height"[^>]*max="3840"/);
+    });
+
+    it('accepts the smallest positive custom size and rejects zero dimensions', () => {
+        assert.equal(validatePositiveIntegerImageSize(1, 1).valid, true);
+        assert.equal(validatePositiveIntegerImageSize(0, 1).valid, false);
     });
 });
 

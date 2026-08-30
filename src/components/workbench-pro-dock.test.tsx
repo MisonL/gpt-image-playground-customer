@@ -1,6 +1,8 @@
 import { WorkbenchProDock } from './workbench-pro-dock';
+import { resolveWorkbenchModelOptions } from './workbench-pro-dock-panels';
 import { I18nProvider } from '@/lib/i18n';
 import { isImageUpstreamStreamingStrategySelectable } from '@/lib/image-upstream-form';
+import { DEFAULT_MODEL_OPTIONS } from '@/lib/model-directory-options';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as React from 'react';
@@ -8,9 +10,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 const setOutputFormat: React.Dispatch<React.SetStateAction<'png' | 'jpeg' | 'webp'>> = () => {};
 const setQuality: React.Dispatch<React.SetStateAction<'low' | 'medium' | 'high' | 'auto'>> = () => {};
-const setModel: React.Dispatch<
-    React.SetStateAction<'gpt-image-2' | 'gpt-image-1.5' | 'gpt-image-1' | 'gpt-image-1-mini'>
-> = () => {};
+const setModel: React.Dispatch<React.SetStateAction<string>> = () => {};
 const setStreamMode: React.Dispatch<React.SetStateAction<'auto' | 'stream' | 'non_stream'>> = () => {};
 const setEnableParallelBatch: React.Dispatch<React.SetStateAction<boolean>> = () => {};
 const setImageBackend: React.Dispatch<
@@ -512,5 +512,14 @@ describe('WorkbenchProDock', () => {
         assert.match(html, /col-span-full grid grid-cols-1 gap-2/);
         assert.match(html, /sm:grid-cols-2/);
         assert.doesNotMatch(html, /md:grid-cols-\[auto_1fr_1fr_1fr\]/);
+    });
+
+    it('uses model options discovered from the active channel directory', () => {
+        assert.deepEqual(resolveWorkbenchModelOptions(['provider-custom-model', 'gpt-image-2']), [
+            'provider-custom-model',
+            'gpt-image-2'
+        ]);
+        assert.deepEqual(resolveWorkbenchModelOptions(), DEFAULT_MODEL_OPTIONS);
+        assert.deepEqual(resolveWorkbenchModelOptions([]), DEFAULT_MODEL_OPTIONS);
     });
 });

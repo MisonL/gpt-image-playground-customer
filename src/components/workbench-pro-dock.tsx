@@ -18,6 +18,7 @@ export type WorkbenchProDockProps = {
     quality: Quality;
     onQualityChange: React.Dispatch<React.SetStateAction<Quality>>;
     model: GptImageModel;
+    modelOptions?: readonly string[];
     onModelChange: React.Dispatch<React.SetStateAction<GptImageModel>>;
     size: SizePreset;
     customWidth?: number;

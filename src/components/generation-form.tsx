@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { findBatchPromptOverLimitIndex, readBatchPromptLines } from '@/lib/batch-prompts';
 import type { GptImageModel } from '@/lib/cost-utils';
+import { GPT_IMAGE_MODELS, isGptImage2Model } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
 import { getImageOutputFormatLabel, getImageQualityLabel } from '@/lib/image-display-labels';
 import { MAX_PROMPT_LENGTH } from '@/lib/image-request-limits';
@@ -43,6 +44,7 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from '@/lib/image-upstream-strategy';
+import { DEFAULT_MODEL_OPTIONS } from '@/lib/model-directory-options';
 import {
     getPresetDimensions,
     getPresetTooltip,
@@ -131,6 +133,7 @@ type GenerationFormProps = {
     clientPasswordHash: string | null;
     onOpenPasswordDialog: () => void;
     model: GenerationFormData['model'];
+    modelOptions?: readonly string[];
     setModel: React.Dispatch<React.SetStateAction<GenerationFormData['model']>>;
     prompt: string;
     setPrompt: React.Dispatch<React.SetStateAction<string>>;
@@ -337,6 +340,7 @@ export function GenerationForm({
     clientPasswordHash,
     onOpenPasswordDialog,
     model,
+    modelOptions,
     setModel,
     prompt,
     setPrompt,
@@ -395,8 +399,9 @@ export function GenerationForm({
 }: GenerationFormProps) {
     const { locale, t } = useI18n();
     const showCompression = outputFormat === 'jpeg' || outputFormat === 'webp';
-    const isGptImage2 = model === 'gpt-image-2';
-    const usesPositiveIntegerCustomSize = upstreamProfile.gptImage2.sizePolicy === 'positive-integer';
+    const isGptImage2 = isGptImage2Model(model);
+    const supportsCustomSize = isGptImage2 || !GPT_IMAGE_MODELS.includes(model as (typeof GPT_IMAGE_MODELS)[number]);
+    const usesPositiveIntegerCustomSize = upstreamProfile.gptImage2.sizePolicy === 'positive-integer' || !isGptImage2;
     const customSizeValidation =
         size === 'custom'
             ? usesPositiveIntegerCustomSize
@@ -549,12 +554,12 @@ export function GenerationForm({
         }
     }, [isActive, streamingDisabledByStrategy, streamMode, setStreamMode]);
 
-    // custom 仅对 gpt-image-2 有效，切换到旧模型时重置。
+    // 旧版模型只支持预设尺寸；provider-defined 模型保留自定义尺寸语义。
     React.useEffect(() => {
-        if (isActive && !isGptImage2 && size === 'custom') {
+        if (isActive && !supportsCustomSize && size === 'custom') {
             setSize('auto');
         }
-    }, [isActive, isGptImage2, setSize, size]);
+    }, [isActive, setSize, size, supportsCustomSize]);
 
     const handleSubmit = () => {
         if (isBatchMode && batchPromptOverLimitIndex !== null) {
@@ -801,7 +806,7 @@ export function GenerationForm({
                                 ))}
                             </RadioGroup>
                         </div>
-                        {isGptImage2 && size === 'custom' && (
+                        {supportsCustomSize && size === 'custom' && (
                             <div className='bg-muted/30 border-border space-y-2 rounded-md border p-3'>
                                 <div className='flex items-center gap-3'>
                                     <div className='flex-1 space-y-1'>
@@ -1016,10 +1021,11 @@ export function GenerationForm({
                                                     <SelectValue placeholder={t('form.selectModel')} />
                                                 </SelectTrigger>
                                                 <SelectContent>
-                                                    <SelectItem value='gpt-image-2'>gpt-image-2</SelectItem>
-                                                    <SelectItem value='gpt-image-1.5'>gpt-image-1.5</SelectItem>
-                                                    <SelectItem value='gpt-image-1'>gpt-image-1</SelectItem>
-                                                    <SelectItem value='gpt-image-1-mini'>gpt-image-1-mini</SelectItem>
+                                                    {(modelOptions ?? DEFAULT_MODEL_OPTIONS).map((modelId) => (
+                                                        <SelectItem key={modelId} value={modelId}>
+                                                            {modelId}
+                                                        </SelectItem>
+                                                    ))}
                                                 </SelectContent>
                                             </Select>
                                         </div>

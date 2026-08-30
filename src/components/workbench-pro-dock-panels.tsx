@@ -9,6 +9,7 @@ import type { GptImageModel } from '@/lib/cost-utils';
 import { useI18n } from '@/lib/i18n';
 import { getImageOutputFormatLabel } from '@/lib/image-display-labels';
 import type { ImageStreamMode } from '@/lib/image-upstream-strategy';
+import { DEFAULT_MODEL_OPTIONS } from '@/lib/model-directory-options';
 import { getPresetDimensions } from '@/lib/size-utils';
 import { resolveStreamingBatchToggleState } from '@/lib/streaming-batch';
 import type * as React from 'react';
@@ -16,10 +17,13 @@ import type * as React from 'react';
 type Translation = ReturnType<typeof useI18n>['t'];
 type ProPanelProps = Omit<WorkbenchProDockProps, 'defaultMode' | 'defaultProTab'>;
 
-const modelOptions: GptImageModel[] = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'];
 const outputFormatOptions: OutputFormat[] = ['png', 'jpeg', 'webp'];
 const qualityOptions: Quality[] = ['auto', 'low', 'medium', 'high'];
 const streamModeOptions: ImageStreamMode[] = ['auto', 'stream', 'non_stream'];
+
+export function resolveWorkbenchModelOptions(modelOptions?: readonly string[]): readonly string[] {
+    return modelOptions && modelOptions.length > 0 ? modelOptions : DEFAULT_MODEL_OPTIONS;
+}
 
 function getQualityLabel(quality: Quality, t: Translation): string {
     if (quality === 'auto') return t('common.auto');
@@ -182,11 +186,17 @@ function OutputPanel({
 
 function ModelPanel({
     model,
+    modelOptions,
     onModelChange,
     disabled,
     resolution,
     t
-}: Pick<ProPanelProps, 'model' | 'onModelChange' | 'disabled'> & { resolution: string; t: Translation }) {
+}: Pick<ProPanelProps, 'model' | 'modelOptions' | 'onModelChange' | 'disabled'> & {
+    resolution: string;
+    t: Translation;
+}) {
+    const availableModels = resolveWorkbenchModelOptions(modelOptions);
+
     return (
         <TabsContent value='model' className='mt-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 text-xs'>
             <div className='space-y-1'>
@@ -199,7 +209,7 @@ function ModelPanel({
                         <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                        {modelOptions.map((option) => (
+                        {availableModels.map((option) => (
                             <SelectItem key={option} value={option}>
                                 {option}
                             </SelectItem>

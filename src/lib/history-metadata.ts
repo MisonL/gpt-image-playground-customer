@@ -1,5 +1,5 @@
 import { formatBatchPromptHistory, readBatchPromptLines } from './batch-prompts';
-import { calculateApiCost, type CostDetails, type GptImageModel } from './cost-utils';
+import { calculateApiCost, isGptImage2Model, type CostDetails, type GptImageModel } from './cost-utils';
 import { getPresetDimensions } from './size-utils';
 import type { ApiImageResponseItem } from './streaming-batch';
 import type { ActualCostDetails } from './upstream-cost/resolve';
@@ -145,7 +145,13 @@ export function readHistoryImageCountSelection(count: number): number | null {
 
 function matchPresetFromAnyModel(rawSize: string): Exclude<GenerationFormData['size'], 'auto' | 'custom'> | null {
     const presets: Array<Exclude<GenerationFormData['size'], 'auto' | 'custom'>> = ['square', 'landscape', 'portrait'];
-    const models: GptImageModel[] = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'];
+    const models: GptImageModel[] = [
+        'gpt-image-2',
+        'gpt-image-2-1k',
+        'gpt-image-1.5',
+        'gpt-image-1',
+        'gpt-image-1-mini'
+    ];
     return (
         presets.find((preset) =>
             models.some((candidateModel) => rawSize === getPresetDimensions(preset, candidateModel))
@@ -181,7 +187,7 @@ export function readHistorySizeSelection(
     }
 
     const customMatch = /^(\d+)x(\d+)$/.exec(rawSize);
-    if (customMatch && model === 'gpt-image-2') {
+    if (customMatch && isGptImage2Model(model)) {
         const customWidth = Number(customMatch[1]);
         const customHeight = Number(customMatch[2]);
         if (

@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { WorkbenchProDock } from '@/components/workbench-pro-dock';
 import { WorkbenchStatusStrip } from '@/components/workbench-status-strip';
 import {
+    classifyApiErrorCode,
     buildApiErrorNotice,
     buildBatchPartialFailureMessage,
     buildUserFacingApiErrorMessage,
@@ -99,6 +100,7 @@ import {
 import type { ImageStreamMode, ImageStreamingStrategy } from '@/lib/image-upstream-strategy';
 import { resolveMobileCreationSheetGesture } from '@/lib/mobile-creation-sheet-gesture';
 import { resolveMobilePrimaryDisabledReason } from '@/lib/mobile-primary-action-state';
+import { DEFAULT_MODEL_OPTIONS, resolveModelDirectoryOptions } from '@/lib/model-directory-options';
 import { hasPreservedDisplayedAuthError, isPagePasswordAuthErrorCode } from '@/lib/page-password-auth';
 import { resolveResultActionState } from '@/lib/result-action-state';
 import { resolveRuntimeHealthStatus, type RuntimeHealthStatus } from '@/lib/runtime-health-status';
@@ -370,6 +372,9 @@ type ApiUsage = {
 };
 
 type RuntimeCapabilities = {
+    imageModel?: {
+        defaultModel?: string;
+    };
     streaming?: {
         defaultBackend?: 'images-api' | 'responses-image-generation';
         defaultMode?: ImageStreamMode;
@@ -434,12 +439,14 @@ type LoadedWebuiImageRetentionState = {
 
 class ApiRequestError extends Error {
     readonly status?: number;
+    readonly code?: string;
     readonly preserveDisplayedError: boolean;
 
-    constructor(message: string, status?: number, options: { preserveDisplayedError?: boolean } = {}) {
+    constructor(message: string, status?: number, options: { preserveDisplayedError?: boolean; code?: string } = {}) {
         super(message);
         this.name = 'ApiRequestError';
         this.status = status;
+        this.code = options.code;
         this.preserveDisplayedError = options.preserveDisplayedError === true;
     }
 }
@@ -450,13 +457,24 @@ function getLocalizedImageRequestError(t: ReturnType<typeof useI18n>['t'], statu
     return t('error.apiFailed', { status });
 }
 
+function getLocalizedImageDimensionMismatchError(
+    t: ReturnType<typeof useI18n>['t'],
+    expected: string | undefined,
+    actual: string | null | undefined
+): string {
+    return t('error.imageDimensionMismatch', {
+        expected: expected || '目标尺寸',
+        actual: actual || '未知尺寸'
+    });
+}
+
 function summarizeApiError(
     error: unknown,
     fallbackMessage: string,
     t: ReturnType<typeof useI18n>['t']
-): { message: string; status?: number } {
+): { message: string; status?: number; code?: string } {
     if (error instanceof ApiRequestError) {
-        return { message: error.message, status: error.status };
+        return { message: error.message, status: error.status, code: error.code };
     }
     if (error instanceof BatchPausedError) {
         return { message: t('batch.pausedFailure') };
@@ -583,6 +601,8 @@ export default function HomePage() {
     const [isApiSettingsDialogOpen, setIsApiSettingsDialogOpen] = React.useState(false);
     const [apiSettings, setApiSettings] = React.useState<ApiSettings>(emptyApiSettings);
     const [runtimeCapabilities, setRuntimeCapabilities] = React.useState<RuntimeCapabilities | null>(null);
+    const [modelOptions, setModelOptions] = React.useState<string[]>([...DEFAULT_MODEL_OPTIONS]);
+    const modelProbeKeysRef = React.useRef<Set<string>>(new Set());
     const [isRuntimeCapabilitiesLoading, setIsRuntimeCapabilitiesLoading] = React.useState(true);
     const [loadedWebuiImageRetentionState, setLoadedWebuiImageRetentionState] =
         React.useState<LoadedWebuiImageRetentionState | null>(null);
@@ -1434,6 +1454,12 @@ export default function HomePage() {
                 throw new Error('获取运行时能力失败');
             }
             setRuntimeCapabilities(data);
+            const defaultModel = data.imageModel?.defaultModel?.trim();
+            if (defaultModel) {
+                setGenModel((current) => (current === 'gpt-image-2' ? defaultModel : current));
+                setEditModel((current) => (current === 'gpt-image-2' ? defaultModel : current));
+                setModelOptions((current) => Array.from(new Set([defaultModel, ...current])));
+            }
             return data;
         } catch (error) {
             console.error('获取运行时能力失败：', error);
@@ -1449,6 +1475,69 @@ export default function HomePage() {
             refreshRuntimeCapabilities();
         });
     }, [refreshRuntimeCapabilities]);
+
+    React.useEffect(() => {
+        const canProbeModelDirectory = isPasswordRequiredByBackend === true && Boolean(clientPasswordHash);
+        const probeKey = canProbeModelDirectory ? `page:${clientPasswordHash}` : 'anonymous';
+        if (modelProbeKeysRef.current.has(probeKey)) return;
+        modelProbeKeysRef.current.add(probeKey);
+        const controller = new AbortController();
+        const fetchModelDirectory = async (endpoint: string) => {
+            const response = await fetch(endpoint, {
+                signal: controller.signal,
+                credentials: 'same-origin'
+            });
+            if (!response.ok) throw new Error('模型目录请求失败');
+            return response.json();
+        };
+        const loadModelDirectory = async () => {
+            if (!canProbeModelDirectory) {
+                return fetchModelDirectory('/api/agent/models');
+            }
+            let lastError: unknown;
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+                try {
+                    return await fetchModelDirectory('/api/agent/models?probe=true');
+                } catch (error) {
+                    lastError = error;
+                    if (controller.signal.aborted) throw error;
+                    await new Promise((resolve) => setTimeout(resolve, 500));
+                }
+            }
+            if (controller.signal.aborted) throw lastError ?? new Error('模型目录请求失败');
+            try {
+                return await fetchModelDirectory('/api/agent/models');
+            } catch {
+                throw lastError ?? new Error('模型目录请求失败');
+            }
+        };
+        loadModelDirectory()
+            .then(
+                (directory: {
+                    known_models?: Array<{ id?: unknown }>;
+                    default_model?: unknown;
+                    channels?: Array<{
+                        declared_models?: unknown;
+                        model_allowlist_configured?: unknown;
+                        models?: unknown;
+                        probe_status?: unknown;
+                    }>;
+                }) => {
+                    const nextOptions = resolveModelDirectoryOptions(directory);
+                    if (nextOptions.length > 0) setModelOptions(nextOptions);
+                    const defaultModel =
+                        typeof directory.default_model === 'string' ? directory.default_model.trim() : '';
+                    const preferredModel =
+                        defaultModel && nextOptions.includes(defaultModel) ? defaultModel : nextOptions[0];
+                    if (preferredModel) {
+                        setGenModel((current) => (nextOptions.includes(current) ? current : preferredModel));
+                        setEditModel((current) => (nextOptions.includes(current) ? current : preferredModel));
+                    }
+                }
+            )
+            .catch(() => undefined);
+        return () => controller.abort();
+    }, [clientPasswordHash, isPasswordRequiredByBackend]);
 
     React.useEffect(() => {
         if (!retentionScopeKey) return;
@@ -1948,7 +2037,17 @@ export default function HomePage() {
                             return newMap;
                         });
                     } else if (event.type === 'error') {
-                        throw new ApiRequestError(getLocalizedImageRequestError(t, event.status), event.status);
+                        const message =
+                            event.code === 'image_dimension_mismatch'
+                                ? getLocalizedImageDimensionMismatchError(
+                                      t,
+                                      event.expected_dimensions,
+                                      event.actual_dimensions
+                                  )
+                                : getLocalizedImageRequestError(t, event.status);
+                        throw new ApiRequestError(message, event.status, {
+                            code: classifyApiErrorCode(event.code, message)
+                        });
                     } else if (event.type === 'completed' || event.type === 'done') {
                         try {
                             streamingState = applyStreamingClientEvent(streamingState, event);
@@ -1994,12 +2093,14 @@ export default function HomePage() {
             }
 
             let result: {
-                error?: string;
+                error?: string | { code?: unknown; message?: unknown };
                 code?: string;
                 images?: ApiImageResponseItem[];
                 usage?: unknown;
                 actualCost?: ActualCostDetails;
                 clientRequestId?: string;
+                expected_dimensions?: string;
+                actual_dimensions?: string | null;
             };
             try {
                 result = await response.json();
@@ -2034,7 +2135,26 @@ export default function HomePage() {
                     promptForExpiredPassword();
                     throw new ApiRequestError(t('error.passwordExpired'), 401, { preserveDisplayedError: true });
                 }
-                throw new ApiRequestError(getLocalizedImageRequestError(t, response.status), response.status);
+                const nestedError = result.error && typeof result.error === 'object' ? result.error : undefined;
+                const upstreamErrorMessage =
+                    typeof result.error === 'string'
+                        ? result.error
+                        : typeof nestedError?.message === 'string'
+                          ? nestedError.message
+                          : '';
+                const resultCode =
+                    result.code ?? (typeof nestedError?.code === 'string' ? nestedError.code : undefined);
+                const localizedMessage =
+                    resultCode === 'image_dimension_mismatch'
+                        ? getLocalizedImageDimensionMismatchError(
+                              t,
+                              result.expected_dimensions,
+                              result.actual_dimensions
+                          )
+                        : getLocalizedImageRequestError(t, response.status);
+                throw new ApiRequestError(localizedMessage, response.status, {
+                    code: classifyApiErrorCode(resultCode, upstreamErrorMessage)
+                });
             }
 
             return {
@@ -4031,6 +4151,7 @@ export default function HomePage() {
                                         clientPasswordHash={clientPasswordHash}
                                         onOpenPasswordDialog={handleOpenPasswordDialog}
                                         model={genModel}
+                                        modelOptions={modelOptions}
                                         setModel={setGenModel}
                                         prompt={genPrompt}
                                         setPrompt={setGenPrompt}
@@ -4110,6 +4231,7 @@ export default function HomePage() {
                                         clientPasswordHash={clientPasswordHash}
                                         onOpenPasswordDialog={handleOpenPasswordDialog}
                                         editModel={editModel}
+                                        modelOptions={modelOptions}
                                         setEditModel={setEditModel}
                                         imageFiles={editImageFiles}
                                         sourceImagePreviewUrls={editSourceImagePreviewUrls}
@@ -4237,6 +4359,7 @@ export default function HomePage() {
                                     quality={mode === 'generate' ? genQuality : editQuality}
                                     onQualityChange={mode === 'generate' ? setGenQuality : setEditQuality}
                                     model={mode === 'generate' ? genModel : editModel}
+                                    modelOptions={modelOptions}
                                     onModelChange={mode === 'generate' ? setGenModel : setEditModel}
                                     size={mode === 'generate' ? genSize : editSize}
                                     customWidth={mode === 'generate' ? genCustomWidth : editCustomWidth}

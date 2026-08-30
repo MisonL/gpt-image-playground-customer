@@ -474,6 +474,7 @@ function HistoryPanelImpl({
                                 <div className='text-muted-foreground space-y-1 pt-1 text-xs'>
                                     {GPT_IMAGE_MODELS.map((model) => {
                                         const rates = getModelRates(model);
+                                        if (!rates) return null;
                                         return (
                                             <React.Fragment key={model}>
                                                 <p className='mt-2 font-medium first:mt-0'>{model}:</p>

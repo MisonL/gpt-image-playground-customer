@@ -221,6 +221,15 @@ describe('history metadata helpers', () => {
         });
     });
 
+    it('restores custom dimensions for the default 1K model alias', () => {
+        assert.deepEqual(readHistorySizeSelection(historyWithSize('2304x1536'), 'gpt-image-2-1k'), {
+            size: 'custom',
+            customWidth: 2304,
+            customHeight: 1536,
+            restored: true
+        });
+    });
+
     it('does not restore zero or unsafe custom dimensions from saved history', () => {
         for (const size of ['0x1536', '2304x0', '9007199254740992x1536']) {
             assert.deepEqual(readHistorySizeSelection(historyWithSize(size), 'gpt-image-2'), {

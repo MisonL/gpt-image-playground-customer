@@ -32,6 +32,34 @@ describe('page state regressions', () => {
         assert.doesNotMatch(source, /result\.error \|\|/);
     });
 
+    it('keeps the selected model inside the compatible model directory options', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(source, /const preferredModel =\s*defaultModel && nextOptions\.includes\(defaultModel\)/);
+        assert.match(
+            source,
+            /setGenModel\(\(current\) => \(nextOptions\.includes\(current\) \? current : preferredModel\)\)/
+        );
+        assert.match(
+            source,
+            /setEditModel\(\(current\) => \(nextOptions\.includes\(current\) \? current : preferredModel\)\)/
+        );
+    });
+
+    it('only probes channels after the page access code has been verified', async () => {
+        const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
+
+        assert.match(
+            source,
+            /const canProbeModelDirectory = isPasswordRequiredByBackend === true && Boolean\(clientPasswordHash\);/
+        );
+        assert.match(
+            source,
+            /if \(!canProbeModelDirectory\) \{\s*return fetchModelDirectory\('\/api\/agent\/models'\);\s*\}/
+        );
+        assert.match(source, /\}, \[clientPasswordHash, isPasswordRequiredByBackend\]\);/);
+    });
+
     it('passes the unified random inspiration picker and batch prompt setter into the generation form', async () => {
         const source = await readFile(new URL('./page.tsx', import.meta.url), 'utf8');
         const generationFormBlock = source.match(/<GenerationForm([\s\S]*?)failedBatchPrompts=/)?.[1] ?? '';
