@@ -18,6 +18,7 @@ import {
 import {
     errorMessage,
     assertValidImageSizeForModel,
+    DEFAULT_IMAGE_MODEL,
     normalizeOutputFormat,
     parseImageSizeValue,
     parseRetryAfterValue,
@@ -27,7 +28,9 @@ import {
     readOptionValue,
     readPartialImages,
     loadPrivateAgentEnvFile,
+    resolveAgentToken,
     resolvePlaygroundBaseUrl,
+    resolveCapabilitiesDefaultImageModel,
     resolveSameOriginUrl,
     sleep,
     validateAgentGenerateRequestAgainstCapabilities
@@ -50,6 +53,7 @@ const STREAM_MODES = new Set(['auto', 'stream', 'non_stream']);
 const THINKING_VALUES = new Set(['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
 const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
 const DEFAULT_OUTPUT_FORMAT = 'webp';
+const DEFAULT_MODEL = DEFAULT_IMAGE_MODEL;
 const DEFAULT_OUTPUT_COMPRESSION = 100;
 const DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
 const PAGE_SSE_ENDPOINT = '/api/images';
@@ -79,7 +83,7 @@ const GENERATE_PRESETS = {
 };
 
 loadPrivateAgentEnvFile();
-const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
+const token = resolveAgentToken();
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1' || process.argv.includes('--contract-check');
 let pageSseClientRequestIdMaxLength = DEFAULT_PAGE_SSE_CLIENT_REQUEST_ID_MAX_LENGTH;
@@ -148,6 +152,13 @@ if (isNonBillableDryRun(options, contractCheck)) {
     let remoteCheck;
     try {
         remoteCheck = options.checkRemote ? await runRemotePlanningCheck() : buildSkippedRemotePlanningCheck();
+        if (!options.modelExplicit && remoteCheck.default_model) {
+            requestBody = {
+                ...requestBody,
+                model: remoteCheck.default_model,
+                size: assertValidImageSizeForModel(requestBody.size, remoteCheck.default_model, '--size')
+            };
+        }
     } catch (error) {
         console.error(errorMessage(error));
         process.exit(1);
@@ -176,6 +187,14 @@ if (isNonBillableDryRun(options, contractCheck)) {
 const capabilities = await readCapabilitiesOrExit();
 try {
     applyCapabilitiesRuntimeValues(capabilities);
+    if (!options.modelExplicit && typeof capabilities?.defaults?.model === 'string') {
+        const resolvedModel = resolveCapabilitiesDefaultImageModel(capabilities, DEFAULT_MODEL);
+        requestBody = {
+            ...requestBody,
+            model: resolvedModel,
+            size: assertValidImageSizeForModel(requestBody.size, resolvedModel, '--size')
+        };
+    }
 } catch (error) {
     console.error(errorMessage(error));
     process.exit(2);
@@ -267,7 +286,8 @@ try {
 function parseArgs(argv) {
     const expandedArgv = expandPresetArgs(argv);
     const parsed = {
-        model: 'gpt-image-2',
+        model: undefined,
+        modelExplicit: false,
         size: '1024x1024',
         quality: 'high',
         n: '1',
@@ -308,8 +328,10 @@ function parseArgs(argv) {
         else if (arg === '--help' || arg === '-h') parsed.help = true;
         else if (arg === '--contract-check') continue;
         else if (arg === '--preset') parsed.preset = readOptionValue(expandedArgv, (index += 1), arg);
-        else if (arg === '--model') parsed.model = readOptionValue(expandedArgv, (index += 1), arg);
-        else if (arg === '--size') parsed.size = readOptionValue(expandedArgv, (index += 1), arg);
+        else if (arg === '--model') {
+            parsed.model = readOptionValue(expandedArgv, (index += 1), arg);
+            parsed.modelExplicit = true;
+        } else if (arg === '--size') parsed.size = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--quality') parsed.quality = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--n') parsed.n = readOptionValue(expandedArgv, (index += 1), arg);
         else if (arg === '--format' || arg === '--output-format')
@@ -374,14 +396,13 @@ function readPrompt(parsed, { readPromptFile }) {
 }
 
 function buildRequestBody(promptValue, parsed) {
+    const model = parsed.model || DEFAULT_MODEL;
     return addUpstreamStrategyFields(
         {
             prompt: promptValue || 'contract check',
-            model: parsed.model,
+            model,
             n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
-            size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size', {
-                forceRequest: parsed.forceRequest
-            }),
+            size: assertValidImageSizeForModel(parsed.size, model, '--size'),
             quality: parsed.quality,
             output_format: normalizeOutputFormat(parsed.format),
             ...(readOutputCompression(parsed) !== undefined
@@ -394,13 +415,12 @@ function buildRequestBody(promptValue, parsed) {
 }
 
 function buildDryRunRequestBody(parsed) {
+    const model = parsed.model || DEFAULT_MODEL;
     const body = addUpstreamStrategyFields(
         {
-            model: parsed.model,
+            model,
             n: readConfiguredPositiveInteger(parsed.n, '--n', 1),
-            size: assertValidImageSizeForModel(parsed.size, parsed.model, '--size', {
-                forceRequest: parsed.forceRequest
-            }),
+            size: assertValidImageSizeForModel(parsed.size, model, '--size'),
             quality: parsed.quality,
             output_format: normalizeOutputFormat(parsed.format),
             ...(readOutputCompression(parsed) !== undefined
@@ -558,6 +578,7 @@ function buildDryRunVerificationScope(remoteCheck = buildSkippedRemotePlanningCh
         auth_verified: remoteCheck.auth_verified,
         billable_request_sent: false,
         remote_check: {
+            default_model: remoteCheck.default_model,
             capabilities: remoteCheck.capabilities,
             runtime: remoteCheck.runtime
         },
@@ -574,8 +595,10 @@ async function runRemotePlanningCheck() {
         remote_capabilities_verified: true,
         runtime_capacity_verified: true,
         auth_verified: true,
+        default_model: resolveCapabilitiesDefaultImageModel(capabilities),
         capabilities: {
             endpoint: AGENT_ENDPOINTS.capabilities,
+            default_model: resolveCapabilitiesDefaultImageModel(capabilities),
             orchestration_supported: capabilities?.orchestration?.supported === true,
             orchestration_endpoint: capabilities?.orchestration?.endpoint || null,
             page_sse_supported: capabilities?.agent_streaming?.page_sse?.supported === true,

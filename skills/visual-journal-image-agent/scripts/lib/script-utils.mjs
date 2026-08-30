@@ -5,9 +5,12 @@ const MAX_RETRY_AFTER_SECONDS = 60;
 const DIGITS_PATTERN = /^\d+$/;
 const IMAGE_SIZE_PATTERN = /^(\d+)x(\d+)$/;
 const LEGACY_IMAGE_SIZES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536']);
+const LEGACY_IMAGE_MODELS = new Set(['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5']);
+export const DEFAULT_IMAGE_MODEL = 'gpt-image-2';
 export const DEFAULT_PLAYGROUND_BASE_URL = 'http://localhost:4783';
 const DEFAULT_PRIVATE_AGENT_ENV_FILE = '.env.agent.local';
 const PRIVATE_AGENT_ENV_PREFIX = 'GPT_IMAGE_';
+const PRIVATE_AGENT_ENV_NAMES = new Set(['AGENT_API_TOKEN']);
 const DISABLE_PRIVATE_AGENT_ENV_VALUES = new Set(['0', 'false', 'no']);
 
 export function loadPrivateAgentEnvFile(options = {}) {
@@ -23,7 +26,7 @@ export function loadPrivateAgentEnvFile(options = {}) {
     const entries = parsePrivateAgentEnvContent(readFileSync(filePath, 'utf8'));
     const appliedNames = [];
     for (const { name, value } of entries) {
-        if (!name.startsWith(PRIVATE_AGENT_ENV_PREFIX)) continue;
+        if (!name.startsWith(PRIVATE_AGENT_ENV_PREFIX) && !PRIVATE_AGENT_ENV_NAMES.has(name)) continue;
         if (env[name] !== undefined) continue;
         env[name] = value;
         appliedNames.push(name);
@@ -33,6 +36,10 @@ export function loadPrivateAgentEnvFile(options = {}) {
         path: filePath,
         applied_names: appliedNames
     };
+}
+
+export function resolveAgentToken(env = process.env) {
+    return env.GPT_IMAGE_AGENT_TOKEN || env.AGENT_API_TOKEN || '';
 }
 
 export function readOptionValue(argv, index, name) {
@@ -81,6 +88,11 @@ export function readPartialImages(value, name = 'partial_images') {
         throw new Error(`${name} 必须是 0 到 4 的整数。`);
     }
     return parsed;
+}
+
+export function resolveCapabilitiesDefaultImageModel(capabilities, fallback = DEFAULT_IMAGE_MODEL) {
+    const value = capabilities?.defaults?.model;
+    return typeof value === 'string' && /^[^\s]{1,200}$/.test(value.trim()) ? value.trim() : fallback;
 }
 
 export function validateAgentGenerateRequestAgainstCapabilities(body, capabilities) {
@@ -220,19 +232,24 @@ function channelSupportsCommonInput(input, capabilities, channel, operation, bac
         }
     }
     if (input.force_request === true || input.forceRequest === true) return true;
-    const model = input.model || 'gpt-image-2';
-    if (model !== 'gpt-image-2') return true;
+    const model = input.model || capabilities?.defaults?.model || DEFAULT_IMAGE_MODEL;
+    if (!isGptImage2Model(model)) return true;
     const gptImage2 = channel.constraints.gpt_image_2;
     const background = input.background || 'auto';
     if (background === 'transparent' && !gptImage2.allow_transparent_background) return false;
     return isGptImage2SizeCompatible(
         input.size || (operation === 'generate' ? '1024x1024' : 'auto'),
         gptImage2,
-        capabilities
+        capabilities,
+        model
     );
 }
 
-function isGptImage2SizeCompatible(size, constraints, capabilities) {
+function isGptImage2Model(model) {
+    return model === 'gpt-image-2' || model === 'gpt-image-2-1k';
+}
+
+function isGptImage2SizeCompatible(size, constraints, capabilities, model) {
     if (size === 'auto') return true;
     const match = IMAGE_SIZE_PATTERN.exec(String(size));
     if (!match) return false;
@@ -240,7 +257,7 @@ function isGptImage2SizeCompatible(size, constraints, capabilities) {
     const height = Number(match[2]);
     if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) return false;
     if (constraints.size_policy === 'positive-integer') return true;
-    const limits = capabilities?.model_limits?.['gpt-image-2'];
+    const limits = capabilities?.model_limits?.[model] || capabilities?.model_limits?.['gpt-image-2'];
     if (!limits) return true;
     const maxEdge = Math.max(width, height);
     const minEdge = Math.min(width, height);
@@ -402,9 +419,16 @@ export function assertValidImageSizeForModel(value, model, label = 'size') {
     if (typeof value !== 'string' || value.trim().length === 0) {
         throw new Error(`${label} 必须是字符串。`);
     }
-    if (model !== 'gpt-image-2') {
+    if (!isGptImage2Model(model)) {
+        if (!LEGACY_IMAGE_MODELS.has(model)) {
+            if (value === 'auto') return value;
+            const size = parseImageSizeValue(value);
+            if (!size) throw new Error(`${label} 必须是 auto 或 WIDTHxHEIGHT。`);
+            assertPositiveIntegerDimensions(size.width, size.height, label);
+            return value;
+        }
         if (!LEGACY_IMAGE_SIZES.has(value)) {
-            throw new Error(`${label} 对 ${model} 无效；非 gpt-image-2 只支持 auto、1024x1024、1536x1024、1024x1536。`);
+            throw new Error(`${label} 对自定义模型 ${model} 无效；请使用 auto、1024x1024、1536x1024 或 1024x1536。`);
         }
         return value;
     }

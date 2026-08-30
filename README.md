@@ -11,7 +11,7 @@ app_port: 4783
 ![许可证](https://img.shields.io/badge/license-MIT-green)
 ![Node.js](https://img.shields.io/badge/node-%3E%3D22.15.0-339933)
 
-图像手记（Visual Journal）是本地优先的 AI 图片创作工作台，支持 `gpt-image-2` 与 OpenAI 兼容图片接口。提供文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪、多渠道路由和 Agent API。
+图像手记（Visual Journal）是本地优先的 AI 图片创作工作台，支持 `gpt-image-2`、配置的自定义图片模型与 OpenAI 兼容图片接口。提供文生图、图生图、遮罩编辑、批量任务、历史复用、费用追踪、多渠道路由和 Agent API。
 
 对外产品名称、npm 包名和 Agent Skill 标识均为“图像手记 / Visual Journal”（`visual-journal`、`visual-journal-image-agent`）。HF Space 已使用 `visual-journal` 名称；为保持已有部署和自动化客户端兼容，Docker 服务、环境变量和 API 路径继续使用 `gpt-image-playground` 相关技术名称。
 
@@ -79,16 +79,18 @@ Windows、macOS 和 Linux 也可分别使用 `start-windows.bat`、`start-macos.
 
 完整配置、默认值和高级示例见 [.env.example](./.env.example)。常用变量如下：
 
-| 场景       | 变量                                                             | 说明                                                             |
-| ---------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
-| 默认上游   | `OPENAI_API_KEY`、`OPENAI_API_BASE_URL`                          | 配置服务端默认 OpenAI 或兼容接口。页面 `API 设置` 优先级更高。   |
-| 多渠道     | `OPENAI_CHANNEL_N_*`                                             | 配置多个渠道、多个 key、请求方式白名单和渠道级覆盖。             |
-| 上游代理   | `OPENAI_UPSTREAM_PROXY_URL`、`OPENAI_CHANNEL_N_PROXY_URL`        | 仅代理服务端到图片上游的 HTTP(S) 请求。                          |
-| 页面访问码 | `APP_PASSWORD`                                                   | 设置后，页面生图和受保护图片需要访问码。公网部署建议开启。       |
-| Agent 鉴权 | `AGENT_API_TOKEN`                                                | 设置后，`/api/agent/*` 需要 Bearer 令牌。                        |
-| Agent 状态 | `AGENT_STATE_BACKEND`                                            | 支持 `memory`、`sqlite` 和 `postgres`；Compose 默认使用 SQLite。 |
-| 图片存储   | `NEXT_PUBLIC_IMAGE_STORAGE_MODE`                                 | 支持 `fs` 和 `indexeddb`；Compose 默认使用文件系统。             |
-| 图片清理   | `WEBUI_IMAGE_AUTO_CLEANUP_ENABLED`、`WEBUI_IMAGE_RETENTION_DAYS` | 默认关闭；启用后默认保留 30 天。                                 |
+| 场景       | 变量                                                             | 说明                                                                                      |
+| ---------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| 默认上游   | `OPENAI_API_KEY`、`OPENAI_API_BASE_URL`                          | 配置服务端默认 OpenAI 或兼容接口。页面 `API 设置` 优先级更高。                            |
+| 默认模型   | `OPENAI_IMAGE_MODEL`                                             | 设置页面、Agent 和模型目录在省略 `model` 时使用的默认图片模型；未设置时为 `gpt-image-2`。 |
+| 多渠道     | `OPENAI_CHANNEL_N_*`                                             | 配置多个渠道、多个 key、请求方式白名单和渠道级覆盖。                                      |
+| 上游代理   | `OPENAI_UPSTREAM_PROXY_URL`、`OPENAI_CHANNEL_N_PROXY_URL`        | 仅代理服务端到图片上游的 HTTP(S) 请求。                                                   |
+| 页面访问码 | `APP_PASSWORD`                                                   | 设置后，页面生图和受保护图片需要访问码。公网部署建议开启。                                |
+| Agent 鉴权 | `AGENT_API_TOKEN`                                                | 设置后，`/api/agent/*` 需要 Bearer 令牌。                                                 |
+| Agent 客户端 token | `GPT_IMAGE_AGENT_TOKEN`                                      | Skill 独立脚本使用的本机 token 别名；DSH 插件优先读取 `AGENT_API_TOKEN`，未设置时回退此变量。 |
+| Agent 状态 | `AGENT_STATE_BACKEND`                                            | 支持 `memory`、`sqlite` 和 `postgres`；Compose 默认使用 SQLite。                          |
+| 图片存储   | `NEXT_PUBLIC_IMAGE_STORAGE_MODE`                                 | 支持 `fs` 和 `indexeddb`；Compose 默认使用文件系统。                                      |
+| 图片清理   | `WEBUI_IMAGE_AUTO_CLEANUP_ENABLED`、`WEBUI_IMAGE_RETENTION_DAYS` | 默认关闭；启用后默认保留 30 天。                                                          |
 
 配置优先级：
 
@@ -121,6 +123,8 @@ OPENAI_CHANNEL_2_REQUEST_MODES=images-non-stream
 - 自定义 API URL 必须和自定义 API 密钥成对配置，避免服务端密钥被发送到未知地址。
 - 不要把真实 API 密钥、访问码、令牌或数据库密码提交到仓库。
 - 非回环地址部署必须同时设置 `APP_PASSWORD`，否则容器会拒绝启动。
+- 非回环地址应使用 HTTPS；页面访问码哈希和访问 cookie 在明文 HTTP 上可能被重放。
+- 分享访问码失败限流是单进程内存状态，多实例部署需在入口代理或共享状态层提供额外限流。
 
 ## 部署
 
@@ -169,6 +173,7 @@ Agent API 是供自动化客户端调用的机器接口，不是自治 Agent 平
 | ------------------------------------------- | -------------------------------- |
 | `GET /api/agent/capabilities`               | 查询能力、限制、鉴权和路由规则。 |
 | `GET /api/agent/openapi.json`               | 获取 OpenAPI 描述。              |
+| `GET /api/agent/models`                     | 读取模型目录；`?probe=true` 主动探测已配置渠道的 `/models`，需要 Agent 或已验证工作台会话鉴权。 |
 | `POST /api/agent/image-requests`            | 提交统一图片生成请求。           |
 | `GET /api/agent/jobs/{id}`                  | 查询异步任务状态。               |
 | `GET /api/agent/diagnostics/requests`       | 按请求 ID 或幂等键查询诊断。     |
@@ -196,30 +201,30 @@ node skills/visual-journal-image-agent/scripts/generate-image.mjs \
 
 ## 验证与运维
 
-| 命令                                 | 用途                                                |
-| ------------------------------------ | --------------------------------------------------- |
+| 命令                                 | 用途                                                 |
+| ------------------------------------ | ---------------------------------------------------- |
 | `npm run status`                     | 只读查看 Git、Node、部署目标和真实冒烟验证配置状态。 |
-| `npm run doctor`                     | 运行本机和部署诊断。                                |
-| `npm run env:summary`                | 安全汇总环境变量来源，不输出密钥值。                |
-| `npm run agent:doctor`               | 执行非计费 Agent 分层诊断。                         |
-| `npm test`                           | 运行单元测试和契约测试。                            |
-| `npm run lint`                       | 检查 `src/` 代码。                                  |
-| `npm run format:check`               | 检查 TypeScript 和 TSX 格式。                       |
-| `npm run build`                      | 执行生产构建。                                      |
-| `npm run verify`                     | 运行提交前完整基线。                                |
-| `npm run smoke:image-upstream-local` | 运行本地非计费上游兼容最终门禁。                    |
+| `npm run doctor`                     | 运行本机和部署诊断。                                 |
+| `npm run env:summary`                | 安全汇总环境变量来源，不输出密钥值。                 |
+| `npm run agent:doctor`               | 执行非计费 Agent 分层诊断。                          |
+| `npm test`                           | 运行单元测试和契约测试。                             |
+| `npm run lint`                       | 检查 `src/` 代码。                                   |
+| `npm run format:check`               | 检查 TypeScript 和 TSX 格式。                        |
+| `npm run build`                      | 执行生产构建。                                       |
+| `npm run verify`                     | 运行提交前完整基线。                                 |
+| `npm run smoke:image-upstream-local` | 运行本地非计费上游兼容最终门禁。                     |
 
 真实上游冒烟验证必须显式传入 `--allow-billable`。`npm run status` 和默认诊断只检查配置与合同，不会产生图片费用。
 
 ## 常见问题
 
-| 问题             | 处理                                                               |
-| ---------------- | ------------------------------------------------------------------ |
-| 未检测到 Node.js | 安装 Node.js >=22.15.0。                                           |
-| 依赖安装失败     | 依次运行安装策略检查、`npm ci --strict-allow-scripts` 和依赖核对。 |
-| API 返回 HTML    | API URL 填成了网页地址；应填写 OpenAI 兼容 `/v1` 根地址。          |
-| 提示需要 API 密钥 | 在 `.env.local` 或页面 `API 设置` 中配置。                        |
-| 端口被占用       | 检查占用 `4783` 的旧进程或旧容器。                                 |
+| 问题              | 处理                                                               |
+| ----------------- | ------------------------------------------------------------------ |
+| 未检测到 Node.js  | 安装 Node.js >=22.15.0。                                           |
+| 依赖安装失败      | 依次运行安装策略检查、`npm ci --strict-allow-scripts` 和依赖核对。 |
+| API 返回 HTML     | API URL 填成了网页地址；应填写 OpenAI 兼容 `/v1` 根地址。          |
+| 提示需要 API 密钥 | 在 `.env.local` 或页面 `API 设置` 中配置。                         |
+| 端口被占用        | 检查占用 `4783` 的旧进程或旧容器。                                 |
 
 ## 项目文档
 

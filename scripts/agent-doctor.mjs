@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
     loadPrivateAgentEnvFile,
+    resolveAgentToken,
     resolvePlaygroundBaseUrl
 } from '../skills/visual-journal-image-agent/scripts/lib/script-utils.mjs';
 import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_SMOKE_CASES } from '../src/lib/channel-request-mode-values.mjs';
@@ -65,7 +66,8 @@ function printHelp() {
 
 环境变量：
   GPT_IMAGE_PLAYGROUND_URL       服务基础地址，默认 http://localhost:4783。
-  GPT_IMAGE_AGENT_TOKEN          capabilities 需要 bearer 鉴权时使用。
+  AGENT_API_TOKEN                服务端 bearer 鉴权变量；脚本也兼容读取。
+  GPT_IMAGE_AGENT_TOKEN          本机 Agent bearer token；两者同时存在时优先使用。
   GPT_IMAGE_APP_PASSWORD_HASH    capabilities 需要页面密码鉴权时使用。
 
 选项：
@@ -717,7 +719,8 @@ function readRequestModeList(value) {
 }
 
 function authHeaders() {
-    if (process.env.GPT_IMAGE_AGENT_TOKEN) return { Authorization: `Bearer ${process.env.GPT_IMAGE_AGENT_TOKEN}` };
+    const agentToken = resolveAgentToken(process.env);
+    if (agentToken) return { Authorization: `Bearer ${agentToken}` };
     if (process.env.GPT_IMAGE_APP_PASSWORD_HASH)
         return { 'X-App-Password-Hash': process.env.GPT_IMAGE_APP_PASSWORD_HASH };
     return {};

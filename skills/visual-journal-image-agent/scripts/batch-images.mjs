@@ -26,6 +26,7 @@ import {
 import {
     errorMessage,
     assertValidImageSizeForModel,
+    DEFAULT_IMAGE_MODEL,
     normalizeOutputFormat,
     readCapabilitiesImageTransportTimeoutMs,
     readConfiguredPositiveInteger,
@@ -33,7 +34,9 @@ import {
     readOptionValue,
     readPartialImages,
     loadPrivateAgentEnvFile,
+    resolveAgentToken,
     resolvePlaygroundBaseUrl,
+    resolveCapabilitiesDefaultImageModel,
     resolveSameOriginUrl,
     validateAgentEditRequestAgainstCapabilities,
     validateAgentGenerateRequestAgainstCapabilities
@@ -43,10 +46,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const IMAGE_BACKENDS = new Set(['images-api', 'images', 'responses', 'responses-image-generation']);
-const MODELS = new Set(['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2']);
+const MODEL_PATTERN = /^[^\s]{1,200}$/;
 const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
 const DEFAULT_OUTPUT_FORMAT = 'webp';
 const DEFAULT_OUTPUT_COMPRESSION = 100;
+const DEFAULT_MODEL = DEFAULT_IMAGE_MODEL;
 const QUALITIES = new Set(['low', 'medium', 'high', 'auto']);
 const BACKGROUNDS = new Set(['transparent', 'opaque', 'auto']);
 const MODERATIONS = new Set(['low', 'auto']);
@@ -114,7 +118,7 @@ const TASK_FIELDS = new Set([
 ]);
 
 loadPrivateAgentEnvFile();
-const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
+const token = resolveAgentToken();
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 
 let options;
@@ -372,9 +376,7 @@ function normalizeIdempotencyKey(value, orderedPrefix, index, id) {
 
 function validateTaskSize(raw, id, mode, dimensionCheck) {
     if (raw.size !== undefined) {
-        assertValidImageSizeForModel(raw.size, raw.model || 'gpt-image-2', `${id}.size`, {
-            forceRequest: readForceRequest(raw, id) === true
-        });
+        assertValidImageSizeForModel(raw.size, raw.model || '__provider_defined__', `${id}.size`);
     }
     if (!dimensionCheck) return;
     const size = raw.size || (mode === 'generate' ? '1024x1024' : undefined);
@@ -395,7 +397,11 @@ function validateTaskFields(raw, id, mode) {
     validateModeSpecificFields(raw, id, mode);
     validateRoutingControlFields(raw, id, mode);
     validateAmbiguousAliasFields(raw, id);
-    if (hasOwn(raw, 'model')) normalizeEnumValue(raw.model, MODELS, `${id}.model`);
+    if (hasOwn(raw, 'model')) {
+        if (typeof raw.model !== 'string' || !MODEL_PATTERN.test(raw.model)) {
+            throw new Error(`${id}.model 必须是 1 到 200 个字符且不能包含空白。`);
+        }
+    }
     if (raw.n !== undefined) readConfiguredPositiveInteger(raw.n, `${id}.n`, 1);
     if (hasOwn(raw, 'quality')) normalizeEnumValue(raw.quality, QUALITIES, `${id}.quality`);
     if (hasOwn(raw, 'response_mode')) normalizeEnumValue(raw.response_mode, RESPONSE_MODES, `${id}.response_mode`);
@@ -1121,7 +1127,7 @@ function buildAgentEditRequestPreview(raw) {
     for (const field of fields) {
         if (raw[field] !== undefined) preview[field] = raw[field];
     }
-    if (!raw.model) preview.model = 'gpt-image-2';
+    if (!raw.model) preview.model = DEFAULT_MODEL;
     if (!raw.response_mode) preview.response_mode = 'path';
     preview.image_fields = readEditImagePaths(raw, String(raw.id || 'edit')).map((_, index) => `image_${index}`);
     if (raw.mask_path) preview.mask = 'provided';
@@ -1133,7 +1139,7 @@ function buildPageSseRequestPreview(task) {
     const preview = {
         mode: task.mode,
         prompt: raw.prompt,
-        model: raw.model || 'gpt-image-2',
+        model: raw.model || DEFAULT_MODEL,
         size: raw.size || (task.mode === 'generate' ? '1024x1024' : 'auto'),
         quality: raw.quality || (task.mode === 'generate' ? 'high' : 'auto'),
         response_mode: readResponseMode(raw),
@@ -1189,8 +1195,8 @@ function isPageSseAllowedForTask(task) {
 }
 
 async function postGenerateTask(task) {
-    const body = buildGenerateBody(task.raw);
     const taskCapabilities = await ensureCapabilities();
+    const body = buildGenerateBody(task.raw, resolveTaskModel(task.raw, taskCapabilities));
     validateLocalRequest(() =>
         validateAgentGenerateRequestAgainstCapabilities(
             {
@@ -1264,6 +1270,7 @@ async function postEditTask(task) {
     const formData = new FormData();
     const imagePaths = readEditImagePaths(task.raw, task.id);
     const taskCapabilities = await ensureCapabilities();
+    const model = resolveTaskModel(task.raw, taskCapabilities);
     validateLocalRequest(() =>
         validateAgentEditRequestAgainstCapabilities(
             {
@@ -1275,14 +1282,14 @@ async function postEditTask(task) {
                 image_backend: task.raw.image_backend,
                 stream_mode: task.raw.stream_mode,
                 streaming_strategy: task.raw.streaming_strategy,
-                model: task.raw.model,
+                model,
                 size: task.raw.size,
                 force_request: readForceRequest(task.raw, task.id)
             },
             taskCapabilities
         )
     );
-    appendEditFields(formData, task.raw);
+    appendEditFields(formData, task.raw, model);
     const { response, result, text } = await fetchJson(`${baseUrl}${AGENT_ENDPOINTS.edit}`, {
         method: 'POST',
         headers: { 'Idempotency-Key': task.idempotencyKey, ...authHeaders() },
@@ -1294,14 +1301,15 @@ async function postEditTask(task) {
 
 async function postPageSseTask(task, routing) {
     const pageSseCapabilities = await ensureCapabilities();
-    validatePageSseTaskAgainstCapabilities(task, pageSseCapabilities);
+    const model = resolveTaskModel(task.raw, pageSseCapabilities);
+    validatePageSseTaskAgainstCapabilities(task, pageSseCapabilities, model);
     try {
         assertPageSseReady({
             capabilities: pageSseCapabilities,
             passwordHash,
             idempotencyKey: task.idempotencyKey
         });
-        const formData = buildPageSseTaskFormData(task);
+        const formData = buildPageSseTaskFormData(task, model);
         const result = await postPageSse({
             url: `${baseUrl}${PAGE_SSE_ENDPOINT}`,
             formData,
@@ -1340,7 +1348,11 @@ function formatPageSseTaskDimensionCheckInput(task, result) {
     });
 }
 
-function validatePageSseTaskAgainstCapabilities(task, taskCapabilities) {
+function validatePageSseTaskAgainstCapabilities(
+    task,
+    taskCapabilities,
+    model = resolveTaskModel(task.raw, taskCapabilities)
+) {
     validateLocalRequest(() => {
         if (task.mode === 'edit') {
             validateAgentEditRequestAgainstCapabilities(
@@ -1353,7 +1365,7 @@ function validatePageSseTaskAgainstCapabilities(task, taskCapabilities) {
                     image_backend: readTaskImageBackend(task.raw),
                     stream_mode: task.raw.stream_mode,
                     streaming_strategy: task.raw.streaming_strategy,
-                    model: task.raw.model,
+                    model,
                     size: task.raw.size,
                     force_request: readForceRequest(task.raw, task.id)
                 },
@@ -1370,7 +1382,7 @@ function validatePageSseTaskAgainstCapabilities(task, taskCapabilities) {
                 image_backend: readTaskImageBackend(task.raw),
                 stream_mode: task.raw.stream_mode,
                 streaming_strategy: task.raw.streaming_strategy,
-                model: task.raw.model,
+                model,
                 size: task.raw.size,
                 background: task.raw.background,
                 force_request: readForceRequest(task.raw, task.id)
@@ -1395,7 +1407,7 @@ function validateLocalRequest(callback) {
     }
 }
 
-function buildGenerateBody(raw) {
+function buildGenerateBody(raw, model = DEFAULT_MODEL) {
     const outputFormat =
         hasOwn(raw, 'output_format') || hasOwn(raw, 'format')
             ? normalizeOutputFormat(raw.output_format ?? raw.format)
@@ -1410,7 +1422,7 @@ function buildGenerateBody(raw) {
     const forceRequest = readForceRequest(raw, String(raw.id || 'generate'));
     const body = {
         prompt: raw.prompt,
-        model: raw.model || 'gpt-image-2',
+        model: raw.model || model,
         n: readConfiguredPositiveInteger(raw.n, 'n', 1),
         size: raw.size || '1024x1024',
         quality: raw.quality || 'high',
@@ -1451,12 +1463,12 @@ function buildGenerateBody(raw) {
     return normalizations ? { ...body, normalizations } : body;
 }
 
-function buildPageSseTaskFormData(task) {
+function buildPageSseTaskFormData(task, model = DEFAULT_MODEL) {
     const raw = task.raw;
     const formData = new FormData();
     formData.append('mode', task.mode);
     formData.append('prompt', raw.prompt);
-    formData.append('model', raw.model || 'gpt-image-2');
+    formData.append('model', raw.model || model);
     formData.append('size', raw.size || (task.mode === 'generate' ? '1024x1024' : 'auto'));
     formData.append('quality', raw.quality || (task.mode === 'generate' ? 'high' : 'auto'));
     formData.append('response_mode', readResponseMode(raw));
@@ -1505,7 +1517,7 @@ function readOutputFormat(raw) {
     return normalizeEnumValue(outputFormat, OUTPUT_FORMATS, 'output_format');
 }
 
-function appendEditFields(formData, raw) {
+function appendEditFields(formData, raw, model = DEFAULT_MODEL) {
     validateEditStrategyFields(raw);
     const fields = [
         'prompt',
@@ -1521,7 +1533,7 @@ function appendEditFields(formData, raw) {
     for (const field of fields) {
         if (raw[field] !== undefined) formData.append(field, String(raw[field]));
     }
-    if (!raw.model) formData.append('model', 'gpt-image-2');
+    if (!raw.model) formData.append('model', model);
     if (!raw.response_mode) formData.append('response_mode', 'path');
     readEditImagePaths(raw, String(raw.id || 'edit')).forEach((filePath, index) =>
         appendFile(formData, `image_${index}`, filePath)
@@ -1531,6 +1543,10 @@ function appendEditFields(formData, raw) {
 
 function readTaskMaxEdge(task) {
     return readMaxImageEdge(task.raw.size || (task.mode === 'generate' ? '1024x1024' : undefined));
+}
+
+function resolveTaskModel(raw, capabilities) {
+    return raw.model || resolveCapabilitiesDefaultImageModel(capabilities, DEFAULT_MODEL);
 }
 
 function validateEditStrategyFields(raw) {

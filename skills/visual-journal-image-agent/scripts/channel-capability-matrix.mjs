@@ -15,6 +15,7 @@ import {
   validateChannelId
 } from './lib/channel-capability-matrix.mjs';
 import {
+  DEFAULT_IMAGE_MODEL,
   errorMessage,
   loadPrivateAgentEnvFile,
   normalizeBaseUrl,
@@ -69,7 +70,7 @@ try {
 function parseArgs(argv) {
   const parsed = {
     baseUrl: undefined,
-    model: 'gpt-image-2',
+    model: DEFAULT_IMAGE_MODEL,
     responsesModel: undefined,
     prompt: 'channel capability matrix probe',
     size: '1024x1024',

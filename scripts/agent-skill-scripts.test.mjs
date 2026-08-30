@@ -3,6 +3,7 @@ import { enrichFailureWithAgentDiagnostics } from '../skills/visual-journal-imag
 import {
     parseRetryAfterValue,
     readCapabilitiesImageTransportTimeoutMs,
+    resolveAgentToken,
     resolveSameOriginUrl,
     validateAgentEditRequestAgainstCapabilities,
     validateAgentGenerateRequestAgainstCapabilities
@@ -65,6 +66,105 @@ function agentGenerateCapabilities(extra = {}) {
 }
 
 describe('Agent skill script argument validation', () => {
+    it('resolves the client token from either supported environment variable', () => {
+        assert.equal(resolveAgentToken({ GPT_IMAGE_AGENT_TOKEN: 'legacy', AGENT_API_TOKEN: 'server' }), 'legacy');
+        assert.equal(resolveAgentToken({ AGENT_API_TOKEN: 'server' }), 'server');
+        assert.equal(resolveAgentToken({}), '');
+    });
+
+    it('lists declared models with JSON output and the configured Agent token', async () => {
+        await withServer(
+            (request, response) => {
+                assert.equal(request.url, '/api/agent/models');
+                assert.equal(request.headers.authorization, 'Bearer list-models-token');
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(
+                    JSON.stringify({
+                        ok: true,
+                        default_model: 'custom-default',
+                        known_models: [{ id: 'custom-default' }],
+                        channels: [{ id: 'images', models: ['custom-default'], probe_status: 'not_probed' }]
+                    })
+                );
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync('list-models.mjs', ['--json', '--base-url', baseUrl], {
+                    GPT_IMAGE_AGENT_TOKEN: 'list-models-token'
+                });
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr, '');
+                assert.equal(JSON.parse(result.stdout).default_model, 'custom-default');
+            }
+        );
+    });
+
+    it('accepts the server-side AGENT_API_TOKEN name for Agent requests', async () => {
+        await withServer(
+            (request, response) => {
+                assert.equal(request.headers.authorization, 'Bearer server-token');
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(
+                    JSON.stringify({ ok: true, default_model: 'gpt-image-2', known_models: [], channels: [] })
+                );
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync('list-models.mjs', ['--json', '--base-url', baseUrl], {
+                    AGENT_API_TOKEN: 'server-token'
+                });
+                assert.equal(result.status, 0);
+                assert.equal(result.stderr, '');
+            }
+        );
+    });
+
+    it('rejects invalid list-models arguments before making a request', () => {
+        const missingValue = runSkillScript('list-models.mjs', ['--base-url']);
+        assert.equal(missingValue.status, 2);
+        assert.match(missingValue.stderr, /--base-url 需要参数值/);
+
+        const unknown = runSkillScript('list-models.mjs', ['--unknown']);
+        assert.equal(unknown.status, 2);
+        assert.match(unknown.stderr, /未知参数：--unknown/);
+    });
+
+    it('classifies list-models timeout and malformed responses explicitly', async () => {
+        await withServer(
+            (_request, response) => {
+                setTimeout(() => {
+                    response.writeHead(200, { 'content-type': 'text/plain' });
+                    response.end('not-json');
+                }, 100);
+            },
+            async (baseUrl) => {
+                const timeoutResult = await runSkillScriptAsync(
+                    'list-models.mjs',
+                    ['--base-url', baseUrl, '--timeout-ms', '20'],
+                    {},
+                    { timeoutMs: 2000 }
+                );
+                assert.equal(timeoutResult.status, 1);
+                assert.match(timeoutResult.stderr, /模型目录请求超时/);
+            }
+        );
+
+        await withServer(
+            (_request, response) => {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ ok: true, known_models: [] }));
+            },
+            async (baseUrl) => {
+                const malformedResult = await runSkillScriptAsync(
+                    'list-models.mjs',
+                    ['--base-url', baseUrl],
+                    {},
+                    { timeoutMs: 2000 }
+                );
+                assert.equal(malformedResult.status, 1);
+                assert.match(malformedResult.stderr, /模型目录请求失败/);
+            }
+        );
+    });
+
     it('prioritizes backend-specific output limits and falls back for older capabilities', () => {
         const capabilities = agentGenerateCapabilities();
 
@@ -251,7 +351,7 @@ describe('Agent skill script argument validation', () => {
             'prompt'
         ]);
         assert.equal(legacyForceResult.status, 2);
-        assert.match(legacyForceResult.stderr, /非 gpt-image-2 只支持 auto、1024x1024、1536x1024、1024x1536/);
+        assert.match(legacyForceResult.stderr, /请使用 auto、1024x1024、1536x1024 或 1024x1536/);
         assert.equal(legacyForceResult.stdout.trim(), '');
     });
 
@@ -1200,6 +1300,10 @@ describe('Agent skill script argument validation', () => {
                                 },
                                 agent_streaming: {
                                     page_sse: { supported: true, endpoint: '/api/images' }
+                                },
+                                defaults: {
+                                    partial_images: 2,
+                                    model: 'gpt-image-2-1k'
                                 }
                             })
                         )
@@ -1220,9 +1324,11 @@ describe('Agent skill script argument validation', () => {
                 response.end(JSON.stringify({ error: 'missing' }));
             },
             async (baseUrl) => {
-                const result = await runSkillScriptAsync('generate-image.mjs', ['--check-remote', 'prompt'], {
-                    GPT_IMAGE_PLAYGROUND_URL: baseUrl
-                });
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--check-remote', '--size', '1536x2288', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
 
                 assert.equal(result.status, 0);
                 assert.equal(result.stderr.trim(), '');
@@ -1232,6 +1338,10 @@ describe('Agent skill script argument validation', () => {
                 assert.equal(body.verification_scope.runtime_capacity_verified, true);
                 assert.equal(body.verification_scope.auth_verified, true);
                 assert.equal(body.verification_scope.billable_request_sent, false);
+                assert.equal(body.request.model, 'gpt-image-2-1k');
+                assert.equal(body.request.size, '1536x2288');
+                assert.equal(body.verification_scope.remote_check.default_model, 'gpt-image-2-1k');
+                assert.equal(body.verification_scope.remote_check.capabilities.default_model, 'gpt-image-2-1k');
                 assert.deepEqual(body.verification_scope.remote_check.capabilities.request_modes, [
                     'images-non-stream',
                     'images-sse'
@@ -4925,10 +5035,7 @@ describe('Agent skill script argument validation', () => {
         const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
         const apiReference = readFileSync(join(skillRoot, 'references/api.md'), 'utf8');
 
-        assert.match(
-            readmeText,
-            /新增探针、诊断或路由可观测能力时，先落 API、能力声明和 OpenAPI 契约/
-        );
+        assert.match(readmeText, /新增探针、诊断或路由可观测能力时，先落 API、能力声明和 OpenAPI 契约/);
         assert.match(readmeText, /Skill 脚本做薄封装/);
         assert.match(skillText, /新增探针、诊断、路由健康或请求旅程能力时/);
         assert.match(skillText, /GET \/api\/agent\/capabilities/);
@@ -6052,6 +6159,95 @@ describe('Agent skill script argument validation', () => {
         }
     });
 
+    it('uses the server-declared default model for real batch requests', async () => {
+        const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-default-model-'));
+        try {
+            const inputPath = join(tempRoot, 'tasks.jsonl');
+            const manifestPath = join(tempRoot, 'manifest.jsonl');
+            writeFileSync(inputPath, JSON.stringify({ id: 'dynamic-model', prompt: 'prompt' }));
+            let requestBody;
+            await withServer(
+                async (request, response) => {
+                    if (request.url === '/api/agent/capabilities') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify(agentGenerateCapabilities({ defaults: { model: 'custom-image-model' } }))
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/image-requests') {
+                        requestBody = JSON.parse(await readRequestText(request));
+                        response.writeHead(202, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                job: {
+                                    id: 'dynamic-model-job',
+                                    state: 'succeeded',
+                                    result_url: '/api/agent/jobs/dynamic-model-job/result'
+                                }
+                            })
+                        );
+                        return;
+                    }
+                    if (request.url === '/api/agent/jobs/dynamic-model-job/result') {
+                        response.writeHead(200, { 'content-type': 'application/json' });
+                        response.end(
+                            JSON.stringify({
+                                request_id: 'dynamic-model-request',
+                                idempotency_key: 'batch-0001-dynamic-model',
+                                images: [{ id: 'dynamic-model-image', content_url: '/generated/dynamic-model.webp' }]
+                            })
+                        );
+                        return;
+                    }
+                    response.writeHead(404, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify({ error: 'missing' }));
+                },
+                async (baseUrl) => {
+                    const result = await runSkillScriptAsync(
+                        'batch-images.mjs',
+                        ['--allow-billable', '--input', inputPath, '--manifest', manifestPath],
+                        { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                    );
+
+                    assert.equal(result.status, 0);
+                    assert.equal(result.stderr.trim(), '');
+                    assert.equal(requestBody.model, 'custom-image-model');
+                    assert.equal(JSON.parse(result.stdout).results[0].status, 'succeeded');
+                }
+            );
+        } finally {
+            rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('revalidates size after applying a server-declared default model', async () => {
+        let imageRequests = 0;
+        await withServer(
+            (request, response) => {
+                if (request.url === '/api/agent/capabilities') {
+                    response.writeHead(200, { 'content-type': 'application/json' });
+                    response.end(JSON.stringify(agentGenerateCapabilities({ defaults: { model: 'gpt-image-1' } })));
+                    return;
+                }
+                if (request.url === '/api/agent/image-requests') imageRequests += 1;
+                response.writeHead(500, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ error: 'unexpected request' }));
+            },
+            async (baseUrl) => {
+                const result = await runSkillScriptAsync(
+                    'generate-image.mjs',
+                    ['--allow-billable', '--size', '2048x2048', 'prompt'],
+                    { GPT_IMAGE_PLAYGROUND_URL: baseUrl }
+                );
+
+                assert.equal(result.status, 2);
+                assert.match(result.stderr, /gpt-image-1.*1024x1024/);
+                assert.equal(imageRequests, 0);
+            }
+        );
+    });
+
     it('passes GPT2Image-compatible edit options to batch page SSE form-data', async () => {
         const tempRoot = mkdtempSync(join(tmpdir(), 'gpt-image-batch-edit-advanced-'));
         try {
@@ -6903,13 +7099,22 @@ describe('Agent skill script argument validation', () => {
                     id: 'invalid-model',
                     prompt: 'prompt',
                     model: 'bad-model',
-                    size: '2048x2048'
+                    size: 'wide'
                 })
             );
             const invalidModelResult = runSkillScript('batch-images.mjs', ['--input', invalidModelInputPath]);
             assert.equal(invalidModelResult.status, 2);
-            assert.match(invalidModelResult.stderr, /invalid-model\.model 的值无效：bad-model/);
+            assert.match(invalidModelResult.stderr, /invalid-model\.size 必须是 auto 或 WIDTHxHEIGHT/);
             assert.equal(invalidModelResult.stdout.trim(), '');
+
+            const customModelInputPath = join(tempRoot, 'custom-model.jsonl');
+            writeFileSync(
+                customModelInputPath,
+                JSON.stringify({ id: 'custom-model', prompt: 'prompt', model: 'bad-model', size: '2048x2048' })
+            );
+            const customModelResult = runSkillScript('batch-images.mjs', ['--input', customModelInputPath]);
+            assert.equal(customModelResult.status, 0);
+            assert.match(customModelResult.stdout, /bad-model/);
 
             const pngCompressionInputPath = join(tempRoot, 'png-compression.jsonl');
             writeFileSync(
@@ -7243,7 +7448,10 @@ describe('Agent skill script argument validation', () => {
                 unsupportedTransportInputPath
             ]);
             assert.equal(unsupportedTransportResult.status, 2);
-            assert.match(unsupportedTransportResult.stderr, /unsupported-transport\.transport 必须是 page_sse 或 agent_json/);
+            assert.match(
+                unsupportedTransportResult.stderr,
+                /unsupported-transport\.transport 必须是 page_sse 或 agent_json/
+            );
             assert.equal(unsupportedTransportResult.stdout.trim(), '');
 
             const generateAgentTransportInputPath = join(tempRoot, 'generate-agent-transport.jsonl');
@@ -7260,7 +7468,10 @@ describe('Agent skill script argument validation', () => {
                 generateAgentTransportInputPath
             ]);
             assert.equal(generateAgentTransportResult.status, 2);
-            assert.match(generateAgentTransportResult.stderr, /generate-agent-transport\.transport=agent_json 仅适用于 edit 任务/);
+            assert.match(
+                generateAgentTransportResult.stderr,
+                /generate-agent-transport\.transport=agent_json 仅适用于 edit 任务/
+            );
             assert.equal(generateAgentTransportResult.stdout.trim(), '');
 
             const agentEditTransportInputPath = join(tempRoot, 'agent-edit-transport.jsonl');

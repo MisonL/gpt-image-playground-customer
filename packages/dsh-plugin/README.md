@@ -6,7 +6,7 @@
 - `visual_journal_generate`：默认只做 dry-run；真实请求必须同时传入 `allow_billable=true` 和稳定的 `idempotency_key`。
 - `visual_journal_diagnose`：按 `request_id` 或 `idempotency_key` 读取请求诊断。
 
-默认服务地址是 `http://localhost:4783`，也可以使用 `GPT_IMAGE_PLAYGROUND_URL` 或 profile patch 的 `baseUrl` 覆盖。服务地址只从 profile 配置和进程环境读取，工具参数不能覆盖它，避免把鉴权凭据发送到模型指定的地址。鉴权使用 `GPT_IMAGE_AGENT_TOKEN`，或使用 `GPT_IMAGE_APP_PASSWORD_HASH` 发送 `X-App-Password-Hash`。密钥只从进程环境读取，不写入请求正文、日志或仓库文件。
+默认服务地址是 `http://localhost:4783`，也可以使用 `GPT_IMAGE_PLAYGROUND_URL` 或 profile patch 的 `baseUrl` 覆盖。服务地址只从 profile 配置和进程环境读取，工具参数不能覆盖它，避免把鉴权凭据发送到模型指定的地址。鉴权使用服务端约定的 `AGENT_API_TOKEN`（优先；兼容旧变量 `GPT_IMAGE_AGENT_TOKEN`），或使用 `GPT_IMAGE_APP_PASSWORD_HASH` 发送 `X-App-Password-Hash`。如果多个 token 变量同时存在，插件会优先发送 `AGENT_API_TOKEN`，以匹配服务端 `assertAgentAuthorized` 的校验；Skill 独立脚本的本机变量优先级可能不同。密钥只从进程环境读取，不写入请求正文、日志或仓库文件。非回环部署应使用 HTTPS，避免访问码哈希被重放。
 
 生成工具的默认总请求预算为 `900000` 毫秒，涵盖创建请求和 job 结果轮询；可通过 profile 的 `timeoutMs` 覆盖。创建请求成功后，轮询继续使用同一个总 deadline，避免在计费 job 仍运行时提前结束并诱导重复提交。
 

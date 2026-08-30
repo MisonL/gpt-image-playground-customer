@@ -4,7 +4,7 @@ import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 
 export const FIXTURE_IMAGE_BASE64 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAMBAQAY3Y2wAAAAAElFTkSuQmCC';
 export const MAX_JSON_BODY_BYTES = 1024 * 1024;
 export const FIXTURE_IMAGE_PATH = '/api/storage/generations/fixture.png';
 

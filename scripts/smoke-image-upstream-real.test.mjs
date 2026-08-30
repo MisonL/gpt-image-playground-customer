@@ -6,13 +6,48 @@ import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { deflateSync } from 'node:zlib';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const scriptPath = join(repoRoot, 'scripts/smoke-image-upstream-real.mjs');
 const realSmokeOutputDir = join(repoRoot, 'generated-images/.real-smoke');
-const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const pngBase64 = createPngWithDimensions(1024, 1024).toString('base64');
 const smokeChildTerminationGraceMs = 5_000;
 const smokeProcessTestTimeoutMs = 120_000;
+
+function createPngWithDimensions(width, height) {
+    const raw = Buffer.alloc((width + 1) * height, 0x40);
+    for (let row = 0; row < height; row += 1) raw[row * (width + 1)] = 0;
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8;
+    return Buffer.concat([
+        Buffer.from('\x89PNG\r\n\x1a\n', 'binary'),
+        createPngChunk('IHDR', ihdr),
+        createPngChunk('IDAT', deflateSync(raw)),
+        createPngChunk('IEND', Buffer.alloc(0))
+    ]);
+}
+
+function createPngChunk(type, data) {
+    const typeBytes = Buffer.from(type, 'ascii');
+    const body = Buffer.concat([typeBytes, data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length, 0);
+    const checksum = Buffer.alloc(4);
+    checksum.writeUInt32BE(crc32(body), 0);
+    return Buffer.concat([length, body, checksum]);
+}
+
+function crc32(data) {
+    let crc = 0xffffffff;
+    for (const byte of data) {
+        crc ^= byte;
+        for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+}
 
 describe('image upstream real smoke script', () => {
     it('skips every real upstream target without billable calls when no target env is configured', () => {

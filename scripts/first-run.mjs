@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import {
     loadPrivateAgentEnvFile,
+    resolveAgentToken,
     resolvePlaygroundBaseUrl
 } from '../skills/visual-journal-image-agent/scripts/lib/script-utils.mjs';
 import { isMainModule, printJson, redactBaseUrl } from './command-center-utils.mjs';
 import { inspectDependencyInstallation, LOCAL_DEPENDENCY_INSTALL_COMMAND } from './dependency-installation.mjs';
 import { summarizeEnvFile } from './env-summary.mjs';
-import { inspectNpmInstallPolicy } from './npm-install-policy.mjs';
 import { isSupportedNodeVersion, MIN_NODE_VERSION_RANGE } from './node-version.mjs';
+import { inspectNpmInstallPolicy } from './npm-install-policy.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -154,7 +155,12 @@ function buildChecks({ cwd, env, envSummary, service, base, validationError, npm
         {
             name: 'npm_install_policy',
             ok: npmInstallPolicy.ok,
-            ...(npmInstallPolicy.ok ? {} : { reason: npmInstallPolicy.reason, ...(npmInstallPolicy.error ? { error: npmInstallPolicy.error } : {}) })
+            ...(npmInstallPolicy.ok
+                ? {}
+                : {
+                      reason: npmInstallPolicy.reason,
+                      ...(npmInstallPolicy.error ? { error: npmInstallPolicy.error } : {})
+                  })
         },
         { name: 'package_lock', ok: packageLock },
         {
@@ -217,7 +223,7 @@ function buildChecks({ cwd, env, envSummary, service, base, validationError, npm
 }
 
 function readAgentAuthState(env, envSummary, service) {
-    const hasToken = Boolean(env.GPT_IMAGE_AGENT_TOKEN);
+    const hasToken = Boolean(resolveAgentToken(env));
     const hasPasswordHash = Boolean(env.GPT_IMAGE_APP_PASSWORD_HASH);
     const privateSource = envSummary.find((source) => source.path.endsWith('.env.agent.local'));
     const requiredSchemes = readAgentAuthSchemes(service);
@@ -238,7 +244,10 @@ function readAgentAuthState(env, envSummary, service) {
         },
         privateEnv: {
             exists: privateSource?.exists === true,
-            has_token: privateSource ? sourceHasSetVariable(privateSource, 'GPT_IMAGE_AGENT_TOKEN') : false,
+            has_token: privateSource
+                ? sourceHasSetVariable(privateSource, 'GPT_IMAGE_AGENT_TOKEN') ||
+                  sourceHasSetVariable(privateSource, 'AGENT_API_TOKEN')
+                : false,
             has_password_hash: privateSource
                 ? sourceHasSetVariable(privateSource, 'GPT_IMAGE_APP_PASSWORD_HASH')
                 : false
@@ -268,7 +277,7 @@ function buildNextActions({ checks, base, service, env, envSummary, validationEr
     }
     if (requiresPageSsePasswordHash(service) && !env.GPT_IMAGE_APP_PASSWORD_HASH) {
         actions.push(
-            '如果要使用页面 SSE、Responses backend edit 或 --page-sse，请在本机私有 .env.agent.local 中设置 GPT_IMAGE_APP_PASSWORD_HASH；Agent 脚本会自动读取该文件，GPT_IMAGE_AGENT_TOKEN 只覆盖 Agent JSON 鉴权。'
+            '如果要使用页面 SSE、Responses backend edit 或 --page-sse，请在本机私有 .env.agent.local 中设置 GPT_IMAGE_APP_PASSWORD_HASH；Agent 脚本会自动读取该文件，GPT_IMAGE_AGENT_TOKEN 或 AGENT_API_TOKEN 只用于 Agent JSON 鉴权。'
         );
     }
     if (!service.ok && !requiresAgentAuth(service)) {
@@ -307,28 +316,27 @@ function readAgentAuthSchemes(service) {
 }
 
 function hasAnyConfiguredAgentAuth(env, schemes) {
-    if (schemes.includes('bearer')) return Boolean(env.GPT_IMAGE_AGENT_TOKEN);
+    if (schemes.includes('bearer')) return Boolean(resolveAgentToken(env));
     if (schemes.includes('x-app-password-hash')) return Boolean(env.GPT_IMAGE_APP_PASSWORD_HASH);
-    return Boolean(env.GPT_IMAGE_AGENT_TOKEN || env.GPT_IMAGE_APP_PASSWORD_HASH);
+    return Boolean(resolveAgentToken(env) || env.GPT_IMAGE_APP_PASSWORD_HASH);
 }
 
 function hasAnyConfiguredAgentAuthSource(source, schemes) {
-    if (schemes.includes('bearer')) return sourceHasSetVariable(source, 'GPT_IMAGE_AGENT_TOKEN');
+    const hasToken =
+        sourceHasSetVariable(source, 'GPT_IMAGE_AGENT_TOKEN') || sourceHasSetVariable(source, 'AGENT_API_TOKEN');
+    if (schemes.includes('bearer')) return hasToken;
     if (schemes.includes('x-app-password-hash')) return sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH');
-    return (
-        sourceHasSetVariable(source, 'GPT_IMAGE_AGENT_TOKEN') ||
-        sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH')
-    );
+    return hasToken || sourceHasSetVariable(source, 'GPT_IMAGE_APP_PASSWORD_HASH');
 }
 
 function buildAgentAuthAction(schemes) {
     if (schemes.includes('bearer')) {
-        return '在仓库外导出 GPT_IMAGE_AGENT_TOKEN，再运行受保护的 Agent 脚本。';
+        return '在仓库外导出 GPT_IMAGE_AGENT_TOKEN 或 AGENT_API_TOKEN，再运行受保护的 Agent 脚本。';
     }
     if (schemes.includes('x-app-password-hash')) {
         return '在仓库外导出 GPT_IMAGE_APP_PASSWORD_HASH，再运行受保护的 Agent 脚本。';
     }
-    return '在仓库外导出 GPT_IMAGE_AGENT_TOKEN 或 GPT_IMAGE_APP_PASSWORD_HASH，再运行受保护的 Agent 脚本。';
+    return '在仓库外导出 GPT_IMAGE_AGENT_TOKEN、AGENT_API_TOKEN 或 GPT_IMAGE_APP_PASSWORD_HASH，再运行受保护的 Agent 脚本。';
 }
 
 function sourceHasSetVariable(source, name) {
@@ -443,7 +451,8 @@ function isCapabilitiesBody(body) {
 }
 
 function authHeaders(env) {
-    if (env.GPT_IMAGE_AGENT_TOKEN) return { Authorization: `Bearer ${env.GPT_IMAGE_AGENT_TOKEN}` };
+    const agentToken = resolveAgentToken(env);
+    if (agentToken) return { Authorization: `Bearer ${agentToken}` };
     if (env.GPT_IMAGE_APP_PASSWORD_HASH) return { 'X-App-Password-Hash': env.GPT_IMAGE_APP_PASSWORD_HASH };
     return {};
 }

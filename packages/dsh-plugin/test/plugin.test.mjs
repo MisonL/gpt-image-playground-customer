@@ -1,5 +1,9 @@
-import { apply, internals } from '../lib/index.js';
+import { apply, Config, internals } from '../lib/index.js';
+import z from '@deepseek-ai/schemastery';
+import yaml from 'js-yaml';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
 function registerTools(timeoutMs = 1000, baseUrl = 'http://localhost:4783') {
@@ -66,10 +70,10 @@ test('allows billable requests when the service has no auth configured', async (
     const tools = registerTools();
     const generate = tools.get('visual_journal_generate');
     const originalFetch = globalThis.fetch;
-    const originalToken = process.env.GPT_IMAGE_AGENT_TOKEN;
+    const originalToken = process.env.AGENT_API_TOKEN;
     const originalPasswordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH;
     let requestHeaders;
-    delete process.env.GPT_IMAGE_AGENT_TOKEN;
+    delete process.env.AGENT_API_TOKEN;
     delete process.env.GPT_IMAGE_APP_PASSWORD_HASH;
     let callCount = 0;
     globalThis.fetch = async (_input, init) => {
@@ -95,10 +99,39 @@ test('allows billable requests when the service has no auth configured', async (
         assert.equal(requestHeaders.has('x-app-password-hash'), false);
     } finally {
         globalThis.fetch = originalFetch;
-        if (originalToken === undefined) delete process.env.GPT_IMAGE_AGENT_TOKEN;
-        else process.env.GPT_IMAGE_AGENT_TOKEN = originalToken;
+        if (originalToken === undefined) delete process.env.AGENT_API_TOKEN;
+        else process.env.AGENT_API_TOKEN = originalToken;
         if (originalPasswordHash === undefined) delete process.env.GPT_IMAGE_APP_PASSWORD_HASH;
         else process.env.GPT_IMAGE_APP_PASSWORD_HASH = originalPasswordHash;
+    }
+});
+
+test('prefers the canonical server Agent token when both token variables are set', async () => {
+    const tools = registerTools();
+    const generate = tools.get('visual_journal_generate');
+    const originalFetch = globalThis.fetch;
+    const originalAgentToken = process.env.AGENT_API_TOKEN;
+    const originalClientToken = process.env.GPT_IMAGE_AGENT_TOKEN;
+    let requestHeaders;
+    process.env.AGENT_API_TOKEN = 'server-token';
+    process.env.GPT_IMAGE_AGENT_TOKEN = 'legacy-token';
+    globalThis.fetch = async (_input, init) => {
+        requestHeaders = new Headers(init?.headers);
+        return new Response(JSON.stringify({ request_id: 'request-token-precedence', images: [] }), { status: 200 });
+    };
+    try {
+        const result = await generate.execute(
+            { prompt: 'test prompt', allow_billable: true, idempotency_key: 'token-precedence-key' },
+            { signal: new AbortController().signal }
+        );
+        assert.equal(result.response.request_id, 'request-token-precedence');
+        assert.equal(requestHeaders.get('authorization'), 'Bearer server-token');
+    } finally {
+        globalThis.fetch = originalFetch;
+        if (originalAgentToken === undefined) delete process.env.AGENT_API_TOKEN;
+        else process.env.AGENT_API_TOKEN = originalAgentToken;
+        if (originalClientToken === undefined) delete process.env.GPT_IMAGE_AGENT_TOKEN;
+        else process.env.GPT_IMAGE_AGENT_TOKEN = originalClientToken;
     }
 });
 
@@ -157,9 +190,12 @@ test('keeps the deployment path prefix when polling a root-relative job URL', as
     globalThis.fetch = async (input, init) => {
         calls.push({ url: String(input), method: init?.method ?? 'GET' });
         if (calls.length === 1) {
-            return new Response(JSON.stringify({ job: { id: 'job-prefix', result_url: '/api/agent/jobs/job-prefix/result' } }), {
-                status: 202
-            });
+            return new Response(
+                JSON.stringify({ job: { id: 'job-prefix', result_url: '/api/agent/jobs/job-prefix/result' } }),
+                {
+                    status: 202
+                }
+            );
         }
         return new Response(JSON.stringify({ request_id: 'request-prefix', images: [] }), { status: 200 });
     };
@@ -169,10 +205,13 @@ test('keeps the deployment path prefix when polling a root-relative job URL', as
             { signal: new AbortController().signal }
         );
         assert.equal(result.response.request_id, 'request-prefix');
-        assert.deepEqual(calls.map((call) => call.url), [
-            'https://host.example/playground/api/agent/image-requests',
-            'https://host.example/playground/api/agent/jobs/job-prefix/result'
-        ]);
+        assert.deepEqual(
+            calls.map((call) => call.url),
+            [
+                'https://host.example/playground/api/agent/image-requests',
+                'https://host.example/playground/api/agent/jobs/job-prefix/result'
+            ]
+        );
     } finally {
         globalThis.fetch = originalFetch;
     }
@@ -217,7 +256,47 @@ test('rejects a job result URL on another origin before sending credentials', ()
 
 test('normalizes configured base URLs and rejects malformed idempotency keys', () => {
     assert.equal(internals.resolveBaseUrl('http://localhost:4783///'), 'http://localhost:4783');
+    assert.equal(internals.resolveBaseUrl('http://127.0.0.1:4783'), 'http://127.0.0.1:4783');
+    assert.equal(internals.resolveBaseUrl('http://[::1]:4783'), 'http://[::1]:4783');
+    assert.equal(internals.resolveBaseUrl('http://[::ffff:7f00:1]:4783'), 'http://[::ffff:7f00:1]:4783');
+    assert.equal(internals.resolveBaseUrl('http://[::ffff:0:7f00:1]:4783'), 'http://[::ffff:0:7f00:1]:4783');
+    assert.throws(
+        () => internals.resolveBaseUrl('http://remote.example/workbench'),
+        /HTTP 时仅允许 localhost 或回环地址/
+    );
     assert.throws(() => internals.requireIdempotencyKey('valid\nkey'), /idempotency_key 不能包含控制字符/);
+});
+
+test('uses the environment service URL when profile config leaves baseUrl unset', () => {
+    const original = process.env.GPT_IMAGE_PLAYGROUND_URL;
+    process.env.GPT_IMAGE_PLAYGROUND_URL = 'https://journal.example/workbench///';
+    try {
+        assert.equal(internals.resolveBaseUrl(undefined), 'https://journal.example/workbench');
+    } finally {
+        if (original === undefined) delete process.env.GPT_IMAGE_PLAYGROUND_URL;
+        else process.env.GPT_IMAGE_PLAYGROUND_URL = original;
+    }
+});
+
+test('allows the bundled empty profile config to resolve without a base URL', () => {
+    const [resolved] = z.resolve({}, Config);
+    assert.equal(resolved.baseUrl, undefined);
+});
+
+test('ships a standard YAML patch without executable tags', () => {
+    const patch = fs.readFileSync(path.join(import.meta.dirname, '..', 'cordis.patch.yml'), 'utf8');
+    const parsed = yaml.load(patch);
+    assert.deepEqual(parsed, [
+        {
+            insert: [
+                {
+                    id: 'visual-journal-dsh-plugin',
+                    name: '@visual-journal/dsh-plugin',
+                    config: {}
+                }
+            ]
+        }
+    ]);
 });
 
 test('rejects an accepted response that has neither a job nor a final response', async () => {
@@ -242,9 +321,9 @@ test('tool arguments cannot redirect requests away from the configured service',
     const tools = registerTools();
     const generate = tools.get('visual_journal_generate');
     const originalFetch = globalThis.fetch;
-    const originalToken = process.env.GPT_IMAGE_AGENT_TOKEN;
+    const originalToken = process.env.AGENT_API_TOKEN;
     const urls = [];
-    process.env.GPT_IMAGE_AGENT_TOKEN = 'test-token';
+    process.env.AGENT_API_TOKEN = 'test-token';
     globalThis.fetch = async (input) => {
         urls.push(String(input));
         return new Response(JSON.stringify({ request_id: 'request-redirect-guard', images: [] }), { status: 200 });
@@ -262,8 +341,8 @@ test('tool arguments cannot redirect requests away from the configured service',
         assert.deepEqual(urls, ['http://localhost:4783/api/agent/image-requests']);
     } finally {
         globalThis.fetch = originalFetch;
-        if (originalToken === undefined) delete process.env.GPT_IMAGE_AGENT_TOKEN;
-        else process.env.GPT_IMAGE_AGENT_TOKEN = originalToken;
+        if (originalToken === undefined) delete process.env.AGENT_API_TOKEN;
+        else process.env.AGENT_API_TOKEN = originalToken;
     }
 });
 

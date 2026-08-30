@@ -25,6 +25,7 @@ import {
 import {
     errorMessage,
     assertValidImageSizeForModel,
+    DEFAULT_IMAGE_MODEL,
     normalizeOutputFormat,
     parseImageSizeValue,
     parseRetryAfterValue,
@@ -33,7 +34,9 @@ import {
     readMaxImageEdge,
     readOptionValue,
     readPartialImages,
+    resolveCapabilitiesDefaultImageModel,
     loadPrivateAgentEnvFile,
+    resolveAgentToken,
     resolvePlaygroundBaseUrl,
     sleep,
     validateAgentEditRequestAgainstCapabilities
@@ -56,13 +59,14 @@ const OUTPUT_FORMATS = new Set(['png', 'jpeg', 'webp']);
 const MODERATIONS = new Set(['low', 'auto']);
 const THINKING_VALUES = new Set(['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
 const DEFAULT_PAGE_OUTPUT_FORMAT = 'webp';
+const DEFAULT_MODEL = DEFAULT_IMAGE_MODEL;
 const DEFAULT_PAGE_OUTPUT_COMPRESSION = 100;
 const DIMENSION_CHECK_URL_FIELDS = ['absolute_content_url', 'content_url', 'absolute_path', 'path'];
 const EDIT_DIMENSION_CHECK_NEXT_STEP =
     '确认当前编辑渠道是否支持请求尺寸，或调整任务接受实际返回尺寸；重新执行必须使用新的 Idempotency-Key。';
 
 loadPrivateAgentEnvFile();
-const token = process.env.GPT_IMAGE_AGENT_TOKEN || '';
+const token = resolveAgentToken();
 const passwordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH || '';
 const contractCheck = process.env.GPT_IMAGE_AGENT_CONTRACT_CHECK === '1' || process.argv.includes('--contract-check');
 const scriptTiming = startScriptTiming();
@@ -83,9 +87,7 @@ if (options.help) {
 
 try {
     validateUpstreamStreamingOptions(options);
-    options.size = assertValidImageSizeForModel(options.size, options.model, '--size', {
-        forceRequest: options.forceRequest
-    });
+    options.size = assertValidImageSizeForModel(options.size, options.model || DEFAULT_MODEL, '--size');
 } catch (error) {
     console.error(errorMessage(error));
     printUsage();
@@ -139,7 +141,7 @@ if (options.dryRun || (!contractCheck && !options.allowBillable)) {
                 request: {
                     image_path: imagePath,
                     prompt,
-                    model: options.model,
+                    model: options.model || DEFAULT_MODEL,
                     size: options.size,
                     quality: options.quality,
                     response_mode: options.responseMode,
@@ -191,7 +193,8 @@ if (routingGuidance.transport === 'page_sse') {
 
 function parseArgs(argv) {
     const parsed = {
-        model: 'gpt-image-2',
+        model: undefined,
+        modelExplicit: false,
         size: 'auto',
         quality: 'auto',
         responseMode: 'path',
@@ -227,8 +230,10 @@ function parseArgs(argv) {
         else if (arg === '--allow-billable') parsed.allowBillable = true;
         else if (arg === '--help' || arg === '-h') parsed.help = true;
         else if (arg === '--contract-check') continue;
-        else if (arg === '--model') parsed.model = readOptionValue(argv, (index += 1), arg);
-        else if (arg === '--size') parsed.size = readOptionValue(argv, (index += 1), arg);
+        else if (arg === '--model') {
+            parsed.model = readOptionValue(argv, (index += 1), arg);
+            parsed.modelExplicit = true;
+        } else if (arg === '--size') parsed.size = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--quality') parsed.quality = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--response-mode') parsed.responseMode = readOptionValue(argv, (index += 1), arg);
         else if (arg === '--agent') parsed.routeMode = 'agent';
@@ -563,6 +568,8 @@ function printUsage() {
 let capabilities;
 try {
     capabilities = await readCapabilities();
+    if (!options.modelExplicit) options.model = resolveCapabilitiesDefaultImageModel(capabilities, DEFAULT_MODEL);
+    options.size = assertValidImageSizeForModel(options.size, options.model, '--size');
     if (options.timeoutMs === undefined) {
         timeoutMs = readCapabilitiesImageTransportTimeoutMs(capabilities, timeoutMs);
     }
@@ -582,7 +589,7 @@ try {
             image_backend: options.imageBackend,
             stream_mode: options.streamMode,
             streaming_strategy: options.streamingStrategy,
-            model: options.model,
+            model: options.model || DEFAULT_MODEL,
             size: options.size,
             force_request: options.forceRequest
         },

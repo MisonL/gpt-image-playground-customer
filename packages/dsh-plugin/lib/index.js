@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import z from '@deepseek-ai/schemastery';
+import net from 'node:net';
 
 const DEFAULT_BASE_URL = 'http://localhost:4783';
 const DEFAULT_TIMEOUT_MS = 900_000;
@@ -13,7 +14,7 @@ const AGENT_ENDPOINTS = Object.freeze({
 export const name = 'visual-journal-dsh-plugin';
 export const inject = ['tools'];
 export const Config = z.object({
-    baseUrl: z.string().default(DEFAULT_BASE_URL),
+    baseUrl: z.string().default(undefined),
     timeoutMs: z.number().min(1).default(DEFAULT_TIMEOUT_MS)
 });
 
@@ -221,11 +222,77 @@ function resolveBaseUrl(configured) {
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
         throw new Error('base_url 必须是无凭据、无查询参数、无片段的 http/https URL。');
     }
+    if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+        throw new Error('base_url 使用 HTTP 时仅允许 localhost 或回环地址；远程服务必须使用 HTTPS。');
+    }
     return url.toString().replace(/\/+$/, '');
 }
 
+function isLoopbackHost(hostname) {
+    const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (normalized === 'localhost' || normalized.endsWith('.localhost')) return true;
+    const family = net.isIP(normalized);
+    if (family === 4) return normalized.startsWith('127.');
+    if (family === 6) {
+        const hextets = parseIpv6Hextets(normalized);
+        if (!hextets) return false;
+        if (hextets.slice(0, 7).every((value) => value === 0) && hextets[7] === 1) return true;
+        const embeddedIpv4 = readEmbeddedIpv4(hextets);
+        return embeddedIpv4?.startsWith('127.') === true;
+    }
+    return false;
+}
+
+function parseIpv6Hextets(address) {
+    let normalized = address.toLowerCase();
+    if (normalized.includes('%')) return undefined;
+    if (normalized.includes('.')) {
+        const separator = normalized.lastIndexOf(':');
+        const ipv4 = normalized.slice(separator + 1);
+        if (separator < 0 || !/^\d+\.\d+\.\d+\.\d+$/.test(ipv4)) return undefined;
+        const octets = ipv4.split('.').map(Number);
+        if (octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return undefined;
+        normalized = `${normalized.slice(0, separator)}:${((octets[0] << 8) | octets[1]).toString(16)}:${((octets[2] << 8) | octets[3]).toString(16)}`;
+    }
+    const compressionIndex = normalized.indexOf('::');
+    if (compressionIndex >= 0 && normalized.indexOf('::', compressionIndex + 2) >= 0) return undefined;
+    const leftText = compressionIndex >= 0 ? normalized.slice(0, compressionIndex) : normalized;
+    const rightText = compressionIndex >= 0 ? normalized.slice(compressionIndex + 2) : '';
+    const left = leftText ? leftText.split(':') : [];
+    const right = rightText ? rightText.split(':') : [];
+    const parsePart = (part) => (/^[0-9a-f]{1,4}$/.test(part) ? Number.parseInt(part, 16) : undefined);
+    const leftValues = left.map(parsePart);
+    const rightValues = right.map(parsePart);
+    if (leftValues.some((value) => value === undefined) || rightValues.some((value) => value === undefined)) {
+        return undefined;
+    }
+    const values = [...leftValues, ...rightValues];
+    if (compressionIndex < 0) return values.length === 8 ? values : undefined;
+    const missing = 8 - values.length;
+    if (missing < 1) return undefined;
+    return [...leftValues, ...Array.from({ length: missing }, () => 0), ...rightValues];
+}
+
+function readEmbeddedIpv4(hextets) {
+    if (hextets.slice(0, 5).every((value) => value === 0) && hextets[5] === 0xffff) {
+        return ipv4FromHextets(hextets[6], hextets[7]);
+    }
+    if (hextets.slice(0, 4).every((value) => value === 0) && hextets[4] === 0xffff && hextets[5] === 0) {
+        return ipv4FromHextets(hextets[6], hextets[7]);
+    }
+    if (hextets.slice(0, 6).every((value) => value === 0)) {
+        return ipv4FromHextets(hextets[6], hextets[7]);
+    }
+    return undefined;
+}
+
+function ipv4FromHextets(high, low) {
+    return (high >> 8) + '.' + (high & 255) + '.' + (low >> 8) + '.' + (low & 255);
+}
+
 function authHeaders() {
-    const token = normalizeNonEmpty(process.env.GPT_IMAGE_AGENT_TOKEN);
+    const token =
+        normalizeNonEmpty(process.env.AGENT_API_TOKEN) || normalizeNonEmpty(process.env.GPT_IMAGE_AGENT_TOKEN);
     if (token) return { Authorization: `Bearer ${token}` };
     const passwordHash = normalizeNonEmpty(process.env.GPT_IMAGE_APP_PASSWORD_HASH);
     if (passwordHash) return { 'X-App-Password-Hash': passwordHash };

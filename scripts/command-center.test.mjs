@@ -582,10 +582,7 @@ describe('Command center scripts', () => {
         const fakeBinDirectory = path.join(temporaryDirectory, 'bin');
         const dockerCallLog = path.join(temporaryDirectory, 'docker-calls.log');
         await mkdir(fakeBinDirectory);
-        await writeFile(
-            path.join(temporaryDirectory, '.env.local'),
-            'WEBUI_IMAGE_AUTO_CLEANUP_ENABLED=true\n'
-        );
+        await writeFile(path.join(temporaryDirectory, '.env.local'), 'WEBUI_IMAGE_AUTO_CLEANUP_ENABLED=true\n');
         await writeExecutable(
             path.join(fakeBinDirectory, 'git'),
             `#!/bin/sh
@@ -666,7 +663,9 @@ exit 1
             baseUrl: 'http://127.0.0.1:4783'
         });
         assert.deepEqual(
-            parsePublishedContainerPortBindings('[{"HostIp":"::","HostPort":"4784"},{"HostIp":"0.0.0.0","HostPort":"4784"}]'),
+            parsePublishedContainerPortBindings(
+                '[{"HostIp":"::","HostPort":"4784"},{"HostIp":"0.0.0.0","HostPort":"4784"}]'
+            ),
             {
                 bindHost: '0.0.0.0',
                 hostPort: '4784',
@@ -860,7 +859,7 @@ exit 1
         const tempDir = await mkdtemp(path.join(os.tmpdir(), 'first-run-'));
         await writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
         await writeFile(path.join(tempDir, 'package-lock.json'), '{}');
-        await writeFile(path.join(tempDir, '.env.agent.local'), 'GPT_IMAGE_AGENT_TOKEN=file-secret\n');
+        await writeFile(path.join(tempDir, '.env.agent.local'), 'AGENT_API_TOKEN=file-secret\n');
         await withServer(
             (request, response) => {
                 if (request.url === '/api/agent/capabilities') {
@@ -901,7 +900,7 @@ exit 1
                             envFiles: ['.env.agent.local'],
                             timeoutMs: 1000
                         },
-                        { GPT_IMAGE_AGENT_TOKEN: 'shell-secret' }
+                        { AGENT_API_TOKEN: 'shell-secret' }
                     );
 
                     assert.equal(report.command, 'first-run');
@@ -1192,6 +1191,7 @@ exit 1
         await withServer(
             (request, response) => {
                 if (request.url === '/proxy/api/agent/capabilities') {
+                    assert.equal(request.headers.authorization, 'Bearer doctor-token');
                     response.writeHead(200, { 'content-type': 'application/json' });
                     response.end(
                         JSON.stringify({
@@ -1332,7 +1332,12 @@ exit 1
             async (baseUrl) => {
                 const prefixedBaseUrl = `${baseUrl}/proxy`;
                 const result = await runNodeCommandAsync(['scripts/agent-doctor.mjs'], {
-                    env: { ...process.env, GPT_IMAGE_PLAYGROUND_URL: `${prefixedBaseUrl}/` },
+                    env: {
+                        ...process.env,
+                        GPT_IMAGE_AGENT_TOKEN: undefined,
+                        AGENT_API_TOKEN: 'doctor-token',
+                        GPT_IMAGE_PLAYGROUND_URL: `${prefixedBaseUrl}/`
+                    },
                     timeoutMs: 15_000
                 });
 

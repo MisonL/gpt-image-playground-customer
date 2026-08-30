@@ -61,6 +61,7 @@ export function buildFailureSummary({ errorBody, routing, timing, idempotencyKey
     const error = readObject(errorBody?.error) || readObject(errorBody);
     const errorMessage = readString(error?.message) || readString(errorBody?.error);
     const diagnostics = readObject(error?.diagnostics);
+    const details = readObject(error?.details);
     const response = readObject(errorBody?.response);
     const execution = readObject(response?.execution);
     const images = Array.isArray(response?.images) ? response.images : [];
@@ -76,9 +77,16 @@ export function buildFailureSummary({ errorBody, routing, timing, idempotencyKey
         content_urls: readImageUrls(images, ['content_url', 'path']),
         absolute_content_urls: readImageUrls(images, ['absolute_content_url', 'absolute_path']),
         image_dimensions: imageDimensions,
-        expected_dimensions: readDimensionObject(error?.expected_dimensions),
-        actual_dimensions: readDimensionObject(error?.actual_dimensions),
-        dimension_check_failed: error?.code === 'dimension_check_failed' ? true : undefined,
+        expected_dimensions:
+            readDimensionObject(error?.expected_dimensions) || readDimensionObject(details?.expected_dimensions),
+        actual_dimensions:
+            readDimensionObject(error?.actual_dimensions) || readDimensionObject(details?.actual_dimensions),
+        dimension_check_failed:
+            error?.code === 'dimension_check_failed' ||
+            error?.code === 'image_dimension_mismatch' ||
+            details?.dimension_check_failed === true
+                ? true
+                : undefined,
         started_at: timingSummary.started_at,
         completed_at: timingSummary.completed_at,
         elapsed_ms: timingSummary.elapsed_ms,
@@ -215,6 +223,15 @@ function readImageTopLevelDimensions(image) {
 }
 
 function readDimensionObject(value) {
+    if (typeof value === 'string') {
+        const match = /^(\d+)x(\d+)$/.exec(value.trim());
+        if (!match) return undefined;
+        const width = Number(match[1]);
+        const height = Number(match[2]);
+        return Number.isSafeInteger(width) && width > 0 && Number.isSafeInteger(height) && height > 0
+            ? { width, height }
+            : undefined;
+    }
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
     const width = readPositiveInteger(value.width);
     const height = readPositiveInteger(value.height);

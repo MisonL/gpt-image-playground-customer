@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 const PNG_BASE64 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAMBAQAY3Y2wAAAAAElFTkSuQmCC';
 const originalEnv = { ...process.env };
 function restoreProcessEnv() {
     for (const key of Object.keys(process.env)) {

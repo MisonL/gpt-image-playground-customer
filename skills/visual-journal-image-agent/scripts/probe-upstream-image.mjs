@@ -8,6 +8,7 @@ import { dirname } from 'node:path';
 import tls from 'node:tls';
 import {
   assertValidImageSizeForModel,
+  DEFAULT_IMAGE_MODEL,
   errorMessage,
   loadPrivateAgentEnvFile,
   normalizeBaseUrl,
@@ -159,7 +160,7 @@ process.exit(report.ok ? 0 : 1);
 function parseArgs(argv) {
   const parsed = {
     baseUrl: undefined,
-    model: 'gpt-image-2',
+    model: DEFAULT_IMAGE_MODEL,
     responsesModel: undefined,
     prompt: 'contract probe',
     size: '1024x1024',
