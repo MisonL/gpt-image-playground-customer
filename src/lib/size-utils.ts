@@ -1,4 +1,4 @@
-import type { GptImageModel } from '@/lib/cost-utils';
+import { GPT_IMAGE_MODELS, isGptImage2Model, type GptImageModel } from '@/lib/cost-utils';
 import type { ImageUpstreamProfile } from '@/lib/image-upstream-profile';
 
 type SizeValidationValues = Record<string, string | number>;
@@ -150,7 +150,7 @@ const GPT_IMAGE_2_RESOLUTION_PRESETS: Array<Omit<SizePresetOption, 'dimensions'>
  */
 export function getPresetDimensions(preset: SizePreset, model: GptImageModel): string | null {
     if (preset === 'auto' || preset === 'custom') return null;
-    const isGptImage2 = model === 'gpt-image-2';
+    const isGptImage2 = isGptImage2Model(model);
     switch (preset) {
         case 'square':
             return isGptImage2 ? '2048x2048' : '1024x1024';
@@ -204,7 +204,9 @@ export function getSizePresetOptions(input: {
             dimensions: getPresetDimensions(value, input.model)
         }))
     ];
-    if (input.model !== 'gpt-image-2') return options;
+    if (!isGptImage2Model(input.model) && GPT_IMAGE_MODELS.includes(input.model as (typeof GPT_IMAGE_MODELS)[number])) {
+        return options;
+    }
     options.splice(1, 0, { value: 'custom', group: 'automatic', dimensions: null });
     const resolutionPresets = GPT_IMAGE_2_RESOLUTION_PRESETS.filter((preset) =>
         supportsPresetDimensions({

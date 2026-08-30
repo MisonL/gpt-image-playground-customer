@@ -1,3 +1,4 @@
+import { readPlainHttpApiBaseUrlAllowlist } from './image-request-utils';
 import { mergeUpstreamHeadersWithFixed, type UpstreamRequestHeaders } from './image-upstream-profile';
 import { fetchOpenAIUpstream, readImageUpstreamTimeoutMs } from './openai-image-transport';
 import type OpenAI from 'openai';
@@ -151,7 +152,14 @@ export async function createImagesApiGenerateStream(input: ImagesApiStreamInput)
                 signal: abortContext.signal,
                 body: JSON.stringify(params)
             },
-            upstreamProxyUrl
+            upstreamProxyUrl,
+            undefined,
+            {
+                baseURL: apiBaseUrl,
+                allowedPlainHttpBaseUrls: readPlainHttpApiBaseUrlAllowlist(
+                    process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS
+                )
+            }
         );
     } catch (error) {
         abortContext.cleanup();

@@ -1,5 +1,6 @@
 export const AGENT_ENDPOINTS = Object.freeze({
     capabilities: '/api/agent/capabilities',
+    models: '/api/agent/models',
     openapi: '/api/agent/openapi.json',
     create_image_request: '/api/agent/image-requests',
     generate: '/api/agent/images/generate',

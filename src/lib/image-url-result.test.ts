@@ -9,6 +9,161 @@ afterEach(() => {
 });
 
 describe('downloadSameOriginImageAsBase64', () => {
+    it('downloads HTTPS images from a different public origin', async () => {
+        let observedUrl = '';
+        let observedAuthorization: string | null = null;
+        globalThis.fetch = async (url, init) => {
+            observedUrl = String(url);
+            observedAuthorization = new Headers(init?.headers).get('authorization');
+            return new Response(Buffer.from('png'), {
+                status: 200,
+                headers: { 'content-type': 'image/webp' }
+            });
+        };
+
+        const result = await downloadSameOriginImageAsBase64({
+            imageUrl: 'https://example.com/result.webp',
+            apiBaseUrl: 'https://api.example.test/v1',
+            apiKey: 'must-not-leak',
+            lookup: (async () => [
+                { address: '93.184.216.34', family: 4 }
+            ]) as unknown as typeof import('node:dns/promises').lookup
+        });
+
+        assert.equal(result, Buffer.from('png').toString('base64'));
+        assert.equal(observedUrl, 'https://example.com/result.webp');
+        assert.equal(observedAuthorization, null);
+    });
+
+    it('supports public IPv6 literal image hosts without a DNS lookup', async () => {
+        let lookupCalled = false;
+        globalThis.fetch = async (_url, init) => {
+            assert.ok(init && 'dispatcher' in init && init.dispatcher);
+            return new Response(Buffer.from('png'), {
+                status: 200,
+                headers: { 'content-type': 'image/png' }
+            });
+        };
+
+        const result = await downloadSameOriginImageAsBase64({
+            imageUrl: 'https://[2001:4860:4860::8888]/result.png',
+            apiBaseUrl: 'https://api.example.test/v1',
+            lookup: (async () => {
+                lookupCalled = true;
+                return [];
+            }) as unknown as typeof import('node:dns/promises').lookup
+        });
+
+        assert.equal(result, Buffer.from('png').toString('base64'));
+        assert.equal(lookupCalled, false);
+    });
+
+    it('rejects cross-origin plaintext HTTP and private hosts', async () => {
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'http://images.example.test/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /HTTPS/
+        );
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://127.0.0.1/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /禁止的本地或内网/
+        );
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://mapped-private.example/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1',
+                    lookup: (async () => [
+                        { address: '::ffff:172.16.0.1', family: 6 },
+                        { address: '::ffff:169.254.169.254', family: 6 }
+                    ]) as unknown as typeof import('node:dns/promises').lookup
+                }),
+            /禁止的本地或内网/
+        );
+    });
+
+    it('rejects NAT64 addresses that map to private IPv4 networks', async () => {
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://[64:ff9b::c0a8:101]/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /本地或内网地址/
+        );
+    });
+
+    it('rejects deprecated site-local IPv6 and 6to4 relay ranges', async () => {
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://[fec0::1]/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /禁止的本地或内网/
+        );
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://192.88.99.1/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /禁止的本地或内网/
+        );
+    });
+
+    it('rejects every address in the reserved 192.0.0.0/24 range', async () => {
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://192.0.0.1/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /禁止的本地或内网/
+        );
+    });
+
+    it('rejects IPv4-compatible private IPv6 and multicast targets', async () => {
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://[::c0a8:101]/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /禁止的本地或内网/
+        );
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://[ff02::1]/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /禁止的本地或内网/
+        );
+    });
+
+    it('rejects site-local remainder, 6to4 private mappings, and translated IPv4 targets', async () => {
+        for (const imageUrl of [
+            'https://[fed0::1]/result.png',
+            'https://[2002:c0a8:0101::]/result.png',
+            'https://[::ffff:0:7f00:1]/result.png',
+            'https://[0:0:0:0:0:ffff:ac10:1]/result.png',
+            'https://[0:0:0:0:ffff:0:c000:201]/result.png'
+        ]) {
+            await assert.rejects(
+                () => downloadSameOriginImageAsBase64({ imageUrl, apiBaseUrl: 'https://api.example.test/v1' }),
+                /禁止的本地或内网/
+            );
+        }
+    });
+
     it('passes authorization and upstream headers to same-origin image downloads', async () => {
         let observedAuthorization: string | null = null;
         let observedUserAgent: string | null = null;
@@ -124,5 +279,32 @@ describe('downloadSameOriginImageAsBase64', () => {
             /25 MB/
         );
         assert.equal(arrayBufferRead, false);
+    });
+
+    it('cancels streaming downloads as soon as the size limit is exceeded', async () => {
+        let cancelled = false;
+        globalThis.fetch = async () =>
+            ({
+                ok: true,
+                headers: new Headers({ 'content-type': 'image/png' }),
+                body: new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new Uint8Array(25 * 1024 * 1024 + 1));
+                    },
+                    cancel() {
+                        cancelled = true;
+                    }
+                })
+            }) as Response;
+
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: '/generated/final.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /25 MB/
+        );
+        assert.equal(cancelled, true);
     });
 });

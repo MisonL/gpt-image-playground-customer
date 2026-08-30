@@ -562,7 +562,7 @@ describe('POST /api/images streaming and Responses backends', { concurrency: fal
 
             assert.equal(response.status, 502);
             const body = (await response.json()) as Record<string, unknown>;
-            assert.match(String(body.error), /同源/);
+            assert.match(String(body.error), /上游图片 URL|下载上游图片/);
             assert.equal(JSON.stringify(body).includes('https://example.test/final.png'), false);
         } finally {
             await upstream.close();

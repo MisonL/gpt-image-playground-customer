@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { describe, it } from 'node:test';
 
-const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAMBAQAY3Y2wAAAAAElFTkSuQmCC';
 
 describe('collectOpenAiImagesFromStream', () => {
     it('deduplicates repeated final image payloads from Responses streams', async () => {

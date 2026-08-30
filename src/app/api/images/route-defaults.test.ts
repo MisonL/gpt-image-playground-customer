@@ -186,7 +186,7 @@ describe('POST /api/images backend defaults and security boundaries', { concurre
 
             assert.equal(response.status, 502);
             const body = (await response.json()) as Record<string, unknown>;
-            assert.match(String(body.error), /同源/);
+            assert.match(String(body.error), /上游图片 URL|下载上游图片/);
         } finally {
             await upstream.close();
         }

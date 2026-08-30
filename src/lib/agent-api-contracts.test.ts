@@ -330,6 +330,9 @@ describe('validateAgentGenerateRequest', () => {
         const originalEnv = { ...process.env };
         let resetServerChannelStateForTests: (() => void) | undefined;
         try {
+            Object.assign(process.env, { NODE_ENV: 'test' });
+            delete process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST;
+            delete process.env.OPENAI_CHANNEL_2_PROVIDER_MANIFEST;
             process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_ENABLED = 'true';
             process.env.OPENAI_CHANNEL_FAILURE_COOLDOWN_MS = '60000';
             process.env.OPENAI_CHANNEL_1_ID = 'cooling-non-stream';
@@ -446,6 +449,7 @@ describe('validateAgentGenerateRequest', () => {
     it('accepts Matsca-compatible gpt-image-2 fields before upstream execution', () => {
         const originalEnv = { ...process.env };
         try {
+            delete process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST;
             process.env.OPENAI_CHANNEL_1_ID = 'matsca';
             process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://img.matsca.com/v1';
             process.env.OPENAI_CHANNEL_1_API_KEYS = 'configured';
@@ -461,6 +465,30 @@ describe('validateAgentGenerateRequest', () => {
             assert.equal(request.size, '123x456');
             assert.equal(request.background, 'transparent');
             assert.equal(request.partial_images, 0);
+        } finally {
+            restoreProcessEnv(originalEnv);
+        }
+    });
+
+    it('applies the gpt-image-2 profile contract to the default 1K model alias', () => {
+        const originalEnv = { ...process.env };
+        try {
+            delete process.env.OPENAI_CHANNEL_1_PROVIDER_MANIFEST;
+            process.env.OPENAI_CHANNEL_1_ID = 'matsca';
+            process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://img.matsca.com/v1';
+            process.env.OPENAI_CHANNEL_1_API_KEYS = 'configured';
+            process.env.OPENAI_CHANNEL_1_UPSTREAM_PROFILE = 'matsca';
+            const request = validateAgentGenerateRequest({
+                prompt: 'transparent default alias',
+                model: 'gpt-image-2-1k',
+                size: '123x456',
+                background: 'transparent',
+                partial_images: 0
+            });
+
+            assert.equal(request.model, 'gpt-image-2-1k');
+            assert.equal(request.size, '123x456');
+            assert.equal(request.background, 'transparent');
         } finally {
             restoreProcessEnv(originalEnv);
         }
@@ -532,6 +560,30 @@ describe('validateAgentGenerateRequest', () => {
                 return true;
             }
         );
+    });
+
+    it('requires provider-defined custom models to use auto or positive WxH sizes', () => {
+        assert.throws(
+            () =>
+                validateAgentGenerateRequest({
+                    prompt: 'custom model size',
+                    model: 'custom-image-model',
+                    size: 'wide'
+                }),
+            (error) => {
+                assert.ok(error instanceof RequestValidationError);
+                assert.equal(error.status, 422);
+                const details = JSON.parse(error.message) as { fields: Record<string, string> };
+                assert.match(details.fields.size, /auto 或 WxH/);
+                return true;
+            }
+        );
+        const request = validateAgentGenerateRequest({
+            prompt: 'custom model size',
+            model: 'custom-image-model',
+            size: '2048x2048'
+        });
+        assert.equal(request.size, '2048x2048');
     });
 
     it('rejects gpt-image-2 sizes that are not positive integer dimensions', () => {
@@ -613,6 +665,8 @@ describe('buildAgentCapabilities', () => {
         });
 
         assert.equal(capabilities.defaults.state_backend, 'postgres');
+        assert.equal(capabilities.defaults.model, 'gpt-image-2');
+        assert.equal(capabilities.model_directory.default_model, 'gpt-image-2');
         assert.equal(capabilities.schema_version, AGENT_SCHEMA_VERSION);
         assert.deepEqual(capabilities.image_transport, {
             upstream_timeout_ms: 900_000,
@@ -932,6 +986,24 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(capabilities.agent_jobs.states, ['queued', 'running', 'succeeded', 'failed', 'expired']);
         assert.match(capabilities.agent_jobs.current_guidance, /orchestration\.endpoint/);
         assert.match(capabilities.agent_jobs.current_guidance, /job/);
+    });
+
+    it('uses the configured image model consistently in capabilities', () => {
+        const capabilities = buildAgentCapabilities({
+            OPENAI_IMAGE_MODEL: 'gpt-image-2-1k',
+            OPENAI_CONFIGURED_MODELS: 'gpt-image-2-1k,custom-image-model'
+        });
+
+        assert.equal(capabilities.defaults.model, 'gpt-image-2-1k');
+        assert.equal(capabilities.model_directory.default_model, 'gpt-image-2-1k');
+        const originalModel = process.env.OPENAI_IMAGE_MODEL;
+        process.env.OPENAI_IMAGE_MODEL = 'gpt-image-2-1k';
+        try {
+            assert.equal(validateAgentGenerateRequest({ prompt: 'configured default' }).model, 'gpt-image-2-1k');
+        } finally {
+            if (originalModel === undefined) delete process.env.OPENAI_IMAGE_MODEL;
+            else process.env.OPENAI_IMAGE_MODEL = originalModel;
+        }
     });
 
     it('reports configured server-channel request modes in Agent capabilities', () => {
@@ -1577,6 +1649,13 @@ describe('buildAgentCapabilities', () => {
         assert.ok('AgentRequestDiagnosticsRetention' in document.components.schemas);
         assert.ok('AgentRequestDiagnosticsLookupResponse' in document.components.schemas);
         assert.ok('AgentRequestDiagnostics' in document.components.schemas);
+        const modelDirectorySchema = document.components.schemas.AgentCapabilities.properties.model_directory;
+        assert.deepEqual(modelDirectorySchema.required, ['endpoint', 'probe_query', 'default_model', 'semantics']);
+        assert.equal(modelDirectorySchema.properties.endpoint.const, '/api/agent/models');
+        assert.equal(modelDirectorySchema.properties.probe_query.const, '?probe=true');
+        assert.equal(modelDirectorySchema.properties.semantics.const, 'declared_models_only_until_explicit_probe');
+        assert.equal(modelDirectorySchema.additionalProperties, false);
+        assert.equal('model_directory' in document.components.schemas.ImageUpstreamProfile.properties, false);
         assert.deepEqual(document.components.schemas.CreateArtifactShareRequest.properties.access_code.anyOf, [
             { type: 'string', pattern: '^\\s*$' },
             { type: 'string', minLength: 8, maxLength: 128 }
@@ -1615,7 +1694,7 @@ describe('buildAgentCapabilities', () => {
         ]);
         assert.deepEqual(generateProperties.stream_mode.enum, ['auto', 'stream', 'non_stream']);
         assert.deepEqual(generateProperties.thinking.enum, ['minimal', 'none', 'low', 'medium', 'high', 'xhigh']);
-        assert.equal(generateProperties.responsesModel.maxLength, 128);
+        assert.equal(generateProperties.responsesModel.maxLength, 200);
         assert.equal(generateProperties.promptOptimization.type, 'boolean');
         assert.equal(generateProperties.force_web.type, 'boolean');
         assert.equal(generateProperties.force_request.type, 'boolean');
@@ -1994,6 +2073,8 @@ describe('buildAgentCapabilities', () => {
                 .required.const,
             true
         );
+        assert.deepEqual(document.paths['/api/agent/models'].get.security, [{ BearerAuth: [] }, {}]);
+        assert.ok(document.paths['/api/agent/models'].get.responses['401']);
         assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, [{ BearerAuth: [] }]);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['401']);
         assert.ok(document.paths['/api/agent/images/generate'].post.responses['415']);
@@ -2012,6 +2093,7 @@ describe('buildAgentCapabilities', () => {
         assert.deepEqual(document.components.schemas.AgentCapabilities.properties.auth.properties.schemes.const, [
             'x-app-password-hash'
         ]);
+        assert.deepEqual(document.paths['/api/agent/models'].get.security, [{ AppPasswordHash: [] }, {}]);
         assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, [{ AppPasswordHash: [] }]);
     });
 
@@ -2030,6 +2112,7 @@ describe('buildAgentCapabilities', () => {
                 .required.const,
             false
         );
+        assert.deepEqual(document.paths['/api/agent/models'].get.security, []);
         assert.deepEqual(document.paths['/api/agent/images/generate'].post.security, []);
     });
 

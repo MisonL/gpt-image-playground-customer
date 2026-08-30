@@ -1,3 +1,4 @@
+import { classifyApiErrorCode } from '@/lib/api-error-guidance';
 import { appLogger } from '@/lib/app-logger';
 import type { ChannelCapacityLease } from '@/lib/channel-capacity-queue';
 import {
@@ -8,6 +9,7 @@ import {
 } from '@/lib/channel-request-mode';
 import {
     isChannelCredentialRequestModeHealthy,
+    isModelUnavailableForAllCredentials,
     type ChannelCredential,
     resolveEffectiveCredential
 } from '@/lib/channel-router';
@@ -43,6 +45,7 @@ import {
     type UpstreamResponseDiagnostics
 } from '@/lib/image-route-support';
 import {
+    ImageDimensionMismatchError,
     InvalidOpenAiImagesResponseError,
     MissingOpenAiImageDataError,
     persistedImageToLegacyResponse,
@@ -172,6 +175,13 @@ function isPageCredentialEligible(input: {
 }): boolean {
     if (!input.requestMode) return true;
     if (
+        input.credential.models !== undefined &&
+        input.credential.models.length > 0 &&
+        !input.credential.models.includes(input.model)
+    ) {
+        return false;
+    }
+    if (
         input.streamMode === 'auto' &&
         isStreamingChannelRequestMode(input.requestMode) &&
         getServerChannelState().streamingAvailability.isUnavailable({
@@ -244,6 +254,8 @@ function validatePageInputAgainstConfiguredProfiles(input: {
     let hasHealthyRequestMode = false;
     const router = getServerChannelState().router;
     for (const credential of input.credentials) {
+        if (credential.models !== undefined && credential.models.length > 0 && !credential.models.includes(input.model))
+            continue;
         const profile =
             credential.providerProfile ||
             readImageUpstreamProfile({
@@ -563,6 +575,7 @@ function reportPersistDiagnosticsFailure(input: {
     credential?: ChannelCredential;
     diagnostics: UpstreamResponseDiagnostics;
     requestMode?: ChannelRequestMode;
+    model?: string;
 }) {
     if (input.diagnostics.category !== 'responses_disabled') return;
     reportServerCredentialFailure(
@@ -571,7 +584,8 @@ function reportPersistDiagnosticsFailure(input: {
             status: 403,
             error: { message: 'Image generation is not enabled for this group' }
         },
-        input.requestMode
+        input.requestMode,
+        input.model
     );
 }
 
@@ -627,6 +641,14 @@ export async function POST(request: NextRequest) {
         const requestedPartialImages = readOptionalPartialImages(formData);
         const requestModePlan = resolvePageChannelRequestModePlan({ streamMode, imageBackend, streamingStrategy });
         if (!requestApiKey && serverChannelRouter) {
+            if (isModelUnavailableForAllCredentials(serverChannelState.config.credentials, model)) {
+                throw new RequestValidationError(
+                    `当前没有支持模型 ${model} 的健康渠道凭证。请调整 OPENAI_CHANNEL_N_MODELS。`,
+                    503,
+                    undefined,
+                    'channel_unavailable'
+                );
+            }
             validatePageInputAgainstConfiguredProfiles({
                 credentials: serverChannelState.config.credentials,
                 formData,
@@ -708,6 +730,7 @@ export async function POST(request: NextRequest) {
                 apiKey: effectiveApiKey,
                 baseURL: effectiveApiBaseUrl || undefined,
                 upstreamProxyUrl: effectiveUpstreamProxyUrl,
+                allowedPlainHttpBaseUrls,
                 defaultHeaders: mergeUpstreamHeadersWithFixed(upstreamHeaders, {})
             })
         );
@@ -895,7 +918,7 @@ export async function POST(request: NextRequest) {
             channelLease = undefined;
             return response;
         }
-        const { result, outputFormat: responseOutputFormat } = modeResult;
+        const { result, outputFormat: responseOutputFormat, targetDimensions: responseTargetDimensions } = modeResult;
 
         appLogger.info('OpenAI API 调用成功。', requestLogContext);
 
@@ -906,6 +929,7 @@ export async function POST(request: NextRequest) {
                 storageMode: effectiveStorageMode,
                 includeBase64: true,
                 normalizeOutputFormat: true,
+                targetDimensions: responseTargetDimensions,
                 apiBaseUrl: effectiveApiBaseUrl,
                 apiKey: effectiveApiKey,
                 upstreamProxyUrl: effectiveUpstreamProxyUrl,
@@ -940,6 +964,24 @@ export async function POST(request: NextRequest) {
             channelLease = undefined;
             return responseWithHeaders;
         } catch (persistError) {
+            if (persistError instanceof ImageDimensionMismatchError) {
+                const response = NextResponse.json(
+                    {
+                        error: persistError.message,
+                        code: persistError.code,
+                        expected_dimensions: `${persistError.expected.width}x${persistError.expected.height}`,
+                        actual_dimensions:
+                            persistError.actual.width !== null && persistError.actual.height !== null
+                                ? `${persistError.actual.width}x${persistError.actual.height}`
+                                : null
+                    },
+                    { status: persistError.status }
+                );
+                const responseWithHeaders = appendChannelQueueHeaders(response, channelLease);
+                channelLease?.release();
+                channelLease = undefined;
+                return responseWithHeaders;
+            }
             if (persistError instanceof MissingOpenAiImageDataError) {
                 const invalidResult = persistError.result;
                 const diagnostics = inspectInvalidImagesResponse(invalidResult);
@@ -950,7 +992,8 @@ export async function POST(request: NextRequest) {
                 reportPersistDiagnosticsFailure({
                     credential: selectedCredential,
                     diagnostics,
-                    requestMode: selectedServerRequestMode
+                    requestMode: selectedServerRequestMode,
+                    model
                 });
                 const response = NextResponse.json(
                     { error: describeInvalidImagesResponse(invalidResult), diagnostics },
@@ -974,7 +1017,8 @@ export async function POST(request: NextRequest) {
             reportPersistDiagnosticsFailure({
                 credential: selectedCredential,
                 diagnostics,
-                requestMode: selectedServerRequestMode
+                requestMode: selectedServerRequestMode,
+                model
             });
             const response = NextResponse.json(
                 { error: describeInvalidImagesResponse(invalidResult), diagnostics },
@@ -997,13 +1041,16 @@ export async function POST(request: NextRequest) {
         });
 
         let errorMessage = '发生未知错误。';
+        let errorCode: string | undefined;
         let status = 500;
 
         if (error instanceof RequestValidationError) {
             errorMessage = error.message;
+            errorCode = classifyApiErrorCode(readErrorCode(error), errorMessage) || 'validation_error';
             status = error.status;
         } else if (error instanceof Error) {
             errorMessage = error.message;
+            errorCode = classifyApiErrorCode(readErrorCode(error), errorMessage);
             if (errorMessage.includes('<!DOCTYPE html') || errorMessage.includes('<html')) {
                 errorMessage = describeInvalidImagesResponse(errorMessage);
             }
@@ -1017,10 +1064,18 @@ export async function POST(request: NextRequest) {
             if ('status' in error && typeof error.status === 'number') {
                 status = error.status;
             }
+            errorCode = classifyApiErrorCode(readErrorCode(error), errorMessage);
         }
 
         return NextResponse.json(
-            { error: errorMessage, ...(upstreamDiagnostics ? { diagnostics: upstreamDiagnostics } : {}) },
+            {
+                error: errorMessage,
+                ...(errorCode ? { code: errorCode } : {}),
+                ...(['upstream_quota_exhausted', 'channel_unavailable'].includes(errorCode || '')
+                    ? { retryable: false }
+                    : {}),
+                ...(upstreamDiagnostics ? { diagnostics: upstreamDiagnostics } : {})
+            },
             { status }
         );
     }

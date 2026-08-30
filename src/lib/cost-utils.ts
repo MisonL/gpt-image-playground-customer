@@ -13,9 +13,20 @@ export type CostDetails = {
     image_output_tokens: number;
 };
 
-export const GPT_IMAGE_MODELS = ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'] as const;
+export const GPT_IMAGE_MODELS = [
+    'gpt-image-2',
+    'gpt-image-2-1k',
+    'gpt-image-1.5',
+    'gpt-image-1',
+    'gpt-image-1-mini'
+] as const;
+export const GPT_IMAGE_2_MODELS = ['gpt-image-2', 'gpt-image-2-1k'] as const;
 
-export type GptImageModel = (typeof GPT_IMAGE_MODELS)[number];
+export type GptImageModel = string;
+
+export function isGptImage2Model(model: GptImageModel): boolean {
+    return (GPT_IMAGE_2_MODELS as readonly string[]).includes(model);
+}
 
 // gpt-image-1 价格。
 const GPT_IMAGE_1_TEXT_INPUT_COST_PER_TOKEN = 0.000005; // $5.00/1M
@@ -47,6 +58,14 @@ export type ModelRates = {
 };
 
 const MODEL_RATES: Record<GptImageModel, ModelRates> = {
+    'gpt-image-2-1k': {
+        textInputPerToken: GPT_IMAGE_2_TEXT_INPUT_COST_PER_TOKEN,
+        imageInputPerToken: GPT_IMAGE_2_IMAGE_INPUT_COST_PER_TOKEN,
+        imageOutputPerToken: GPT_IMAGE_2_IMAGE_OUTPUT_COST_PER_TOKEN,
+        textInputPerMillion: 5,
+        imageInputPerMillion: 8,
+        imageOutputPerMillion: 30
+    },
     'gpt-image-2': {
         textInputPerToken: GPT_IMAGE_2_TEXT_INPUT_COST_PER_TOKEN,
         imageInputPerToken: GPT_IMAGE_2_IMAGE_INPUT_COST_PER_TOKEN,
@@ -82,11 +101,11 @@ const MODEL_RATES: Record<GptImageModel, ModelRates> = {
 };
 
 export function isGptImageModel(value: unknown): value is GptImageModel {
-    return typeof value === 'string' && (GPT_IMAGE_MODELS as readonly string[]).includes(value);
+    return typeof value === 'string' && value.trim().length > 0;
 }
 
-export function getModelRates(model: GptImageModel): ModelRates {
-    return MODEL_RATES[model];
+export function getModelRates(model: GptImageModel): ModelRates | null {
+    return MODEL_RATES[model] ?? null;
 }
 
 export function isNonNegativeFiniteNumber(value: unknown): value is number {
@@ -134,6 +153,10 @@ export function calculateApiCost(
     }
 
     const rates = getModelRates(model);
+    if (!rates) {
+        console.warn(`费用计算没有配置模型 ${model} 的费率，无法生成估算。`);
+        return null;
+    }
 
     const costUSD =
         textInT * rates.textInputPerToken + imgInT * rates.imageInputPerToken + imgOutT * rates.imageOutputPerToken;

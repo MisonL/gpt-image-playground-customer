@@ -1,5 +1,7 @@
+import { assertAgentAuthorized } from '@/lib/agent-auth';
 import { CHANNEL_REQUEST_MODES, CHANNEL_REQUEST_MODE_ADMIN_CONTROL } from '@/lib/channel-request-mode';
 import { getChannelPoolSummary, toPublicChannelFailure } from '@/lib/channel-router';
+import { resolveDefaultImageModel } from '@/lib/image-request-utils';
 import {
     getImageBackendCompatibility,
     getImageCountRangeCompatibilityForBackend,
@@ -13,15 +15,15 @@ import {
 } from '@/lib/image-upstream-strategy';
 import { summarizeOpenAIImageTransport } from '@/lib/openai-image-transport';
 import { getServerChannelState } from '@/lib/server-channel-router';
-import { readBooleanEnv, readPositiveIntegerEnv } from '@/lib/server-runtime';
+import { readBooleanEnv, readPositiveIntegerEnv, verifyAccessToken } from '@/lib/server-runtime';
 import { computeStreamingBatchRecommendation } from '@/lib/streaming-batch';
 import { getWebuiImageCleanupSummary } from '@/lib/webui-image-cleanup-runtime';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 const RESPONSES_IMAGE_BACKEND_REQUIRED_ENV = ['ENABLE_RESPONSES_IMAGE_BACKEND'] as const;
 const RESPONSES_IMAGE_BACKEND_OPTIONAL_ENV = ['OPENAI_RESPONSES_API_MODEL'] as const;
 
-export async function GET() {
+export async function GET(request?: NextRequest) {
     try {
         const serverChannelState = getServerChannelState();
         const summary = getChannelPoolSummary(serverChannelState.config);
@@ -52,7 +54,10 @@ export async function GET() {
                 manifest: channel.providerManifest
             }));
 
-        return NextResponse.json({
+        const responseBody: Record<string, unknown> = {
+            imageModel: {
+                defaultModel: resolveDefaultImageModel(process.env)
+            },
             streaming: {
                 defaultBackend: readImageGenerationBackend(new FormData(), process.env),
                 defaultMode: readImageStreamMode(new FormData(), process.env),
@@ -141,10 +146,75 @@ export async function GET() {
                     ? { incompatibleConstraints: responsesImageBackendIncompatibleConstraints }
                     : {})
             }
-        });
+        };
+        return NextResponse.json(
+            isRuntimeCapabilitiesAuthorized(request) ? responseBody : redactRuntimeCapabilities(responseBody)
+        );
     } catch (error) {
         return NextResponse.json({ error: error instanceof Error ? error.message : '配置错误' }, { status: 500 });
     }
+}
+
+function isRuntimeCapabilitiesAuthorized(request: NextRequest | undefined): boolean {
+    const configuredToken = process.env.AGENT_API_TOKEN?.trim();
+    const configuredPassword = process.env.APP_PASSWORD?.trim();
+    if (!configuredToken && !configuredPassword) return true;
+    // Internal callers without a request object cannot prove deployment
+    // credentials. Return the same redacted view as an unauthenticated HTTP
+    // caller instead of treating the missing request as authorized.
+    if (!request) return false;
+    try {
+        assertAgentAuthorized(request.headers);
+        return true;
+    } catch {
+        if (configuredPassword && verifyAccessToken(request.cookies.get('gptImageAccess')?.value, configuredPassword)) {
+            return true;
+        }
+        return false;
+    }
+}
+
+function redactRuntimeCapabilities(value: Record<string, unknown>): Record<string, unknown> {
+    const redacted = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+    const channelQueue = asRecord(redacted.channelQueue);
+    if (channelQueue) channelQueue.credentials = [];
+
+    const channelRouting = asRecord(redacted.channelRouting);
+    if (channelRouting) {
+        channelRouting.upstreamProxyByChannel = [];
+        channelRouting.requestModesByChannel = redactChannelIds(channelRouting.requestModesByChannel);
+        channelRouting.effectiveRequestModesByChannel = redactChannelIds(channelRouting.effectiveRequestModesByChannel);
+    }
+
+    const channelRecovery = asRecord(redacted.channelRecovery);
+    const recoveryProbe = channelRecovery ? asRecord(channelRecovery.probe) : undefined;
+    const lastProbe = recoveryProbe ? asRecord(recoveryProbe.lastProbe) : undefined;
+    if (lastProbe) {
+        delete lastProbe.channelId;
+        delete lastProbe.credentialId;
+    }
+
+    const streamingBatch = asRecord(redacted.streamingBatch);
+    const lastFailure = streamingBatch ? asRecord(streamingBatch.lastFailure) : undefined;
+    if (lastFailure) delete lastFailure.requestId;
+
+    redacted.providerManifests = [];
+    return redacted;
+}
+
+function redactChannelIds(value: unknown): unknown[] {
+    if (!Array.isArray(value)) return [];
+    return value.map((entry, index) => {
+        const record = asRecord(entry);
+        if (!record) return { channelId: `channel-${index + 1}` };
+        const rest = { ...record };
+        delete rest.channelId;
+        return { ...rest, channelId: `channel-${index + 1}` };
+    });
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function readResponsesImageBackendIncompatibleConstraints(profile: Parameters<typeof getImageBackendCompatibility>[0]) {

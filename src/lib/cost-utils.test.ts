@@ -2,6 +2,7 @@ import {
     calculateApiCost,
     getModelRates,
     GPT_IMAGE_MODELS,
+    isGptImage2Model,
     isGptImageModel,
     isNonNegativeFiniteNumber,
     isNonNegativeSafeInteger,
@@ -11,16 +12,21 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 describe('cost-utils', () => {
-    it('uses the shared model-rate table for every supported image model', () => {
+    it('uses the shared model-rate table for every supported image model and accepts custom names', () => {
         for (const model of GPT_IMAGE_MODELS) {
             const rates = getModelRates(model);
 
             assert.equal(isGptImageModel(model), true);
+            assert.ok(rates);
             assert.ok(rates.textInputPerToken > 0);
             assert.ok(rates.imageInputPerToken > 0);
             assert.ok(rates.imageOutputPerToken > 0);
         }
-        assert.equal(isGptImageModel('unknown-model'), false);
+        assert.equal(isGptImageModel('custom-image-model'), true);
+        assert.equal(getModelRates('custom-image-model'), null);
+        assert.equal(isGptImage2Model('gpt-image-2'), true);
+        assert.equal(isGptImage2Model('gpt-image-2-1k'), true);
+        assert.equal(isGptImage2Model('gpt-image-1.5'), false);
     });
 
     it('accepts only finite nonnegative usage and cost values', () => {

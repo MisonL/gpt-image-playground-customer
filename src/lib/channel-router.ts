@@ -51,6 +51,7 @@ export type ChannelCredential = {
     requestModes?: ChannelRequestMode[];
     requestModePriority?: ChannelRequestMode[];
     requestModePrioritySource?: 'channel' | 'pool';
+    models?: string[];
 };
 
 export type ChannelPoolConfig = {
@@ -58,6 +59,16 @@ export type ChannelPoolConfig = {
     credentials: ChannelCredential[];
     requestModePriority?: ChannelRequestMode[];
 };
+
+export function isModelUnavailableForAllCredentials(credentials: readonly ChannelCredential[], model: string): boolean {
+    return (
+        credentials.length > 0 &&
+        credentials.every(
+            (credential) =>
+                credential.models !== undefined && credential.models.length > 0 && !credential.models.includes(model)
+        )
+    );
+}
 
 export type ChannelPoolSummary = {
     credentialCount: number;
@@ -138,6 +149,7 @@ export type ChannelFailureReportOptions = {
     scope?: 'credential' | 'channel';
     requestMode?: ChannelRequestMode;
     reason?: ChannelFailureReason;
+    model?: string;
 };
 
 export type ChannelFailureReport = {
@@ -161,6 +173,7 @@ export type ChannelFailureReason = {
     requestId?: string;
     requestMode?: ChannelRequestMode;
     message?: string;
+    model?: string;
 };
 
 export type PublicChannelFailureReason = Omit<ChannelFailureReason, 'message'>;
@@ -238,7 +251,7 @@ const DEFAULT_STRATEGY: RoutingStrategy = 'sticky';
 const DEFAULT_FAILURE_COOLDOWN_MS = 30_000;
 const VALID_STRATEGIES = new Set<RoutingStrategy>(['sticky', 'round_robin', 'random']);
 const CHANNEL_KEY_PATTERN =
-    /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|REQUEST_MODE_PRIORITY|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON|FAILURE_COOLDOWN_MS|PROXY_URL)$/;
+    /^OPENAI_CHANNEL_(\d+)_(ID|BASE_URL|API_KEYS|MODELS|UPSTREAM_PROFILE|PROVIDER_MANIFEST|REQUEST_MODES|REQUEST_MODE_PRIORITY|MATSCA_APP_ID|MATSCA_APP_SECRET|USER_AGENT|UPSTREAM_HEADERS_JSON|FAILURE_COOLDOWN_MS|PROXY_URL)$/;
 
 export function parseChannelPoolConfig(env: Record<string, string | undefined>): ChannelPoolConfig {
     if (env.OPENAI_CHANNELS_JSON?.trim()) {
@@ -465,7 +478,9 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
                 requestMode
                     ? `当前没有支持 ${requestMode} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`
                     : '当前没有可用的健康渠道凭证。',
-                503
+                503,
+                undefined,
+                'channel_unavailable'
             );
         }
 
@@ -498,7 +513,9 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             requestMode
                 ? `当前没有支持 ${requestMode} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`
                 : '当前没有可用的健康渠道凭证。',
-            503
+            503,
+            undefined,
+            'channel_unavailable'
         );
     };
 
@@ -546,7 +563,9 @@ export function createChannelRouter(options: ChannelRouterOptions): ChannelRoute
             if (!preferredRequestMode || rankedHealthyCandidates.length === 0) {
                 throw new RequestValidationError(
                     `当前没有支持 ${requestModes.join(', ')} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`,
-                    503
+                    503,
+                    undefined,
+                    'channel_unavailable'
                 );
             }
 
@@ -1031,7 +1050,9 @@ function selectRoundRobinHealthy(
         requestMode
             ? `当前没有支持 ${requestMode} 的健康渠道凭证。请调整请求策略或 OPENAI_CHANNEL_N_REQUEST_MODES。`
             : '当前没有可用的健康渠道凭证。',
-        503
+        503,
+        undefined,
+        'channel_unavailable'
     );
 }
 
@@ -1253,7 +1274,8 @@ export function toPublicChannelFailure(
         ...(reason.status === undefined ? {} : { status: reason.status }),
         ...(reason.code === undefined ? {} : { code: reason.code }),
         ...(reason.requestId === undefined ? {} : { requestId: reason.requestId }),
-        ...(reason.requestMode === undefined ? {} : { requestMode: reason.requestMode })
+        ...(reason.requestMode === undefined ? {} : { requestMode: reason.requestMode }),
+        ...(reason.model === undefined ? {} : { model: reason.model })
     };
 }
 
@@ -1336,6 +1358,10 @@ function parseNumberedChannel(
         requestModePriority: channelRequestModePriority
     });
     const requestModePriority = channelRequestModePriority ?? globalRequestModePriority;
+    const models = normalizeOptionalString(env[`OPENAI_CHANNEL_${channelIndex}_MODELS`])
+        ?.split(',')
+        .map((model) => model.trim())
+        .filter(Boolean);
     if (baseUrl) {
         validateApiBaseUrl(baseUrl, {
             allowedPlainHttpBaseUrls: readPlainHttpApiBaseUrlAllowlist(env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS)
@@ -1367,7 +1393,8 @@ function parseNumberedChannel(
                   requestModePriority,
                   requestModePrioritySource: channelRequestModePriority ? ('channel' as const) : ('pool' as const)
               }
-            : {})
+            : {}),
+        ...(models?.length ? { models } : {})
     }));
 }
 

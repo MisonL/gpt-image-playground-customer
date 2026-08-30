@@ -16,7 +16,7 @@ type ResponsesPayload = {
     usage?: unknown;
 };
 
-const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAMBAQAY3Y2wAAAAAElFTkSuQmCC';
 
 function createSizedImageFile(size: number, name: string): File {
     return { size, name, type: 'image/png' } as File;

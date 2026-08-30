@@ -1,3 +1,4 @@
+import { GPT_IMAGE_MODELS, isGptImage2Model } from './cost-utils';
 import { MAX_OPENAI_UPLOAD_BYTES, MAX_PROMPT_LENGTH } from './image-request-limits';
 import {
     IMAGE_UPSTREAM_PROFILES,
@@ -16,7 +17,10 @@ export const MAX_UPLOAD_BYTES = MAX_OPENAI_UPLOAD_BYTES;
 export { MAX_PROMPT_LENGTH } from './image-request-limits';
 
 const VALID_MODE_VALUES = ['generate', 'edit'] as const;
-const VALID_MODEL_VALUES = ['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2'] as const;
+// Keep the broadly compatible model as the implicit request default when no
+// deployment-specific model is configured.
+export const DEFAULT_IMAGE_MODEL = 'gpt-image-2';
+export const MAX_MODEL_NAME_LENGTH = 200;
 const VALID_OUTPUT_FORMAT_VALUES = ['png', 'jpeg', 'webp'] as const;
 const VALID_GENERATE_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
 const VALID_EDIT_QUALITY_VALUES = ['low', 'medium', 'high', 'auto'] as const;
@@ -52,7 +56,7 @@ type PngInfo = ImageDimensions & {
 };
 
 export type ImageMode = (typeof VALID_MODE_VALUES)[number];
-export type GptImageModel = (typeof VALID_MODEL_VALUES)[number];
+export type GptImageModel = string;
 export type ValidOutputFormat = (typeof VALID_OUTPUT_FORMAT_VALUES)[number];
 export type GenerateQuality = (typeof VALID_GENERATE_QUALITY_VALUES)[number];
 export type EditQuality = (typeof VALID_EDIT_QUALITY_VALUES)[number];
@@ -63,15 +67,22 @@ export type ImageRequestValidationOptions = {
     forceRequest?: boolean;
 };
 
+export function resolveDefaultImageModel(env: Record<string, string | undefined> = process.env): GptImageModel {
+    const configured = env.OPENAI_IMAGE_MODEL?.trim();
+    return configured && configured.length <= 200 ? configured : DEFAULT_IMAGE_MODEL;
+}
+
 export class RequestValidationError extends Error {
     readonly status: number;
     readonly details?: Record<string, unknown>;
+    readonly code?: string;
 
-    constructor(message: string, status = 400, details?: Record<string, unknown>) {
+    constructor(message: string, status = 400, details?: Record<string, unknown>, code?: string) {
         super(message);
         this.name = 'RequestValidationError';
         this.status = status;
         this.details = details;
+        this.code = code;
     }
 }
 
@@ -100,11 +111,11 @@ export function readMode(formData: FormData): ImageMode {
 
 export function readModel(formData: FormData): GptImageModel {
     const value = formData.get('model');
-    if (value === null) return 'gpt-image-2';
-    if (typeof value !== 'string' || !isOneOf(value, VALID_MODEL_VALUES)) {
-        throw new RequestValidationError('model 无效。');
+    if (value === null) return resolveDefaultImageModel();
+    if (typeof value !== 'string' || value.trim().length === 0 || value.length > MAX_MODEL_NAME_LENGTH) {
+        throw new RequestValidationError('model 必须是 1 到 ' + MAX_MODEL_NAME_LENGTH + ' 个字符的非空字符串。');
     }
-    return value;
+    return value.trim();
 }
 
 export function readCount(
@@ -177,7 +188,7 @@ export function readBackground(
     }
     if (
         !options.forceRequest &&
-        model === 'gpt-image-2' &&
+        isGptImage2Model(model) &&
         value === 'transparent' &&
         !profile.gptImage2.allowTransparentBackground
     ) {
@@ -208,23 +219,26 @@ export function readSize(
     if (typeof value !== 'string' || value.trim().length === 0) {
         throw new RequestValidationError(`${field} 必须是字符串。`);
     }
-    if (model !== 'gpt-image-2' && !isOneOf(value, VALID_LEGACY_SIZE_VALUES)) {
-        throw new RequestValidationError(`${field} 对 ${model} 无效。`);
+    const isGptImage2 = isGptImage2Model(model);
+    const isKnownLegacyModel = !isGptImage2 && (GPT_IMAGE_MODELS as readonly string[]).includes(model);
+    const isProviderDefinedModel = !isGptImage2 && !isKnownLegacyModel;
+    if (isKnownLegacyModel && !isOneOf(value, VALID_LEGACY_SIZE_VALUES)) {
+        throw new RequestValidationError(`${field} 对 ${model} 无效：必须是兼容的预设尺寸。`);
     }
-    if (model === 'gpt-image-2' && value !== 'auto' && !/^\d+x\d+$/.test(value)) {
+    if ((isGptImage2 || isProviderDefinedModel) && value !== 'auto' && !/^\d+x\d+$/.test(value)) {
         throw new RequestValidationError(`${field} 必须是 auto 或 WxH 格式的尺寸值。`);
     }
-    if (model === 'gpt-image-2' && value !== 'auto' && options.forceRequest) {
+    if ((isGptImage2 || isProviderDefinedModel) && value !== 'auto' && options.forceRequest) {
         const { width, height } = parseFixedSizeValue(value);
         if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
             throw new RequestValidationError(`${field} 对 ${model} 无效：宽度和高度必须是正整数。`);
         }
     }
     if (
-        model === 'gpt-image-2' &&
+        (isGptImage2 || isProviderDefinedModel) &&
         value !== 'auto' &&
         !options.forceRequest &&
-        profile.gptImage2.sizePolicy === 'positive-integer'
+        (isProviderDefinedModel || profile.gptImage2.sizePolicy === 'positive-integer')
     ) {
         const { width, height } = parseFixedSizeValue(value);
         if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
@@ -232,7 +246,7 @@ export function readSize(
         }
     }
     if (
-        model === 'gpt-image-2' &&
+        isGptImage2 &&
         value !== 'auto' &&
         !options.forceRequest &&
         profile.gptImage2.sizePolicy === 'openai-compatible'
@@ -314,13 +328,25 @@ function isAllowedPlainHttpApiBaseUrl(parsed: URL, allowedBaseUrls: string[] | u
 }
 
 function isLoopbackHost(hostname: string): boolean {
-    const normalized = hostname.toLowerCase();
+    const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
     return (
         normalized === 'localhost' ||
+        normalized.endsWith('.localhost') ||
         normalized === '::1' ||
-        normalized === '[::1]' ||
-        /^127(?:\.\d{1,3}){3}$/.test(normalized)
+        normalized === '0:0:0:0:0:0:0:1' ||
+        /^127(?:\.\d{1,3}){3}$/.test(normalized) ||
+        readEmbeddedIpv4(normalized)?.startsWith('127.') === true
     );
+}
+
+function readEmbeddedIpv4(address: string): string | undefined {
+    const dotted = address.match(/^::(?:ffff:0:)?(?:ffff:)?(127(?:\.\d{1,3}){3})$/);
+    if (dotted) return dotted[1];
+    const hex = address.match(/^::(?:ffff:0:)?(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+    if (!hex) return undefined;
+    const high = Number.parseInt(hex[1], 16);
+    const low = Number.parseInt(hex[2], 16);
+    return (high >> 8) + '.' + (high & 255) + '.' + (low >> 8) + '.' + (low & 255);
 }
 
 export function readPlainHttpApiBaseUrlAllowlist(rawValue: string | undefined): string[] {
@@ -328,7 +354,32 @@ export function readPlainHttpApiBaseUrlAllowlist(rawValue: string | undefined): 
     return rawValue
         .split(',')
         .map((value) => value.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .map((value, index) => {
+            let parsed: URL;
+            try {
+                parsed = new URL(value);
+            } catch {
+                throw new RequestValidationError(
+                    `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS 第 ${index + 1} 项必须是有效的 http URL。`,
+                    500
+                );
+            }
+            if (
+                parsed.protocol !== 'http:' ||
+                !parsed.hostname ||
+                parsed.username ||
+                parsed.password ||
+                parsed.search ||
+                parsed.hash
+            ) {
+                throw new RequestValidationError(
+                    `OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS 第 ${index + 1} 项必须是无凭据、无查询参数和无片段的 http URL。`,
+                    500
+                );
+            }
+            return value;
+        });
 }
 
 function normalizeApiBaseUrlSafely(value: string): string | undefined {

@@ -1,4 +1,5 @@
 import {
+    classifyApiErrorCode,
     buildApiErrorNotice,
     buildBatchPartialFailureMessage,
     buildUserFacingApiErrorMessage,
@@ -7,10 +8,26 @@ import {
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+it('normalizes symbolic upstream balance errors', () => {
+    assert.equal(classifyApiErrorCode('INSUFFICIENT_BALANCE', '余额不足'), 'upstream_quota_exhausted');
+});
+
+it('classifies exhausted healthy-channel selection separately from validation errors', () => {
+    assert.equal(classifyApiErrorCode(undefined, '当前没有支持 images-sse 的健康渠道凭证。'), 'channel_unavailable');
+    assert.equal(
+        classifyApiErrorCode(undefined, '当前没有支持模型 custom-image 的健康渠道凭证。'),
+        'channel_unavailable'
+    );
+    assert.equal(classifyApiErrorCode(undefined, 'prompt 必须是非空文本。'), undefined);
+});
+
 const translate = (key: string, values?: Record<string, string | number>) => {
     const messages: Record<string, string> = {
         'error.apiFailedWithAdvice': '{message}。建议：{advice}',
         'error.adviceAuth': '检查 API Key、访问码或渠道权限。',
+        'error.adviceQuota': '上游渠道余额不足，请充值或切换可用渠道后重试。',
+        'error.adviceChannelUnavailable': '当前没有健康的图片渠道，请等待恢复探测或切换渠道配置。',
+        'error.adviceValidation': '请修正请求参数后再试；这类错误不会通过重试解决。',
         'error.adviceRateLimit': '请求被限流。请稍后重试，或降低并发和图片数量。',
         'error.adviceUpstream': '上游或 API 中转站异常。请稍后重试，或切换可用渠道。',
         'error.adviceCloudflare':
@@ -40,6 +57,27 @@ describe('buildUserFacingApiErrorMessage', () => {
 
         assert.match(message, /请求被限流/);
         assert.match(message, /降低并发和图片数量/);
+    });
+
+    it('gives quota and channel-specific advice', () => {
+        assert.match(
+            buildUserFacingApiErrorMessage({
+                message: '上游渠道余额不足。',
+                status: 403,
+                code: 'upstream_quota_exhausted',
+                t: translate
+            }),
+            /余额不足/
+        );
+        assert.match(
+            buildUserFacingApiErrorMessage({
+                message: '没有健康渠道。',
+                status: 503,
+                code: 'channel_unavailable',
+                t: translate
+            }),
+            /没有健康的图片渠道/
+        );
     });
 
     it('adds Cloudflare advice with the configured referral link for 524 failures', () => {

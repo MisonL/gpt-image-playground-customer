@@ -81,6 +81,7 @@ const RESPONSES_EVENT_TYPES = new Set([
 const OTOKAPI_EVENT_TYPES = new Set(['image.generation.chunk', 'image.generation.result']);
 const AGENT_EVENT_TYPES = new Set(['agent.event', 'agent.partial_image', 'agent.completed']);
 const MAX_RESPONSES_IMAGE_TRAVERSAL_DEPTH = 64;
+const MAX_NESTED_DATA_TRAVERSAL_DEPTH = 64;
 
 function readString(record: JsonRecord, ...keys: string[]): string | undefined {
     for (const key of keys) {
@@ -187,13 +188,20 @@ function assertNotExplicitFailureEvent(record: JsonRecord, eventType: string | u
 
 function readNestedCompletedItems(record: JsonRecord): JsonRecord[] {
     const items: JsonRecord[] = [];
-    const visit = (current: JsonRecord) => {
-        for (const item of readDataItems(current)) {
-            items.push(item);
-            visit(item);
+    const pending: Array<{ record: JsonRecord; depth: number }> = [{ record, depth: 0 }];
+    while (pending.length > 0) {
+        const current = pending.pop();
+        if (!current || current.depth >= MAX_NESTED_DATA_TRAVERSAL_DEPTH) {
+            continue;
         }
-    };
-    visit(record);
+        const nestedItems = readDataItems(current.record);
+        for (const item of nestedItems) {
+            items.push(item);
+        }
+        for (let index = nestedItems.length - 1; index >= 0; index -= 1) {
+            pending.push({ record: nestedItems[index], depth: current.depth + 1 });
+        }
+    }
     return items;
 }
 

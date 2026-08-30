@@ -5,7 +5,7 @@ import {
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAMBAQAY3Y2wAAAAAElFTkSuQmCC';
 const GIF_BASE64 = 'R0lGODlhAQABAAAAACw=';
 
 describe('normalizeUpstreamImageStreamEvent', () => {
@@ -103,6 +103,19 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                     b64Json: 'final-base64',
                     usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 }
                 }
+            ]
+        );
+    });
+
+    it('preserves depth-first order when nested data contains sibling images', () => {
+        assert.deepEqual(
+            normalizeUpstreamImageStreamEvent({
+                type: 'image.generation.result',
+                data: [{ data: [{ b64_json: 'first' }] }, { data: [{ b64_json: 'second' }] }]
+            }),
+            [
+                { type: 'completed', b64Json: 'first' },
+                { type: 'completed', b64Json: 'second' }
             ]
         );
     });
@@ -572,6 +585,22 @@ describe('normalizeUpstreamImageStreamEvent', () => {
                 item: payload
             }),
             []
+        );
+    });
+
+    it('limits nested data traversal depth without overflowing the call stack', () => {
+        let payload: Record<string, unknown> = { b64_json: 'deep-final' };
+        for (let index = 0; index < 20000; index += 1) {
+            payload = { data: [payload] };
+        }
+
+        assert.throws(
+            () =>
+                normalizeUpstreamImageStreamEvent({
+                    type: 'image.generation.result',
+                    data: payload
+                }),
+            /缺少 b64_json 或 url/
         );
     });
 

@@ -1,5 +1,8 @@
 import {
     buildOpenAIImageRequestOptions,
+    closeOpenAIImageTransportResources,
+    createDnsValidatedDispatcher,
+    createPinnedDnsDispatcher,
     createOpenAIImageClientOptions,
     fetchOpenAIUpstream,
     readImageStreamDataIntervalTimeoutMs,
@@ -12,8 +15,12 @@ import {
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import OpenAI from 'openai';
+
+after(async () => {
+    await closeOpenAIImageTransportResources();
+});
 
 describe('openai image transport settings', () => {
     it('uses long image defaults and disables automatic SDK retries', () => {
@@ -27,13 +34,13 @@ describe('openai image transport settings', () => {
             upstream_proxy: { configured: false }
         });
 
-        assert.deepEqual(createOpenAIImageClientOptions({ apiKey: 'key', baseURL: 'https://api.example/v1' }), {
-            apiKey: 'key',
-            baseURL: 'https://api.example/v1',
-            defaultHeaders: undefined,
-            timeout: 900_000,
-            maxRetries: 0
-        });
+        const clientOptions = createOpenAIImageClientOptions({ apiKey: 'key', baseURL: 'https://api.example/v1' });
+        assert.equal(clientOptions.apiKey, 'key');
+        assert.equal(clientOptions.baseURL, 'https://api.example/v1');
+        assert.equal(clientOptions.defaultHeaders, undefined);
+        assert.equal(typeof clientOptions.fetch, 'function');
+        assert.equal(clientOptions.timeout, 900_000);
+        assert.equal(clientOptions.maxRetries, 0);
     });
 
     it('lets operators override timeout and retry policy explicitly', () => {
@@ -159,6 +166,18 @@ describe('openai image transport settings', () => {
         }
     });
 
+    it('rejects combining a proxy dispatcher with a pinned dispatcher', async () => {
+        const dispatcher = createPinnedDnsDispatcher([{ address: '127.0.0.1', family: 4 }]);
+        try {
+            assert.throws(
+                () => fetchOpenAIUpstream('https://example.com/models', undefined, 'http://proxy.example', dispatcher),
+                /不能同时指定 upstreamProxyUrl 和 pinned dispatcher/
+            );
+        } finally {
+            await dispatcher.close();
+        }
+    });
+
     it('routes SDK image edits with multipart uploads through an HTTP proxy', async () => {
         let receivedContentType = '';
         let receivedBody = '';
@@ -194,6 +213,61 @@ describe('openai image transport settings', () => {
             assert.equal(proxy.connectTargets[0], upstream.origin);
         } finally {
             await proxy.close();
+            await upstream.close();
+        }
+    });
+
+    it('supports pinned DNS dispatchers when undici requests all lookup records', async () => {
+        const upstream = await startHttpServer((request, response) => {
+            response.writeHead(200, { 'Content-Type': 'text/plain', Connection: 'close' });
+            response.end(request.headers.host);
+        });
+        const dispatcher = createPinnedDnsDispatcher([{ address: '127.0.0.1', family: 4 }]);
+
+        try {
+            const pinnedHostUrl = upstream.baseUrl.replace('127.0.0.1', 'pinned.example.invalid');
+            const response = await fetch(`${pinnedHostUrl}/pinned`, {
+                dispatcher,
+                headers: { Connection: 'close' }
+            } as RequestInit & { dispatcher: typeof dispatcher });
+            assert.equal(response.status, 200);
+            assert.match(await response.text(), /^pinned\.example\.invalid:/);
+        } finally {
+            await dispatcher.close();
+            await upstream.close();
+        }
+    });
+
+    it('blocks private DNS answers before an upstream connection is opened', async () => {
+        let connectionOpened = false;
+        const upstream = await startHttpServer((_request, response) => {
+            connectionOpened = true;
+            response.writeHead(200, { 'Content-Type': 'text/plain', Connection: 'close' });
+            response.end('unexpected');
+        });
+        const dispatcher = createDnsValidatedDispatcher({
+            lookup: (async () => [
+                { address: '127.0.0.1', family: 4 }
+            ]) as unknown as typeof import('node:dns/promises').lookup
+        });
+
+        try {
+            await assert.rejects(
+                () =>
+                    fetch(`${upstream.baseUrl.replace('127.0.0.1', 'private.example.invalid')}/blocked`, {
+                        dispatcher,
+                        headers: { Connection: 'close' }
+                    } as RequestInit & { dispatcher: typeof dispatcher }),
+                (error: unknown) => {
+                    assert.match(String(error), /fetch failed/);
+                    const cause = error && typeof error === 'object' && 'cause' in error ? error.cause : undefined;
+                    assert.match(String(cause), /禁止的本地或内网地址/);
+                    return true;
+                }
+            );
+            assert.equal(connectionOpened, false);
+        } finally {
+            await dispatcher.close();
             await upstream.close();
         }
     });

@@ -1,8 +1,12 @@
+import { readImageDimensions } from './agent-file-utils';
 import {
     AcceptedImageTaskResponseError,
     assertOpenAiImagesResponse,
     MissingOpenAiImageDataError,
     persistOpenAiImages,
+    ImageDimensionMismatchError,
+    normalizeImageBuffer,
+    readRequestedImageDimensions,
     readAcceptedImageTaskDetails,
     readRetryAfterSecondsHeader,
     resolveAcceptedImageTaskResponse
@@ -92,6 +96,101 @@ describe('persistOpenAiImages', () => {
                 assert.ok(error instanceof MissingOpenAiImageDataError);
                 assert.equal(error.index, 0);
                 assert.equal(error.result, result);
+                return true;
+            }
+        );
+    });
+});
+
+describe('fixed image dimensions', () => {
+    it('parses fixed WxH sizes and ignores auto or invalid values', () => {
+        assert.deepEqual(readRequestedImageDimensions('1024x1536'), { width: 1024, height: 1536 });
+        assert.equal(readRequestedImageDimensions('auto'), undefined);
+        assert.equal(readRequestedImageDimensions('1024'), undefined);
+        assert.equal(readRequestedImageDimensions(null), undefined);
+    });
+
+    it('resizes a same-aspect image to the requested dimensions without changing its aspect ratio', async () => {
+        const normalized = await normalizeImageBuffer(Buffer.from(PNG_BASE64, 'base64'), 'webp', {
+            width: 2,
+            height: 2
+        });
+
+        assert.deepEqual(readImageDimensions(normalized), { width: 2, height: 2 });
+    });
+
+    it('accepts small upstream rounding drift and pads without stretching', async () => {
+        const { default: sharp } = await import('sharp');
+        const source = await sharp({
+            create: {
+                width: 1027,
+                height: 1531,
+                channels: 4,
+                background: { r: 255, g: 0, b: 0, alpha: 1 }
+            }
+        })
+            .png()
+            .toBuffer();
+
+        const normalized = await normalizeImageBuffer(source, 'webp', {
+            width: 1536,
+            height: 2288
+        });
+
+        assert.deepEqual(readImageDimensions(normalized), { width: 1536, height: 2288 });
+    });
+
+    it('accepts a provider portrait preset rounded to 1024x1536 for the 1536x2288 contract', async () => {
+        const { default: sharp } = await import('sharp');
+        const source = await sharp({
+            create: {
+                width: 1024,
+                height: 1536,
+                channels: 4,
+                background: { r: 255, g: 0, b: 0, alpha: 1 }
+            }
+        })
+            .png()
+            .toBuffer();
+
+        const normalized = await normalizeImageBuffer(source, 'webp', {
+            width: 1536,
+            height: 2288
+        });
+
+        assert.deepEqual(readImageDimensions(normalized), { width: 1536, height: 2288 });
+    });
+
+    it('rejects a large portrait ratio drift beyond the one-percent guardrail', async () => {
+        const { default: sharp } = await import('sharp');
+        const source = await sharp({
+            create: {
+                width: 1024,
+                height: 1500,
+                channels: 4,
+                background: { r: 255, g: 0, b: 0, alpha: 1 }
+            }
+        })
+            .png()
+            .toBuffer();
+
+        await assert.rejects(
+            () => normalizeImageBuffer(source, 'webp', { width: 1536, height: 2288 }),
+            (error) => error instanceof ImageDimensionMismatchError
+        );
+    });
+
+    it('rejects a returned image with a different aspect ratio instead of stretching it', async () => {
+        await assert.rejects(
+            () =>
+                normalizeImageBuffer(Buffer.from(PNG_BASE64, 'base64'), 'webp', {
+                    width: 2,
+                    height: 1
+                }),
+            (error) => {
+                assert.ok(error instanceof ImageDimensionMismatchError);
+                assert.deepEqual(error.expected, { width: 2, height: 1 });
+                assert.deepEqual(error.actual, { width: 1, height: 1 });
                 return true;
             }
         );

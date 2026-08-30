@@ -1,6 +1,9 @@
+import { isPublicIpAddress } from './network-security';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import type OpenAI from 'openai';
 import type { ClientOptions } from 'openai';
-import { ProxyAgent } from 'undici';
+import { Agent, ProxyAgent } from 'undici';
 
 type ImageTransportEnv = Record<string, string | undefined>;
 
@@ -14,8 +17,22 @@ export type UpstreamProxySummary = {
 const DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS = 900_000;
 const DEFAULT_IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS = 900_000;
 const DEFAULT_IMAGE_UPSTREAM_MAX_RETRIES = 0;
+const MAX_PINNED_DNS_ROTATION_ENTRIES = 256;
 const UPSTREAM_PROXY_URL_ENV = 'OPENAI_UPSTREAM_PROXY_URL';
 const proxyDispatcherByUrl = new Map<string, ProxyAgent>();
+const upstreamDnsDispatcherByPolicy = new Map<string, Agent>();
+
+/**
+ * Close cached proxy dispatchers when a short-lived consumer (for example a
+ * test worker) is about to exit. The application normally keeps these
+ * dispatchers cached for the lifetime of the process.
+ */
+export async function closeOpenAIImageTransportResources(): Promise<void> {
+    const dispatchers = [...proxyDispatcherByUrl.values(), ...upstreamDnsDispatcherByPolicy.values()];
+    proxyDispatcherByUrl.clear();
+    upstreamDnsDispatcherByPolicy.clear();
+    await Promise.allSettled(dispatchers.map((dispatcher) => dispatcher.close()));
+}
 
 export function readImageUpstreamTimeoutMs(env: ImageTransportEnv = process.env): number {
     return readPositiveIntegerEnv(env, 'IMAGE_UPSTREAM_TIMEOUT_MS', DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS);
@@ -38,6 +55,7 @@ export function createOpenAIImageClientOptions(input: {
     baseURL?: string;
     defaultHeaders?: ClientOptions['defaultHeaders'];
     upstreamProxyUrl?: string;
+    allowedPlainHttpBaseUrls?: string[];
     env?: ImageTransportEnv;
 }): ClientOptions {
     const upstreamProxyUrl = input.upstreamProxyUrl
@@ -47,7 +65,10 @@ export function createOpenAIImageClientOptions(input: {
         apiKey: input.apiKey,
         baseURL: input.baseURL,
         defaultHeaders: input.defaultHeaders,
-        ...(upstreamProxyUrl ? { fetch: createOpenAIUpstreamFetch(upstreamProxyUrl) } : {}),
+        fetch: createOpenAIUpstreamFetch(upstreamProxyUrl, {
+            baseURL: input.baseURL,
+            allowedPlainHttpBaseUrls: input.allowedPlainHttpBaseUrls
+        }),
         timeout: readImageUpstreamTimeoutMs(input.env),
         maxRetries: readImageUpstreamMaxRetries(input.env)
     };
@@ -73,16 +94,145 @@ export function summarizeOpenAIUpstreamProxy(upstreamProxyUrl: string | undefine
 export function fetchOpenAIUpstream(
     input: Parameters<NonNullable<ClientOptions['fetch']>>[0],
     init: Parameters<NonNullable<ClientOptions['fetch']>>[1] | undefined,
-    upstreamProxyUrl?: string
+    upstreamProxyUrl?: string,
+    dispatcher?: Agent,
+    options: { baseURL?: string; allowedPlainHttpBaseUrls?: string[] } = {}
 ): Promise<Response> {
+    if (upstreamProxyUrl && dispatcher) {
+        throw new Error('不能同时指定 upstreamProxyUrl 和 pinned dispatcher。');
+    }
     if (!upstreamProxyUrl) {
-        return fetch(input, init);
+        const effectiveDispatcher =
+            dispatcher ||
+            getUpstreamDnsDispatcher({
+                baseURL: options.baseURL || readFetchUrl(input),
+                allowedPlainHttpBaseUrls: options.allowedPlainHttpBaseUrls
+            });
+        return fetch(
+            input,
+            effectiveDispatcher
+                ? ({ ...(init || {}), dispatcher: effectiveDispatcher } as Parameters<typeof fetch>[1])
+                : init
+        );
     }
     const normalizedProxyUrl = normalizeUpstreamProxyUrl(upstreamProxyUrl, UPSTREAM_PROXY_URL_ENV);
-    const dispatcher = getUpstreamProxyDispatcher(normalizedProxyUrl);
+    const proxyDispatcher = getUpstreamProxyDispatcher(normalizedProxyUrl);
     // Use Node's native fetch so OpenAI SDK multipart uploads retain native FormData encoding.
-    return fetch(input, { ...(init || {}), dispatcher } as Parameters<typeof fetch>[1]);
+    return fetch(input, { ...(init || {}), dispatcher: proxyDispatcher } as Parameters<typeof fetch>[1]);
 }
+
+export function createPinnedDnsDispatcher(addresses: Array<{ address: string; family: number }>): Agent {
+    if (addresses.length === 0) throw new Error('至少需要一个已验证的 DNS 地址。');
+    const addressSetKey = addresses.map(({ address, family }) => `${family}:${address}`).join('|');
+    const startAddress = pinnedDnsNextAddressBySet.get(addressSetKey) ?? 0;
+    pinnedDnsNextAddressBySet.set(addressSetKey, (startAddress + 1) % addresses.length);
+    if (pinnedDnsNextAddressBySet.size > MAX_PINNED_DNS_ROTATION_ENTRIES) {
+        const oldestKey = pinnedDnsNextAddressBySet.keys().next().value;
+        if (typeof oldestKey === 'string') pinnedDnsNextAddressBySet.delete(oldestKey);
+    }
+    let nextAddress = startAddress;
+    return new Agent({
+        connect: {
+            lookup: (_hostname, options, callback) => {
+                if (options.all) {
+                    callback(
+                        null,
+                        addresses.map(({ address, family }) => ({ address, family }))
+                    );
+                    return;
+                }
+                const address = addresses[nextAddress % addresses.length];
+                nextAddress += 1;
+                callback(null, address.address, address.family);
+            }
+        }
+    });
+}
+
+/**
+ * Resolve and validate the destination at connection time. The dispatcher
+ * returns only the addresses from that lookup to undici, so a later DNS
+ * rebinding cannot make the same request connect to a different target.
+ */
+export function createDnsValidatedDispatcher(
+    input: {
+        allowPrivate?: boolean;
+        lookup?: typeof dns.lookup;
+        allowedPrivateHostnames?: readonly string[];
+    } = {}
+): Agent {
+    const allowPrivate = input.allowPrivate === true;
+    const lookup = input.lookup ?? dns.lookup;
+    const allowedPrivateHostnames = new Set(
+        (input.allowedPrivateHostnames ?? []).map((hostname) => hostname.replace(/^\[|\]$/g, '').toLowerCase())
+    );
+    return new Agent({
+        connect: {
+            lookup: (hostname, options, callback) => {
+                const normalizedHostname = hostname.replace(/^\[|\]$/g, '');
+                const literalFamily = net.isIP(normalizedHostname);
+                const resolve = literalFamily
+                    ? Promise.resolve([{ address: normalizedHostname, family: literalFamily }])
+                    : lookup(normalizedHostname, { all: true, verbatim: true });
+                resolve.then(
+                    (addresses) => {
+                        const safeAddresses = addresses.filter(
+                            ({ address }) =>
+                                isPublicIpAddress(address) ||
+                                (allowPrivate &&
+                                    (allowedPrivateHostnames.size === 0 ||
+                                        allowedPrivateHostnames.has(normalizedHostname.toLowerCase())))
+                        );
+                        if (safeAddresses.length === 0) {
+                            callback(
+                                Object.assign(new Error('上游 API 主机解析到了被禁止的本地或内网地址。'), {
+                                    code: 'ERR_FORBIDDEN_DNS_ADDRESS'
+                                }),
+                                '',
+                                0
+                            );
+                            return;
+                        }
+                        const preferred =
+                            options.family && options.family !== 0
+                                ? safeAddresses.find(({ family }) => family === options.family)
+                                : safeAddresses[0];
+                        if (!preferred) {
+                            callback(
+                                Object.assign(new Error('上游 API 主机没有匹配请求地址族的安全 DNS 地址。'), {
+                                    code: 'ERR_FORBIDDEN_DNS_FAMILY'
+                                }),
+                                '',
+                                0
+                            );
+                            return;
+                        }
+                        if (options.all) {
+                            callback(null, safeAddresses);
+                            return;
+                        }
+                        callback(null, preferred.address, preferred.family);
+                    },
+                    (error) => {
+                        const normalizedError = error instanceof Error ? error : new Error(String(error));
+                        callback(normalizedError as NodeJS.ErrnoException, '', 0);
+                    }
+                );
+            }
+        }
+    });
+}
+
+export function createUpstreamDnsDispatcher(
+    input: {
+        baseURL?: string;
+        allowedPlainHttpBaseUrls?: string[];
+    } = {}
+): Agent {
+    return createDnsValidatedDispatcher(resolveUpstreamDnsPolicy(input.baseURL, input.allowedPlainHttpBaseUrls));
+}
+
+const pinnedDnsNextAddressBySet = new Map<string, number>();
 
 export function buildOpenAIImageRequestOptions(
     input: {
@@ -111,8 +261,75 @@ export function summarizeOpenAIImageTransport(env: ImageTransportEnv = process.e
     };
 }
 
-function createOpenAIUpstreamFetch(upstreamProxyUrl: string): NonNullable<ClientOptions['fetch']> {
-    return (input, init) => fetchOpenAIUpstream(input, init, upstreamProxyUrl);
+function createOpenAIUpstreamFetch(
+    upstreamProxyUrl: string | undefined,
+    options: { baseURL?: string; allowedPlainHttpBaseUrls?: string[] }
+): NonNullable<ClientOptions['fetch']> {
+    return (input, init) =>
+        fetchOpenAIUpstream(input, init, upstreamProxyUrl, undefined, {
+            baseURL: options.baseURL,
+            allowedPlainHttpBaseUrls: options.allowedPlainHttpBaseUrls
+        });
+}
+
+function readFetchUrl(input: Parameters<NonNullable<ClientOptions['fetch']>>[0]): string | undefined {
+    if (typeof input === 'string') return input;
+    if (input instanceof URL) return input.href;
+    if (input instanceof Request) return input.url;
+    return undefined;
+}
+
+function getUpstreamDnsDispatcher(options: { baseURL?: string; allowedPlainHttpBaseUrls?: string[] }): Agent {
+    const policy = resolveUpstreamDnsPolicy(options.baseURL, options.allowedPlainHttpBaseUrls);
+    const hostKey = policy.allowedPrivateHostnames?.join(',') || '';
+    const key = `${policy.allowPrivate ? 'private' : 'public'}:${hostKey}`;
+    const existing = upstreamDnsDispatcherByPolicy.get(key);
+    if (existing) return existing;
+    const dispatcher = createDnsValidatedDispatcher(policy);
+    upstreamDnsDispatcherByPolicy.set(key, dispatcher);
+    return dispatcher;
+}
+
+function resolveUpstreamDnsPolicy(
+    baseURL: string | undefined,
+    allowedPlainHttpBaseUrls: string[] | undefined
+): { allowPrivate: boolean; allowedPrivateHostnames?: string[] } {
+    if (!baseURL) return { allowPrivate: false };
+    let parsed: URL;
+    try {
+        parsed = new URL(baseURL);
+    } catch {
+        return { allowPrivate: false };
+    }
+    if (parsed.protocol !== 'http:') return { allowPrivate: false };
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+        return { allowPrivate: true, allowedPrivateHostnames: [hostname] };
+    }
+    if (net.isIP(hostname) === 4 && hostname.startsWith('127.')) {
+        return { allowPrivate: true, allowedPrivateHostnames: [hostname] };
+    }
+    if (net.isIP(hostname) === 6 && isLoopbackIpv6(hostname)) {
+        return { allowPrivate: true, allowedPrivateHostnames: [hostname] };
+    }
+    const normalized = normalizePlainHttpBaseUrl(parsed);
+    const explicitlyAllowed = (allowedPlainHttpBaseUrls ?? []).some((value) => {
+        try {
+            return normalizePlainHttpBaseUrl(new URL(value)) === normalized;
+        } catch {
+            return false;
+        }
+    });
+    return explicitlyAllowed ? { allowPrivate: true, allowedPrivateHostnames: [hostname] } : { allowPrivate: false };
+}
+
+function isLoopbackIpv6(hostname: string): boolean {
+    return hostname === '::1' || hostname === '0:0:0:0:0:0:0:1' || /^::ffff:127(?:\.\d{1,3}){3}$/.test(hostname);
+}
+
+function normalizePlainHttpBaseUrl(value: URL): string {
+    const pathname = value.pathname.replace(/\/+$/, '') || '/';
+    return `${value.protocol}//${value.host}${pathname}`;
 }
 
 function getUpstreamProxyDispatcher(upstreamProxyUrl: string): ProxyAgent {

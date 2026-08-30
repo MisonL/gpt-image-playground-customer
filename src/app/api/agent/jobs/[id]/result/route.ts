@@ -39,7 +39,7 @@ function createJobInProgressError(record: Parameters<typeof readAgentJobState>[0
     const retryAfterSeconds = computeRetryAfterSeconds(record.lockedUntil, new Date());
     return new AgentApiError({
         code: 'request_in_progress',
-        message: 'Agent job 仍在运行。',
+        message: 'Agent job 仍在排队或运行中。',
         status: 409,
         retryable: true,
         retryAfterSeconds

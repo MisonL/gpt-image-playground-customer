@@ -1,3 +1,4 @@
+import { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -26,6 +27,8 @@ beforeEach(async () => {
     testCwd = await mkdtemp(path.join(os.tmpdir(), 'runtime-capabilities-'));
     process.chdir(testCwd);
     process.env.npm_lifecycle_event = 'test';
+    delete process.env.AGENT_API_TOKEN;
+    delete process.env.APP_PASSWORD;
     delete process.env.ENABLE_RESPONSES_IMAGE_BACKEND;
     delete process.env.OPENAI_RESPONSES_API_MODEL;
     delete process.env.IMAGE_GENERATION_BACKEND;
@@ -81,6 +84,45 @@ afterEach(async () => {
 });
 
 describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
+    it('redacts routing internals for unauthenticated requests when Agent auth is configured', async () => {
+        process.env.AGENT_API_TOKEN = 'runtime-capabilities-token';
+        process.env.OPENAI_CHANNEL_1_ID = 'private-channel';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://private.example/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'private-key';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        const { GET } = await import('./route');
+
+        const response = await GET(new NextRequest('http://localhost/api/runtime-capabilities'));
+        const body = (await response.json()) as {
+            channelQueue: { credentials: unknown[] };
+            channelRouting: {
+                upstreamProxyByChannel: unknown[];
+                requestModesByChannel: Array<{ channelId: string }>;
+            };
+            providerManifests: unknown[];
+        };
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body.channelQueue.credentials, []);
+        assert.deepEqual(body.channelRouting.upstreamProxyByChannel, []);
+        assert.equal(body.channelRouting.requestModesByChannel[0]?.channelId, 'channel-1');
+        assert.deepEqual(body.providerManifests, []);
+        const serialized = JSON.stringify(body);
+        assert.equal(serialized.includes('private-channel'), false);
+        assert.equal(serialized.includes('private-key'), false);
+
+        const authorizedResponse = await GET(
+            new NextRequest('http://localhost/api/runtime-capabilities', {
+                headers: { Authorization: 'Bearer runtime-capabilities-token' }
+            })
+        );
+        const authorizedBody = (await authorizedResponse.json()) as {
+            channelRouting: { requestModesByChannel: Array<{ channelId: string }> };
+        };
+        assert.equal(authorizedResponse.status, 200);
+        assert.equal(authorizedBody.channelRouting.requestModesByChannel[0]?.channelId, 'private-channel');
+    });
+
     it('exposes streaming batch capability by default without the removed env gate', async () => {
         const { GET } = await import('./route');
 
@@ -91,6 +133,30 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
 
         assert.equal(body.streamingBatch.enabled, true);
         assert.equal(typeof body.streamingBatch.recommendedConcurrency, 'number');
+    });
+
+    it('redacts direct internal calls when deployment authentication is configured', async () => {
+        process.env.AGENT_API_TOKEN = 'runtime-capabilities-token';
+        process.env.OPENAI_CHANNEL_1_ID = 'private-channel';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = 'https://private.example/v1';
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'private-key';
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as {
+            channelRouting: { requestModesByChannel: Array<{ channelId: string }> };
+        };
+        assert.equal(body.channelRouting.requestModesByChannel[0]?.channelId, 'channel-1');
+    });
+
+    it('exposes the configured default image model without credentials', async () => {
+        process.env.OPENAI_IMAGE_MODEL = 'custom-image-model';
+        const { GET } = await import('./route');
+
+        const response = await GET();
+        const body = (await response.json()) as { imageModel: { defaultModel: string } };
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body.imageModel, { defaultModel: 'custom-image-model' });
     });
 
     it('exposes WebUI image cleanup as disabled with a 30 day default', async () => {

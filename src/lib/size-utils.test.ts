@@ -39,6 +39,16 @@ describe('size presets', () => {
         assert.ok(matscaOptions.includes('square-4k'));
     });
 
+    it('keeps the default 1K model alias on the gpt-image-2 preset path', () => {
+        assert.equal(getPresetDimensions('landscape', 'gpt-image-2-1k'), '3072x2048');
+        const options = getSizePresetOptions({
+            model: 'gpt-image-2-1k',
+            upstreamProfile: IMAGE_UPSTREAM_PROFILES['openai-compatible']
+        }).map((option) => option.value);
+        assert.ok(options.includes('custom'));
+        assert.ok(options.includes('wide-4k'));
+    });
+
     it('does not expose gpt-image-2-only custom and resolution presets for legacy models', () => {
         const options = getSizePresetOptions({
             model: 'gpt-image-1',

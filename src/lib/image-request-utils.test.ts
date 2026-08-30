@@ -5,9 +5,12 @@ import {
     readGenerateQuality,
     readImageFiles,
     readMaskFile,
+    readModel,
     readOutputCompression,
     readOutputFormat,
+    readPlainHttpApiBaseUrlAllowlist,
     readSize,
+    resolveDefaultImageModel,
     validateApiBaseUrl
 } from './image-request-utils';
 import { IMAGE_UPSTREAM_PROFILES } from './image-upstream-profile';
@@ -22,6 +25,34 @@ describe('image request quality defaults', () => {
 
     it('keeps image editing quality on auto by default', () => {
         assert.equal(readEditQuality(new FormData()), 'auto');
+    });
+});
+
+describe('custom image models', () => {
+    it('accepts non-empty custom model names', () => {
+        const formData = new FormData();
+        formData.set('model', 'gpt-image-2-1k');
+        assert.equal(readModel(formData), 'gpt-image-2-1k');
+    });
+});
+
+describe('configured image model defaults', () => {
+    it('uses OPENAI_IMAGE_MODEL for omitted form and agent defaults', () => {
+        assert.equal(resolveDefaultImageModel({ OPENAI_IMAGE_MODEL: 'gpt-image-2-1k' }), 'gpt-image-2-1k');
+        assert.equal(resolveDefaultImageModel({ OPENAI_IMAGE_MODEL: '  custom-image-model  ' }), 'custom-image-model');
+        assert.equal(resolveDefaultImageModel({ OPENAI_IMAGE_MODEL: 'x'.repeat(201) }), 'gpt-image-2');
+        assert.equal(resolveDefaultImageModel({}), 'gpt-image-2');
+    });
+
+    it('applies the configured model when a form omits model', () => {
+        const original = process.env.OPENAI_IMAGE_MODEL;
+        process.env.OPENAI_IMAGE_MODEL = 'gpt-image-2-1k';
+        try {
+            assert.equal(readModel(new FormData()), 'gpt-image-2-1k');
+        } finally {
+            if (original === undefined) delete process.env.OPENAI_IMAGE_MODEL;
+            else process.env.OPENAI_IMAGE_MODEL = original;
+        }
     });
 });
 
@@ -50,6 +81,9 @@ describe('validateApiBaseUrl', () => {
         assert.doesNotThrow(() => validateApiBaseUrl('http://localhost:4783/v1'));
         assert.doesNotThrow(() => validateApiBaseUrl('http://127.0.0.1:4783/v1'));
         assert.doesNotThrow(() => validateApiBaseUrl('http://[::1]:4783/v1'));
+        assert.doesNotThrow(() => validateApiBaseUrl('http://[::ffff:7f00:1]:4783/v1'));
+        assert.doesNotThrow(() => validateApiBaseUrl('http://[::ffff:0:7f00:1]:4783/v1'));
+        assert.doesNotThrow(() => validateApiBaseUrl('http://loopback.localhost:4783/v1'));
     });
 
     it('rejects remote plain-http API base URLs by default', () => {
@@ -63,6 +97,19 @@ describe('validateApiBaseUrl', () => {
                 allowedPlainHttpBaseUrls: ['http://api.j3gb.com/v1']
             })
         );
+    });
+
+    it('rejects malformed plain-http allowlist entries instead of silently ignoring them', () => {
+        assert.deepEqual(readPlainHttpApiBaseUrlAllowlist(' http://api.j3gb.com/v1 , '), ['http://api.j3gb.com/v1']);
+        assert.throws(
+            () => readPlainHttpApiBaseUrlAllowlist('https://api.j3gb.com/v1'),
+            /第 1 项必须是无凭据、无查询参数和无片段的 http URL/
+        );
+        assert.throws(
+            () => readPlainHttpApiBaseUrlAllowlist('http://api.j3gb.com/v1?token=secret'),
+            /第 1 项必须是无凭据、无查询参数和无片段的 http URL/
+        );
+        assert.throws(() => readPlainHttpApiBaseUrlAllowlist('not-a-url'), /第 1 项必须是有效的 http URL/);
     });
 
     it('rejects non-http protocols', () => {
@@ -178,6 +225,24 @@ describe('Matsca upstream image parameter compatibility', () => {
         assert.equal(readSize(formData, 'size', '1024x1024', 'gpt-image-2', IMAGE_UPSTREAM_PROFILES.matsca), '123x456');
     });
 
+    it('applies gpt-image-2 size and background rules to the default 1K model alias', () => {
+        const sizeFormData = new FormData();
+        sizeFormData.append('size', '123x456');
+        const backgroundFormData = new FormData();
+        backgroundFormData.append('background', 'transparent');
+
+        assert.throws(() => readSize(sizeFormData, 'size', '1024x1024', 'gpt-image-2-1k'), /无效/);
+        assert.equal(
+            readSize(sizeFormData, 'size', '1024x1024', 'gpt-image-2-1k', IMAGE_UPSTREAM_PROFILES.matsca),
+            '123x456'
+        );
+        assert.throws(() => readBackground(backgroundFormData, 'gpt-image-2-1k'), /不支持 transparent/);
+        assert.equal(
+            readBackground(backgroundFormData, 'gpt-image-2-1k', IMAGE_UPSTREAM_PROFILES.matsca),
+            'transparent'
+        );
+    });
+
     it('allows explicit force_request to bypass local gpt-image-2 size and background profile limits', () => {
         const sizeFormData = new FormData();
         sizeFormData.append('size', '512x512');
@@ -210,6 +275,20 @@ describe('Matsca upstream image parameter compatibility', () => {
                 }),
             /gpt-image-1 无效/
         );
+    });
+
+    it('applies provider-defined positive WxH sizing to custom models', () => {
+        const valid = new FormData();
+        valid.append('size', '2048x2048');
+        assert.equal(readSize(valid, 'size', '1024x1024', 'custom-image-model'), '2048x2048');
+
+        const invalid = new FormData();
+        invalid.append('size', 'wide');
+        assert.throws(() => readSize(invalid, 'size', '1024x1024', 'custom-image-model'), /auto 或 WxH/);
+
+        const nonPositive = new FormData();
+        nonPositive.append('size', '0x2048');
+        assert.throws(() => readSize(nonPositive, 'size', '1024x1024', 'custom-image-model'), /正整数/);
     });
 
     it('uses the Matsca single upload limit for masks too', () => {

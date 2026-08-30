@@ -2,11 +2,49 @@ import type { NextRequest } from 'next/server';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
+import { deflateSync } from 'node:zlib';
 
 export { readSseEvents } from '@/lib/sse-test-utils';
 
-export const PNG_BASE64 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+export const PNG_BASE64 = createPngWithDimensions(1024, 1024, 0x40).toString('base64');
+export const PNG_WIDE_BASE64 = createPngWithDimensions(16, 9, 0x80).toString('base64');
+export const PNG_MATSCA_BASE64 = createPngWithDimensions(41, 152, 0xa0).toString('base64');
+
+function createPngWithDimensions(width: number, height: number, grayscale: number): Buffer {
+    const raw = Buffer.alloc((width + 1) * height, grayscale);
+    for (let row = 0; row < height; row += 1) raw[row * (width + 1)] = 0;
+
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8;
+
+    return Buffer.concat([
+        Buffer.from('\x89PNG\r\n\x1a\n', 'binary'),
+        createPngChunk('IHDR', ihdr),
+        createPngChunk('IDAT', deflateSync(raw)),
+        createPngChunk('IEND', Buffer.alloc(0))
+    ]);
+}
+
+function createPngChunk(type: string, data: Buffer): Buffer {
+    const typeBytes = Buffer.from(type, 'ascii');
+    const body = Buffer.concat([typeBytes, data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length, 0);
+    const checksum = Buffer.alloc(4);
+    checksum.writeUInt32BE(crc32(body), 0);
+    return Buffer.concat([length, body, checksum]);
+}
+
+function crc32(data: Buffer): number {
+    let crc = 0xffffffff;
+    for (const byte of data) {
+        crc ^= byte;
+        for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+}
 
 export function imageFormRequest(input: {
     apiBaseUrl?: string;
@@ -21,6 +59,7 @@ export function imageFormRequest(input: {
     size?: string;
     n?: string;
     responsesModel?: string;
+    model?: string;
     outputFormat?: 'png' | 'jpeg' | 'webp';
     outputCompression?: string;
     partialImages?: string;
@@ -37,7 +76,7 @@ export function imageFormRequest(input: {
     const formData = new FormData();
     formData.append('mode', input.mode || 'generate');
     formData.append('prompt', 'route stream contract');
-    formData.append('model', 'gpt-image-2');
+    formData.append('model', input.model || 'gpt-image-2');
     formData.append('n', input.n || '1');
     formData.append('size', input.size || '1024x1024');
     formData.append('output_format', input.outputFormat || 'png');

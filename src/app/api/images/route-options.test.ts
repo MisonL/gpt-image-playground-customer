@@ -1,5 +1,6 @@
 import {
     PNG_BASE64,
+    PNG_WIDE_BASE64,
     imageFormRequest,
     startImagesJsonUpstream,
     startResponsesImageUpstream,
@@ -149,7 +150,7 @@ describe('POST /api/images request validation and extensions', { concurrency: fa
                     {
                         type: 'image_generation_call',
                         status: 'completed',
-                        result: PNG_BASE64
+                        result: PNG_WIDE_BASE64
                     }
                 ]
             };
@@ -235,7 +236,7 @@ describe('POST /api/images request validation and extensions', { concurrency: fa
                     {
                         type: 'image_generation_call',
                         status: 'completed',
-                        result: PNG_BASE64
+                        result: PNG_WIDE_BASE64
                     }
                 ]
             };

@@ -7,6 +7,7 @@ import {
     isChannelFailure,
     isChannelRequestModeFailure,
     isCredentialFailure,
+    isModelUnavailableForAllCredentials,
     parseChannelPoolConfig,
     resolveEffectiveCredential,
     toPublicChannelFailure
@@ -24,6 +25,18 @@ const DEFAULT_HEADER_SUMMARY = {
 };
 
 describe('parseChannelPoolConfig', () => {
+    it('identifies model requests rejected by every configured allowlist', () => {
+        const config = parseChannelPoolConfig({
+            OPENAI_CHANNEL_1_ID: 'images',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'key-one,key-two',
+            OPENAI_CHANNEL_1_MODELS: 'gpt-image-2'
+        });
+
+        assert.equal(isModelUnavailableForAllCredentials(config.credentials, 'custom-image'), true);
+        assert.equal(isModelUnavailableForAllCredentials(config.credentials, 'gpt-image-2'), false);
+    });
+
     it('parses multiple channels with multiple keys from numbered env vars', () => {
         const config = parseChannelPoolConfig({
             OPENAI_ROUTING_STRATEGY: 'round_robin',

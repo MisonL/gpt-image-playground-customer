@@ -1,7 +1,8 @@
 import { writeFileAtomic } from './agent-file-utils';
+import { classifyApiErrorCode } from './api-error-guidance';
 import { appLogger } from './app-logger';
 import { createImageResult, type StorageMode, type ValidOutputFormat } from './image-request-utils';
-import { normalizeImageBuffer } from './image-service';
+import { ImageDimensionMismatchError, normalizeImageBuffer, type RequestedImageDimensions } from './image-service';
 import { normalizeUpstreamImageStreamEventWithDiagnostics } from './image-stream-events';
 import type { UpstreamRequestHeaders } from './image-upstream-profile';
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
@@ -39,7 +40,10 @@ type StreamingEvent = {
     streaming_degraded?: boolean;
     streamingDegraded?: boolean;
     error?: string;
+    code?: string;
     status?: number;
+    expected_dimensions?: string;
+    actual_dimensions?: string | null;
 };
 
 type CompletedImage = NonNullable<StreamingEvent['images']>[number];
@@ -61,6 +65,7 @@ export type ImageStreamResponseOptions = {
     stream: AsyncIterable<unknown>;
     modeLabel: '生成' | '编辑';
     outputFormat: ValidOutputFormat;
+    targetDimensions?: RequestedImageDimensions;
     storageMode: StorageMode;
     apiBaseUrl?: string;
     apiKey: string;
@@ -269,7 +274,11 @@ async function emitCompletedImage(
         throw new Error('流式图片完成事件缺少 b64_json。');
     }
     const normalizedB64Json = (
-        await normalizeImageBuffer(Buffer.from(b64Json, 'base64'), runtime.options.outputFormat)
+        await normalizeImageBuffer(
+            Buffer.from(b64Json, 'base64'),
+            runtime.options.outputFormat,
+            runtime.options.targetDimensions
+        )
     ).toString('base64');
     const currentIndex = runtime.state.imageIndex;
     const filename = createImageFilename(runtime.batchId, currentIndex, runtime.options.outputFormat);
@@ -428,9 +437,31 @@ function emitErrorEvent(runtime: StreamRuntime, error: unknown): boolean {
         error: error instanceof Error ? error.message : String(error)
     });
     const status = readErrorStatus(error);
+    const rawMessage =
+        error instanceof Error
+            ? error.message
+            : typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string'
+              ? error.message
+              : '流式处理失败';
+    const rawCode =
+        typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+            ? error.code
+            : undefined;
+    const code = classifyApiErrorCode(rawCode, rawMessage);
+    const dimensionError = error instanceof ImageDimensionMismatchError ? error : undefined;
     return runtime.sse.send({
         type: 'error',
-        error: error instanceof Error ? error.message : '流式处理失败',
+        error: rawMessage,
+        ...(code || dimensionError ? { code: dimensionError?.code || code } : {}),
+        ...(dimensionError
+            ? {
+                  expected_dimensions: `${dimensionError.expected.width}x${dimensionError.expected.height}`,
+                  actual_dimensions:
+                      dimensionError.actual.width !== null && dimensionError.actual.height !== null
+                          ? `${dimensionError.actual.width}x${dimensionError.actual.height}`
+                          : null
+              }
+            : {}),
         ...(status ? { status } : {})
     });
 }

@@ -23,7 +23,7 @@ import {
 } from './agent-api-contracts';
 import { AGENT_ENDPOINTS } from './agent-api-paths.mjs';
 import { CHANNEL_REQUEST_MODES } from './channel-request-mode';
-import { MAX_PROMPT_LENGTH } from './image-request-utils';
+import { MAX_MODEL_NAME_LENGTH, MAX_PROMPT_LENGTH } from './image-request-utils';
 
 type AgentOpenApiSecurityRequirement = { BearerAuth: [] } | { AppPasswordHash: [] };
 
@@ -180,6 +180,25 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     summary: '获取机器可读的 Agent API 能力信息',
                     responses: {
                         '200': jsonContent('#/components/schemas/AgentCapabilities')
+                    }
+                }
+            },
+            [AGENT_ENDPOINTS.models]: {
+                get: {
+                    summary:
+                        '默认列出项目、配置和渠道声明的模型；使用 probe=true 显式探测渠道 /models（探测需要 Agent 或已验证页面会话鉴权）',
+                    security: agentSecurity.length ? [...agentSecurity, {}] : [],
+                    parameters: [
+                        {
+                            name: 'probe',
+                            in: 'query',
+                            required: false,
+                            schema: { type: 'boolean', default: false }
+                        }
+                    ],
+                    responses: {
+                        '200': jsonContent('#/components/schemas/AgentModelDirectory'),
+                        '401': jsonContent('#/components/schemas/AgentError')
                     }
                 }
             },
@@ -548,6 +567,84 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 }
             },
             schemas: {
+                AgentModelDirectory: {
+                    type: 'object',
+                    required: ['ok', 'default_model', 'known_models', 'channels', 'probe'],
+                    properties: {
+                        ok: { type: 'boolean', const: true },
+                        default_model: { type: 'string' },
+                        known_models: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                required: ['id', 'source', 'custom', 'status', 'size_policy', 'strict_dimensions'],
+                                properties: {
+                                    id: { type: 'string' },
+                                    source: {
+                                        type: 'string',
+                                        enum: ['project_default', 'project_known', 'configured']
+                                    },
+                                    custom: { type: 'boolean' },
+                                    status: {
+                                        type: 'string',
+                                        enum: ['declared', 'verified_usable', 'known_unavailable']
+                                    },
+                                    size_policy: {
+                                        type: 'string',
+                                        enum: ['provider_defined', 'legacy_allowlist']
+                                    },
+                                    strict_dimensions: { type: 'boolean' }
+                                },
+                                additionalProperties: false
+                            }
+                        },
+                        channels: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                required: [
+                                    'id',
+                                    'configured',
+                                    'declared_models',
+                                    'model_allowlist_configured',
+                                    'models',
+                                    'probe_status'
+                                ],
+                                properties: {
+                                    id: { type: 'string' },
+                                    host: { type: 'string' },
+                                    configured: { type: 'boolean' },
+                                    declared_models: { type: 'array', items: { type: 'string' } },
+                                    model_allowlist_configured: { type: 'boolean' },
+                                    models: { type: 'array', items: { type: 'string' } },
+                                    probe_status: { type: 'string', enum: ['not_probed', 'ok', 'failed'] },
+                                    http_status: { type: 'integer' },
+                                    error_code: {
+                                        type: 'string',
+                                        enum: [
+                                            'missing_base_url',
+                                            'missing_api_key',
+                                            'request_failed',
+                                            'invalid_response',
+                                            'upstream_error'
+                                        ]
+                                    }
+                                },
+                                additionalProperties: false
+                            }
+                        },
+                        probe: {
+                            type: 'object',
+                            required: ['requested', 'timeout_ms'],
+                            properties: {
+                                requested: { type: 'boolean' },
+                                timeout_ms: { type: 'integer', minimum: 1 }
+                            },
+                            additionalProperties: false
+                        }
+                    },
+                    additionalProperties: false
+                },
                 AgentCapabilities: {
                     type: 'object',
                     required: [
@@ -568,6 +665,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'routing_rules',
                         'agent_jobs',
                         'supported',
+                        'model_directory',
                         'storage',
                         'page_request_diagnostics',
                         'agent_request_diagnostics',
@@ -694,7 +792,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 'partial_images'
                             ],
                             properties: {
-                                model: { type: 'string', enum: AGENT_MODELS },
+                                model: { type: 'string', minLength: 1, maxLength: 200 },
                                 response_mode: { type: 'string', enum: AGENT_RESPONSE_MODES },
                                 state_backend: { type: 'string', enum: ['memory', 'sqlite', 'postgres'] },
                                 image_backend: { type: 'string', enum: AGENT_IMAGE_BACKENDS },
@@ -884,6 +982,17 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                             additionalProperties: false
                         },
                         model_limits: { $ref: '#/components/schemas/AgentModelLimits' },
+                        model_directory: {
+                            type: 'object',
+                            required: ['endpoint', 'probe_query', 'default_model', 'semantics'],
+                            properties: {
+                                endpoint: { type: 'string', const: capabilities.model_directory.endpoint },
+                                probe_query: { type: 'string', const: capabilities.model_directory.probe_query },
+                                default_model: { type: 'string', const: capabilities.model_directory.default_model },
+                                semantics: { type: 'string', const: capabilities.model_directory.semantics }
+                            },
+                            additionalProperties: false
+                        },
                         force_request_controls: {
                             type: 'object',
                             required: ['field', 'cli_flag', 'default', 'effect', 'still_enforced', 'intended_for'],
@@ -988,7 +1097,9 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                 },
                 AgentModelLimits: {
                     type: 'object',
-                    required: ['gpt-image-2'],
+                    description:
+                        '已知模型的专用约束。未列出的自定义模型由渠道 provider manifest 或上游 API 决定尺寸、背景和能力。',
+                    required: ['gpt-image-2', 'gpt-image-2-1k'],
                     properties: {
                         'gpt-image-2': {
                             type: 'object',
@@ -1028,6 +1139,50 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                     }
                                 }
                             }
+                        },
+                        'gpt-image-2-1k': {
+                            type: 'object',
+                            required: [
+                                'max_edge',
+                                'max_pixels',
+                                'edge_multiple',
+                                'max_aspect',
+                                'min_pixels',
+                                'recommended_presets',
+                                'large_image_risk'
+                            ],
+                            properties: {
+                                max_edge: { type: 'integer', minimum: 1 },
+                                max_pixels: { type: 'integer', minimum: 1 },
+                                edge_multiple: { type: 'integer', minimum: 1 },
+                                max_aspect: { type: 'number', minimum: 1 },
+                                min_pixels: { type: 'integer', minimum: 1 },
+                                size_policy: { type: 'string' },
+                                allow_transparent_background: { type: 'boolean' },
+                                recommended_presets: {
+                                    type: 'array',
+                                    items: {
+                                        type: 'object',
+                                        required: ['name', 'size', 'purpose'],
+                                        properties: {
+                                            name: { type: 'string' },
+                                            size: { type: 'string' },
+                                            purpose: { type: 'string' }
+                                        },
+                                        additionalProperties: false
+                                    }
+                                },
+                                large_image_risk: {
+                                    type: 'object',
+                                    required: ['applies_to', 'guidance'],
+                                    properties: {
+                                        applies_to: { type: 'array', items: { type: 'string' } },
+                                        guidance: { type: 'string' }
+                                    },
+                                    additionalProperties: false
+                                }
+                            },
+                            additionalProperties: false
                         }
                     }
                 },
@@ -1814,7 +1969,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     ],
                     properties: {
                         prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
-                        model: { type: 'string', enum: AGENT_MODELS },
+                        model: {
+                            type: 'string',
+                            minLength: 1,
+                            maxLength: 200,
+                            default: capabilities.defaults.model
+                        },
                         n: {
                             type: 'integer',
                             minimum: capabilities.limits.generate_images.min,
@@ -1837,7 +1997,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         responsesModel: {
                             type: 'string',
-                            maxLength: 128,
+                            maxLength: MAX_MODEL_NAME_LENGTH,
                             description:
                                 'Responses image_generation 顶层模型；仅适用于 image_backend=responses-image-generation。'
                         },
@@ -1897,7 +2057,12 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                     description: `Agent edit 返回最终 JSON。请求必须至少提供一个 image_0..image_${maxSourceImageCount - 1} 源图字段。高分辨率 edit 默认优先使用页面端 /api/images form-data SSE；页面流式有问题时可显式回退到 Agent edit 诊断或执行。`,
                     properties: {
                         prompt: { type: 'string', maxLength: MAX_PROMPT_LENGTH },
-                        model: { type: 'string', enum: AGENT_MODELS, default: 'gpt-image-2' },
+                        model: {
+                            type: 'string',
+                            minLength: 1,
+                            maxLength: 200,
+                            default: capabilities.defaults.model
+                        },
                         n: {
                             type: 'integer',
                             minimum: capabilities.limits.edit_images.min,
@@ -2077,6 +2242,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                         code: { type: 'string' },
                                         message: { type: 'string' },
                                         retryable: { type: 'boolean' },
+                                        retry_after_seconds: { type: 'integer', minimum: 1 },
                                         details: { type: 'object' },
                                         upstream_status: { type: 'integer' },
                                         diagnostics: { $ref: '#/components/schemas/AgentErrorDiagnostics' }
@@ -2446,6 +2612,7 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                                 code: { type: 'string' },
                                 message: { type: 'string' },
                                 retryable: { type: 'boolean' },
+                                retry_after_seconds: { type: 'integer', minimum: 1 },
                                 details: { type: 'object' },
                                 upstream_status: { type: 'integer' },
                                 diagnostics: { $ref: '#/components/schemas/AgentErrorDiagnostics' },

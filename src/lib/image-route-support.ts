@@ -4,6 +4,7 @@ import { appLogger } from './app-logger';
 import type { ChannelRequestMode } from './channel-request-mode';
 import {
     type ChannelCredential,
+    type ChannelFailureReport,
     describeChannelFailure,
     isChannelFailure,
     isChannelRequestModeFailure,
@@ -90,51 +91,57 @@ export function assertResponsesImageBackendAllowed(input: { imageBackend: ImageB
 export function reportServerCredentialFailure(
     credential: ChannelCredential | undefined,
     error: unknown,
-    requestMode?: ChannelRequestMode
-) {
+    requestMode?: ChannelRequestMode,
+    model?: string
+): ChannelFailureReport | undefined {
     const serverChannelRouter = getServerChannelState().router;
-    if (!credential || !serverChannelRouter) return;
+    if (!credential || !serverChannelRouter) return undefined;
     if (isChannelRequestModeFailure(error, requestMode)) {
         const reason = {
             ...describeChannelFailure(error, 'channel'),
-            ...(requestMode ? { requestMode } : {})
+            ...(requestMode ? { requestMode } : {}),
+            ...(model ? { model } : {})
         };
-        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason, model });
         appLogger.warn(
             report.cooldownApplied
                 ? `暂时冷却 API 渠道请求方式：${credential.channelId}/${requestMode}`
                 : `记录 API 渠道请求方式失败，未启用冷却：${credential.channelId}/${requestMode}`,
             reason
         );
-        return;
+        return report;
     }
     if (isChannelFailure(error)) {
         const reason = {
             ...describeChannelFailure(error, 'channel'),
-            ...(requestMode ? { requestMode } : {})
+            ...(requestMode ? { requestMode } : {}),
+            ...(model ? { model } : {})
         };
-        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
+        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason, model });
         appLogger.warn(
             report.cooldownApplied
                 ? `暂时冷却 API 渠道：${credential.channelId}`
                 : `记录 API 渠道失败，未启用冷却：${credential.channelId}`,
             reason
         );
-        return;
+        return report;
     }
     if (isCredentialFailure(error)) {
         const reason = {
             ...describeChannelFailure(error, 'credential'),
-            ...(requestMode ? { requestMode } : {})
+            ...(requestMode ? { requestMode } : {}),
+            ...(model ? { model } : {})
         };
-        const report = serverChannelRouter.reportFailure(credential, { requestMode, reason });
+        const report = serverChannelRouter.reportFailure(credential, { requestMode, reason, model });
         appLogger.warn(
             report.cooldownApplied
                 ? `暂时冷却 API 渠道凭证：${credential.channelId}/${credential.id}`
                 : `记录 API 渠道凭证失败，未启用冷却：${credential.channelId}/${credential.id}`,
             reason
         );
+        return report;
     }
+    return undefined;
 }
 
 export function inspectInvalidImagesResponse(result: unknown): UpstreamResponseDiagnostics {

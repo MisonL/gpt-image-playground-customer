@@ -19,6 +19,9 @@ export type AgentErrorCode =
     | 'job_not_found'
     | 'job_expired'
     | 'upstream_rate_limited'
+    | 'upstream_quota_exhausted'
+    | 'channel_unavailable'
+    | 'image_dimension_mismatch'
     | 'upstream_auth_failed'
     | 'upstream_unavailable'
     | 'unexpected_error';
@@ -63,6 +66,7 @@ export type AgentErrorBody = {
         code: AgentErrorCode;
         message: string;
         retryable: boolean;
+        retry_after_seconds?: number;
         details?: Record<string, unknown>;
         upstream_status?: number;
         diagnostics?: AgentErrorDiagnostics;
@@ -79,6 +83,9 @@ export function statusForAgentErrorCode(code: AgentErrorCode, upstreamStatus?: n
     if (code === 'job_not_found') return 404;
     if (code === 'job_expired') return 410;
     if (code === 'upstream_rate_limited') return 429;
+    if (code === 'upstream_quota_exhausted') return 403;
+    if (code === 'channel_unavailable') return 503;
+    if (code === 'image_dimension_mismatch') return 502;
     if (code === 'upstream_auth_failed') return upstreamStatus === 403 ? 403 : 401;
     if (code === 'upstream_unavailable') return 502;
     return 500;
@@ -226,6 +233,12 @@ function readStringField(error: unknown, field: string): string | undefined {
     if (typeof error !== 'object' || error === null || !(field in error)) return undefined;
     const value = (error as Record<string, unknown>)[field];
     return typeof value === 'string' ? value : undefined;
+}
+
+function readNestedErrorStringField(error: unknown, field: string): string | undefined {
+    if (typeof error !== 'object' || error === null) return undefined;
+    const nested = (error as Record<string, unknown>).error;
+    return readStringField(nested, field);
 }
 
 function readRetryAfterSeconds(error: unknown): number | undefined {
@@ -410,6 +423,7 @@ export function createAgentErrorBody(error: AgentApiError, requestId: string): A
             code: error.code,
             message: error.message,
             retryable: error.retryable,
+            ...(error.retryable && error.retryAfterSeconds ? { retry_after_seconds: error.retryAfterSeconds } : {}),
             ...(error.details ? { details: error.details } : {}),
             ...(error.upstreamStatus ? { upstream_status: error.upstreamStatus } : {}),
             ...(diagnostics ? { diagnostics } : {}),
@@ -449,10 +463,12 @@ export function toTerminalAgentErrorBody(errorBody: AgentErrorBody): AgentErrorB
 }
 
 function stripTerminalRetryDiagnostics(error: AgentErrorBody['error']): AgentErrorBody['error'] {
-    if (!error.diagnostics?.retry_after_seconds) return error;
+    const withoutTopLevelRetry = { ...error };
+    delete withoutTopLevelRetry.retry_after_seconds;
+    if (!error.diagnostics?.retry_after_seconds) return withoutTopLevelRetry;
     const diagnostics = stripRetryDiagnostics(error.diagnostics);
     return {
-        ...error,
+        ...withoutTopLevelRetry,
         diagnostics
     };
 }
@@ -468,10 +484,19 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
     if (error instanceof AgentApiError) return error;
     if (error instanceof RequestValidationError) {
         const details = error.details ?? parseValidationDetails(error.message) ?? inferValidationDetails(error.message);
+        const channelUnavailable =
+            error.code === 'channel_unavailable' ||
+            (error.status === 503 &&
+                (error.message.includes('当前没有支持') || error.message.includes('当前没有可用')) &&
+                error.message.includes('健康渠道'));
         return new AgentApiError({
-            code: error.status >= 500 ? 'configuration_error' : 'validation_error',
+            code: channelUnavailable
+                ? 'channel_unavailable'
+                : error.status >= 500
+                  ? 'configuration_error'
+                  : 'validation_error',
             message: details ? '请求校验失败。' : error.message,
-            status: error.status === 400 ? 422 : error.status,
+            status: channelUnavailable ? 503 : error.status === 400 ? 422 : error.status,
             retryable: false,
             ...(details ? { details } : {}),
             diagnostics: buildDiagnostics(error, diagnostics)
@@ -479,7 +504,24 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
     }
 
     const status = readNumberField(error, 'status') ?? readNumberField(error, 'statusCode');
-    const message = error instanceof Error ? error.message : (readStringField(error, 'message') ?? '发生未知错误。');
+    const message =
+        error instanceof Error
+            ? error.message
+            : (readStringField(error, 'message') ?? readNestedErrorStringField(error, 'message') ?? '发生未知错误。');
+    const upstreamCode =
+        readStringField(error, 'code') ||
+        readStringField(error, 'errorCode') ||
+        readNestedErrorStringField(error, 'code');
+    if (upstreamCode === 'INSUFFICIENT_BALANCE' || message.toLowerCase().includes('insufficient account balance')) {
+        return new AgentApiError({
+            code: 'upstream_quota_exhausted',
+            message: '上游渠道余额不足，当前无法生成图片。',
+            status: 403,
+            retryable: false,
+            upstreamStatus: status ?? 403,
+            diagnostics: buildDiagnostics(error, { ...diagnostics, upstreamStatus: status ?? 403 })
+        });
+    }
     if (isAcceptedImageTaskError(error)) {
         return new AgentApiError({
             code: 'upstream_unavailable',
@@ -491,6 +533,16 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
                 ...diagnostics,
                 ...(status !== undefined ? { upstreamStatus: status } : {})
             })
+        });
+    }
+    if (status === 404) {
+        return new AgentApiError({
+            code: 'upstream_unavailable',
+            message,
+            status: 502,
+            retryable: false,
+            upstreamStatus: 404,
+            diagnostics: buildDiagnostics(error, { ...diagnostics, upstreamStatus: 404 })
         });
     }
     if (isChannelRequestModeFailure(error, diagnostics.channel_request_mode)) {
@@ -515,7 +567,7 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
         return new AgentApiError({
             code: 'upstream_rate_limited',
             message,
-            status: error.status === 499 ? 499 : 429,
+            status: 429,
             retryable: error.retryable,
             details: {
                 code: error.code,

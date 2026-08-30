@@ -44,6 +44,44 @@ describe('normalizeAgentError', () => {
         assert.equal(error.upstreamStatus, 429);
     });
 
+    it('classifies upstream insufficient balance as a terminal quota error', () => {
+        const error = normalizeAgentError({
+            status: 403,
+            code: 'INSUFFICIENT_BALANCE',
+            message: 'Insufficient account balance'
+        });
+        assert.equal(error.code, 'upstream_quota_exhausted');
+        assert.equal(error.status, 403);
+        assert.equal(error.retryable, false);
+    });
+
+    it('classifies nested upstream insufficient balance errors', () => {
+        const error = normalizeAgentError({
+            status: 403,
+            error: { code: 'INSUFFICIENT_BALANCE', message: 'Insufficient account balance' }
+        });
+        assert.equal(error.code, 'upstream_quota_exhausted');
+        assert.equal(error.retryable, false);
+    });
+
+    it('classifies exhausted channel selection separately from configuration errors', () => {
+        const error = normalizeAgentError(
+            new RequestValidationError('当前没有支持 images-sse 的健康渠道凭证。请调整请求策略。', 503)
+        );
+        assert.equal(error.code, 'channel_unavailable');
+        assert.equal(error.status, 503);
+        assert.equal(error.retryable, false);
+    });
+
+    it('classifies an ordinary upstream 404 as an unavailable upstream', () => {
+        const error = normalizeAgentError({ status: 404, message: 'model route not found' });
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.upstreamStatus, 404);
+        assert.equal(error.retryable, false);
+    });
+
     it('maps upstream image input errors to agent-correctable validation errors', () => {
         const error = normalizeAgentError({
             status: 400,
@@ -368,5 +406,20 @@ describe('createAgentErrorBody', () => {
         );
 
         assert.equal(response.headers.get('Retry-After'), null);
+    });
+
+    it('exposes retry timing in the JSON error contract for retryable errors', () => {
+        const body = createAgentErrorBody(
+            new AgentApiError({
+                code: 'upstream_rate_limited',
+                message: 'rate limit',
+                status: 429,
+                retryable: true,
+                retryAfterSeconds: 7
+            }),
+            'request-retryable'
+        );
+
+        assert.equal(body.error.retry_after_seconds, 7);
     });
 });

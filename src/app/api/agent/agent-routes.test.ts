@@ -10,11 +10,12 @@ import type { Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { deflateSync } from 'node:zlib';
 import { Pool } from 'pg';
 
-const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
-const PNG_CONVERTIBLE_BASE64 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+const PNG_BASE64 = createPngWithDimensions(1024, 1024, 0x40).toString('base64');
+const PNG_CONVERTIBLE_BASE64 = createPngWithDimensions(1024, 1024, 0xa0).toString('base64');
+const PNG_LANDSCAPE_BASE64 = createPngWithDimensions(3, 2, 0x80).toString('base64');
 
 let originalEnv: NodeJS.ProcessEnv;
 let originalCwd = '';
@@ -195,6 +196,20 @@ describe('Agent route integration', () => {
         assert.equal(serialized.includes('channel-header-secret'), false);
         assert.equal(serialized.includes('trace-token-secret'), false);
         assert.equal(serialized.includes('global-agent-secret'), false);
+    });
+
+    it('does not serialize configured base URLs or proxy hosts in public capabilities', async () => {
+        const { getCapabilities } = await loadAgentRoutes();
+        process.env.OPENAI_API_KEY = 'test-key';
+        process.env.OPENAI_API_BASE_URL = 'https://private-upstream.example/v1';
+        process.env.OPENAI_UPSTREAM_PROXY_URL = 'https://private-proxy.example:9443';
+
+        const response = await getCapabilities();
+        assert.equal(response.status, 200);
+        const serialized = JSON.stringify(await response.json());
+        assert.equal(serialized.includes('private-upstream.example'), false);
+        assert.equal(serialized.includes('private-proxy.example'), false);
+        assert.equal(serialized.includes('9443'), false);
     });
 
     it('reports enabled Responses image backend from the deployed runtime environment', async () => {
@@ -3191,7 +3206,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
+            return { data: [{ b64_json: PNG_LANDSCAPE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -3284,7 +3299,7 @@ describe('Agent route integration', () => {
         let upstreamCalls = 0;
         const upstream = await startImageUpstream(() => {
             upstreamCalls += 1;
-            return { data: [{ b64_json: PNG_CONVERTIBLE_BASE64 }] };
+            return { data: [{ b64_json: PNG_LANDSCAPE_BASE64 }] };
         });
         process.env.OPENAI_API_KEY = 'test-key';
         process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
@@ -4489,11 +4504,55 @@ function agentEditRequest(
     });
 }
 
-function createPngWithDimensions(width: number, height: number): Buffer {
-    const buffer = Buffer.from(PNG_BASE64, 'base64');
-    buffer.writeUInt32BE(width, 16);
-    buffer.writeUInt32BE(height, 20);
-    return buffer;
+function createPngWithDimensions(width: number, height: number, grayscale = 0x7f): Buffer {
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+        throw new RangeError('PNG fixture dimensions must be positive safe integers.');
+    }
+    if (!Number.isInteger(grayscale) || grayscale < 0 || grayscale > 0xff) {
+        throw new RangeError('PNG fixture grayscale must be an 8-bit integer.');
+    }
+
+    const raw = Buffer.alloc((width + 1) * height, grayscale);
+    for (let row = 0; row < height; row += 1) {
+        raw[row * (width + 1)] = 0;
+    }
+
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8;
+    ihdr[9] = 0;
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = 0;
+
+    return Buffer.concat([
+        Buffer.from('\x89PNG\r\n\x1a\n', 'binary'),
+        createPngChunk('IHDR', ihdr),
+        createPngChunk('IDAT', deflateSync(raw)),
+        createPngChunk('IEND', Buffer.alloc(0))
+    ]);
+}
+
+function createPngChunk(type: string, data: Buffer): Buffer {
+    const typeBytes = Buffer.from(type, 'ascii');
+    const body = Buffer.concat([typeBytes, data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length, 0);
+    const checksum = Buffer.alloc(4);
+    checksum.writeUInt32BE(crc32(body), 0);
+    return Buffer.concat([length, body, checksum]);
+}
+
+function crc32(data: Buffer): number {
+    let crc = 0xffffffff;
+    for (const byte of data) {
+        crc ^= byte;
+        for (let bit = 0; bit < 8; bit += 1) {
+            crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+        }
+    }
+    return (crc ^ 0xffffffff) >>> 0;
 }
 
 async function startImageUpstream(
@@ -4577,6 +4636,7 @@ async function startStreamingImageUpstream(
         body: string
     ) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const sockets = new Set<Socket>();
     const server = http.createServer(async (request, response) => {
         const isImageStreamPath =
             request.url?.endsWith('/images/generations') || request.url?.endsWith('/images/edits');
@@ -4599,12 +4659,20 @@ async function startStreamingImageUpstream(
         response.write('data: [DONE]\n\n');
         response.end();
     });
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+    });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     assert.ok(address && typeof address === 'object');
     return {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+        close: () =>
+            new Promise((resolve, reject) => {
+                for (const socket of sockets) socket.destroy();
+                server.close((error) => (error ? reject(error) : resolve()));
+            })
     };
 }
 
@@ -4613,6 +4681,7 @@ async function startStreamingResponsesImageUpstream(
         body: string
     ) => Array<{ event?: string; data: unknown }> | Promise<Array<{ event?: string; data: unknown }>>
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const sockets = new Set<Socket>();
     const server = http.createServer(async (request, response) => {
         if (request.method !== 'POST' || !request.url?.endsWith('/responses')) {
             response.writeHead(404, { 'Content-Type': 'application/json' });
@@ -4633,12 +4702,20 @@ async function startStreamingResponsesImageUpstream(
         response.write('data: [DONE]\n\n');
         response.end();
     });
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+    });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     assert.ok(address && typeof address === 'object');
     return {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+        close: () =>
+            new Promise((resolve, reject) => {
+                for (const socket of sockets) socket.destroy();
+                server.close((error) => (error ? reject(error) : resolve()));
+            })
     };
 }
 

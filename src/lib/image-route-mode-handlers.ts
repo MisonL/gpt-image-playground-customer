@@ -14,6 +14,7 @@ import {
     readOutputCompression,
     readOutputFormat,
     readSize,
+    MAX_MODEL_NAME_LENGTH,
     type Background,
     type EditQuality,
     type GenerateParams,
@@ -31,7 +32,12 @@ import {
     type ImageBackend,
     type RequestLogContext
 } from './image-route-support';
-import { resolveAcceptedImageTaskResponse, type AcceptedImageTaskResponseError } from './image-service';
+import {
+    readRequestedImageDimensions,
+    resolveAcceptedImageTaskResponse,
+    type AcceptedImageTaskResponseError
+} from './image-service';
+import type { RequestedImageDimensions } from './image-service';
 import { createImageStreamResponse } from './image-stream-service';
 import {
     getImageCountRangeCompatibilityForBackend,
@@ -84,6 +90,7 @@ export type ImageModeResult =
     | {
           result: OpenAI.Images.ImagesResponse;
           outputFormat: ValidOutputFormat;
+          targetDimensions?: RequestedImageDimensions;
       };
 
 type GenerateOptions = {
@@ -219,8 +226,11 @@ function readResponsesApiModel(formData: FormData): string {
             400
         );
     }
-    if (model.length > 128) {
-        throw new RequestValidationError('Responses API 顶层模型名称不能超过 128 个字符。', 400);
+    if (model.length > MAX_MODEL_NAME_LENGTH) {
+        throw new RequestValidationError(
+            'Responses API 顶层模型名称不能超过 ' + MAX_MODEL_NAME_LENGTH + ' 个字符。',
+            400
+        );
     }
     return model;
 }
@@ -266,6 +276,7 @@ async function createResponsesImageResult(input: CommonModeInput, options: Gener
     appLogger.info('调用 Responses API image_generation 实验后端。', input.requestLogContext);
     return {
         outputFormat: options.outputFormat,
+        targetDimensions: readRequestedImageDimensions(options.size),
         result: await generateImageWithResponsesBackend({
             responses: input.openai.responses,
             prompt: input.prompt,
@@ -337,12 +348,17 @@ async function createResponsesImageStreamResponse(
     } catch (error) {
         if (!input.streamFallbackEnabled) throw error;
         input.onStreamUnavailable?.(error, 'stream_request_failed');
-        return { outputFormat: options.outputFormat, result: await createResponsesImageResultOnly(input, options) };
+        return {
+            outputFormat: options.outputFormat,
+            targetDimensions: readRequestedImageDimensions(options.size),
+            result: await createResponsesImageResultOnly(input, options)
+        };
     }
     const response = createImageStreamResponse({
         stream,
         modeLabel: '生成',
         outputFormat: options.outputFormat,
+        targetDimensions: readRequestedImageDimensions(options.size),
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
@@ -398,12 +414,17 @@ async function createGenerateStreamResponse(
     } catch (error) {
         if (!input.streamFallbackEnabled) throw error;
         input.onStreamUnavailable?.(error, 'stream_request_failed');
-        return { outputFormat: options.outputFormat, result: await createImagesGenerateResultOnly(input, options) };
+        return {
+            outputFormat: options.outputFormat,
+            targetDimensions: readRequestedImageDimensions(options.size),
+            result: await createImagesGenerateResultOnly(input, options)
+        };
     }
     const response = createImageStreamResponse({
         stream,
         modeLabel: '生成',
         outputFormat: options.outputFormat,
+        targetDimensions: readRequestedImageDimensions(options.size),
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
@@ -434,6 +455,7 @@ export async function handleGenerateImageMode(input: CommonModeInput): Promise<I
     if (!input.streamEnabled) {
         return {
             outputFormat: options.outputFormat,
+            targetDimensions: readRequestedImageDimensions(options.size),
             result: await createImagesGenerateResultOnly(input, options)
         };
     }
@@ -534,12 +556,17 @@ async function createEditStreamResponse(input: CommonModeInput, options: EditOpt
     } catch (error) {
         if (!input.streamFallbackEnabled) throw error;
         input.onStreamUnavailable?.(error, 'stream_request_failed');
-        return { outputFormat: options.outputFormat, result: await createEditResultOnly(input, options) };
+        return {
+            outputFormat: options.outputFormat,
+            targetDimensions: readRequestedImageDimensions(options.size),
+            result: await createEditResultOnly(input, options)
+        };
     }
     const response = createImageStreamResponse({
         stream,
         modeLabel: '编辑',
         outputFormat: options.outputFormat,
+        targetDimensions: readRequestedImageDimensions(options.size),
         storageMode: input.storageMode,
         apiBaseUrl: input.apiBaseUrl,
         apiKey: input.apiKey,
@@ -596,6 +623,7 @@ export async function handleEditImageMode(input: CommonModeInput): Promise<Image
                 input.onStreamUnavailable?.(error, 'stream_request_failed');
                 return {
                     outputFormat: options.outputFormat,
+                    targetDimensions: readRequestedImageDimensions(options.size),
                     result: await editImageWithResponsesBackend(responseInput)
                 };
             }
@@ -603,6 +631,7 @@ export async function handleEditImageMode(input: CommonModeInput): Promise<Image
                 stream,
                 modeLabel: '编辑',
                 outputFormat: options.outputFormat,
+                targetDimensions: readRequestedImageDimensions(options.size),
                 storageMode: input.storageMode,
                 apiBaseUrl: input.apiBaseUrl,
                 apiKey: input.apiKey,
@@ -623,10 +652,18 @@ export async function handleEditImageMode(input: CommonModeInput): Promise<Image
             });
             return appendAccessCookie(response, input.accessCookie);
         }
-        return { outputFormat: options.outputFormat, result: await editImageWithResponsesBackend(responseInput) };
+        return {
+            outputFormat: options.outputFormat,
+            targetDimensions: readRequestedImageDimensions(options.size),
+            result: await editImageWithResponsesBackend(responseInput)
+        };
     }
     if (!input.streamEnabled) {
-        return { outputFormat: options.outputFormat, result: await createEditResultOnly(input, options) };
+        return {
+            outputFormat: options.outputFormat,
+            targetDimensions: readRequestedImageDimensions(options.size),
+            result: await createEditResultOnly(input, options)
+        };
     }
     return createEditStreamResponse(input, options);
 }

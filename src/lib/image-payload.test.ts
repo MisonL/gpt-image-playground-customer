@@ -2,7 +2,7 @@ import { extractImageBase64FromDataUrl, isRemoteHttpUrl, readResponsesImageResul
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAMBAQAY3Y2wAAAAAElFTkSuQmCC';
 
 describe('image payload parsing', () => {
     it('extracts only image base64 data URLs', () => {

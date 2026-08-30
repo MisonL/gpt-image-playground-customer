@@ -1,4 +1,5 @@
 import {
+    PNG_MATSCA_BASE64,
     PNG_BASE64,
     imageFormRequest,
     readSseEvents,
@@ -314,6 +315,47 @@ describe('POST /api/images Images API streaming', { concurrency: false }, () => 
             assert.equal(edit.status, 200);
             assert.equal(firstCalls, 0);
             assert.equal(secondCalls, 2);
+        } finally {
+            await Promise.all([first.close(), second.close()]);
+        }
+    });
+
+    it('routes page requests to the channel that allows the requested model', async () => {
+        const { POST } = await import('./route');
+        let firstCalls = 0;
+        let secondCalls = 0;
+        const first = await startImagesJsonUpstream(async (_body, _url, request) => {
+            if (request.method === 'POST') firstCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        const second = await startImagesJsonUpstream(async (_body, _url, request) => {
+            if (request.method === 'POST') secondCalls += 1;
+            return { data: [{ b64_json: PNG_BASE64 }] };
+        });
+        process.env.OPENAI_CHANNEL_1_ID = 'model-one';
+        process.env.OPENAI_CHANNEL_1_BASE_URL = first.baseUrl;
+        process.env.OPENAI_CHANNEL_1_API_KEYS = 'first-key';
+        process.env.OPENAI_CHANNEL_1_MODELS = 'gpt-image-1';
+        process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream';
+        process.env.OPENAI_CHANNEL_2_ID = 'model-two';
+        process.env.OPENAI_CHANNEL_2_BASE_URL = second.baseUrl;
+        process.env.OPENAI_CHANNEL_2_API_KEYS = 'second-key';
+        process.env.OPENAI_CHANNEL_2_MODELS = 'custom-image-model';
+        process.env.OPENAI_CHANNEL_2_REQUEST_MODES = 'images-non-stream';
+        const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
+        resetServerChannelStateForTests();
+
+        try {
+            const response = await POST(
+                imageFormRequest({
+                    model: 'custom-image-model',
+                    streamMode: 'non_stream',
+                    clientRequestId: 'model-routing-page'
+                })
+            );
+            assert.equal(response.status, 200);
+            assert.equal(firstCalls, 0);
+            assert.equal(secondCalls, 1);
         } finally {
             await Promise.all([first.close(), second.close()]);
         }
@@ -679,7 +721,7 @@ describe('POST /api/images Images API streaming', { concurrency: false }, () => 
                 upstreamAppSecret = request.headers['x-app-secret'];
             }
             return {
-                data: [{ b64_json: PNG_BASE64 }]
+                data: [{ b64_json: PNG_MATSCA_BASE64 }]
             };
         });
 

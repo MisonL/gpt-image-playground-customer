@@ -1,3 +1,4 @@
+import { readImageDimensions } from './agent-file-utils';
 import { clearAppLogEntriesForTest, readAppLogEntries } from './app-logger';
 import { createImageStreamResponse } from './image-stream-service';
 import { readSseEvents, upstreamEvents } from './sse-test-utils';
@@ -5,7 +6,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVQI12P4z8AAAAMBAQAY3Y2wAAAAAElFTkSuQmCC';
 const CONVERTIBLE_PNG_BASE64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVQImWP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
 
@@ -101,6 +102,47 @@ describe('createImageStreamResponse', () => {
             ).toString('ascii', 8, 12),
             'WEBP'
         );
+    });
+
+    it('normalizes same-aspect final streamed images to the requested dimensions', async () => {
+        const response = createImageStreamResponse({
+            stream: upstreamEvents([{ data: [{ b64_json: CONVERTIBLE_PNG_BASE64 }] }]),
+            modeLabel: '生成',
+            outputFormat: 'webp',
+            targetDimensions: { width: 2, height: 2 },
+            storageMode: 'indexeddb',
+            apiKey: 'test-key',
+            model: 'gpt-image-2',
+            startedAtMs: 1000,
+            resolveActualCost,
+            logProviderDiagnostics: false
+        });
+
+        const events = await readSseEvents(response);
+        const image = Buffer.from(String(events[0].b64_json || ''), 'base64');
+        assert.deepEqual(readImageDimensions(image), { width: 2, height: 2 });
+    });
+
+    it('reports a dimension mismatch on the streamed completion event', async () => {
+        const response = createImageStreamResponse({
+            stream: upstreamEvents([{ data: [{ b64_json: CONVERTIBLE_PNG_BASE64 }] }]),
+            modeLabel: '生成',
+            outputFormat: 'webp',
+            targetDimensions: { width: 2, height: 1 },
+            storageMode: 'indexeddb',
+            apiKey: 'test-key',
+            model: 'gpt-image-2',
+            startedAtMs: 1000,
+            resolveActualCost,
+            logProviderDiagnostics: false
+        });
+
+        const events = await readSseEvents(response);
+        assert.deepEqual(
+            events.map((event) => event.type),
+            ['error']
+        );
+        assert.equal(events[0].code, 'image_dimension_mismatch');
     });
 
     it('emits the stable client SSE contract for normalized upstream image events', async () => {

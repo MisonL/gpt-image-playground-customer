@@ -15,6 +15,11 @@ const DEFAULT_ACCEPTED_IMAGE_TASK_MAX_ATTEMPTS = 3;
 const DEFAULT_ACCEPTED_IMAGE_TASK_RETRY_DELAY_MS = 5_000;
 const MAX_ACCEPTED_IMAGE_TASK_RETRY_DELAY_MS = 15_000;
 const MAX_ACCEPTED_IMAGE_TASK_RETRY_AFTER_SECONDS = 300;
+// Some upstreams round each output edge independently. Allow only the small
+// pixel drift that can be corrected with transparent/opaque padding; larger
+// aspect-ratio changes must still fail instead of distorting the subject.
+const MIN_NORMALIZABLE_ASPECT_DRIFT_PX = 8;
+const MAX_NORMALIZABLE_ASPECT_DRIFT_RATIO = 0.01;
 
 export type PersistedOpenAiImage = {
     filename: string;
@@ -69,6 +74,39 @@ export class AcceptedImageTaskResponseError extends Error {
         this.pollUrl = input.pollUrl;
         this.retryAfterSeconds = input.retryAfterSeconds;
     }
+}
+
+export type RequestedImageDimensions = {
+    width: number;
+    height: number;
+};
+
+export class ImageDimensionMismatchError extends Error {
+    readonly code = 'image_dimension_mismatch';
+    readonly status = 502;
+    readonly expected: RequestedImageDimensions;
+    readonly actual: { width: number | null; height: number | null };
+
+    constructor(expected: RequestedImageDimensions, actual: { width: number | null; height: number | null }) {
+        super(
+            actual.width === null || actual.height === null
+                ? `上游图片尺寸无法识别，无法满足请求尺寸 ${expected.width}x${expected.height}。`
+                : `上游图片尺寸 ${actual.width}x${actual.height} 与请求尺寸 ${expected.width}x${expected.height} 的宽高比不一致，无法安全归一化。`
+        );
+        this.name = 'ImageDimensionMismatchError';
+        this.expected = expected;
+        this.actual = actual;
+    }
+}
+
+export function readRequestedImageDimensions(size: string | null | undefined): RequestedImageDimensions | undefined {
+    if (!size || size === 'auto') return undefined;
+    const match = /^(\d+)x(\d+)$/.exec(size);
+    if (!match) return undefined;
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) return undefined;
+    return { width, height };
 }
 
 export function assertOpenAiImagesResponse(result: unknown): asserts result is ValidImagesResponse {
@@ -167,6 +205,7 @@ export async function persistOpenAiImages(options: {
     storageMode: StorageMode;
     includeBase64: boolean;
     normalizeOutputFormat?: boolean;
+    targetDimensions?: RequestedImageDimensions;
     batchId?: string;
     apiBaseUrl?: string;
     apiKey?: string;
@@ -183,6 +222,12 @@ export async function persistOpenAiImages(options: {
     const batchId = options.batchId || createBatchId();
     const persisted: PersistedOpenAiImage[] = [];
     const imageItems = result.data;
+    const prepared: Array<{
+        buffer: Buffer;
+        detectedFormat: ReturnType<typeof detectImageFormat>;
+        filename: string;
+        filepath: string;
+    }> = [];
 
     for (const [index, imageData] of imageItems.entries()) {
         const b64Json =
@@ -201,32 +246,37 @@ export async function persistOpenAiImages(options: {
             throw new MissingOpenAiImageDataError(index, result);
         }
         const sourceBuffer = Buffer.from(b64Json, 'base64');
-        const buffer = options.normalizeOutputFormat
-            ? await normalizeImageBuffer(sourceBuffer, options.outputFormat)
-            : sourceBuffer;
+        const buffer =
+            options.normalizeOutputFormat || options.targetDimensions
+                ? await normalizeImageBuffer(sourceBuffer, options.outputFormat, options.targetDimensions)
+                : sourceBuffer;
         const detectedFormat = detectImageFormat(buffer, options.outputFormat);
         const filename = createImageFilename(batchId, index, detectedFormat.outputFormat);
         const filepath = path.join(outputDir, filename);
+        prepared.push({ buffer, detectedFormat, filename, filepath });
+    }
+
+    for (const item of prepared) {
         if (options.storageMode === 'fs') {
-            await writeFileAtomic(filepath, buffer);
+            await writeFileAtomic(item.filepath, item.buffer);
         }
-        const dimensions = readImageDimensions(buffer);
-        const persistedB64Json = buffer.toString('base64');
+        const dimensions = readImageDimensions(item.buffer);
+        const persistedB64Json = item.buffer.toString('base64');
         const legacyResult = createImageResult(
-            filename,
+            item.filename,
             persistedB64Json,
-            detectedFormat.outputFormat,
+            item.detectedFormat.outputFormat,
             options.storageMode
         );
         persisted.push({
-            filename,
+            filename: item.filename,
             b64Json: persistedB64Json,
             ...(options.includeBase64 ? { responseJson: persistedB64Json } : {}),
             ...(legacyResult.path ? { path: legacyResult.path } : {}),
-            outputFormat: detectedFormat.outputFormat,
-            filepath,
-            mimeType: detectedFormat.mimeType,
-            sizeBytes: buffer.byteLength,
+            outputFormat: item.detectedFormat.outputFormat,
+            filepath: item.filepath,
+            mimeType: item.detectedFormat.mimeType,
+            sizeBytes: item.buffer.byteLength,
             width: dimensions.width,
             height: dimensions.height
         });
@@ -235,17 +285,69 @@ export async function persistOpenAiImages(options: {
     return persisted;
 }
 
-export async function normalizeImageBuffer(buffer: Buffer, outputFormat: ValidOutputFormat): Promise<Buffer> {
+export async function normalizeImageBuffer(
+    buffer: Buffer,
+    outputFormat: ValidOutputFormat,
+    targetDimensions?: RequestedImageDimensions
+): Promise<Buffer> {
     const detectedFormat = detectImageFormat(buffer, outputFormat);
-    if (detectedFormat.outputFormat === outputFormat) return buffer;
+    const sourceDimensions = readImageDimensions(buffer);
+    const aspectRatioDrift = targetDimensions
+        ? readAspectRatioDriftPixels(sourceDimensions, targetDimensions)
+        : undefined;
+    if (targetDimensions && aspectRatioDrift === undefined) {
+        throw new ImageDimensionMismatchError(targetDimensions, sourceDimensions);
+    }
+    if (detectedFormat.outputFormat === outputFormat && dimensionsMatch(sourceDimensions, targetDimensions)) {
+        return buffer;
+    }
     const { default: sharp } = await import('sharp');
-    if (outputFormat === 'webp') {
-        return sharp(buffer).webp({ quality: 100 }).toBuffer();
+    let image = sharp(buffer);
+    if (targetDimensions) {
+        image = image.resize(targetDimensions.width, targetDimensions.height, {
+            fit: aspectRatioDrift === 0 ? 'fill' : 'contain',
+            ...(aspectRatioDrift === 0
+                ? {}
+                : { background: outputFormat === 'jpeg' ? '#ffffff' : { r: 0, g: 0, b: 0, alpha: 0 } })
+        });
     }
-    if (outputFormat === 'jpeg') {
-        return sharp(buffer).jpeg({ quality: 100 }).toBuffer();
+    if (outputFormat === 'webp') return image.webp({ quality: 100 }).toBuffer();
+    if (outputFormat === 'jpeg') return image.jpeg({ quality: 100 }).toBuffer();
+    return image.png().toBuffer();
+}
+
+function dimensionsMatch(
+    actual: { width: number | null; height: number | null },
+    expected: RequestedImageDimensions | undefined
+): boolean {
+    return (
+        expected === undefined ||
+        (actual.width !== null &&
+            actual.height !== null &&
+            actual.width === expected.width &&
+            actual.height === expected.height)
+    );
+}
+
+function readAspectRatioDriftPixels(
+    actual: { width: number | null; height: number | null },
+    expected: RequestedImageDimensions
+): number | undefined {
+    if (actual.width === null || actual.height === null) return undefined;
+    if (actual.width <= 0 || actual.height <= 0) return undefined;
+    if (BigInt(actual.width) * BigInt(expected.height) === BigInt(actual.height) * BigInt(expected.width)) {
+        return 0;
     }
-    return sharp(buffer).png().toBuffer();
+
+    const heightDrift = Math.abs((actual.height * expected.width) / actual.width - expected.height);
+    const widthDrift = Math.abs((actual.width * expected.height) / actual.height - expected.width);
+    const drift = Math.min(heightDrift, widthDrift);
+    const relativeDrift = drift / Math.min(expected.width, expected.height);
+    const maxDriftPixels = Math.max(
+        MIN_NORMALIZABLE_ASPECT_DRIFT_PX,
+        Math.ceil(Math.min(expected.width, expected.height) * MAX_NORMALIZABLE_ASPECT_DRIFT_RATIO)
+    );
+    return drift <= maxDriftPixels && relativeDrift <= MAX_NORMALIZABLE_ASPECT_DRIFT_RATIO ? drift : undefined;
 }
 
 export function persistedImageToLegacyResponse(image: PersistedOpenAiImage): {

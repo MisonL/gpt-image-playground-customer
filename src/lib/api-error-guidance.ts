@@ -5,6 +5,7 @@ export const superApiReferralUrl = 'https://gpt2image.superapi.buzz/';
 export type ApiErrorSummary = {
     message: string;
     status?: number;
+    code?: string;
 };
 
 export type ApiErrorNotice = {
@@ -16,7 +17,7 @@ export type ApiErrorNotice = {
 };
 
 export function buildUserFacingApiErrorMessage(options: ApiErrorSummary & { t: Translate }): string {
-    const advice = buildApiErrorAdvice(options.status, options.t);
+    const advice = buildApiErrorAdvice(options.status, options.code, options.t);
     if (!advice) return options.message;
 
     return options.t('error.apiFailedWithAdvice', {
@@ -37,6 +38,7 @@ export function buildBatchPartialFailureMessage(options: {
                 `${index + 1}. ${buildUserFacingApiErrorMessage({
                     message: error.message,
                     status: error.status,
+                    code: error.code,
                     t: options.t
                 })}`
         )
@@ -53,12 +55,29 @@ export function buildApiErrorNotice(message: string): ApiErrorNotice {
     return { message, links: [] };
 }
 
-function buildApiErrorAdvice(status: number | undefined, t: Translate): string | null {
+function buildApiErrorAdvice(status: number | undefined, code: string | undefined, t: Translate): string | null {
+    if (code === 'upstream_quota_exhausted') return t('error.adviceQuota');
+    if (code === 'channel_unavailable') return t('error.adviceChannelUnavailable');
+    if (code === 'validation_error') return t('error.adviceValidation');
     if (status === 401 || status === 403) return t('error.adviceAuth');
     if (status === 429) return t('error.adviceRateLimit');
     if (status === 524) return t('error.adviceCloudflare', { url: superApiReferralUrl });
     if (isUpstreamStatus(status)) return t('error.adviceUpstream');
     return null;
+}
+
+export function classifyApiErrorCode(code: unknown, message: string): string | undefined {
+    const normalizedCode = typeof code === 'string' && code.trim() ? code.trim() : undefined;
+    if (normalizedCode?.toUpperCase() === 'INSUFFICIENT_BALANCE') return 'upstream_quota_exhausted';
+    if (normalizedCode) return normalizedCode;
+    const normalized = message.toLowerCase();
+    if (normalized.includes('insufficient_balance') || normalized.includes('insufficient account balance')) {
+        return 'upstream_quota_exhausted';
+    }
+    if (normalized.includes('健康渠道') && (normalized.includes('没有支持') || normalized.includes('没有可用'))) {
+        return 'channel_unavailable';
+    }
+    return undefined;
 }
 
 function isUpstreamStatus(status: number | undefined): boolean {

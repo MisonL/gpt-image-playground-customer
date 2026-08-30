@@ -44,13 +44,11 @@ import {
 import {
     type ChannelCredential,
     type ChannelFailureReport,
-    describeChannelFailure,
     isChannelCredentialRequestModeHealthy,
-    isChannelFailure,
-    isChannelRequestModeFailure,
-    isCredentialFailure,
+    isModelUnavailableForAllCredentials,
     resolveEffectiveCredential
 } from './channel-router';
+import { isGptImage2Model } from './cost-utils';
 import {
     RequestValidationError,
     assertMaskCompatibility,
@@ -60,6 +58,7 @@ import {
     readImageFiles,
     readMaskFile,
     readModel,
+    MAX_MODEL_NAME_LENGTH,
     readPlainHttpApiBaseUrlAllowlist,
     readRequiredText,
     readSize,
@@ -67,10 +66,13 @@ import {
     type GptImageModel,
     type ValidOutputFormat
 } from './image-request-utils';
+import { reportServerCredentialFailure } from './image-route-support';
 import {
+    ImageDimensionMismatchError,
     InvalidOpenAiImagesResponseError,
     MissingOpenAiImageDataError,
     readAcceptedImageTaskDetails,
+    readRequestedImageDimensions,
     resolveAcceptedImageTaskResponse,
     type AcceptedImageTaskResponseError,
     persistOpenAiImages as persistSharedOpenAiImages
@@ -301,6 +303,7 @@ export function prepareAgentGenerate(request: AgentGenerateRequest, headers: Hea
     const credentialContext = createOpenAiClient(
         headers,
         resolveAgentGenerateChannelRequestModePlan(request),
+        request.model,
         (credential, requestMode) => isAgentGenerateCredentialEligible(request, credential, requestMode)
     );
     validateAgentGenerateAgainstUpstreamProfile(request, credentialContext.upstreamProfile, {
@@ -354,7 +357,7 @@ export async function prepareAgentEdit(formData: FormData, headers: Headers): Pr
         streamMode,
         streamingStrategy
     });
-    const credentialContext = createOpenAiClient(headers, requestModePlan, (credential, requestMode) =>
+    const credentialContext = createOpenAiClient(headers, requestModePlan, model, (credential, requestMode) =>
         isAgentEditCredentialEligible(
             {
                 formData,
@@ -518,6 +521,7 @@ export async function executeAgentGenerate(options: {
             model: options.request.model,
             prompt: options.request.prompt,
             outputFormat: options.request.output_format,
+            targetDimensions: readRequestedImageDimensions(options.request.size),
             responseMode: options.request.response_mode,
             normalizeOutputFormat: true,
             requestId: options.requestId,
@@ -550,7 +554,8 @@ export async function executeAgentGenerate(options: {
         const failureReport = reportServerCredentialFailure(
             credentialContext.selectedCredential,
             error,
-            credentialContext.channelRequestMode
+            credentialContext.channelRequestMode,
+            options.request.model
         );
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs, failureReport));
     } finally {
@@ -674,13 +679,13 @@ function validateAgentGenerateAgainstUpstreamProfile(
     }
     if (options.forceRequest) return;
     if (
-        request.model === 'gpt-image-2' &&
+        isGptImage2Model(request.model) &&
         request.background === 'transparent' &&
         !upstreamProfile.gptImage2.allowTransparentBackground
     ) {
         throw new RequestValidationError('gpt-image-2 不支持 transparent 背景。', 422);
     }
-    if (request.model !== 'gpt-image-2' || request.size === 'auto') return;
+    if (!isGptImage2Model(request.model) || request.size === 'auto') return;
     const formData = new FormData();
     formData.set('size', request.size);
     readSize(formData, 'size', '1024x1024', request.model, upstreamProfile);
@@ -700,6 +705,9 @@ function isAgentGenerateCredentialEligible(
     credential: ChannelCredential,
     requestMode?: ChannelRequestMode
 ): boolean {
+    if (credential.models !== undefined && credential.models.length > 0 && !credential.models.includes(request.model)) {
+        return false;
+    }
     const serverChannelState = getServerChannelState();
     if (requestMode && !isChannelCredentialRequestModeHealthy(serverChannelState.router, credential, requestMode)) {
         return false;
@@ -738,13 +746,13 @@ function isAgentGenerateCredentialEligible(
     }
     if (request.force_request === true) return true;
     if (
-        request.model === 'gpt-image-2' &&
+        isGptImage2Model(request.model) &&
         request.background === 'transparent' &&
         !upstreamProfile.gptImage2.allowTransparentBackground
     ) {
         return false;
     }
-    if (request.model !== 'gpt-image-2' || request.size === 'auto') return true;
+    if (!isGptImage2Model(request.model) || request.size === 'auto') return true;
     try {
         const formData = new FormData();
         formData.set('size', request.size);
@@ -769,6 +777,9 @@ function isAgentEditCredentialEligible(
     credential: ChannelCredential,
     requestMode?: ChannelRequestMode
 ): boolean {
+    if (credential.models !== undefined && credential.models.length > 0 && !credential.models.includes(input.model)) {
+        return false;
+    }
     const serverChannelState = getServerChannelState();
     if (requestMode && !isChannelCredentialRequestModeHealthy(serverChannelState.router, credential, requestMode)) {
         return false;
@@ -1092,8 +1103,11 @@ function readAgentResponsesApiModel(requestModel?: string): string {
             500
         );
     }
-    if (model.length > 128) {
-        throw new RequestValidationError('Responses API 顶层模型名称不能超过 128 个字符。', 400);
+    if (model.length > MAX_MODEL_NAME_LENGTH) {
+        throw new RequestValidationError(
+            'Responses API 顶层模型名称不能超过 ' + MAX_MODEL_NAME_LENGTH + ' 个字符。',
+            400
+        );
     }
     return model;
 }
@@ -1116,9 +1130,11 @@ export async function executeAgentEdit(options: {
     const startedAtMs = Date.now();
     const startedAt = isoDate(new Date(startedAtMs));
     let channelLease: ChannelCapacityLease | undefined;
+    let failureModel: string | undefined;
     try {
         const preparation = options.preparation ?? (await prepareAgentEdit(options.formData, options.headers));
         credentialContext = preparation.credentialContext;
+        failureModel = preparation.model;
         // Keep a const alias so TypeScript preserves the narrowed credential context below.
         const activeCredentialContext = credentialContext;
         const editParams: OpenAI.Images.ImageEditParamsNonStreaming = {
@@ -1173,6 +1189,7 @@ export async function executeAgentEdit(options: {
             model: preparation.model,
             prompt: preparation.prompt,
             outputFormat: AGENT_EDIT_OUTPUT_FORMAT,
+            targetDimensions: readRequestedImageDimensions(preparation.size),
             responseMode: preparation.responseMode,
             normalizeOutputFormat: true,
             requestId: options.requestId,
@@ -1205,7 +1222,8 @@ export async function executeAgentEdit(options: {
         const failureReport = reportServerCredentialFailure(
             credentialContext?.selectedCredential,
             error,
-            credentialContext?.channelRequestMode
+            credentialContext?.channelRequestMode,
+            failureModel
         );
         throw normalizeAgentError(error, buildAgentExecutionDiagnostics(credentialContext, startedAtMs, failureReport));
     } finally {
@@ -1372,6 +1390,9 @@ export function errorToAgentErrorBody(error: unknown, requestId: string): AgentE
             code: normalized.code,
             message: normalized.message,
             retryable: normalized.retryable,
+            ...(normalized.retryable && normalized.retryAfterSeconds
+                ? { retry_after_seconds: normalized.retryAfterSeconds }
+                : {}),
             ...(normalized.details ? { details: normalized.details } : {}),
             ...(normalized.upstreamStatus ? { upstream_status: normalized.upstreamStatus } : {}),
             ...(normalized.diagnostics ? { diagnostics: normalized.diagnostics } : {}),
@@ -1409,17 +1430,32 @@ export async function hydrateAgentReplayResponse(
 function createOpenAiClient(
     headers: Headers,
     requestModePlan: AgentChannelRequestModePlan,
+    model: string,
     isCredentialEligible?: (credential: ChannelCredential, requestMode?: ChannelRequestMode) => boolean
 ): CredentialContext {
     const serverChannelState = getServerChannelState();
     const serverChannelRouter = serverChannelState.router;
+    if (isModelUnavailableForAllCredentials(serverChannelState.config.credentials, model)) {
+        throw new AgentApiError({
+            code: 'channel_unavailable',
+            message: `当前没有支持模型 ${model} 的健康渠道凭证。请调整 OPENAI_CHANNEL_N_MODELS。`,
+            status: 503,
+            retryable: false
+        });
+    }
     const hasMultipleServerChannels =
         new Set(serverChannelState.config.credentials.map((credential) => credential.channelId)).size > 1;
+    const selectionEligibility = hasMultipleServerChannels
+        ? isCredentialEligible
+        : (credential: ChannelCredential) =>
+              credential.models?.length !== undefined && credential.models.length > 0
+                  ? credential.models.includes(model)
+                  : true;
     const selection = selectAgentChannelCredential({
         router: serverChannelRouter,
         headers,
         requestModePlan,
-        isCredentialEligible: hasMultipleServerChannels ? isCredentialEligible : undefined
+        isCredentialEligible: selectionEligibility
     });
     const selectedCredential = selection.selectedCredential;
     const {
@@ -1461,6 +1497,9 @@ function createOpenAiClient(
                 apiKey,
                 baseURL: baseUrl || undefined,
                 upstreamProxyUrl,
+                allowedPlainHttpBaseUrls: readPlainHttpApiBaseUrlAllowlist(
+                    process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS
+                ),
                 defaultHeaders: mergeUpstreamHeadersWithFixed(effectiveSelectedCredential?.upstreamHeaders, {})
             })
         ),
@@ -1522,64 +1561,13 @@ function readUrlHost(value: string): string | undefined {
     }
 }
 
-function reportServerCredentialFailure(
-    credential: ChannelCredential | undefined,
-    error: unknown,
-    requestMode?: ChannelRequestMode
-): ChannelFailureReport | undefined {
-    const serverChannelRouter = getServerChannelState().router;
-    if (!credential || !serverChannelRouter) return undefined;
-    if (isChannelRequestModeFailure(error, requestMode)) {
-        const reason = {
-            ...describeChannelFailure(error, 'channel'),
-            ...(requestMode ? { requestMode } : {})
-        };
-        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
-        appLogger.warn(
-            report.cooldownApplied
-                ? `Temporarily cooling down API channel request mode: ${credential.channelId}/${requestMode}`
-                : `Recording API channel request mode failure without cooldown: ${credential.channelId}/${requestMode}`,
-            reason
-        );
-        return report;
-    }
-    if (isChannelFailure(error)) {
-        const reason = {
-            ...describeChannelFailure(error, 'channel'),
-            ...(requestMode ? { requestMode } : {})
-        };
-        const report = serverChannelRouter.reportFailure(credential, { scope: 'channel', requestMode, reason });
-        appLogger.warn(
-            report.cooldownApplied
-                ? `Temporarily cooling down API channel: ${credential.channelId}`
-                : `Recording API channel failure without cooldown: ${credential.channelId}`,
-            reason
-        );
-        return report;
-    }
-    if (isCredentialFailure(error)) {
-        const reason = {
-            ...describeChannelFailure(error, 'credential'),
-            ...(requestMode ? { requestMode } : {})
-        };
-        const report = serverChannelRouter.reportFailure(credential, { requestMode, reason });
-        appLogger.warn(
-            report.cooldownApplied
-                ? `Temporarily cooling down API channel credential: ${credential.channelId}/${credential.id}`
-                : `Recording API channel credential failure without cooldown: ${credential.channelId}/${credential.id}`,
-            reason
-        );
-        return report;
-    }
-    return undefined;
-}
-
 async function persistOpenAiImages(options: {
     result: OpenAI.Images.ImagesResponse;
     mode: 'generate' | 'edit';
     model: GptImageModel;
     prompt: string;
     outputFormat: ValidOutputFormat;
+    targetDimensions?: ReturnType<typeof readRequestedImageDimensions>;
     responseMode: AgentResponseMode;
     normalizeOutputFormat?: boolean;
     requestId: string;
@@ -1600,6 +1588,7 @@ async function persistOpenAiImages(options: {
             storageMode: 'fs',
             includeBase64: shouldIncludeBase64(options.responseMode),
             normalizeOutputFormat: options.normalizeOutputFormat,
+            targetDimensions: options.targetDimensions,
             apiBaseUrl: options.apiBaseUrl,
             apiKey: options.apiKey,
             upstreamProxyUrl: options.upstreamProxyUrl,
@@ -1607,6 +1596,22 @@ async function persistOpenAiImages(options: {
             abortSignal: options.abortSignal
         });
     } catch (error) {
+        if (error instanceof ImageDimensionMismatchError) {
+            throw new AgentApiError({
+                code: 'image_dimension_mismatch',
+                message: error.message,
+                status: error.status,
+                retryable: false,
+                details: {
+                    dimension_check_failed: true,
+                    expected_dimensions: `${error.expected.width}x${error.expected.height}`,
+                    actual_dimensions:
+                        error.actual.width !== null && error.actual.height !== null
+                            ? `${error.actual.width}x${error.actual.height}`
+                            : null
+                }
+            });
+        }
         if (!(error instanceof InvalidOpenAiImagesResponseError) && !(error instanceof MissingOpenAiImageDataError)) {
             throw error;
         }

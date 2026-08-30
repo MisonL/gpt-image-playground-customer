@@ -136,7 +136,7 @@ export function createChannelCapacityQueue(options: ChannelCapacityQueueOptions)
                             key,
                             queuedAtMs,
                             position: 0,
-                            status: 499,
+                            status: 429,
                             retryable: false
                         })
                     );
@@ -151,7 +151,7 @@ export function createChannelCapacityQueue(options: ChannelCapacityQueueOptions)
                             key,
                             queuedAtMs,
                             position: getWaiterPosition(waiter),
-                            status: 499,
+                            status: 429,
                             retryable: false
                         })
                     );

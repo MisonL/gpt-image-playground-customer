@@ -11,9 +11,12 @@ import {
     type ChannelRequestModeDecision
 } from './channel-request-mode';
 import { getChannelPoolSummary, parseChannelPoolConfig } from './channel-router';
+import { isGptImage2Model } from './cost-utils';
 import {
     MAX_PROMPT_LENGTH,
+    MAX_MODEL_NAME_LENGTH,
     RequestValidationError,
+    resolveDefaultImageModel,
     validateApiBaseUrl,
     type GptImageModel,
     type ValidOutputFormat
@@ -73,7 +76,13 @@ export const AGENT_DEFAULT_RECOVERY_INTERVAL_MS = 30 * 1000;
 export const AGENT_PAGE_REQUEST_DIAGNOSTICS_NO_MATCH_HINT =
     'matched_log_count=0 表示当前保留窗口内没有匹配日志；可能已被保留条数淘汰、被 APP_LOG_LEVEL 过滤，或本地日志文件被清理。';
 
-export const AGENT_MODELS = ['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2'] as const;
+export const AGENT_MODELS = [
+    'gpt-image-1',
+    'gpt-image-1-mini',
+    'gpt-image-1.5',
+    'gpt-image-2',
+    'gpt-image-2-1k'
+] as const;
 export const AGENT_OUTPUT_FORMATS = ['png', 'jpeg', 'webp'] as const;
 const AGENT_DEFAULT_OUTPUT_FORMAT = 'webp';
 const AGENT_DEFAULT_LOSSY_OUTPUT_COMPRESSION = 100;
@@ -253,6 +262,7 @@ export type AgentJobStatusResponse = {
             code: string;
             message: string;
             retryable: boolean;
+            retry_after_seconds?: number;
             details?: Record<string, unknown>;
             upstream_status?: number;
             diagnostics?: AgentErrorDiagnostics;
@@ -334,6 +344,20 @@ export type AgentCapabilities = {
     };
     model_limits: {
         'gpt-image-2': {
+            max_edge: number;
+            max_pixels: number;
+            edge_multiple: number;
+            max_aspect: number;
+            min_pixels: number;
+            size_policy: ImageUpstreamProfile['gptImage2']['sizePolicy'];
+            allow_transparent_background: boolean;
+            recommended_presets: Array<{ name: string; size: string; purpose: string }>;
+            large_image_risk: {
+                applies_to: string[];
+                guidance: string;
+            };
+        };
+        'gpt-image-2-1k': {
             max_edge: number;
             max_pixels: number;
             edge_multiple: number;
@@ -445,6 +469,12 @@ export type AgentCapabilities = {
         request_modes: readonly ChannelRequestMode[];
         streaming_strategies: readonly ImageStreamingStrategy[];
         stream_modes: readonly ImageStreamMode[];
+    };
+    model_directory: {
+        endpoint: string;
+        probe_query: string;
+        default_model: string;
+        semantics: 'declared_models_only_until_explicit_probe';
     };
     storage: {
         image_storage_mode: string;
@@ -568,10 +598,11 @@ function validatePrompt(value: unknown, fields: FieldErrors): string {
 }
 
 function readModel(body: Record<string, unknown>, fields: FieldErrors): GptImageModel {
-    const value = readStringField(body, 'model', 'gpt-image-2');
-    if (!value || !isOneOf(value, AGENT_MODELS)) {
-        fields.model = `必须是以下值之一：${AGENT_MODELS.join(', ')}`;
-        return 'gpt-image-2';
+    const defaultModel = resolveDefaultImageModel(process.env);
+    const value = readStringField(body, 'model', defaultModel)?.trim();
+    if (!value || value.length > MAX_MODEL_NAME_LENGTH) {
+        fields.model = '必须是 1 到 ' + MAX_MODEL_NAME_LENGTH + ' 个字符的非空字符串';
+        return defaultModel;
     }
     return value;
 }
@@ -589,11 +620,29 @@ function readSize(
         fields.size = '必须是字符串';
         return fallback;
     }
-    if (model !== 'gpt-image-2' && !isOneOf(value, AGENT_LEGACY_SIZES)) {
+    if (
+        !isGptImage2Model(model) &&
+        AGENT_MODELS.includes(model as (typeof AGENT_MODELS)[number]) &&
+        !isOneOf(value, AGENT_LEGACY_SIZES)
+    ) {
         fields.size = `${model} 的 size 必须是以下值之一：${AGENT_LEGACY_SIZES.join(', ')}`;
         return fallback;
     }
-    if (model === 'gpt-image-2' && value !== 'auto') {
+    if (!isGptImage2Model(model) && !AGENT_MODELS.includes(model as (typeof AGENT_MODELS)[number])) {
+        if (value === 'auto') return value;
+        const match = /^(\d+)x(\d+)$/.exec(value);
+        if (!match) {
+            fields.size = '必须是 auto 或 WxH 格式的尺寸值';
+            return fallback;
+        }
+        const validation = validatePositiveIntegerImageSize(Number(match[1]), Number(match[2]));
+        if (!validation.valid) {
+            fields.size = validation.reason;
+            return fallback;
+        }
+        return value;
+    }
+    if (isGptImage2Model(model) && value !== 'auto') {
         const match = /^(\d+)x(\d+)$/.exec(value);
         if (!match) {
             fields.size = '必须是 auto 或 WxH 格式的尺寸值';
@@ -811,13 +860,13 @@ function readAgentAutoGenerateCandidates(input: {
             }
             if (!input.forceRequest) {
                 if (
-                    input.model === 'gpt-image-2' &&
+                    isGptImage2Model(input.model) &&
                     input.background === 'transparent' &&
                     !profile.gptImage2.allowTransparentBackground
                 ) {
                     return [];
                 }
-                if (input.model === 'gpt-image-2' && input.size !== 'auto') {
+                if (isGptImage2Model(input.model) && input.size !== 'auto') {
                     const fields: FieldErrors = {};
                     readSize({ size: input.size }, input.model, fields, '1024x1024', profile);
                     if (fields.size) return [];
@@ -927,9 +976,9 @@ function validateAgentGenerateBackground(input: {
     profile: ImageUpstreamProfile;
     fields: FieldErrors;
 }): void {
-    if (input.forceRequest || input.model !== 'gpt-image-2' || input.background !== 'transparent') return;
+    if (input.forceRequest || !isGptImage2Model(input.model) || input.background !== 'transparent') return;
     if (!input.profile.gptImage2.allowTransparentBackground) {
-        input.fields.background = 'gpt-image-2 不支持 transparent 背景。';
+        input.fields.background = `${input.model} 不支持 transparent 背景。`;
     }
 }
 
@@ -983,7 +1032,7 @@ function readAgentResponsesModel(
     imageBackend: ImageGenerationBackend,
     fields: FieldErrors
 ): string | undefined {
-    const value = readOptionalStringField(body, 'responsesModel', fields, { maxLength: 128 });
+    const value = readOptionalStringField(body, 'responsesModel', fields, { maxLength: MAX_MODEL_NAME_LENGTH });
     if (value && imageBackend !== 'responses-image-generation') {
         fields.responsesModel = '仅适用于 image_backend=responses-image-generation';
     }
@@ -1422,6 +1471,7 @@ function readPositiveIntegerEnv(env: Record<string, string | undefined>, fieldNa
 }
 
 export function buildAgentCapabilities(env: Record<string, string | undefined>): AgentCapabilities {
+    const defaultModel = resolveDefaultImageModel(env);
     const upstreamLimits = buildAgentUpstreamLimits(env);
     const channelSummary = getChannelPoolSummary(parseChannelPoolConfig(env));
     const normalizedGenerateImages = getImageCountRangeForBackend(upstreamLimits.profile, 'generate', 'images-api');
@@ -1466,7 +1516,7 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         upstream_request_headers: buildAgentUpstreamRequestHeadersCapabilities(env),
         request_mode_controls: buildAgentRequestModeControlsCapabilities(),
         defaults: {
-            model: 'gpt-image-2',
+            model: defaultModel,
             response_mode: 'path',
             state_backend: readAgentStateBackend(env),
             image_backend: 'images-api',
@@ -1517,6 +1567,24 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
         },
         model_limits: {
             'gpt-image-2': {
+                max_edge: GPT_IMAGE_2_MAX_EDGE,
+                max_pixels: GPT_IMAGE_2_MAX_PIXELS,
+                edge_multiple: GPT_IMAGE_2_EDGE_MULTIPLE,
+                max_aspect: GPT_IMAGE_2_MAX_ASPECT,
+                min_pixels: GPT_IMAGE_2_MIN_PIXELS,
+                size_policy: upstreamLimits.profile.gptImage2.sizePolicy,
+                allow_transparent_background: upstreamLimits.profile.gptImage2.allowTransparentBackground,
+                recommended_presets: [
+                    { name: 'square', size: '2048x2048', purpose: '通用正方形构图' },
+                    { name: 'landscape', size: '3072x2048', purpose: '横向宽幅构图' },
+                    { name: 'portrait', size: '2048x3072', purpose: '纵向主体构图' }
+                ],
+                large_image_risk: {
+                    applies_to: ['max_edge>2048', 'long_running_upstream'],
+                    guidance: '大尺寸请求可能耗时数分钟；失败应归类为上游长耗时风险，不代表低负载路径不可用。'
+                }
+            },
+            'gpt-image-2-1k': {
                 max_edge: GPT_IMAGE_2_MAX_EDGE,
                 max_pixels: GPT_IMAGE_2_MAX_PIXELS,
                 edge_multiple: GPT_IMAGE_2_EDGE_MULTIPLE,
@@ -1726,6 +1794,12 @@ export function buildAgentCapabilities(env: Record<string, string | undefined>):
             request_modes: CHANNEL_REQUEST_MODES,
             streaming_strategies: AGENT_STREAMING_STRATEGIES,
             stream_modes: AGENT_STREAM_MODES
+        },
+        model_directory: {
+            endpoint: AGENT_ENDPOINTS.models,
+            probe_query: '?probe=true',
+            default_model: defaultModel,
+            semantics: 'declared_models_only_until_explicit_probe'
         },
         storage: {
             image_storage_mode: env.NEXT_PUBLIC_IMAGE_STORAGE_MODE || (env.VERCEL === '1' ? 'indexeddb' : 'fs'),
