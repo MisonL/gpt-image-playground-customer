@@ -138,6 +138,7 @@ const argv = process.argv.slice(2);
 let options;
 let exitCode = 0;
 let forceExitAfterReport = false;
+let routeHandlersLoaded = false;
 try {
     if (!isHelpRequested(argv)) loadDotEnvFiles(argv);
     options = parseArgs(argv);
@@ -155,6 +156,7 @@ try {
             const loadHandlers = async (caseConfig) => {
                 const endpoint = readRouteHandlerEndpoint(caseConfig);
                 routeHandlersByEndpoint[endpoint] ||= await loadRouteHandlers(endpoint);
+                routeHandlersLoaded = true;
                 return routeHandlersByEndpoint[endpoint];
             };
             const result = await runCase(loadHandlers, testCase, billablePreflight);
@@ -212,6 +214,10 @@ try {
     exitCode = 1;
 } finally {
     restoreProcessEnv();
+    if (routeHandlersLoaded) {
+        const { closeOpenAIImageTransportResources } = await import('../src/lib/openai-image-transport.ts');
+        await closeOpenAIImageTransportResources();
+    }
 }
 if (forceExitAfterReport) {
     process.exit(exitCode);

@@ -400,7 +400,7 @@ async function maybeSaveFirstImage({ summary, response, json, text, modeKind }) 
   if (!options.saveFirstImagePath || !summary.ok || !response.ok) return undefined;
   try {
     const image = await readFirstConsumableFinalImageBytes({ response, json, text, modeKind });
-    if (!image) throw new Error('未找到可保存的内联或同源图片产物。');
+    if (!image) throw new Error('未找到可保存的内联或同源图片产物；跨域 URL 需要由部署服务按安全策略下载。');
     const dimensions = readImageDimensions(image.bytes);
     await mkdir(dirname(options.saveFirstImagePath), { recursive: true });
     await writeFile(options.saveFirstImagePath, image.bytes, { flag: 'wx' });
