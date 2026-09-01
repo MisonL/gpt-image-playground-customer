@@ -1,4 +1,4 @@
-import { isPublicIpAddress } from './network-security';
+import { isLoopbackIpAddress, isPublicIpAddress } from './network-security';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import type OpenAI from 'openai';
@@ -18,20 +18,70 @@ const DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS = 900_000;
 const DEFAULT_IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS = 900_000;
 const DEFAULT_IMAGE_UPSTREAM_MAX_RETRIES = 0;
 const MAX_PINNED_DNS_ROTATION_ENTRIES = 256;
+const DEFAULT_TRANSPORT_RESOURCE_CLOSE_TIMEOUT_MS = 5000;
 const UPSTREAM_PROXY_URL_ENV = 'OPENAI_UPSTREAM_PROXY_URL';
 const proxyDispatcherByUrl = new Map<string, ProxyAgent>();
 const upstreamDnsDispatcherByPolicy = new Map<string, Agent>();
+
+/**
+ * Raised when an upstream API returns a successful HTML page instead of the
+ * JSON or SSE response required by the image APIs.  Keeping this distinction
+ * at the transport boundary prevents the OpenAI SDK from reducing a
+ * deterministic upstream response-format failure to a generic connection
+ * error.
+ */
+export class UpstreamResponseFormatError extends Error {
+    readonly code = 'upstream_response_format';
+    readonly status = 502;
+    readonly upstreamStatus: number;
+    readonly contentType?: string;
+    readonly headers: Headers;
+
+    constructor(input: { upstreamStatus: number; contentType?: string; headers?: Headers }) {
+        super('上游返回 HTML 页面而不是 JSON 或 SSE 响应。请确认 API URL 填写的是兼容接口根地址，而不是网页地址。');
+        this.name = 'UpstreamResponseFormatError';
+        this.upstreamStatus = input.upstreamStatus;
+        this.contentType = input.contentType;
+        this.headers = new Headers(
+            input.headers ?? (input.contentType ? { 'content-type': input.contentType } : undefined)
+        );
+    }
+}
 
 /**
  * Close cached proxy dispatchers when a short-lived consumer (for example a
  * test worker) is about to exit. The application normally keeps these
  * dispatchers cached for the lifetime of the process.
  */
-export async function closeOpenAIImageTransportResources(): Promise<void> {
+export async function closeOpenAIImageTransportResources(
+    timeoutMs = DEFAULT_TRANSPORT_RESOURCE_CLOSE_TIMEOUT_MS
+): Promise<void> {
     const dispatchers = [...proxyDispatcherByUrl.values(), ...upstreamDnsDispatcherByPolicy.values()];
     proxyDispatcherByUrl.clear();
     upstreamDnsDispatcherByPolicy.clear();
-    await Promise.allSettled(dispatchers.map((dispatcher) => dispatcher.close()));
+    if (dispatchers.length === 0) return;
+
+    const normalizedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? Math.floor(timeoutMs) : 0;
+    const closePromise = Promise.allSettled(dispatchers.map((dispatcher) => dispatcher.close()));
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = await Promise.race([
+        closePromise.then(() => false),
+        new Promise<boolean>((resolve) => {
+            timeout = setTimeout(() => resolve(true), normalizedTimeoutMs);
+        })
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (!timedOut) return;
+
+    const destroyError = new Error('上游传输资源优雅关闭超时，已强制终止未完成请求。');
+    await Promise.allSettled(
+        dispatchers.map((dispatcher) =>
+            Promise.race([
+                dispatcher.destroy(destroyError),
+                new Promise<void>((resolve) => setTimeout(resolve, normalizedTimeoutMs))
+            ])
+        )
+    );
 }
 
 export function readImageUpstreamTimeoutMs(env: ImageTransportEnv = process.env): number {
@@ -113,12 +163,31 @@ export function fetchOpenAIUpstream(
             effectiveDispatcher
                 ? ({ ...(init || {}), dispatcher: effectiveDispatcher } as Parameters<typeof fetch>[1])
                 : init
-        );
+        ).then(validateUpstreamResponseFormat);
     }
     const normalizedProxyUrl = normalizeUpstreamProxyUrl(upstreamProxyUrl, UPSTREAM_PROXY_URL_ENV);
     const proxyDispatcher = getUpstreamProxyDispatcher(normalizedProxyUrl);
     // Use Node's native fetch so OpenAI SDK multipart uploads retain native FormData encoding.
-    return fetch(input, { ...(init || {}), dispatcher: proxyDispatcher } as Parameters<typeof fetch>[1]);
+    return fetch(input, { ...(init || {}), dispatcher: proxyDispatcher } as Parameters<typeof fetch>[1]).then(
+        validateUpstreamResponseFormat
+    );
+}
+
+async function validateUpstreamResponseFormat(response: Response): Promise<Response> {
+    if (!response.ok) return response;
+    const contentType = response.headers.get('content-type') || '';
+    const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase();
+    if (mediaType !== 'text/html' && mediaType !== 'application/xhtml+xml') return response;
+    try {
+        await response.body?.cancel();
+    } catch {
+        // The response is being rejected regardless; cancellation is best effort.
+    }
+    throw new UpstreamResponseFormatError({
+        upstreamStatus: response.status,
+        contentType: mediaType || contentType || undefined,
+        headers: response.headers
+    });
 }
 
 export function createPinnedDnsDispatcher(addresses: Array<{ address: string; family: number }>): Agent {
@@ -134,14 +203,28 @@ export function createPinnedDnsDispatcher(addresses: Array<{ address: string; fa
     return new Agent({
         connect: {
             lookup: (_hostname, options, callback) => {
-                if (options.all) {
+                const requestedFamily = options.family && options.family !== 0 ? options.family : undefined;
+                const candidateAddresses = requestedFamily
+                    ? addresses.filter(({ family }) => family === requestedFamily)
+                    : addresses;
+                if (candidateAddresses.length === 0) {
                     callback(
-                        null,
-                        addresses.map(({ address, family }) => ({ address, family }))
+                        Object.assign(new Error('已验证 DNS 地址没有匹配请求地址族。'), {
+                            code: 'ERR_FORBIDDEN_DNS_FAMILY'
+                        }),
+                        '',
+                        0
                     );
                     return;
                 }
-                const address = addresses[nextAddress % addresses.length];
+                if (options.all) {
+                    callback(
+                        null,
+                        candidateAddresses.map(({ address, family }) => ({ address, family }))
+                    );
+                    return;
+                }
+                const address = candidateAddresses[nextAddress % candidateAddresses.length];
                 nextAddress += 1;
                 callback(null, address.address, address.family);
             }
@@ -309,7 +392,7 @@ function resolveUpstreamDnsPolicy(
     if (net.isIP(hostname) === 4 && hostname.startsWith('127.')) {
         return { allowPrivate: true, allowedPrivateHostnames: [hostname] };
     }
-    if (net.isIP(hostname) === 6 && isLoopbackIpv6(hostname)) {
+    if (net.isIP(hostname) === 6 && isLoopbackIpAddress(hostname)) {
         return { allowPrivate: true, allowedPrivateHostnames: [hostname] };
     }
     const normalized = normalizePlainHttpBaseUrl(parsed);
@@ -321,10 +404,6 @@ function resolveUpstreamDnsPolicy(
         }
     });
     return explicitlyAllowed ? { allowPrivate: true, allowedPrivateHostnames: [hostname] } : { allowPrivate: false };
-}
-
-function isLoopbackIpv6(hostname: string): boolean {
-    return hostname === '::1' || hostname === '0:0:0:0:0:0:0:1' || /^::ffff:127(?:\.\d{1,3}){3}$/.test(hostname);
 }
 
 function normalizePlainHttpBaseUrl(value: URL): string {

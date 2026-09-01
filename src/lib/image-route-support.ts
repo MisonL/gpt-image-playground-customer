@@ -179,7 +179,7 @@ export function inspectInvalidImagesResponse(result: unknown): UpstreamResponseD
             category: 'url_only_result',
             structure,
             diagnostic_hint:
-                '上游返回了远程 URL 形式的图片结果。服务端只会下载同源 URL，非同源远程 URL 需要上游改为 b64_json 或同源 artifact URL。'
+                '上游返回了远程 URL 形式的图片结果。服务端会在 HTTPS、公共 DNS 地址且未配置代理时安全下载跨域 URL；不满足这些条件时，请让上游返回 b64_json 或同源 artifact URL。'
         };
     }
     return {
@@ -207,7 +207,7 @@ export function describeInvalidImagesResponse(result: unknown): string {
         return 'Responses API 未返回可消费的 image_generation_call.result 或 url。请检查上游是否只返回文本、pending 或 failed 状态；不要把未返回最终图片的 responses request mode 写入该渠道白名单。';
     }
     if (diagnostics.category === 'url_only_result') {
-        return 'API 返回了远程 URL 形式的图片结果，但不是可直接消费的 OpenAI Images b64_json。请让上游返回 b64_json，或返回可由服务端同源下载的 artifact URL。';
+        return 'API 返回了远程 URL 形式的图片结果。服务端只会安全下载 HTTPS 且解析到公共地址的跨域 URL；配置代理时跨域下载会被拒绝。请让上游返回 b64_json，或返回同源 artifact URL。';
     }
     if (diagnostics.category === 'partial_no_final') {
         return '流式图片响应只返回了 partial image，没有返回最终图片 b64_json。请检查上游 SSE 事件是否包含 completed/final image 事件。';
@@ -216,6 +216,13 @@ export function describeInvalidImagesResponse(result: unknown): string {
 }
 
 export function inspectUpstreamError(error: unknown): UpstreamResponseDiagnostics | undefined {
+    if (isUpstreamResponseFormatError(error)) {
+        return {
+            category: 'html_response',
+            diagnostic_hint:
+                '上游成功返回了 HTML 页面而不是 JSON 或 SSE。请确认 API URL 填的是兼容接口根地址，通常需要以 /v1 结尾，不要填写管理后台或网页首页地址。'
+        };
+    }
     if (isConnectionError(error)) {
         return {
             category: 'connection_error',
@@ -247,6 +254,13 @@ export function inspectUpstreamError(error: unknown): UpstreamResponseDiagnostic
     }
     if (normalized.includes('<!doctype html') || normalized.includes('<html')) {
         return inspectInvalidImagesResponse(message);
+    }
+    if (normalized.includes('unexpected token') && normalized.includes('<')) {
+        return {
+            category: 'html_response',
+            diagnostic_hint:
+                '上游响应无法按 JSON 解析，内容疑似 HTML 页面。请确认 API URL 填的是兼容接口根地址，通常需要以 /v1 结尾。'
+        };
     }
     if (normalized.includes('流式图片响应未返回最终图片') || normalized.includes('missing final image')) {
         return {
@@ -323,7 +337,7 @@ function inspectResponsesImageOutput(result: unknown): UpstreamResponseDiagnosti
                 category: 'url_only_result',
                 structure: summarizeUpstreamResponseStructure(result),
                 diagnostic_hint:
-                    'Responses image_generation_call 返回 URL。服务端只会下载同源 URL，非同源远程 URL 需要上游改为 base64 或同源 artifact URL。'
+                    'Responses image_generation_call 返回 URL。服务端会在 HTTPS、公共 DNS 地址且未配置代理时安全下载跨域 URL；不满足这些条件时，请让上游改为 base64 或同源 artifact URL。'
             };
         }
         return undefined;
@@ -334,6 +348,15 @@ function inspectResponsesImageOutput(result: unknown): UpstreamResponseDiagnosti
         diagnostic_hint:
             'Responses 返回了 image_generation_call 但没有 completed result。建议分别验证 responses-non-stream 和 responses-sse；未返回最终图片的 mode 不应写入渠道白名单。'
     };
+}
+
+function isUpstreamResponseFormatError(error: unknown, seen = new WeakSet<object>()): boolean {
+    if (typeof error !== 'object' || error === null) return false;
+    if (seen.has(error)) return false;
+    seen.add(error);
+    if ((error as { code?: unknown }).code === 'upstream_response_format') return true;
+    const cause = (error as { cause?: unknown }).cause;
+    return cause !== undefined && isUpstreamResponseFormatError(cause, seen);
 }
 
 function summarizeScalar(value: unknown): unknown {

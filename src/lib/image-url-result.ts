@@ -1,7 +1,7 @@
 import { readPlainHttpApiBaseUrlAllowlist, RequestValidationError } from './image-request-utils';
 import { mergeUpstreamHeadersWithFixed, type UpstreamRequestHeaders } from './image-upstream-profile';
 import { isPublicIpAddress } from './network-security';
-import { createPinnedDnsDispatcher, fetchOpenAIUpstream } from './openai-image-transport';
+import { createPinnedDnsDispatcher, fetchOpenAIUpstream, UpstreamResponseFormatError } from './openai-image-transport';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
@@ -64,26 +64,36 @@ export async function downloadSameOriginImageAsBase64(input: {
     lookup?: typeof dns.lookup;
 }): Promise<string> {
     const url = resolveRemoteImageUrl(input.imageUrl, input.apiBaseUrl);
-    if (input.upstreamProxyUrl && !isSameOrigin(url, input.apiBaseUrl)) {
+    const sameOrigin = isSameOrigin(url, input.apiBaseUrl);
+    if (input.upstreamProxyUrl && !sameOrigin) {
         throw new RemoteImageResultError('配置代理时不允许下载跨域上游图片 URL。');
     }
-    const pinnedDispatcher = !isSameOrigin(url, input.apiBaseUrl)
-        ? await resolvePinnedRemoteHost(url.hostname, input.lookup ?? dns.lookup)
-        : undefined;
     const allowedPlainHttpBaseUrls =
         input.allowedPlainHttpBaseUrls ??
         readPlainHttpApiBaseUrlAllowlist(process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REMOTE_IMAGE_DOWNLOAD_TIMEOUT_MS);
     const abortListener = () => controller.abort();
-    input.abortSignal?.addEventListener('abort', abortListener, { once: true });
+    if (input.abortSignal?.aborted) {
+        controller.abort();
+    } else {
+        input.abortSignal?.addEventListener('abort', abortListener, { once: true });
+    }
+    let pinnedDispatcher: ReturnType<typeof createPinnedDnsDispatcher> | undefined;
     try {
+        if (!sameOrigin) {
+            pinnedDispatcher = await resolvePinnedRemoteHost(
+                url.hostname,
+                input.lookup ?? dns.lookup,
+                controller.signal
+            );
+        }
         const response = await fetchOpenAIUpstream(
             url,
             {
                 headers: buildDownloadHeaders(
-                    isSameOrigin(url, input.apiBaseUrl) ? input.apiKey : undefined,
-                    isSameOrigin(url, input.apiBaseUrl) ? input.upstreamHeaders : undefined
+                    sameOrigin ? input.apiKey : undefined,
+                    sameOrigin ? input.upstreamHeaders : undefined
                 ),
                 redirect: 'error',
                 signal: controller.signal
@@ -113,6 +123,9 @@ export async function downloadSameOriginImageAsBase64(input: {
         return buffer.toString('base64');
     } catch (error) {
         if (error instanceof RemoteImageResultError) throw error;
+        if (error instanceof UpstreamResponseFormatError) {
+            throw new RemoteImageResultError('下载上游图片失败：响应不是图片类型。');
+        }
         if (controller.signal.aborted) {
             throw new RemoteImageResultError('下载上游图片失败：请求超时或已取消。');
         }
@@ -124,7 +137,7 @@ export async function downloadSameOriginImageAsBase64(input: {
     }
 }
 
-async function resolvePinnedRemoteHost(hostname: string, lookup: typeof dns.lookup) {
+async function resolvePinnedRemoteHost(hostname: string, lookup: typeof dns.lookup, signal?: AbortSignal) {
     const normalizedHostname = hostname.replace(/^\[|\]$/g, '');
     const literalFamily = net.isIP(normalizedHostname);
     if (literalFamily) {
@@ -135,14 +148,34 @@ async function resolvePinnedRemoteHost(hostname: string, lookup: typeof dns.look
     }
     let addresses: Array<{ address: string; family: number }>;
     try {
-        addresses = await lookup(normalizedHostname, { all: true, verbatim: true });
-    } catch {
+        addresses = await lookupWithAbort(lookup, normalizedHostname, signal);
+    } catch (error) {
+        if (signal?.aborted) throw error;
         throw new RemoteImageResultError('上游图片 URL 主机无法解析，已拒绝下载。');
     }
     if (addresses.length === 0 || addresses.some(({ address }) => !isPublicIp(address))) {
         throw new RemoteImageResultError('上游图片 URL 解析到了被禁止的本地或内网地址。');
     }
     return createPinnedDnsDispatcher(addresses);
+}
+
+async function lookupWithAbort(
+    lookup: typeof dns.lookup,
+    hostname: string,
+    signal?: AbortSignal
+): Promise<Array<{ address: string; family: number }>> {
+    if (!signal) return lookup(hostname, { all: true, verbatim: true });
+    if (signal.aborted) throw new Error('DNS lookup aborted');
+    let abortHandler: (() => void) | undefined;
+    const abortPromise = new Promise<never>((_, reject) => {
+        abortHandler = () => reject(new Error('DNS lookup aborted'));
+        signal.addEventListener('abort', abortHandler, { once: true });
+    });
+    try {
+        return await Promise.race([lookup(hostname, { all: true, verbatim: true }), abortPromise]);
+    } finally {
+        if (abortHandler) signal.removeEventListener('abort', abortHandler);
+    }
 }
 
 function isPublicIp(address: string): boolean {

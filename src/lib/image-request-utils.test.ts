@@ -1,5 +1,6 @@
 import {
     assertMaskCompatibility,
+    assertSafeApiOverride,
     readBackground,
     readEditQuality,
     readGenerateQuality,
@@ -14,6 +15,7 @@ import {
     validateApiBaseUrl
 } from './image-request-utils';
 import { IMAGE_UPSTREAM_PROFILES } from './image-upstream-profile';
+import { isLoopbackIpAddress, isPublicIpAddress } from './network-security';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { deflateSync } from 'node:zlib';
@@ -83,6 +85,7 @@ describe('validateApiBaseUrl', () => {
         assert.doesNotThrow(() => validateApiBaseUrl('http://[::1]:4783/v1'));
         assert.doesNotThrow(() => validateApiBaseUrl('http://[::ffff:7f00:1]:4783/v1'));
         assert.doesNotThrow(() => validateApiBaseUrl('http://[::ffff:0:7f00:1]:4783/v1'));
+        assert.doesNotThrow(() => validateApiBaseUrl('http://[0:0:0:0:0:ffff:7f00:1]:4783/v1'));
         assert.doesNotThrow(() => validateApiBaseUrl('http://loopback.localhost:4783/v1'));
     });
 
@@ -120,6 +123,44 @@ describe('validateApiBaseUrl', () => {
         assert.throws(() => validateApiBaseUrl('https://user:pass@example.com/v1'), /用户名或密码/);
         assert.throws(() => validateApiBaseUrl('https://example.com/v1?token=one'), /查询参数或片段/);
         assert.throws(() => validateApiBaseUrl('https://example.com/v1#key'), /查询参数或片段/);
+    });
+});
+
+describe('assertSafeApiOverride', () => {
+    it('rejects a request-level URL when the server would proxy it', () => {
+        assert.throws(
+            () =>
+                assertSafeApiOverride('sk-request', 'https://attacker.example/v1', {
+                    upstreamProxyConfigured: true
+                }),
+            /请求级自定义 API URL.*服务端上游代理/
+        );
+    });
+
+    it('keeps request-level URLs available without a server proxy', () => {
+        assert.doesNotThrow(() => assertSafeApiOverride('sk-request', 'https://api.example/v1'));
+        assert.doesNotThrow(() => assertSafeApiOverride('', ''));
+    });
+});
+
+describe('isLoopbackIpAddress', () => {
+    it('recognizes native and IPv4-mapped loopback forms', () => {
+        for (const address of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:0:7f00:1']) {
+            assert.equal(isLoopbackIpAddress(address), true, address);
+        }
+    });
+
+    it('does not treat private non-loopback addresses as loopback', () => {
+        for (const address of ['0.0.0.0', '10.0.0.1', '::', '::ffff:0a00:1', '::ffff:ac10:1']) {
+            assert.equal(isLoopbackIpAddress(address), false, address);
+        }
+    });
+});
+
+describe('isPublicIpAddress', () => {
+    it('normalizes bracketed IPv6 addresses before applying reserved-range checks', () => {
+        assert.equal(isPublicIpAddress('[2001:4860:4860::8888]'), true);
+        assert.equal(isPublicIpAddress('[::ffff:172.16.0.1]'), false);
     });
 });
 

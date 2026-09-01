@@ -210,6 +210,14 @@ export async function startImagesJsonUpstream(
     return listen(server);
 }
 
+export async function startHtmlImageUpstream(status = 200): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const server = http.createServer((_request, response) => {
+        response.writeHead(status, { 'Content-Type': 'text/html', Connection: 'close' });
+        response.end('<!doctype html><html><body>gateway page</body></html>');
+    });
+    return listen(server);
+}
+
 export async function startImagesStreamFallbackUpstream(): Promise<{
     baseUrl: string;
     calls: Array<{ stream?: boolean; partial_images?: number }>;
@@ -496,12 +504,17 @@ export async function startHttpConnectProxy(): Promise<{
 }
 
 async function listen(server: http.Server): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const sockets = new Set<net.Socket>();
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
+    });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     assert.ok(address && typeof address === 'object');
     return {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+        close: () => closeServerWithSockets(server, sockets)
     };
 }
 

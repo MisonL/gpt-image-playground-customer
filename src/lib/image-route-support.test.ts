@@ -4,6 +4,7 @@ import {
     inspectUpstreamError,
     readClientRequestId
 } from './image-route-support';
+import { UpstreamResponseFormatError } from './openai-image-transport';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -81,6 +82,16 @@ describe('inspectInvalidImagesResponse', () => {
         assert.equal(serialized.includes('sk-secret'), false);
         assert.equal(serialized.includes('"redacted":true'), true);
     });
+
+    it('explains that safe cross-origin HTTPS URLs may be downloaded', () => {
+        const diagnostics = inspectInvalidImagesResponse({
+            data: [{ url: 'https://provider.example.test/final.png' }]
+        });
+
+        assert.equal(diagnostics.category, 'url_only_result');
+        assert.match(diagnostics.diagnostic_hint || '', /HTTPS/);
+        assert.match(diagnostics.diagnostic_hint || '', /公共 DNS/);
+    });
 });
 
 describe('inspectUpstreamError', () => {
@@ -96,6 +107,33 @@ describe('inspectUpstreamError', () => {
         const diagnostics = inspectUpstreamError(new Error('流式图片响应未返回最终图片 b64_json。'));
 
         assert.equal(diagnostics?.category, 'partial_no_final');
+    });
+
+    it('classifies transport-level HTML responses before SDK parsing', () => {
+        const diagnostics = inspectUpstreamError(
+            new UpstreamResponseFormatError({
+                upstreamStatus: 200,
+                contentType: 'text/html',
+                headers: new Headers({ 'content-type': 'text/html' })
+            })
+        );
+
+        assert.equal(diagnostics?.category, 'html_response');
+    });
+
+    it('classifies JSON parse errors that contain an HTML marker', () => {
+        const diagnostics = inspectUpstreamError(
+            new Error('Unexpected token \'<\', "<!doctype html>" is not valid JSON')
+        );
+
+        assert.equal(diagnostics?.category, 'html_response');
+    });
+
+    it('does not recurse forever on a self-referential cause chain', () => {
+        const error = new Error('Connection error.');
+        Object.defineProperty(error, 'cause', { configurable: true, value: error });
+
+        assert.deepEqual(inspectUpstreamError(error)?.category, 'connection_error');
     });
 });
 

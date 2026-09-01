@@ -1,4 +1,5 @@
 import { clearAppLogEntriesForTest } from '@/lib/app-logger';
+import { closeOpenAIImageTransportResources } from '@/lib/openai-image-transport';
 import { afterEach, beforeEach } from 'node:test';
 
 export function registerRouteTestLifecycle() {
@@ -47,6 +48,7 @@ export function registerRouteTestLifecycle() {
     afterEach(async () => {
         const { resetServerChannelStateForTests } = await import('@/lib/server-channel-router');
         resetServerChannelStateForTests();
+        await closeOpenAIImageTransportResources();
         clearAppLogEntriesForTest();
         restoreProcessEnv(originalEnv);
         console.error = originalConsoleError;

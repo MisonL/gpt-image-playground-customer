@@ -610,6 +610,7 @@ export async function POST(request: NextRequest) {
     let clientRequestId: string | undefined;
     let requestLogContext: RequestLogContext | undefined;
     let accessCookie: AccessCookie | undefined;
+    let selectedModel: string | undefined;
     try {
         const serverChannelState = getServerChannelState();
         const serverChannelRouter = serverChannelState.router;
@@ -629,13 +630,16 @@ export async function POST(request: NextRequest) {
         const allowedPlainHttpBaseUrls = readPlainHttpApiBaseUrlAllowlist(
             process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS
         );
-        assertSafeApiOverride(requestApiKey, requestApiBaseUrl);
+        assertSafeApiOverride(requestApiKey, requestApiBaseUrl, {
+            upstreamProxyConfigured: Boolean(process.env.OPENAI_UPSTREAM_PROXY_URL?.trim())
+        });
         validateApiBaseUrl(requestApiBaseUrl, { allowedPlainHttpBaseUrls });
         const streamMode = readImageStreamMode(formData, process.env);
         const imageBackend = readImageGenerationBackend(formData, process.env);
         const streamingStrategy = readImageStreamingStrategy(formData, process.env);
         const mode = readMode(formData);
         const model = readModel(formData);
+        selectedModel = model;
         const forceRequest = readBooleanAlias(formData, 'force_request', 'forceRequest') === true;
         const requestedImageCount = readOptionalPositiveCount(formData, 'n');
         const requestedPartialImages = readOptionalPartialImages(formData);
@@ -1032,7 +1036,7 @@ export async function POST(request: NextRequest) {
     } catch (error: unknown) {
         channelLease?.release();
         channelLease = undefined;
-        reportServerCredentialFailure(selectedServerCredential, error, selectedServerRequestMode);
+        reportServerCredentialFailure(selectedServerCredential, error, selectedServerRequestMode, selectedModel);
         const upstreamDiagnostics = inspectUpstreamError(error);
         appLogger.error('/api/images 处理失败：', {
             ...requestLogContext,
@@ -1065,6 +1069,17 @@ export async function POST(request: NextRequest) {
                 status = error.status;
             }
             errorCode = classifyApiErrorCode(readErrorCode(error), errorMessage);
+        }
+
+        if (upstreamDiagnostics?.category === 'html_response') {
+            errorCode = 'upstream_unavailable';
+            // A successful or error HTML page is a protocol mismatch at the
+            // upstream boundary, not a server-internal failure. Keep the
+            // page contract aligned with Agent errors and return 502.
+            status = 502;
+            errorMessage =
+                upstreamDiagnostics.diagnostic_hint ||
+                '上游返回了无法解析的 HTML 内容，请确认 API URL 是兼容接口根地址。';
         }
 
         return NextResponse.json(

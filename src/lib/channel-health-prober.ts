@@ -5,6 +5,7 @@ import {
     type ChannelRecoveryProbeCandidate,
     type ChannelRouter
 } from './channel-router';
+import { readPlainHttpApiBaseUrlAllowlist, validateApiBaseUrl } from './image-request-utils';
 import { mergeUpstreamHeadersWithFixed } from './image-upstream-profile';
 import { fetchOpenAIUpstream } from './openai-image-transport';
 
@@ -56,6 +57,7 @@ type ChannelHealthProberOptions = {
     maxPerTick: number;
     now?: () => number;
     probe?: (candidate: ChannelRecoveryProbeCandidate, timeoutMs: number) => Promise<ProbeResult>;
+    allowedPlainHttpBaseUrls?: string[];
 };
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
@@ -66,22 +68,33 @@ export async function probeChannelModelsEndpoint(input: {
     credential: ChannelCredential;
     timeoutMs: number;
     fetchImpl?: ProbeFetch;
+    allowedPlainHttpBaseUrls?: string[];
 }): Promise<ProbeResult> {
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), input.timeoutMs);
+    const allowedPlainHttpBaseUrls =
+        input.allowedPlainHttpBaseUrls ??
+        readPlainHttpApiBaseUrlAllowlist(process.env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS);
     try {
+        if (input.credential.baseUrl) {
+            validateApiBaseUrl(input.credential.baseUrl, { allowedPlainHttpBaseUrls });
+        }
         const requestInit = {
             method: 'GET',
             headers: mergeUpstreamHeadersWithFixed(input.credential.upstreamHeaders, {
                 Authorization: `Bearer ${input.credential.apiKey}`,
                 Accept: 'application/json'
             }),
+            redirect: 'error',
             signal: abortController.signal
         } satisfies RequestInit;
         const targetUrl = buildModelsUrl(input.credential.baseUrl);
         const response = input.fetchImpl
             ? await input.fetchImpl(targetUrl, requestInit)
-            : await fetchOpenAIUpstream(targetUrl, requestInit, input.credential.upstreamProxyUrl);
+            : await fetchOpenAIUpstream(targetUrl, requestInit, input.credential.upstreamProxyUrl, undefined, {
+                  baseURL: input.credential.baseUrl,
+                  allowedPlainHttpBaseUrls
+              });
         if (!response.ok) {
             return {
                 ok: false,
@@ -114,7 +127,11 @@ export function createChannelHealthProber(options: ChannelHealthProberOptions): 
     const probe =
         options.probe ||
         ((candidate: ChannelRecoveryProbeCandidate, timeoutMs: number) =>
-            probeChannelModelsEndpoint({ credential: candidate.credential, timeoutMs }));
+            probeChannelModelsEndpoint({
+                credential: candidate.credential,
+                timeoutMs,
+                allowedPlainHttpBaseUrls: options.allowedPlainHttpBaseUrls
+            }));
 
     return {
         async runDueTick() {

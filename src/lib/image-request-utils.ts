@@ -6,6 +6,7 @@ import {
     type ImageUpstreamProfile,
     type NumericRange
 } from './image-upstream-profile';
+import { isLoopbackIpAddress } from './network-security';
 import { validateGptImage2Size } from './size-utils';
 import { promisify } from 'node:util';
 import { inflate } from 'node:zlib';
@@ -290,9 +291,18 @@ export function readStorageMode(env: NodeJS.ProcessEnv): StorageMode {
     return env.VERCEL === '1' ? 'indexeddb' : 'fs';
 }
 
-export function assertSafeApiOverride(requestApiKey: string, requestApiBaseUrl: string): void {
+export function assertSafeApiOverride(
+    requestApiKey: string,
+    requestApiBaseUrl: string,
+    options: { upstreamProxyConfigured?: boolean } = {}
+): void {
     if (requestApiBaseUrl && !requestApiKey) {
         throw new RequestValidationError('填写自定义 API URL 时必须同时填写 API Key，避免服务器密钥被发送到未知地址。');
+    }
+    if (requestApiBaseUrl && options.upstreamProxyConfigured) {
+        throw new RequestValidationError(
+            '请求级自定义 API URL 不能与服务端上游代理同时使用。请把该地址配置为服务端渠道，或移除 OPENAI_UPSTREAM_PROXY_URL。'
+        );
     }
 }
 
@@ -329,24 +339,7 @@ function isAllowedPlainHttpApiBaseUrl(parsed: URL, allowedBaseUrls: string[] | u
 
 function isLoopbackHost(hostname: string): boolean {
     const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    return (
-        normalized === 'localhost' ||
-        normalized.endsWith('.localhost') ||
-        normalized === '::1' ||
-        normalized === '0:0:0:0:0:0:0:1' ||
-        /^127(?:\.\d{1,3}){3}$/.test(normalized) ||
-        readEmbeddedIpv4(normalized)?.startsWith('127.') === true
-    );
-}
-
-function readEmbeddedIpv4(address: string): string | undefined {
-    const dotted = address.match(/^::(?:ffff:0:)?(?:ffff:)?(127(?:\.\d{1,3}){3})$/);
-    if (dotted) return dotted[1];
-    const hex = address.match(/^::(?:ffff:0:)?(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
-    if (!hex) return undefined;
-    const high = Number.parseInt(hex[1], 16);
-    const low = Number.parseInt(hex[2], 16);
-    return (high >> 8) + '.' + (high & 255) + '.' + (low >> 8) + '.' + (low & 255);
+    return normalized === 'localhost' || normalized.endsWith('.localhost') || isLoopbackIpAddress(normalized);
 }
 
 export function readPlainHttpApiBaseUrlAllowlist(rawValue: string | undefined): string[] {

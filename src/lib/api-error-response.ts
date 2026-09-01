@@ -6,6 +6,7 @@ import {
 } from './channel-request-mode';
 import { isChannelFailure, isChannelRequestModeFailure } from './channel-router';
 import { RequestValidationError } from './image-request-utils';
+import { UpstreamResponseFormatError } from './openai-image-transport';
 import { NextResponse } from 'next/server';
 
 export type AgentErrorCode =
@@ -146,7 +147,8 @@ function buildDiagnostics(error: unknown, input: ErrorDiagnosticsInput = {}): Ag
     const upstreamEventType = base.upstream_event_type ?? readStringField(error, 'upstreamEventType');
     const partialImageCount = base.partial_image_count ?? readNumberField(error, 'partialImageCount');
     const transportError = base.transport_error ?? (isTransportError(error) || undefined);
-    const transportErrorKind = base.transport_error_kind ?? classifyTransportErrorKind(error);
+    const transportErrorKind =
+        base.transport_error_kind ?? (transportError === false ? undefined : classifyTransportErrorKind(error));
     const responseHeaders = base.response_headers ?? readWhitelistedHeaders(error);
     return cleanDiagnostics({
         ...base,
@@ -266,8 +268,14 @@ function normalizeNonNegativeInteger(value: number): number | undefined {
 }
 
 function readWhitelistedHeaders(error: unknown): Record<string, string> | undefined {
-    const headers = readHeadersSource(error);
+    const headers = readHeadersSource(error) ?? readCauseChainHeaders(error);
     return readWhitelistedHeaderSource(headers);
+}
+
+function readCauseChainHeaders(error: unknown, depth = 0): unknown {
+    if (depth > 4 || typeof error !== 'object' || error === null || !('cause' in error)) return undefined;
+    const cause = (error as { cause?: unknown }).cause;
+    return readHeadersSource(cause) ?? readCauseChainHeaders(cause, depth + 1);
 }
 
 function readWhitelistedHeaderSource(headers: unknown): Record<string, string> | undefined {
@@ -416,6 +424,20 @@ function readCauseChainString(error: unknown, fieldName: string, depth = 0): str
     return readStringField(cause, fieldName) || readCauseChainString(cause, fieldName, depth + 1);
 }
 
+function readCauseChainNumber(error: unknown, fieldName: string, depth = 0): number | undefined {
+    if (depth > 4 || typeof error !== 'object' || error === null || !('cause' in error)) return undefined;
+    const cause = (error as { cause?: unknown }).cause;
+    return readNumberField(cause, fieldName) ?? readCauseChainNumber(cause, fieldName, depth + 1);
+}
+
+function isUpstreamResponseFormatError(error: unknown): boolean {
+    return (
+        error instanceof UpstreamResponseFormatError ||
+        readStringField(error, 'code') === 'upstream_response_format' ||
+        readCauseChainString(error, 'code') === 'upstream_response_format'
+    );
+}
+
 export function createAgentErrorBody(error: AgentApiError, requestId: string): AgentErrorBody {
     const diagnostics = error.retryable ? error.diagnostics : stripRetryDiagnostics(error.diagnostics);
     return {
@@ -503,6 +525,28 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
         });
     }
 
+    if (isUpstreamResponseFormatError(error)) {
+        const upstreamStatus =
+            error instanceof UpstreamResponseFormatError
+                ? error.upstreamStatus
+                : (readCauseChainNumber(error, 'upstreamStatus') ?? readNumberField(error, 'upstreamStatus') ?? 502);
+        return new AgentApiError({
+            code: 'upstream_unavailable',
+            message:
+                error instanceof UpstreamResponseFormatError
+                    ? error.message
+                    : '上游返回 HTML 页面而不是 JSON 或 SSE 响应。请确认 API URL 填写的是兼容接口根地址，而不是网页地址。',
+            status: 502,
+            retryable: false,
+            upstreamStatus,
+            diagnostics: buildDiagnostics(error, {
+                ...diagnostics,
+                upstreamStatus,
+                transport_error: false
+            })
+        });
+    }
+
     const status = readNumberField(error, 'status') ?? readNumberField(error, 'statusCode');
     const message =
         error instanceof Error
@@ -512,7 +556,11 @@ export function normalizeAgentError(error: unknown, diagnostics: AgentErrorDiagn
         readStringField(error, 'code') ||
         readStringField(error, 'errorCode') ||
         readNestedErrorStringField(error, 'code');
-    if (upstreamCode === 'INSUFFICIENT_BALANCE' || message.toLowerCase().includes('insufficient account balance')) {
+    if (
+        upstreamCode?.toUpperCase() === 'INSUFFICIENT_BALANCE' ||
+        message.toLowerCase().includes('insufficient account balance') ||
+        message.toLowerCase().includes('insufficient_balance')
+    ) {
         return new AgentApiError({
             code: 'upstream_quota_exhausted',
             message: '上游渠道余额不足，当前无法生成图片。',

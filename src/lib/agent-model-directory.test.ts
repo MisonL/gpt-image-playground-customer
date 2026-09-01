@@ -1,6 +1,7 @@
 import { buildAgentModelDirectory, probeAgentModelDirectory } from './agent-model-directory';
+import { closeOpenAIImageTransportResources } from './openai-image-transport';
 import assert from 'node:assert/strict';
-import { afterEach, describe, it } from 'node:test';
+import { after, afterEach, describe, it } from 'node:test';
 
 const originalFetch = globalThis.fetch;
 const publicLookup = (async () => [
@@ -12,6 +13,10 @@ const loopbackLookup = (async () => [
 
 afterEach(() => {
     globalThis.fetch = originalFetch;
+});
+
+after(async () => {
+    await closeOpenAIImageTransportResources();
 });
 
 describe('agent model directory', () => {
@@ -98,6 +103,23 @@ describe('agent model directory', () => {
                 OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS: 'http://127.0.0.1:4783/v1'
             },
             { lookup: loopbackLookup }
+        );
+        assert.equal(directory.channels[0]?.probe_status, 'ok');
+    });
+
+    it('probes IPv4-mapped loopback HTTP channels', async () => {
+        globalThis.fetch = async () =>
+            new Response(JSON.stringify({ data: [{ id: 'custom-image' }] }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' }
+            });
+        const directory = await probeAgentModelDirectory(
+            {
+                OPENAI_CHANNEL_1_ID: 'local-images',
+                OPENAI_CHANNEL_1_BASE_URL: 'http://[::ffff:7f00:1]:4783/v1',
+                OPENAI_CHANNEL_1_API_KEYS: 'key'
+            },
+            { lookup: publicLookup }
         );
         assert.equal(directory.channels[0]?.probe_status, 'ok');
     });

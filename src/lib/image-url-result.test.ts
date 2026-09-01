@@ -1,4 +1,5 @@
 import { downloadSameOriginImageAsBase64 } from './image-url-result';
+import { closeOpenAIImageTransportResources, UpstreamResponseFormatError } from './openai-image-transport';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
@@ -6,6 +7,10 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
     globalThis.fetch = originalFetch;
+});
+
+afterEach(async () => {
+    await closeOpenAIImageTransportResources();
 });
 
 describe('downloadSameOriginImageAsBase64', () => {
@@ -87,6 +92,27 @@ describe('downloadSameOriginImageAsBase64', () => {
                 }),
             /禁止的本地或内网/
         );
+    });
+
+    it('honors an already-aborted request before performing DNS resolution', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        let lookupCalled = false;
+
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: 'https://example.com/result.png',
+                    apiBaseUrl: 'https://api.example.test/v1',
+                    abortSignal: controller.signal,
+                    lookup: (async () => {
+                        lookupCalled = true;
+                        return [{ address: '93.184.216.34', family: 4 }];
+                    }) as unknown as typeof import('node:dns/promises').lookup
+                }),
+            /超时或已取消/
+        );
+        assert.equal(lookupCalled, false);
     });
 
     it('rejects NAT64 addresses that map to private IPv4 networks', async () => {
@@ -279,6 +305,25 @@ describe('downloadSameOriginImageAsBase64', () => {
             /25 MB/
         );
         assert.equal(arrayBufferRead, false);
+    });
+
+    it('keeps HTML artifact responses in the image-result error category', async () => {
+        globalThis.fetch = async () => {
+            throw new UpstreamResponseFormatError({
+                upstreamStatus: 200,
+                contentType: 'text/html',
+                headers: new Headers({ 'content-type': 'text/html' })
+            });
+        };
+
+        await assert.rejects(
+            () =>
+                downloadSameOriginImageAsBase64({
+                    imageUrl: '/generated/final.png',
+                    apiBaseUrl: 'https://api.example.test/v1'
+                }),
+            /响应不是图片类型/
+        );
     });
 
     it('cancels streaming downloads as soon as the size limit is exceeded', async () => {

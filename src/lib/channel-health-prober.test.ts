@@ -1,8 +1,14 @@
 import { createChannelHealthProber, probeChannelModelsEndpoint } from './channel-health-prober';
 import { createChannelRouter, parseChannelPoolConfig } from './channel-router';
+import { closeOpenAIImageTransportResources } from './openai-image-transport';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { describe, it } from 'node:test';
+import net from 'node:net';
+import { after, describe, it } from 'node:test';
+
+after(async () => {
+    await closeOpenAIImageTransportResources();
+});
 
 describe('probeChannelModelsEndpoint', () => {
     it('checks the non-billable models endpoint with the selected credential', async () => {
@@ -14,6 +20,7 @@ describe('probeChannelModelsEndpoint', () => {
             appId?: string | string[];
             appSecret?: string | string[];
         }> = [];
+        let redirectMode: RequestRedirect | undefined;
         const upstream = await startModelsUpstream((request, response) => {
             calls.push({
                 method: request.method,
@@ -42,7 +49,11 @@ describe('probeChannelModelsEndpoint', () => {
                         'X-App-Secret': 'app-secret'
                     }
                 },
-                timeoutMs: 5000
+                timeoutMs: 5000,
+                fetchImpl: async (url, init) => {
+                    redirectMode = init.redirect;
+                    return fetch(url, init);
+                }
             });
 
             assert.deepEqual(result, { ok: true, status: 200 });
@@ -56,6 +67,7 @@ describe('probeChannelModelsEndpoint', () => {
                     appSecret: 'app-secret'
                 }
             ]);
+            assert.equal(redirectMode, 'error');
         } finally {
             await upstream.close();
         }
@@ -83,6 +95,53 @@ describe('probeChannelModelsEndpoint', () => {
         } finally {
             await upstream.close();
         }
+    });
+
+    it('honors the explicit plain HTTP allowlist while validating the probe URL', async () => {
+        let fetchCalled = false;
+        const result = await probeChannelModelsEndpoint({
+            credential: {
+                id: 'remote#0',
+                channelId: 'remote',
+                apiKey: 'sk-test',
+                baseUrl: 'http://192.0.2.10/v1',
+                upstreamProfile: 'openai-compatible'
+            },
+            timeoutMs: 5000,
+            allowedPlainHttpBaseUrls: ['http://192.0.2.10/v1'],
+            fetchImpl: async () => {
+                fetchCalled = true;
+                return new Response(JSON.stringify({ data: [{ id: 'gpt-image-2' }] }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+        });
+
+        assert.equal(fetchCalled, true);
+        assert.deepEqual(result, { ok: true, status: 200 });
+    });
+
+    it('rejects non-allowlisted plain HTTP probe URLs before making a request', async () => {
+        let fetchCalled = false;
+        const result = await probeChannelModelsEndpoint({
+            credential: {
+                id: 'remote#0',
+                channelId: 'remote',
+                apiKey: 'sk-test',
+                baseUrl: 'http://192.0.2.10/v1',
+                upstreamProfile: 'openai-compatible'
+            },
+            timeoutMs: 5000,
+            fetchImpl: async () => {
+                fetchCalled = true;
+                throw new Error('fetch must not run for a disallowed HTTP URL');
+            }
+        });
+
+        assert.equal(fetchCalled, false);
+        assert.equal(result.ok, false);
+        assert.equal(result.code, 'probe_transport_error');
     });
 });
 
@@ -407,20 +466,30 @@ describe('createChannelHealthProber', () => {
 async function startModelsUpstream(
     handler: (request: http.IncomingMessage, response: http.ServerResponse) => void
 ): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+    const sockets = new Set<net.Socket>();
     const server = http.createServer((request, response) => {
         if (request.method !== 'GET' || request.url !== '/v1/models') {
-            response.writeHead(404, { 'Content-Type': 'application/json' });
+            response.writeHead(404, { 'Content-Type': 'application/json', Connection: 'close' });
             response.end(JSON.stringify({ error: { message: 'not found' } }));
             return;
         }
         handler(request, response);
+    });
+    server.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     assert.ok(address && typeof address === 'object');
     return {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+        close: async () => {
+            for (const socket of sockets) socket.destroy();
+            await new Promise<void>((resolve, reject) => {
+                server.close((error) => (error ? reject(error) : resolve()));
+            });
+        }
     };
 }
 

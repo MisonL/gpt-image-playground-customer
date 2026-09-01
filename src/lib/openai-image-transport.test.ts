@@ -10,7 +10,8 @@ import {
     readImageUpstreamTimeoutMs,
     readOpenAIUpstreamProxyUrl,
     summarizeOpenAIUpstreamProxy,
-    summarizeOpenAIImageTransport
+    summarizeOpenAIImageTransport,
+    UpstreamResponseFormatError
 } from './openai-image-transport';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -268,6 +269,46 @@ describe('openai image transport settings', () => {
             assert.equal(connectionOpened, false);
         } finally {
             await dispatcher.close();
+            await upstream.close();
+        }
+    });
+
+    it('classifies successful HTML upstream responses before SDK parsing', async () => {
+        const upstream = await startHttpServer((_request, response) => {
+            response.writeHead(200, {
+                'Content-Type': 'text/html',
+                'Retry-After': '19',
+                'X-Request-Id': 'html-upstream-1',
+                Connection: 'close'
+            });
+            response.end('<!doctype html><html><body>gateway page</body></html>');
+        });
+
+        try {
+            await assert.rejects(
+                () =>
+                    fetchOpenAIUpstream(
+                        `${upstream.baseUrl}/v1/images/generations`,
+                        { headers: { Connection: 'close' } },
+                        undefined,
+                        undefined,
+                        {
+                            baseURL: upstream.baseUrl,
+                            allowedPlainHttpBaseUrls: [upstream.baseUrl]
+                        }
+                    ),
+                (error: unknown) => {
+                    assert.ok(error instanceof UpstreamResponseFormatError);
+                    assert.equal(error.code, 'upstream_response_format');
+                    assert.equal(error.status, 502);
+                    assert.equal(error.upstreamStatus, 200);
+                    assert.equal(error.contentType, 'text/html');
+                    assert.equal(error.headers.get('retry-after'), '19');
+                    assert.equal(error.headers.get('x-request-id'), 'html-upstream-1');
+                    return true;
+                }
+            );
+        } finally {
             await upstream.close();
         }
     });

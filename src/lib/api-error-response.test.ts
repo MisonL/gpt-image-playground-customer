@@ -9,6 +9,7 @@ import {
 import { type ChannelRequestMode } from './channel-request-mode';
 import { RequestValidationError } from './image-request-utils';
 import { AcceptedImageTaskResponseError } from './image-service';
+import { UpstreamResponseFormatError } from './openai-image-transport';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
@@ -61,6 +62,67 @@ describe('normalizeAgentError', () => {
             error: { code: 'INSUFFICIENT_BALANCE', message: 'Insufficient account balance' }
         });
         assert.equal(error.code, 'upstream_quota_exhausted');
+        assert.equal(error.retryable, false);
+    });
+
+    it('preserves successful HTML upstream responses as deterministic unavailable errors', () => {
+        const error = normalizeAgentError(
+            new UpstreamResponseFormatError({
+                upstreamStatus: 200,
+                contentType: 'text/html',
+                headers: new Headers({
+                    'content-type': 'text/html',
+                    'x-request-id': 'req-html-1',
+                    'retry-after': '17',
+                    'x-secret-header': 'must-not-leak'
+                })
+            })
+        );
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, false);
+        assert.equal(error.upstreamStatus, 200);
+        assert.equal(error.diagnostics?.upstream_status, 200);
+        assert.equal(error.diagnostics?.transport_error, false);
+        assert.deepEqual(error.diagnostics?.response_headers, {
+            'content-type': 'text/html',
+            'retry-after': '17',
+            'x-request-id': 'req-html-1'
+        });
+    });
+
+    it('recovers response-format details when the SDK wraps the transport error', () => {
+        const wrapped = Object.assign(new Error('Connection error.'), {
+            name: 'APIConnectionError',
+            cause: new UpstreamResponseFormatError({
+                upstreamStatus: 200,
+                contentType: 'text/html',
+                headers: new Headers({ 'content-type': 'text/html', 'cf-ray': 'ray-html-1' })
+            })
+        });
+        const error = normalizeAgentError(wrapped);
+
+        assert.equal(error.code, 'upstream_unavailable');
+        assert.equal(error.status, 502);
+        assert.equal(error.retryable, false);
+        assert.equal(error.upstreamStatus, 200);
+        assert.equal(error.diagnostics?.transport_error, false);
+        assert.equal(error.diagnostics?.transport_error_kind, undefined);
+        assert.deepEqual(error.diagnostics?.response_headers, {
+            'cf-ray': 'ray-html-1',
+            'content-type': 'text/html'
+        });
+    });
+
+    it('normalizes case-insensitive nested insufficient balance codes', () => {
+        const error = normalizeAgentError({
+            status: 403,
+            error: { code: 'insufficient_balance', message: 'insufficient_balance' }
+        });
+
+        assert.equal(error.code, 'upstream_quota_exhausted');
+        assert.equal(error.status, 403);
         assert.equal(error.retryable, false);
     });
 

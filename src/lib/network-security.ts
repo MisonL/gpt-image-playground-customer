@@ -6,9 +6,10 @@ import net from 'node:net';
  * applying the IPv4 reserved-range checks.
  */
 export function isPublicIpAddress(address: string): boolean {
-    if (net.isIPv4(address)) return isPublicIpv4(address);
-    if (!net.isIPv6(address)) return false;
-    const hextets = parseIpv6Hextets(address);
+    const normalized = address.trim().replace(/^\[|\]$/g, '');
+    if (net.isIPv4(normalized)) return isPublicIpv4(normalized);
+    if (!net.isIPv6(normalized)) return false;
+    const hextets = parseIpv6Hextets(normalized);
     if (!hextets) return false;
     const allZero = hextets.every((value) => value === 0);
     if (allZero || (hextets.slice(0, 7).every((value) => value === 0) && hextets[7] === 1)) return false;
@@ -25,6 +26,20 @@ export function isPublicIpAddress(address: string): boolean {
     if (hextets[0] === 0x0064 && hextets[1] === 0xff9b) return false;
     if (hextets[0] === 0x2002) return isPublicIpv4(ipv4FromHextets(hextets[1], hextets[2]));
     return true;
+}
+
+export function isLoopbackIpAddress(address: string): boolean {
+    const normalized = address.replace(/^\[|\]$/g, '');
+    if (net.isIPv4(normalized)) return isLoopbackIpv4(normalized);
+    if (!net.isIPv6(normalized)) return false;
+    const hextets = parseIpv6Hextets(normalized);
+    if (!hextets) return false;
+    if (hextets.slice(0, 7).every((value) => value === 0) && hextets[7] === 1) return true;
+    const embeddedIpv4 =
+        readMappedIpv4FromHextets(hextets) ??
+        readTranslatedIpv4FromHextets(hextets) ??
+        readCompatibleIpv4FromHextets(hextets);
+    return embeddedIpv4 !== undefined && isLoopbackIpv4(embeddedIpv4);
 }
 
 function isPublicIpv4(address: string): boolean {
@@ -45,6 +60,15 @@ function isPublicIpv4(address: string): boolean {
         (a === 198 && (b === 18 || b === 19 || b === 51)) ||
         (a === 203 && b === 0 && c === 113) ||
         a >= 224
+    );
+}
+
+function isLoopbackIpv4(address: string): boolean {
+    const octets = address.split('.').map(Number);
+    return (
+        octets.length === 4 &&
+        octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255) &&
+        octets[0] === 127
     );
 }
 

@@ -69,6 +69,7 @@ function buildApiErrorAdvice(status: number | undefined, code: string | undefine
 export function classifyApiErrorCode(code: unknown, message: string): string | undefined {
     const normalizedCode = typeof code === 'string' && code.trim() ? code.trim() : undefined;
     if (normalizedCode?.toUpperCase() === 'INSUFFICIENT_BALANCE') return 'upstream_quota_exhausted';
+    if (normalizedCode === 'upstream_response_format') return 'upstream_unavailable';
     if (normalizedCode) return normalizedCode;
     const normalized = message.toLowerCase();
     if (normalized.includes('insufficient_balance') || normalized.includes('insufficient account balance')) {

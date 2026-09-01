@@ -2,7 +2,7 @@ import { AGENT_MODELS } from './agent-api-contracts';
 import { parseChannelPoolConfig, type ChannelCredential } from './channel-router';
 import { readPlainHttpApiBaseUrlAllowlist, resolveDefaultImageModel, validateApiBaseUrl } from './image-request-utils';
 import { mergeUpstreamHeadersWithFixed } from './image-upstream-profile';
-import { isPublicIpAddress } from './network-security';
+import { isLoopbackIpAddress, isPublicIpAddress } from './network-security';
 import { createPinnedDnsDispatcher, fetchOpenAIUpstream } from './openai-image-transport';
 import dns from 'node:dns/promises';
 import net from 'node:net';
@@ -155,6 +155,9 @@ export async function probeAgentModelDirectory(
                     lastErrorCode = 'request_failed';
                     break;
                 }
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), Math.max(0, channelDeadline - Date.now()));
+                let pinnedDispatcher: ReturnType<typeof createPinnedDnsDispatcher> | undefined;
                 try {
                     if (!credential.baseUrl) {
                         lastErrorCode = 'missing_base_url';
@@ -165,70 +168,71 @@ export async function probeAgentModelDirectory(
                         continue;
                     }
                     validateApiBaseUrl(credential.baseUrl, { allowedPlainHttpBaseUrls });
-                    const pinnedDispatcher = credential.upstreamProxyUrl
+                    pinnedDispatcher = credential.upstreamProxyUrl
                         ? undefined
-                        : await resolvePinnedChannelHost(credential.baseUrl, lookup, allowedPlainHttpBaseUrls);
-                    const controller = new AbortController();
-                    const timer = setTimeout(() => controller.abort(), Math.max(0, channelDeadline - Date.now()));
-                    try {
-                        const response = await fetchOpenAIUpstream(
-                            `${credential.baseUrl.replace(/\/$/, '')}/models`,
-                            {
-                                headers: mergeUpstreamHeadersWithFixed(credential.upstreamHeaders, {
-                                    Authorization: `Bearer ${credential.apiKey}`,
-                                    Accept: 'application/json'
-                                }),
-                                redirect: 'error',
-                                signal: controller.signal
-                            },
-                            credential.upstreamProxyUrl,
-                            pinnedDispatcher
-                        );
-                        channel.http_status = response.status;
-                        if (!response.ok) {
-                            await cancelResponseBody(response);
-                            lastErrorCode = 'upstream_error';
-                            continue;
-                        }
-                        const contentLength = response.headers.get('content-length');
-                        if (contentLength && Number(contentLength) > MAX_PROBE_RESPONSE_BYTES) {
-                            await cancelResponseBody(response);
-                            lastErrorCode = 'invalid_response';
-                            continue;
-                        }
-                        const body = await readBoundedResponseText(response, MAX_PROBE_RESPONSE_BYTES);
-                        let payload: { data?: Array<{ id?: unknown }> };
-                        try {
-                            payload = JSON.parse(body) as { data?: Array<{ id?: unknown }> };
-                        } catch {
-                            lastErrorCode = 'invalid_response';
-                            continue;
-                        }
-                        if (!Array.isArray(payload.data)) {
-                            lastErrorCode = 'invalid_response';
-                            continue;
-                        }
-                        const probedModels = Array.from(
-                            new Set(
-                                payload.data
-                                    .map((item) => (typeof item?.id === 'string' ? item.id.trim() : ''))
-                                    .filter(Boolean)
-                            )
-                        ).sort();
-                        const allowedModels =
-                            credential.models !== undefined && credential.models.length > 0
-                                ? probedModels.filter((model) => credential.models?.includes(model))
-                                : probedModels;
-                        successfulProbe = true;
-                        successfulHost ??= safeHost(credential.baseUrl);
-                        successfulStatus ??= response.status;
-                        for (const model of allowedModels) discoveredModels.add(model);
-                    } finally {
-                        clearTimeout(timer);
-                        await pinnedDispatcher?.close();
+                        : await resolvePinnedChannelHost(
+                              credential.baseUrl,
+                              lookup,
+                              allowedPlainHttpBaseUrls,
+                              controller.signal
+                          );
+                    const response = await fetchOpenAIUpstream(
+                        `${credential.baseUrl.replace(/\/$/, '')}/models`,
+                        {
+                            headers: mergeUpstreamHeadersWithFixed(credential.upstreamHeaders, {
+                                Authorization: `Bearer ${credential.apiKey}`,
+                                Accept: 'application/json'
+                            }),
+                            redirect: 'error',
+                            signal: controller.signal
+                        },
+                        credential.upstreamProxyUrl,
+                        pinnedDispatcher
+                    );
+                    channel.http_status = response.status;
+                    if (!response.ok) {
+                        await cancelResponseBody(response);
+                        lastErrorCode = 'upstream_error';
+                        continue;
                     }
+                    const contentLength = response.headers.get('content-length');
+                    if (contentLength && Number(contentLength) > MAX_PROBE_RESPONSE_BYTES) {
+                        await cancelResponseBody(response);
+                        lastErrorCode = 'invalid_response';
+                        continue;
+                    }
+                    const body = await readBoundedResponseText(response, MAX_PROBE_RESPONSE_BYTES);
+                    let payload: { data?: Array<{ id?: unknown }> };
+                    try {
+                        payload = JSON.parse(body) as { data?: Array<{ id?: unknown }> };
+                    } catch {
+                        lastErrorCode = 'invalid_response';
+                        continue;
+                    }
+                    if (!Array.isArray(payload.data)) {
+                        lastErrorCode = 'invalid_response';
+                        continue;
+                    }
+                    const probedModels = Array.from(
+                        new Set(
+                            payload.data
+                                .map((item) => (typeof item?.id === 'string' ? item.id.trim() : ''))
+                                .filter(Boolean)
+                        )
+                    ).sort();
+                    const allowedModels =
+                        credential.models !== undefined && credential.models.length > 0
+                            ? probedModels.filter((model) => credential.models?.includes(model))
+                            : probedModels;
+                    successfulProbe = true;
+                    successfulHost ??= safeHost(credential.baseUrl);
+                    successfulStatus ??= response.status;
+                    for (const model of allowedModels) discoveredModels.add(model);
                 } catch (error) {
                     lastErrorCode = error instanceof ProbeResponseTooLargeError ? 'invalid_response' : 'request_failed';
+                } finally {
+                    clearTimeout(timer);
+                    await pinnedDispatcher?.close();
                 }
             }
             if (successfulProbe) {
@@ -267,7 +271,8 @@ export async function probeAgentModelDirectory(
 async function resolvePinnedChannelHost(
     baseUrl: string,
     lookup: typeof dns.lookup,
-    allowedPlainHttpBaseUrls: string[]
+    allowedPlainHttpBaseUrls: string[],
+    signal?: AbortSignal
 ) {
     const parsed = new URL(baseUrl);
     const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
@@ -277,7 +282,7 @@ async function resolvePinnedChannelHost(
     if (literalFamily) {
         addresses = [{ address: hostname, family: literalFamily }];
     } else {
-        addresses = await lookup(hostname, { all: true, verbatim: true });
+        addresses = await lookupWithAbort(lookup, hostname, signal);
     }
     if (addresses.length === 0 || (!allowPrivate && addresses.some(({ address }) => !isPublicIpAddress(address)))) {
         throw new Error('模型目录渠道主机解析到了被禁止的本地或内网地址。');
@@ -285,16 +290,31 @@ async function resolvePinnedChannelHost(
     return createPinnedDnsDispatcher(addresses);
 }
 
+async function lookupWithAbort(
+    lookup: typeof dns.lookup,
+    hostname: string,
+    signal?: AbortSignal
+): Promise<Array<{ address: string; family: number }>> {
+    if (!signal) return lookup(hostname, { all: true, verbatim: true });
+    if (signal.aborted) throw new Error('DNS lookup aborted');
+    let abortHandler: (() => void) | undefined;
+    const abortPromise = new Promise<never>((_, reject) => {
+        abortHandler = () => reject(new Error('DNS lookup aborted'));
+        signal.addEventListener('abort', abortHandler, { once: true });
+    });
+    try {
+        return await Promise.race([lookup(hostname, { all: true, verbatim: true }), abortPromise]);
+    } finally {
+        if (abortHandler) signal.removeEventListener('abort', abortHandler);
+    }
+}
+
 function isExplicitlyAllowedPrivateHttpBaseUrl(parsed: URL, allowedPlainHttpBaseUrls: string[]): boolean {
     if (parsed.protocol !== 'http:') return false;
     const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
     if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true;
     if (net.isIP(hostname) === 4 && hostname.startsWith('127.')) return true;
-    if (
-        net.isIP(hostname) === 6 &&
-        (hostname === '::1' || hostname === '0:0:0:0:0:0:0:1' || /^::ffff:127(?:\.\d{1,3}){3}$/.test(hostname))
-    )
-        return true;
+    if (net.isIP(hostname) === 6 && isLoopbackIpAddress(hostname)) return true;
     const normalized = normalizePlainHttpBaseUrl(parsed);
     return allowedPlainHttpBaseUrls.some((value) => {
         try {

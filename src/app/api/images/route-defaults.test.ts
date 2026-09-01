@@ -2,6 +2,7 @@ import {
     PNG_BASE64,
     imageFormRequest,
     readSseEvents,
+    startHtmlImageUpstream,
     startHttpConnectProxy,
     startImagesJsonUpstream,
     startResponsesImageUpstream,
@@ -112,17 +113,40 @@ describe('POST /api/images backend defaults and security boundaries', { concurre
         }
     });
 
-    it('sends page API requests through the configured global upstream proxy', async () => {
+    it('returns 502 upstream_unavailable for successful HTML upstream pages', async () => {
         const { POST } = await import('./route');
-        const upstream = await startImagesJsonUpstream(async () => ({ data: [{ b64_json: PNG_BASE64 }] }));
-        const proxy = await startHttpConnectProxy();
-        process.env.OPENAI_UPSTREAM_PROXY_URL = proxy.url;
+        const upstream = await startHtmlImageUpstream();
 
         try {
             const response = await POST(
                 imageFormRequest({
                     apiBaseUrl: upstream.baseUrl,
                     apiKey: 'test-key',
+                    stream: false,
+                    streamMode: 'non_stream'
+                })
+            );
+
+            assert.equal(response.status, 502);
+            const body = (await response.json()) as { code?: string; error?: string };
+            assert.equal(body.code, 'upstream_unavailable');
+            assert.match(body.error || '', /HTML|兼容接口根地址/);
+        } finally {
+            await upstream.close();
+        }
+    });
+
+    it('sends page API requests through the configured global upstream proxy', async () => {
+        const { POST } = await import('./route');
+        const upstream = await startImagesJsonUpstream(async () => ({ data: [{ b64_json: PNG_BASE64 }] }));
+        const proxy = await startHttpConnectProxy();
+        process.env.OPENAI_API_BASE_URL = upstream.baseUrl;
+        process.env.OPENAI_API_KEY = 'server-key';
+        process.env.OPENAI_UPSTREAM_PROXY_URL = proxy.url;
+
+        try {
+            const response = await POST(
+                imageFormRequest({
                     stream: false,
                     streamMode: 'non_stream'
                 })

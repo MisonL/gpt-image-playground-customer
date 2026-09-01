@@ -12,6 +12,10 @@ it('normalizes symbolic upstream balance errors', () => {
     assert.equal(classifyApiErrorCode('INSUFFICIENT_BALANCE', '余额不足'), 'upstream_quota_exhausted');
 });
 
+it('normalizes transport response-format errors to upstream availability', () => {
+    assert.equal(classifyApiErrorCode('upstream_response_format', '上游返回 HTML 页面'), 'upstream_unavailable');
+});
+
 it('classifies exhausted healthy-channel selection separately from validation errors', () => {
     assert.equal(classifyApiErrorCode(undefined, '当前没有支持 images-sse 的健康渠道凭证。'), 'channel_unavailable');
     assert.equal(
