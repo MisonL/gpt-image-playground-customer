@@ -9,6 +9,7 @@ import {
     readImageUpstreamMaxRetries,
     readImageUpstreamTimeoutMs,
     readOpenAIUpstreamProxyUrl,
+    resolveUpstreamDnsPolicy,
     summarizeOpenAIUpstreamProxy,
     summarizeOpenAIImageTransport,
     UpstreamResponseFormatError
@@ -271,6 +272,22 @@ describe('openai image transport settings', () => {
             await dispatcher.close();
             await upstream.close();
         }
+    });
+
+    it('keeps synthetic DNS opt-in separate from ordinary private-address access', () => {
+        assert.deepEqual(resolveUpstreamDnsPolicy('https://mhapi.net/v1', undefined), {
+            allowPrivate: false,
+            allowSyntheticDns: false
+        });
+        assert.deepEqual(resolveUpstreamDnsPolicy('https://mhapi.net/v1', undefined, true), {
+            allowPrivate: false,
+            allowSyntheticDns: true
+        });
+        assert.deepEqual(resolveUpstreamDnsPolicy('http://127.0.0.1:4783/v1', undefined, true), {
+            allowPrivate: true,
+            allowSyntheticDns: true,
+            allowedPrivateHostnames: ['127.0.0.1']
+        });
     });
 
     it('classifies successful HTML upstream responses before SDK parsing', async () => {

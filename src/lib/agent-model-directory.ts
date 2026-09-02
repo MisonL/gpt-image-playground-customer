@@ -2,8 +2,8 @@ import { AGENT_MODELS } from './agent-api-contracts';
 import { parseChannelPoolConfig, type ChannelCredential } from './channel-router';
 import { readPlainHttpApiBaseUrlAllowlist, resolveDefaultImageModel, validateApiBaseUrl } from './image-request-utils';
 import { mergeUpstreamHeadersWithFixed } from './image-upstream-profile';
-import { isLoopbackIpAddress, isPublicIpAddress } from './network-security';
-import { createPinnedDnsDispatcher, fetchOpenAIUpstream } from './openai-image-transport';
+import { isLoopbackIpAddress, isPublicIpAddress, isSyntheticDnsIpAddress } from './network-security';
+import { createPinnedDnsDispatcher, fetchOpenAIUpstream, readSyntheticDnsSetting } from './openai-image-transport';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
@@ -133,6 +133,7 @@ export async function probeAgentModelDirectory(
 ): Promise<AgentModelDirectory> {
     const directory = buildAgentModelDirectory(env);
     const allowedPlainHttpBaseUrls = readPlainHttpApiBaseUrlAllowlist(env.OPENAI_ALLOWED_PLAIN_HTTP_API_BASE_URLS);
+    const allowSyntheticDns = readSyntheticDnsSetting(env);
     const lookup = options.lookup ?? dns.lookup;
     const credentials = parseChannelPoolConfig(env).credentials;
     const credentialsByChannel = new Map<string, ChannelCredential[]>();
@@ -174,6 +175,7 @@ export async function probeAgentModelDirectory(
                               credential.baseUrl,
                               lookup,
                               allowedPlainHttpBaseUrls,
+                              allowSyntheticDns,
                               controller.signal
                           );
                     const response = await fetchOpenAIUpstream(
@@ -187,7 +189,12 @@ export async function probeAgentModelDirectory(
                             signal: controller.signal
                         },
                         credential.upstreamProxyUrl,
-                        pinnedDispatcher
+                        pinnedDispatcher,
+                        {
+                            baseURL: credential.baseUrl,
+                            allowedPlainHttpBaseUrls,
+                            allowSyntheticDns
+                        }
                     );
                     channel.http_status = response.status;
                     if (!response.ok) {
@@ -272,6 +279,7 @@ async function resolvePinnedChannelHost(
     baseUrl: string,
     lookup: typeof dns.lookup,
     allowedPlainHttpBaseUrls: string[],
+    allowSyntheticDns: boolean,
     signal?: AbortSignal
 ) {
     const parsed = new URL(baseUrl);
@@ -284,7 +292,15 @@ async function resolvePinnedChannelHost(
     } else {
         addresses = await lookupWithAbort(lookup, hostname, signal);
     }
-    if (addresses.length === 0 || (!allowPrivate && addresses.some(({ address }) => !isPublicIpAddress(address)))) {
+    if (
+        addresses.length === 0 ||
+        (!allowPrivate &&
+            addresses.some(
+                ({ address }) =>
+                    !isPublicIpAddress(address) &&
+                    !(allowSyntheticDns && !literalFamily && isSyntheticDnsIpAddress(address))
+            ))
+    ) {
         throw new Error('模型目录渠道主机解析到了被禁止的本地或内网地址。');
     }
     return createPinnedDnsDispatcher(addresses);

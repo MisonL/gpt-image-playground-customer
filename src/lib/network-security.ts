@@ -28,6 +28,19 @@ export function isPublicIpAddress(address: string): boolean {
     return true;
 }
 
+/**
+ * Some local transparent DNS/proxy setups map public hostnames into the
+ * RFC 2544 benchmarking range before intercepting the connection. This range
+ * is never treated as public; callers must opt in explicitly when they know
+ * the network path is an intentional synthetic-DNS proxy.
+ */
+export function isSyntheticDnsIpAddress(address: string): boolean {
+    const normalized = address.trim().replace(/^\[|\]$/g, '');
+    if (!net.isIPv4(normalized)) return false;
+    const octets = normalized.split('.').map(Number);
+    return octets.length === 4 && octets[0] === 198 && (octets[1] === 18 || octets[1] === 19);
+}
+
 export function isLoopbackIpAddress(address: string): boolean {
     const normalized = address.replace(/^\[|\]$/g, '');
     if (net.isIPv4(normalized)) return isLoopbackIpv4(normalized);

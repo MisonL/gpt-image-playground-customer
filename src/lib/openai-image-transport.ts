@@ -1,4 +1,4 @@
-import { isLoopbackIpAddress, isPublicIpAddress } from './network-security';
+import { isLoopbackIpAddress, isPublicIpAddress, isSyntheticDnsIpAddress } from './network-security';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import type OpenAI from 'openai';
@@ -117,7 +117,8 @@ export function createOpenAIImageClientOptions(input: {
         defaultHeaders: input.defaultHeaders,
         fetch: createOpenAIUpstreamFetch(upstreamProxyUrl, {
             baseURL: input.baseURL,
-            allowedPlainHttpBaseUrls: input.allowedPlainHttpBaseUrls
+            allowedPlainHttpBaseUrls: input.allowedPlainHttpBaseUrls,
+            allowSyntheticDns: readSyntheticDnsSetting(input.env)
         }),
         timeout: readImageUpstreamTimeoutMs(input.env),
         maxRetries: readImageUpstreamMaxRetries(input.env)
@@ -146,8 +147,9 @@ export function fetchOpenAIUpstream(
     init: Parameters<NonNullable<ClientOptions['fetch']>>[1] | undefined,
     upstreamProxyUrl?: string,
     dispatcher?: Agent,
-    options: { baseURL?: string; allowedPlainHttpBaseUrls?: string[] } = {}
+    options: { baseURL?: string; allowedPlainHttpBaseUrls?: string[]; allowSyntheticDns?: boolean } = {}
 ): Promise<Response> {
+    const allowSyntheticDns = options.allowSyntheticDns ?? readSyntheticDnsSetting();
     if (upstreamProxyUrl && dispatcher) {
         throw new Error('不能同时指定 upstreamProxyUrl 和 pinned dispatcher。');
     }
@@ -156,7 +158,8 @@ export function fetchOpenAIUpstream(
             dispatcher ||
             getUpstreamDnsDispatcher({
                 baseURL: options.baseURL || readFetchUrl(input),
-                allowedPlainHttpBaseUrls: options.allowedPlainHttpBaseUrls
+                allowedPlainHttpBaseUrls: options.allowedPlainHttpBaseUrls,
+                allowSyntheticDns
             });
         return fetch(
             input,
@@ -240,11 +243,13 @@ export function createPinnedDnsDispatcher(addresses: Array<{ address: string; fa
 export function createDnsValidatedDispatcher(
     input: {
         allowPrivate?: boolean;
+        allowSyntheticDns?: boolean;
         lookup?: typeof dns.lookup;
         allowedPrivateHostnames?: readonly string[];
     } = {}
 ): Agent {
     const allowPrivate = input.allowPrivate === true;
+    const allowSyntheticDns = input.allowSyntheticDns === true;
     const lookup = input.lookup ?? dns.lookup;
     const allowedPrivateHostnames = new Set(
         (input.allowedPrivateHostnames ?? []).map((hostname) => hostname.replace(/^\[|\]$/g, '').toLowerCase())
@@ -262,6 +267,7 @@ export function createDnsValidatedDispatcher(
                         const safeAddresses = addresses.filter(
                             ({ address }) =>
                                 isPublicIpAddress(address) ||
+                                (allowSyntheticDns && !literalFamily && isSyntheticDnsIpAddress(address)) ||
                                 (allowPrivate &&
                                     (allowedPrivateHostnames.size === 0 ||
                                         allowedPrivateHostnames.has(normalizedHostname.toLowerCase())))
@@ -310,9 +316,12 @@ export function createUpstreamDnsDispatcher(
     input: {
         baseURL?: string;
         allowedPlainHttpBaseUrls?: string[];
+        allowSyntheticDns?: boolean;
     } = {}
 ): Agent {
-    return createDnsValidatedDispatcher(resolveUpstreamDnsPolicy(input.baseURL, input.allowedPlainHttpBaseUrls));
+    return createDnsValidatedDispatcher(
+        resolveUpstreamDnsPolicy(input.baseURL, input.allowedPlainHttpBaseUrls, input.allowSyntheticDns)
+    );
 }
 
 const pinnedDnsNextAddressBySet = new Map<string, number>();
@@ -346,12 +355,13 @@ export function summarizeOpenAIImageTransport(env: ImageTransportEnv = process.e
 
 function createOpenAIUpstreamFetch(
     upstreamProxyUrl: string | undefined,
-    options: { baseURL?: string; allowedPlainHttpBaseUrls?: string[] }
+    options: { baseURL?: string; allowedPlainHttpBaseUrls?: string[]; allowSyntheticDns?: boolean }
 ): NonNullable<ClientOptions['fetch']> {
     return (input, init) =>
         fetchOpenAIUpstream(input, init, upstreamProxyUrl, undefined, {
             baseURL: options.baseURL,
-            allowedPlainHttpBaseUrls: options.allowedPlainHttpBaseUrls
+            allowedPlainHttpBaseUrls: options.allowedPlainHttpBaseUrls,
+            allowSyntheticDns: options.allowSyntheticDns
         });
 }
 
@@ -362,10 +372,18 @@ function readFetchUrl(input: Parameters<NonNullable<ClientOptions['fetch']>>[0])
     return undefined;
 }
 
-function getUpstreamDnsDispatcher(options: { baseURL?: string; allowedPlainHttpBaseUrls?: string[] }): Agent {
-    const policy = resolveUpstreamDnsPolicy(options.baseURL, options.allowedPlainHttpBaseUrls);
+function getUpstreamDnsDispatcher(options: {
+    baseURL?: string;
+    allowedPlainHttpBaseUrls?: string[];
+    allowSyntheticDns?: boolean;
+}): Agent {
+    const policy = resolveUpstreamDnsPolicy(
+        options.baseURL,
+        options.allowedPlainHttpBaseUrls,
+        options.allowSyntheticDns
+    );
     const hostKey = policy.allowedPrivateHostnames?.join(',') || '';
-    const key = `${policy.allowPrivate ? 'private' : 'public'}:${hostKey}`;
+    const key = `${policy.allowPrivate ? 'private' : 'public'}:${policy.allowSyntheticDns ? 'synthetic' : 'strict'}:${hostKey}`;
     const existing = upstreamDnsDispatcherByPolicy.get(key);
     if (existing) return existing;
     const dispatcher = createDnsValidatedDispatcher(policy);
@@ -373,27 +391,28 @@ function getUpstreamDnsDispatcher(options: { baseURL?: string; allowedPlainHttpB
     return dispatcher;
 }
 
-function resolveUpstreamDnsPolicy(
+export function resolveUpstreamDnsPolicy(
     baseURL: string | undefined,
-    allowedPlainHttpBaseUrls: string[] | undefined
-): { allowPrivate: boolean; allowedPrivateHostnames?: string[] } {
-    if (!baseURL) return { allowPrivate: false };
+    allowedPlainHttpBaseUrls: string[] | undefined,
+    allowSyntheticDns = false
+): { allowPrivate: boolean; allowSyntheticDns: boolean; allowedPrivateHostnames?: string[] } {
+    if (!baseURL) return { allowPrivate: false, allowSyntheticDns };
     let parsed: URL;
     try {
         parsed = new URL(baseURL);
     } catch {
-        return { allowPrivate: false };
+        return { allowPrivate: false, allowSyntheticDns };
     }
-    if (parsed.protocol !== 'http:') return { allowPrivate: false };
+    if (parsed.protocol !== 'http:') return { allowPrivate: false, allowSyntheticDns };
     const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
     if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-        return { allowPrivate: true, allowedPrivateHostnames: [hostname] };
+        return { allowPrivate: true, allowSyntheticDns, allowedPrivateHostnames: [hostname] };
     }
     if (net.isIP(hostname) === 4 && hostname.startsWith('127.')) {
-        return { allowPrivate: true, allowedPrivateHostnames: [hostname] };
+        return { allowPrivate: true, allowSyntheticDns, allowedPrivateHostnames: [hostname] };
     }
     if (net.isIP(hostname) === 6 && isLoopbackIpAddress(hostname)) {
-        return { allowPrivate: true, allowedPrivateHostnames: [hostname] };
+        return { allowPrivate: true, allowSyntheticDns, allowedPrivateHostnames: [hostname] };
     }
     const normalized = normalizePlainHttpBaseUrl(parsed);
     const explicitlyAllowed = (allowedPlainHttpBaseUrls ?? []).some((value) => {
@@ -403,7 +422,13 @@ function resolveUpstreamDnsPolicy(
             return false;
         }
     });
-    return explicitlyAllowed ? { allowPrivate: true, allowedPrivateHostnames: [hostname] } : { allowPrivate: false };
+    return explicitlyAllowed
+        ? { allowPrivate: true, allowSyntheticDns, allowedPrivateHostnames: [hostname] }
+        : { allowPrivate: false, allowSyntheticDns };
+}
+
+export function readSyntheticDnsSetting(env: ImageTransportEnv = process.env): boolean {
+    return ['1', 'true', 'yes', 'on'].includes(env.OPENAI_ALLOW_SYNTHETIC_DNS_IPS?.trim().toLowerCase() || '');
 }
 
 function normalizePlainHttpBaseUrl(value: URL): string {

@@ -15,7 +15,7 @@ import {
     validateApiBaseUrl
 } from './image-request-utils';
 import { IMAGE_UPSTREAM_PROFILES } from './image-upstream-profile';
-import { isLoopbackIpAddress, isPublicIpAddress } from './network-security';
+import { isLoopbackIpAddress, isPublicIpAddress, isSyntheticDnsIpAddress } from './network-security';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { deflateSync } from 'node:zlib';
@@ -161,6 +161,16 @@ describe('isPublicIpAddress', () => {
     it('normalizes bracketed IPv6 addresses before applying reserved-range checks', () => {
         assert.equal(isPublicIpAddress('[2001:4860:4860::8888]'), true);
         assert.equal(isPublicIpAddress('[::ffff:172.16.0.1]'), false);
+    });
+});
+
+describe('isSyntheticDnsIpAddress', () => {
+    it('recognizes only the RFC 2544 benchmarking range', () => {
+        assert.equal(isSyntheticDnsIpAddress('198.18.1.24'), true);
+        assert.equal(isSyntheticDnsIpAddress('[198.19.255.254]'), true);
+        assert.equal(isSyntheticDnsIpAddress('198.17.1.24'), false);
+        assert.equal(isSyntheticDnsIpAddress('10.0.0.1'), false);
+        assert.equal(isSyntheticDnsIpAddress('::ffff:198.18.1.24'), false);
     });
 });
 

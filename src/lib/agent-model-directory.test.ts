@@ -10,6 +10,9 @@ const publicLookup = (async () => [
 const loopbackLookup = (async () => [
     { address: '127.0.0.1', family: 4 }
 ]) as unknown as typeof import('node:dns/promises').lookup;
+const syntheticDnsLookup = (async () => [
+    { address: '198.18.1.24', family: 4 }
+]) as unknown as typeof import('node:dns/promises').lookup;
 
 afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -145,6 +148,37 @@ describe('agent model directory', () => {
         assert.equal(fetchCalled, false);
         assert.equal(directory.channels[0]?.probe_status, 'failed');
         assert.equal(directory.channels[0]?.error_code, 'request_failed');
+    });
+
+    it('allows synthetic DNS answers only with explicit opt-in', async () => {
+        globalThis.fetch = async () =>
+            new Response(JSON.stringify({ data: [{ id: 'custom-image' }] }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' }
+            });
+
+        const baseEnv = {
+            OPENAI_CHANNEL_1_ID: 'images',
+            OPENAI_CHANNEL_1_BASE_URL: 'https://images.example/v1',
+            OPENAI_CHANNEL_1_API_KEYS: 'key'
+        };
+        const disabled = await probeAgentModelDirectory(baseEnv, { lookup: syntheticDnsLookup });
+        assert.equal(disabled.channels[0]?.probe_status, 'failed');
+        assert.equal(disabled.channels[0]?.error_code, 'request_failed');
+
+        const enabled = await probeAgentModelDirectory(
+            { ...baseEnv, OPENAI_ALLOW_SYNTHETIC_DNS_IPS: 'true' },
+            { lookup: syntheticDnsLookup }
+        );
+        assert.equal(enabled.channels[0]?.probe_status, 'ok');
+        assert.deepEqual(enabled.channels[0]?.models, ['custom-image']);
+
+        const literal = await probeAgentModelDirectory(
+            { ...baseEnv, OPENAI_CHANNEL_1_BASE_URL: 'https://198.18.1.24/v1', OPENAI_ALLOW_SYNTHETIC_DNS_IPS: 'true' },
+            { lookup: syntheticDnsLookup }
+        );
+        assert.equal(literal.channels[0]?.probe_status, 'failed');
+        assert.equal(literal.channels[0]?.error_code, 'request_failed');
     });
 
     it('keeps custom model metadata generic', () => {

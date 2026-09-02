@@ -85,6 +85,7 @@ Windows、macOS 和 Linux 也可分别使用 `start-windows.bat`、`start-macos.
 | 默认模型           | `OPENAI_IMAGE_MODEL`                                             | 设置页面、Agent 和模型目录在省略 `model` 时使用的默认图片模型；未设置时为 `gpt-image-2`。     |
 | 多渠道             | `OPENAI_CHANNEL_N_*`                                             | 配置多个渠道、多个 key、请求方式白名单和渠道级覆盖。                                          |
 | 上游代理           | `OPENAI_UPSTREAM_PROXY_URL`、`OPENAI_CHANNEL_N_PROXY_URL`        | 仅代理服务端到图片上游的 HTTP(S) 请求。                                                       |
+| 透明代理 fake DNS  | `OPENAI_ALLOW_SYNTHETIC_DNS_IPS`                                 | 默认关闭；仅在明确使用透明代理并确认域名解析到 RFC 2544 `198.18.0.0/15` 时启用。                 |
 | 页面访问码         | `APP_PASSWORD`                                                   | 设置后，页面生图和受保护图片需要访问码。公网部署建议开启。                                    |
 | Agent 鉴权         | `AGENT_API_TOKEN`                                                | 设置后，`/api/agent/*` 需要 Bearer 令牌。                                                     |
 | Agent 客户端 token | `GPT_IMAGE_AGENT_TOKEN`                                          | Skill 独立脚本使用的本机 token 别名；DSH 插件优先读取 `AGENT_API_TOKEN`，未设置时回退此变量。 |

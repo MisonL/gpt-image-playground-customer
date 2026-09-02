@@ -278,6 +278,9 @@ node "<skill-root>/scripts/diagnose-request.mjs" --base-url https://your-space.h
 - `GPT_IMAGE_SHARE_ACCESS_CODE`：仅在 `generate-image.mjs --share` 时读取，用于创建需要访问码的分享链接；不要放进命令行参数、manifest 或日志。
 - `GPT_IMAGE_AGENT_CONTRACT_CHECK=1`：只检查 capabilities 和错误契约，不触发真实生图或编辑。
 
+服务端透明代理或 fake DNS 如果把上游域名解析到 RFC 2544 `198.18.0.0/15`，可显式设置
+`OPENAI_ALLOW_SYNTHETIC_DNS_IPS=true`。该开关默认关闭，只允许非字面量主机名使用这段合成地址；普通私网、回环、链路本地和字面量保留地址仍会被拒绝。它只影响服务端到已配置上游的 DNS 校验，不放宽跨域图片 URL 的 SSRF 防护；启用前必须确认代理边界，修改后重启服务。
+
 Hugging Face Space Secrets 只能写入和列出名称，不能从 CLI 读回 secret 值。远端配置 `AGENT_API_TOKEN` 后，本机 Agent 可通过不入库的 shell 环境、keychain 或本地私有 env 文件注入 `GPT_IMAGE_AGENT_TOKEN` 或 `AGENT_API_TOKEN`；Agent CLI 默认读取当前仓库根目录的 `.env.agent.local`，shell 环境变量优先。不要把 token 写进仓库、README、任务 JSONL、manifest、命令参数或日志。仓库根目录的 `.env.agent.local.example` 只作私有本机配置模板，真实 `.env.agent.local` 不入库。
 
 上游请求头由服务端统一生成。默认 `User-Agent` 是 `visual-journal/<package-version>`；可用 `OPENAI_UPSTREAM_USER_AGENT` 或 `UPSTREAM_USER_AGENT` 覆盖全局 UA，也可用 `OPENAI_CHANNEL_N_USER_AGENT` 和 `OPENAI_CHANNEL_N_UPSTREAM_HEADERS_JSON` 覆盖单渠道安全 header。`Authorization`、`Accept`、`Content-Type`、`Content-Length` 和 `Host` 等协议头不可由 extra headers 覆盖；capabilities、status 和 diagnostics 只暴露 `user_agent_effective`、`has_extra_headers`、`allowed_header_names` 和 `configured_header_names`，不暴露 secret 值。

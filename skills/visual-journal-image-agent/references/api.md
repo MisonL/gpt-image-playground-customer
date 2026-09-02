@@ -219,6 +219,9 @@ GET /api/agent/capabilities
 - `image_transport.stream_data_interval_timeout_ms`：已建立图片流的单次数据空闲超时；`0` 表示服务端禁用该空闲计时器。
 - `image_transport.upstream_max_retries`：OpenAI SDK 图片请求自动重试次数；默认 `0`，避免长耗时图片请求被 SDK 自动重试后重复计费。
 - `image_transport.upstream_proxy`：全局服务端上游代理摘要，只包含 `configured` 和可选的 `protocol`（`http` 或 `https`）；不会返回代理主机、端口、认证信息或完整 URL。代理由部署管理员通过 `OPENAI_UPSTREAM_PROXY_URL` 配置，只影响服务端到图片上游的出站连接。
+
+透明代理或 fake DNS 环境下，如果已确认上游域名会解析到 RFC 2544 `198.18.0.0/15`，部署管理员可以设置
+`OPENAI_ALLOW_SYNTHETIC_DNS_IPS=true`。该变量默认关闭，只对非字面量上游主机名的合成 DNS 结果生效；普通私网、回环、链路本地和字面量保留地址仍被拒绝，也不会放宽跨域图片 URL 的 SSRF 校验。配置变更需重启服务，主动模型探测和实际图片请求会使用同一策略。
 - `model_limits.gpt-image-2.max_edge`：最大单边像素，当前为 `3840`。
 - `model_limits.gpt-image-2.max_pixels`：最大总像素，当前为 `8294400`。
 - `model_limits.gpt-image-2.edge_multiple`：宽高必须是该值的倍数，当前为 `16`。
