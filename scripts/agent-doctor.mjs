@@ -351,6 +351,7 @@ function buildLayers({ capabilities, runtime, contract, smoke }) {
 
 function summarizeCapabilities(body) {
     return {
+        tun_mode: body?.image_transport?.tun_mode || 'unknown',
         page_sse: body?.agent_streaming?.page_sse?.supported === true,
         page_sse_declared_supported: body?.agent_streaming?.page_sse?.supported === true,
         page_sse_auth_required: body?.agent_streaming?.page_sse?.auth?.required === true,
@@ -453,6 +454,7 @@ function buildRuntimeEnvironmentSummary({ capabilities, runtime }) {
     return {
         state_backend: capabilities?.defaults?.state_backend || 'unknown',
         image_storage_mode: capabilities?.storage?.image_storage_mode || 'unknown',
+        tun_mode: capabilities?.image_transport?.tun_mode || 'unknown',
         postgres_configured: capabilities?.storage?.postgres_configured === true,
         page_sse_auth_required: capabilities?.agent_streaming?.page_sse?.auth?.required === true,
         agent_auth_schemes: Array.isArray(capabilities?.auth?.schemes) ? capabilities.auth.schemes : [],

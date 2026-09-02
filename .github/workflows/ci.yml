@@ -84,6 +84,7 @@ jobs:
           docker compose config --quiet
           docker compose -f docker-compose.yml -f docker-compose.memory.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.postgres.yml config --quiet
+          OPENAI_TUN_MODE=synthetic-dns docker compose -f docker-compose.yml -f docker-compose.tun.yml config --quiet
 
   docker-runtime:
     needs: quality

@@ -672,7 +672,8 @@ describe('buildAgentCapabilities', () => {
             upstream_timeout_ms: 900_000,
             stream_data_interval_timeout_ms: 900_000,
             upstream_max_retries: 0,
-            upstream_proxy: { configured: false }
+            upstream_proxy: { configured: false },
+            tun_mode: 'disabled'
         });
         assert.equal(capabilities.defaults.image_backend, 'images-api');
         assert.equal(capabilities.defaults.stream_mode, 'auto');
@@ -1004,6 +1005,12 @@ describe('buildAgentCapabilities', () => {
             if (originalModel === undefined) delete process.env.OPENAI_IMAGE_MODEL;
             else process.env.OPENAI_IMAGE_MODEL = originalModel;
         }
+    });
+
+    it('exposes the explicit TUN transport mode without exposing legacy flag values', () => {
+        const capabilities = buildAgentCapabilities({ OPENAI_TUN_MODE: 'synthetic-dns' });
+        assert.equal(capabilities.image_transport.tun_mode, 'synthetic-dns');
+        assert.throws(() => buildAgentCapabilities({ OPENAI_TUN_MODE: 'invalid' }), /OPENAI_TUN_MODE/);
     });
 
     it('reports configured server-channel request modes in Agent capabilities', () => {
@@ -1770,6 +1777,11 @@ describe('buildAgentCapabilities', () => {
             document.components.schemas.ImageTransportCapabilities.properties.upstream_proxy.$ref,
             '#/components/schemas/UpstreamProxySummary'
         );
+        assert.deepEqual(document.components.schemas.ImageTransportCapabilities.properties.tun_mode, {
+            type: 'string',
+            enum: ['disabled', 'synthetic-dns'],
+            const: 'disabled'
+        });
         assert.deepEqual(document.components.schemas.UpstreamProxySummary.required, ['configured']);
         assert.equal(
             capabilityProperties.upstream_request_headers.properties.default.$ref,

@@ -14,6 +14,8 @@ export type UpstreamProxySummary = {
     protocol?: UpstreamProxyProtocol;
 };
 
+export type ImageTransportTunMode = 'disabled' | 'synthetic-dns';
+
 const DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS = 900_000;
 const DEFAULT_IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS = 900_000;
 const DEFAULT_IMAGE_UPSTREAM_MAX_RETRIES = 0;
@@ -345,11 +347,13 @@ export function buildOpenAIImageRequestOptions(
 }
 
 export function summarizeOpenAIImageTransport(env: ImageTransportEnv = process.env) {
+    const syntheticDnsEnabled = readSyntheticDnsSetting(env);
     return {
         upstream_timeout_ms: readImageUpstreamTimeoutMs(env),
         stream_data_interval_timeout_ms: readImageStreamDataIntervalTimeoutMs(env),
         upstream_max_retries: readImageUpstreamMaxRetries(env),
-        upstream_proxy: summarizeOpenAIUpstreamProxy(readOpenAIUpstreamProxyUrl(env))
+        upstream_proxy: summarizeOpenAIUpstreamProxy(readOpenAIUpstreamProxyUrl(env)),
+        tun_mode: (syntheticDnsEnabled ? 'synthetic-dns' : 'disabled') as ImageTransportTunMode
     };
 }
 
@@ -428,6 +432,12 @@ export function resolveUpstreamDnsPolicy(
 }
 
 export function readSyntheticDnsSetting(env: ImageTransportEnv = process.env): boolean {
+    const tunMode = env.OPENAI_TUN_MODE?.trim().toLowerCase();
+    if (tunMode) {
+        if (['disabled', 'off', 'strict'].includes(tunMode)) return false;
+        if (['synthetic-dns', 'synthetic_dns', 'fake-ip', 'fake_ip', 'enabled', 'on'].includes(tunMode)) return true;
+        throw new Error('OPENAI_TUN_MODE 必须是 disabled 或 synthetic-dns。');
+    }
     return ['1', 'true', 'yes', 'on'].includes(env.OPENAI_ALLOW_SYNTHETIC_DNS_IPS?.trim().toLowerCase() || '');
 }
 

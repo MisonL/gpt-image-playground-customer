@@ -8,11 +8,17 @@ export const DEFAULT_TEST_TIMEOUT_MS = 60_000;
 export const DEFAULT_TEST_CONCURRENCY = 2;
 
 export function buildTestEnvironment(baseEnvironment = process.env) {
-    return {
+    const environment = {
         ...baseEnvironment,
         NODE_ENV: 'test',
         APP_LOG_TEST_CONSOLE_MIRROR: 'false'
     };
+    // Transport opt-ins describe the deployment network, not the deterministic
+    // unit-test process. Keep host TUN/fake-DNS settings from changing the
+    // default test contract; individual tests can still opt in explicitly.
+    delete environment.OPENAI_TUN_MODE;
+    delete environment.OPENAI_ALLOW_SYNTHETIC_DNS_IPS;
+    return environment;
 }
 
 function collectTestFiles(root, directory, suffixes, files) {

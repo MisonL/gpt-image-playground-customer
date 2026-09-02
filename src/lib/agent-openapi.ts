@@ -2736,7 +2736,8 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         'upstream_timeout_ms',
                         'stream_data_interval_timeout_ms',
                         'upstream_max_retries',
-                        'upstream_proxy'
+                        'upstream_proxy',
+                        'tun_mode'
                     ],
                     properties: {
                         upstream_timeout_ms: {
@@ -2756,6 +2757,11 @@ export function buildAgentOpenApiDocument(env: Record<string, string | undefined
                         },
                         upstream_proxy: {
                             $ref: '#/components/schemas/UpstreamProxySummary'
+                        },
+                        tun_mode: {
+                            type: 'string',
+                            enum: ['disabled', 'synthetic-dns'],
+                            const: capabilities.image_transport.tun_mode
                         }
                     },
                     additionalProperties: false

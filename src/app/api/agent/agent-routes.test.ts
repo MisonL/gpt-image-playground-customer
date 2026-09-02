@@ -61,6 +61,8 @@ beforeEach(async () => {
     delete process.env.OPENAI_UPSTREAM_REQUEST_MODES;
     delete process.env.OPENAI_UPSTREAM_REQUEST_MODE_PRIORITY;
     delete process.env.OPENAI_UPSTREAM_PROXY_URL;
+    delete process.env.OPENAI_TUN_MODE;
+    delete process.env.OPENAI_ALLOW_SYNTHETIC_DNS_IPS;
     delete process.env.OPENAI_UPSTREAM_USER_AGENT;
     delete process.env.UPSTREAM_USER_AGENT;
     delete process.env.OPENAI_CHANNEL_1_ID;

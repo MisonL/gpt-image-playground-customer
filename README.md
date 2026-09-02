@@ -85,7 +85,7 @@ Windows、macOS 和 Linux 也可分别使用 `start-windows.bat`、`start-macos.
 | 默认模型           | `OPENAI_IMAGE_MODEL`                                             | 设置页面、Agent 和模型目录在省略 `model` 时使用的默认图片模型；未设置时为 `gpt-image-2`。     |
 | 多渠道             | `OPENAI_CHANNEL_N_*`                                             | 配置多个渠道、多个 key、请求方式白名单和渠道级覆盖。                                          |
 | 上游代理           | `OPENAI_UPSTREAM_PROXY_URL`、`OPENAI_CHANNEL_N_PROXY_URL`        | 仅代理服务端到图片上游的 HTTP(S) 请求。                                                       |
-| 透明代理 fake DNS  | `OPENAI_ALLOW_SYNTHETIC_DNS_IPS`                                 | 默认关闭；仅在明确使用透明代理并确认域名解析到 RFC 2544 `198.18.0.0/15` 时启用。                 |
+| 主机 TUN/fake DNS  | `OPENAI_TUN_MODE`、`OPENAI_ALLOW_SYNTHETIC_DNS_IPS`              | 默认关闭；TUN 主机可使用 `OPENAI_TUN_MODE=synthetic-dns`，仅放行明确受限的合成 DNS 地址。       |
 | 页面访问码         | `APP_PASSWORD`                                                   | 设置后，页面生图和受保护图片需要访问码。公网部署建议开启。                                    |
 | Agent 鉴权         | `AGENT_API_TOKEN`                                                | 设置后，`/api/agent/*` 需要 Bearer 令牌。                                                     |
 | Agent 客户端 token | `GPT_IMAGE_AGENT_TOKEN`                                          | Skill 独立脚本使用的本机 token 别名；DSH 插件优先读取 `AGENT_API_TOKEN`，未设置时回退此变量。 |
@@ -118,6 +118,14 @@ OPENAI_CHANNEL_2_REQUEST_MODES=images-non-stream
 请求方式白名单只能填写已通过真实上游冒烟验证、且结果能被本服务消费的模式。未配置时默认只允许 `images-non-stream`；显式流式或 Responses 请求失败时不会静默降级。
 
 代理 URL 仅支持无认证、无路径的 `http://` 或 `https://` 根地址，不支持 SOCKS。代理只影响服务端出站请求，不改变浏览器到本服务的连接。
+
+如果部署主机启用了 TUN/fake DNS，且上游域名在主机或 Docker 内解析到 RFC 2544 `198.18.0.0/15`，请使用专用 Compose 覆盖：
+
+```bash
+npm run deploy:local -- --tun
+```
+
+该覆盖等价于设置 `OPENAI_TUN_MODE=synthetic-dns`。它不会把 Docker 容器加入主机网络、不会关闭 DNS 校验，也不会放行普通私网、回环、链路本地或字面量保留地址。若 TUN 服务使用真实 HTTP(S) 代理而不是 fake DNS，请配置 `OPENAI_UPSTREAM_PROXY_URL` 或渠道级 `OPENAI_CHANNEL_N_PROXY_URL`，不要启用 `--tun`。
 
 安全要求：
 

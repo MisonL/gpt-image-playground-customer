@@ -513,6 +513,21 @@ describe('Command center scripts', () => {
             '--wait-timeout',
             '120'
         ]);
+        assert.deepEqual(buildDockerComposeArgs({ tun: true }), [
+            'compose',
+            '-f',
+            'docker-compose.yml',
+            '-f',
+            'docker-compose.tun.yml',
+            'up',
+            '-d',
+            '--build',
+            '--force-recreate',
+            '--remove-orphans',
+            '--wait',
+            '--wait-timeout',
+            '120'
+        ]);
         assert.throws(() => buildDockerComposeArgs({ memory: true, postgres: true }), /不能同时使用/);
     });
 
@@ -700,6 +715,28 @@ exit 1
         assert.equal(sleepCount, 1);
     });
 
+    it('reads the effective TUN mode from runtime capabilities', async () => {
+        const probe = await waitForLocalEndpoints('http://127.0.0.1:4783', {
+            attempts: 1,
+            fetchJson: async (probePath) => {
+                if (probePath === '/api/auth-status') return { passwordRequired: false };
+                if (probePath === '/api/runtime-capabilities') {
+                    return {
+                        imageTransport: { tun_mode: 'synthetic-dns' },
+                        streamingBatch: { enabled: true }
+                    };
+                }
+                return {
+                    defaults: { state_backend: 'sqlite' },
+                    storage: { image_storage_mode: 'fs' },
+                    image_transport: { tun_mode: 'disabled' }
+                };
+            }
+        });
+
+        assert.equal(probe.tunMode, 'synthetic-dns');
+    });
+
     it('requires the running Docker image and revision label to match the deployed revision', () => {
         const deployment = {
             revision: '0123456789abcdef0123456789abcdef01234567',
@@ -833,6 +870,20 @@ exit 1
                     { memory: true, postgres: true }
                 ),
             /不能同时使用/
+        );
+        assert.doesNotThrow(() =>
+            assertLocalProbeMatchesMode(
+                { stateBackend: 'sqlite', imageStorageMode: 'fs', tunMode: 'synthetic-dns' },
+                { tun: true }
+            )
+        );
+        assert.throws(
+            () =>
+                assertLocalProbeMatchesMode(
+                    { stateBackend: 'sqlite', imageStorageMode: 'fs', tunMode: 'disabled' },
+                    { tun: true }
+                ),
+            /tunMode=.*synthetic-dns/
         );
     });
 
@@ -1420,6 +1471,7 @@ exit 1
                 assert.deepEqual(body.summary.runtime_environment, {
                     state_backend: 'memory',
                     image_storage_mode: 'indexeddb',
+                    tun_mode: 'unknown',
                     postgres_configured: false,
                     page_sse_auth_required: true,
                     agent_auth_schemes: [],

@@ -9,6 +9,7 @@ import {
     readImageUpstreamMaxRetries,
     readImageUpstreamTimeoutMs,
     readOpenAIUpstreamProxyUrl,
+    readSyntheticDnsSetting,
     resolveUpstreamDnsPolicy,
     summarizeOpenAIUpstreamProxy,
     summarizeOpenAIImageTransport,
@@ -33,7 +34,8 @@ describe('openai image transport settings', () => {
             upstream_timeout_ms: 900_000,
             stream_data_interval_timeout_ms: 900_000,
             upstream_max_retries: 0,
-            upstream_proxy: { configured: false }
+            upstream_proxy: { configured: false },
+            tun_mode: 'disabled'
         });
 
         const clientOptions = createOpenAIImageClientOptions({ apiKey: 'key', baseURL: 'https://api.example/v1' });
@@ -288,6 +290,17 @@ describe('openai image transport settings', () => {
             allowSyntheticDns: true,
             allowedPrivateHostnames: ['127.0.0.1']
         });
+    });
+
+    it('accepts the explicit TUN mode and lets disabled mode override the legacy flag', () => {
+        assert.equal(readSyntheticDnsSetting({ OPENAI_TUN_MODE: 'synthetic-dns' }), true);
+        assert.equal(readSyntheticDnsSetting({ OPENAI_TUN_MODE: 'fake-ip' }), true);
+        assert.equal(
+            readSyntheticDnsSetting({ OPENAI_TUN_MODE: 'disabled', OPENAI_ALLOW_SYNTHETIC_DNS_IPS: 'true' }),
+            false
+        );
+        assert.throws(() => readSyntheticDnsSetting({ OPENAI_TUN_MODE: 'unexpected' }), /OPENAI_TUN_MODE/);
+        assert.equal(summarizeOpenAIImageTransport({ OPENAI_TUN_MODE: 'synthetic-dns' }).tun_mode, 'synthetic-dns');
     });
 
     it('classifies successful HTML upstream responses before SDK parsing', async () => {

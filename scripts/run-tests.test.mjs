@@ -18,11 +18,17 @@ const baseTestArguments = ['--test', '--import', 'tsx', ...testFiles];
 
 describe('test runner arguments', () => {
     it('marks the standard suite as test-only and disables app-log console mirroring', () => {
-        const environment = buildTestEnvironment({ EXISTING_VALUE: 'kept' });
+        const environment = buildTestEnvironment({
+            EXISTING_VALUE: 'kept',
+            OPENAI_TUN_MODE: 'synthetic-dns',
+            OPENAI_ALLOW_SYNTHETIC_DNS_IPS: 'true'
+        });
 
         assert.equal(environment.EXISTING_VALUE, 'kept');
         assert.equal(environment.NODE_ENV, 'test');
         assert.equal(environment.APP_LOG_TEST_CONSOLE_MIRROR, 'false');
+        assert.equal(environment.OPENAI_TUN_MODE, undefined);
+        assert.equal(environment.OPENAI_ALLOW_SYNTHETIC_DNS_IPS, undefined);
     });
 
     it('limits concurrency and test duration when the current Node runtime supports both options', () => {

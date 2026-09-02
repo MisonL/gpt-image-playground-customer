@@ -26,6 +26,7 @@ export function buildDockerComposeArgs(options = {}) {
     const files = ['-f', 'docker-compose.yml'];
     if (options.memory) files.push('-f', 'docker-compose.memory.yml');
     if (options.postgres) files.push('-f', 'docker-compose.postgres.yml');
+    if (options.tun) files.push('-f', 'docker-compose.tun.yml');
     return [
         'compose',
         ...files,
@@ -112,13 +113,23 @@ export function assertDeploymentImageIdentity(identity, deployment) {
 
 function parseArgs(argv) {
     const unknown = argv.find(
-        (arg) => !['--help', '-h', '--memory', '--postgres', '--skip-probe', '--allow-image-auto-cleanup'].includes(arg)
+        (arg) =>
+            ![
+                '--help',
+                '-h',
+                '--memory',
+                '--postgres',
+                '--tun',
+                '--skip-probe',
+                '--allow-image-auto-cleanup'
+            ].includes(arg)
     );
     if (unknown) throw new Error(`Unknown option: ${unknown}`);
     const options = {
         help: argv.includes('--help') || argv.includes('-h'),
         memory: argv.includes('--memory'),
         postgres: argv.includes('--postgres'),
+        tun: argv.includes('--tun'),
         skipProbe: argv.includes('--skip-probe'),
         allowImageAutoCleanup: argv.includes('--allow-image-auto-cleanup')
     };
@@ -131,10 +142,12 @@ function printHelp() {
   npm run deploy:local
   npm run deploy:local -- --memory
   npm run deploy:local -- --postgres
+  npm run deploy:local -- --tun
 
 Options:
   --memory       Use docker-compose.memory.yml overlay for HF Space-like memory mode.
   --postgres     Use docker-compose.postgres.yml and require GPT_IMAGE_POSTGRES_PASSWORD.
+  --tun          Enable the restricted synthetic-DNS transport needed by a host TUN/fake-DNS service.
   --allow-image-auto-cleanup
                  Confirm that the configured WebUI automatic image cleanup may run after deployment.
   --skip-probe   Rebuild and start the container without HTTP endpoint probes.
@@ -199,13 +212,20 @@ export async function waitForLocalEndpoints(baseUrl, options = {}) {
         try {
             const responses = {};
             for (const path of PROBE_PATHS) responses[path] = await requestJson(path, baseUrl);
+            const runtimeCapabilities = responses['/api/runtime-capabilities'];
+            const agentCapabilities = responses['/api/agent/capabilities'];
             return {
                 attempts: attempt,
                 baseUrl,
                 authRequired: responses['/api/auth-status'].passwordRequired,
-                stateBackend: responses['/api/agent/capabilities'].defaults?.state_backend,
-                imageStorageMode: responses['/api/agent/capabilities'].storage?.image_storage_mode,
-                streamingBatch: responses['/api/runtime-capabilities'].streamingBatch
+                stateBackend: agentCapabilities.defaults?.state_backend,
+                imageStorageMode: agentCapabilities.storage?.image_storage_mode,
+                streamingBatch: runtimeCapabilities.streamingBatch,
+                tunMode:
+                    runtimeCapabilities.imageTransport?.tun_mode ??
+                    runtimeCapabilities.image_transport?.tun_mode ??
+                    agentCapabilities.image_transport?.tun_mode ??
+                    agentCapabilities.imageTransport?.tun_mode
             };
         } catch (error) {
             lastError = error instanceof Error ? error.message : String(error);
@@ -228,6 +248,9 @@ export function assertLocalProbeMatchesMode(probe, options = {}) {
     }
     if (probe.imageStorageMode !== expected.imageStorageMode) {
         mismatches.push(`imageStorageMode=${probe.imageStorageMode ?? '<missing>'} expected ${expected.imageStorageMode}`);
+    }
+    if (options.tun && probe.tunMode !== 'synthetic-dns') {
+        mismatches.push(`tunMode=${probe.tunMode ?? '<missing>'} expected synthetic-dns`);
     }
     if (mismatches.length) throw new Error(`${expected.label} deployment mode did not take effect: ${mismatches.join(', ')}.`);
 }

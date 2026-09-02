@@ -37,6 +37,8 @@ beforeEach(async () => {
     delete process.env.IMAGE_STREAM_DATA_INTERVAL_TIMEOUT_MS;
     delete process.env.IMAGE_UPSTREAM_MAX_RETRIES;
     delete process.env.OPENAI_UPSTREAM_PROXY_URL;
+    delete process.env.OPENAI_TUN_MODE;
+    delete process.env.OPENAI_ALLOW_SYNTHETIC_DNS_IPS;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_BASE_URL;
     delete process.env.OPENAI_ROUTING_STRATEGY;
@@ -285,6 +287,7 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
                 stream_data_interval_timeout_ms?: number;
                 upstream_max_retries?: number;
                 upstream_proxy?: { configured: boolean; protocol?: string };
+                tun_mode?: string;
             }
         >;
 
@@ -295,8 +298,18 @@ describe('GET /api/runtime-capabilities', { concurrency: false }, () => {
             upstream_timeout_ms: 1_200_000,
             stream_data_interval_timeout_ms: 600_000,
             upstream_max_retries: 1,
-            upstream_proxy: { configured: false }
+            upstream_proxy: { configured: false },
+            tun_mode: 'disabled'
         });
+    });
+
+    it('exposes the configured synthetic DNS transport mode', async () => {
+        process.env.OPENAI_TUN_MODE = 'synthetic-dns';
+        const { GET } = await import('./route');
+
+        const body = (await (await GET()).json()) as { imageTransport: { tun_mode?: string } };
+
+        assert.equal(body.imageTransport.tun_mode, 'synthetic-dns');
     });
 
     it('defaults channel failure cooldown to disabled while exposing recovery probe settings', async () => {

@@ -20,6 +20,8 @@ beforeEach(() => {
     process.env.OPENAI_CHANNEL_1_API_KEYS = 'health-channel-secret,secondary-secret';
     process.env.OPENAI_CHANNEL_1_REQUEST_MODES = 'images-non-stream,images-sse';
     delete process.env.OPENAI_UPSTREAM_PROXY_URL;
+    delete process.env.OPENAI_TUN_MODE;
+    delete process.env.OPENAI_ALLOW_SYNTHETIC_DNS_IPS;
     delete process.env.OPENAI_CHANNEL_1_PROXY_URL;
     resetServerChannelStateForTests();
 });

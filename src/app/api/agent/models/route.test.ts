@@ -12,6 +12,8 @@ beforeEach(() => {
     delete process.env.OPENAI_CHANNEL_1_BASE_URL;
     delete process.env.OPENAI_CHANNEL_1_API_KEYS;
     delete process.env.OPENAI_CHANNEL_1_ID;
+    delete process.env.OPENAI_TUN_MODE;
+    delete process.env.OPENAI_ALLOW_SYNTHETIC_DNS_IPS;
 });
 
 afterEach(() => {

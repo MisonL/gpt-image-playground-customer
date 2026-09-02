@@ -389,6 +389,7 @@ function summarizeCapabilitiesBody(body) {
     return {
         auth_required: body?.auth?.required === true,
         auth_schemes: Array.isArray(body?.auth?.schemes) ? body.auth.schemes : [],
+        tun_mode: body?.image_transport?.tun_mode || 'unknown',
         page_sse_auth_required: body?.agent_streaming?.page_sse?.auth?.required === true,
         page_sse_auth_form_field: body?.agent_streaming?.page_sse?.auth?.form_field,
         state_backend: body?.defaults?.state_backend,

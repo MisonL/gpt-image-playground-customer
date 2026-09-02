@@ -51,7 +51,11 @@ import {
     type ImageStreamMode,
     type ImageStreamingStrategy
 } from './image-upstream-strategy';
-import { summarizeOpenAIImageTransport, type UpstreamProxySummary } from './openai-image-transport';
+import {
+    summarizeOpenAIImageTransport,
+    type ImageTransportTunMode,
+    type UpstreamProxySummary
+} from './openai-image-transport';
 import { CHINESE_POSITIVE_INTEGER_MESSAGES, readPositiveIntegerFromEnv } from './positive-integer-config.mjs';
 import { getExistingServerChannelState } from './server-channel-router';
 import { readBooleanEnv } from './server-runtime';
@@ -283,6 +287,7 @@ export type AgentCapabilities = {
         stream_data_interval_timeout_ms: number;
         upstream_max_retries: number;
         upstream_proxy: UpstreamProxySummary;
+        tun_mode: ImageTransportTunMode;
     };
     upstream_profile: ImageUpstreamProfileSummary;
     upstream_request_headers: {

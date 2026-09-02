@@ -4,16 +4,25 @@ import { describe, it } from 'node:test';
 
 describe('Docker build context', () => {
     it('keeps the tracked real-upstream smoke template available to containerized tests', async () => {
-        const [dockerignore, dockerfile, gitignore, realSmokeTemplate, compose, postgresCompose, ciWorkflow] =
-            await Promise.all([
-                readFile(new URL('../.dockerignore', import.meta.url), 'utf8'),
-                readFile(new URL('../Dockerfile', import.meta.url), 'utf8'),
-                readFile(new URL('../.gitignore', import.meta.url), 'utf8'),
-                readFile(new URL('../.env.real-smoke.example', import.meta.url), 'utf8'),
-                readFile(new URL('../docker-compose.yml', import.meta.url), 'utf8'),
-                readFile(new URL('../docker-compose.postgres.yml', import.meta.url), 'utf8'),
-                readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
-            ]);
+        const [
+            dockerignore,
+            dockerfile,
+            gitignore,
+            realSmokeTemplate,
+            compose,
+            postgresCompose,
+            tunCompose,
+            ciWorkflow
+        ] = await Promise.all([
+            readFile(new URL('../.dockerignore', import.meta.url), 'utf8'),
+            readFile(new URL('../Dockerfile', import.meta.url), 'utf8'),
+            readFile(new URL('../.gitignore', import.meta.url), 'utf8'),
+            readFile(new URL('../.env.real-smoke.example', import.meta.url), 'utf8'),
+            readFile(new URL('../docker-compose.yml', import.meta.url), 'utf8'),
+            readFile(new URL('../docker-compose.postgres.yml', import.meta.url), 'utf8'),
+            readFile(new URL('../docker-compose.tun.yml', import.meta.url), 'utf8'),
+            readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+        ]);
 
         assert.match(dockerignore, /^\.gitignore$/m);
         assert.match(dockerignore, /^!\.gitignore$/m);
@@ -36,6 +45,7 @@ describe('Docker build context', () => {
         assert.match(postgresCompose, /^      AGENT_DB_PASSWORD_FILE: \/run\/secrets\/postgres_password$/m);
         assert.doesNotMatch(postgresCompose, /gpt-image-playground-customer:postgres/);
         assert.doesNotMatch(postgresCompose, /^    ports:/m);
+        assert.match(tunCompose, /^      OPENAI_TUN_MODE: synthetic-dns$/m);
         assert.match(ciWorkflow, /--env GIP_COMPOSE_DEPLOYMENT=true --env GIP_BIND_HOST=127\.0\.0\.1/);
         assert.match(ciWorkflow, /for attempt in \{1\.\.120\}; do/);
         assert.match(ciWorkflow, /attempt %s\/120/);
