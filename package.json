@@ -97,6 +97,7 @@
         "node": ">=22.15.0"
     },
     "overrides": {
+        "@humanfs/node": ">=0.16.8",
         "postcss": "^8.5.18",
         "brace-expansion": "$brace-expansion",
         "js-yaml": "^4.3.1",
