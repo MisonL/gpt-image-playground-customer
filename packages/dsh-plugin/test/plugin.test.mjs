@@ -71,9 +71,11 @@ test('allows billable requests when the service has no auth configured', async (
     const generate = tools.get('visual_journal_generate');
     const originalFetch = globalThis.fetch;
     const originalToken = process.env.AGENT_API_TOKEN;
+    const originalClientToken = process.env.GPT_IMAGE_AGENT_TOKEN;
     const originalPasswordHash = process.env.GPT_IMAGE_APP_PASSWORD_HASH;
     let requestHeaders;
     delete process.env.AGENT_API_TOKEN;
+    delete process.env.GPT_IMAGE_AGENT_TOKEN;
     delete process.env.GPT_IMAGE_APP_PASSWORD_HASH;
     let callCount = 0;
     globalThis.fetch = async (_input, init) => {
@@ -101,6 +103,8 @@ test('allows billable requests when the service has no auth configured', async (
         globalThis.fetch = originalFetch;
         if (originalToken === undefined) delete process.env.AGENT_API_TOKEN;
         else process.env.AGENT_API_TOKEN = originalToken;
+        if (originalClientToken === undefined) delete process.env.GPT_IMAGE_AGENT_TOKEN;
+        else process.env.GPT_IMAGE_AGENT_TOKEN = originalClientToken;
         if (originalPasswordHash === undefined) delete process.env.GPT_IMAGE_APP_PASSWORD_HASH;
         else process.env.GPT_IMAGE_APP_PASSWORD_HASH = originalPasswordHash;
     }

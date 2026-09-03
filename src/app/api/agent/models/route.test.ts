@@ -108,7 +108,7 @@ describe('GET /api/agent/models', () => {
                 headers: { Cookie: `gptImageAccess=${createAccessToken('models-page-password')}` }
             })
         );
-        assert.notEqual(response.status, 401);
+        assert.equal(response.status, 200);
     });
 
     it('accepts the authenticated page cookie when both Agent and page auth are configured', async () => {
@@ -120,6 +120,6 @@ describe('GET /api/agent/models', () => {
                 headers: { Cookie: `gptImageAccess=${createAccessToken('models-page-password')}` }
             })
         );
-        assert.notEqual(response.status, 401);
+        assert.equal(response.status, 200);
     });
 });
